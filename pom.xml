@@ -1180,7 +1180,7 @@ flexible messaging model and an intuitive client API.</description>
     <dependency>
       <groupId>org.apache.pulsar</groupId>
       <artifactId>buildtools</artifactId>
-      <version>${project.version}</version>
+      <version>2.6.1</version>
       <scope>test</scope>
     </dependency>
 
@@ -1254,7 +1254,7 @@ flexible messaging model and an intuitive client API.</description>
           <dependency>
             <groupId>org.apache.pulsar</groupId>
             <artifactId>buildtools</artifactId>
-            <version>${project.version}</version>
+            <version>2.6.1</version>
           </dependency>
         </dependencies>
       </plugin>
@@ -1581,7 +1581,7 @@ flexible messaging model and an intuitive client API.</description>
           <version>1.2.0</version>
           <extensions>true</extensions>
           <configuration>
-            <finalName>${project.artifactId}-${project.version}</finalName>
+            <finalName>${project.artifactId}-2.6.1</finalName>
           </configuration>
           <executions>
             <execution>

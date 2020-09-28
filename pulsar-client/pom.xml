@@ -30,6 +30,7 @@
   </parent>
 
   <artifactId>pulsar-client-original</artifactId>
+  <version>2.6.1-E1</version>
   <name>Pulsar Client Java</name>
 
   <dependencies>
