@@ -56,6 +56,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
@@ -185,6 +186,8 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
 
     private final boolean createTopicIfDoesNotExist;
 
+
+    private final AtomicReference<ClientCnx> clientCnxUsedForConsumerRegistration = new AtomicReference<>();
 
     static <T> ConsumerImpl<T> newConsumerImpl(PulsarClientImpl client,
                                                String topic,
@@ -351,7 +354,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             ByteBuf unsubscribe = Commands.newUnsubscribe(consumerId, requestId);
             ClientCnx cnx = cnx();
             cnx.sendRequestWithId(unsubscribe, requestId).thenRun(() -> {
-                cnx.removeConsumer(consumerId);
+                deregisterFromClientCnx();
                 closeConsumerTasks();
                 client.cleanupConsumer(ConsumerImpl.this);
                 log.info("[{}][{}] Successfully unsubscribed from topic", topic, subscription);
@@ -733,7 +736,6 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
             return;
         }
         setClientCnx(cnx);
-        cnx.registerConsumer(consumerId, this);
 
         log.info("[{}][{}] Subscribing to topic on cnx {}", topic, subscription, cnx.ctx().channel());
 
@@ -790,7 +792,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
                     // Consumer was closed while reconnecting, close the connection to make sure the broker
                     // drops the consumer on its side
                     setState(State.Closed);
-                    cnx.removeConsumer(consumerId);
+                    deregisterFromClientCnx();
                     cnx.channel().close();
                     return;
                 }
@@ -807,7 +809,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
                 sendFlowPermitsToBroker(cnx, conf.getReceiverQueueSize());
             }
         }).exceptionally((e) -> {
-            cnx.removeConsumer(consumerId);
+            deregisterFromClientCnx();
             if (getState() == State.Closing || getState() == State.Closed) {
                 // Consumer was closed while reconnecting, close the connection to make sure the broker
                 // drops the consumer on its side
@@ -953,7 +955,7 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
         } else {
             ByteBuf cmd = Commands.newCloseConsumer(consumerId, requestId);
             cnx.sendRequestWithId(cmd, requestId).handle((v, exception) -> {
-                cnx.removeConsumer(consumerId);
+                deregisterFromClientCnx();
                 if (exception == null || !cnx.ctx().channel().isActive()) {
                     cleanupAtClose(closeFuture);
                 } else {
@@ -2147,7 +2149,23 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
     }
 
     void setClientCnx(ClientCnx clientCnx) {
-        this.connectionHandler.setClientCnx(clientCnx);
+        try {
+            lock.writeLock().lock();
+            if (clientCnx != null) {
+                this.connectionHandler.setClientCnx(clientCnx);
+                clientCnx.registerConsumer(consumerId, this);
+            }
+            ClientCnx previousClientCnx = clientCnxUsedForConsumerRegistration.getAndSet(clientCnx);
+            if (previousClientCnx != null && previousClientCnx != clientCnx) {
+                previousClientCnx.removeConsumer(consumerId);
+            }
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    void deregisterFromClientCnx() {
+        setClientCnx(null);
     }
 
     void reconnectLater(Throwable exception) {
