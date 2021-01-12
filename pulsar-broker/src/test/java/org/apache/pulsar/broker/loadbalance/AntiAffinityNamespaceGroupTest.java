@@ -64,6 +64,8 @@ import org.apache.pulsar.zookeeper.LocalBookkeeperEnsemble;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.ZooDefs.Ids;
 import org.apache.zookeeper.ZooKeeper;
+import org.awaitility.Awaitility;
+import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -403,16 +405,10 @@ public class AntiAffinityNamespaceGroupTest {
         admin1.namespaces().setNamespaceAntiAffinityGroup(namespace2, namespaceAntiAffinityGroup);
 
         // validate strategically if brokerToDomainCache updated
-        for (int i = 0; i < 5; i++) {
-            if (!isLoadManagerUpdatedDomainCache(primaryLoadManager)
-                    || !isLoadManagerUpdatedDomainCache(secondaryLoadManager)) {
-                Thread.sleep(200);
-            } else {
-                break;
-            }
-        }
-        assertTrue(isLoadManagerUpdatedDomainCache(primaryLoadManager));
-        assertTrue(isLoadManagerUpdatedDomainCache(secondaryLoadManager));
+        Awaitility.await().untilAsserted(() -> {
+            assertTrue(isLoadManagerUpdatedDomainCache(primaryLoadManager));
+            assertTrue(isLoadManagerUpdatedDomainCache(secondaryLoadManager));
+        });
 
         ServiceUnitId serviceUnit1 = makeBundle(tenant, cluster, "ns1");
         String selectedBroker1 = primaryLoadManager.selectBrokerForAssignment(serviceUnit1).get();
