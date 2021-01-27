@@ -29,7 +29,7 @@ on:
     paths-ignore: ['site2/**', 'deployment/**']
 
 env:
-  MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.count=3
+  MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.count=3 -Dgradle.user.config=.mvn/gradle-enterprise-ci.xml
 
 jobs:
 
