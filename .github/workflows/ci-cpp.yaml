@@ -75,7 +75,7 @@ jobs:
 
       - name: build package
         if: steps.docs.outputs.changed_only == 'no'
-        run: mvn -B -ntp -q install -Pcore-modules -DskipTests
+        run: mvn -B -ntp install -Pcore-modules -DskipTests
 
       - name: build cpp artifacts
         if: steps.docs.outputs.changed_only == 'no'
