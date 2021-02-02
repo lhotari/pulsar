@@ -728,7 +728,7 @@ public class PulsarService implements AutoCloseable {
                         }
                     } else {
                         LOG.info("This broker is a follower. Current leader is {}",
-                                leaderElectionService.getCurrentLeader());
+                                leaderElectionService != null ? leaderElectionService.getCurrentLeader() : null);
                         if (loadSheddingTask != null) {
                             loadSheddingTask.cancel(false);
                             loadSheddingTask = null;
