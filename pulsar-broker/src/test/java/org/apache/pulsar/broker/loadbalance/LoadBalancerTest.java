@@ -26,6 +26,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
@@ -86,6 +87,8 @@ import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.ZooDefs;
 import org.apache.zookeeper.ZooKeeper;
+import org.awaitility.Awaitility;
+import org.checkerframework.checker.units.qual.A;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.Assert;
@@ -156,6 +159,13 @@ public class LoadBalancerTest {
             pulsarAdmins[i] = PulsarAdmin.builder().serviceHttpUrl(brokerUrls[i].toString()).build();
         }
 
+        // make sure that all brokers see each other before proceeding with the test
+        Awaitility.await().untilAsserted(() -> {
+            for (int i = 0; i < BROKER_COUNT; i++) {
+                assertEquals(pulsarAdmins[i].brokers().getActiveBrokers("use").size(), BROKER_COUNT);
+            }
+        });
+
         createNamespacePolicies(pulsarServices[0]);
 
         Thread.sleep(100);
@@ -176,23 +186,15 @@ public class LoadBalancerTest {
         bkEnsemble.stop();
     }
 
-    private LeaderBroker loopUntilLeaderChanges(LeaderElectionService les, LeaderBroker oldLeader,
-            LeaderBroker newLeader) throws InterruptedException {
-        int loopCount = 0;
-
-        while (loopCount < MAX_RETRIES) {
-            Thread.sleep(1000);
-            // Check if the new leader is elected. If yes, break without incrementing the loopCount
-            newLeader = les.getCurrentLeader().get();
-            if (newLeader.equals(oldLeader) == false) {
-                break;
-            }
-            ++loopCount;
-        }
-
-        // Check if maximum retries are already done. If yes, assert.
-        Assert.assertNotEquals(loopCount, MAX_RETRIES, "Leader is not changed even after maximum retries.");
-        return newLeader;
+    private LeaderBroker loopUntilLeaderChanges(LeaderElectionService les, LeaderBroker oldLeader)
+            throws InterruptedException {
+        AtomicReference<LeaderBroker> leaderBrokerReference = new AtomicReference<>();
+        Awaitility.await().ignoreExceptions().untilAsserted(() -> {
+            LeaderBroker newBroker = les.readCurrentLeader().get(1, TimeUnit.SECONDS).get();
+            assertNotEquals(newBroker, oldLeader);
+            leaderBrokerReference.set(newBroker);
+        });
+        return leaderBrokerReference.get();
     }
 
     /*
@@ -734,14 +736,18 @@ public class LoadBalancerTest {
             // Make sure both brokers see the same leader
             log.info("Old leader is : {}", oldLeader.getServiceUrl());
             for (PulsarService pulsar : activePulsar) {
-                log.info("Current leader for {} is : {}", pulsar.getWebServiceAddress(), pulsar.getLeaderElectionService().getCurrentLeader());
+                Awaitility.await().untilAsserted(() -> {
+                    log.info("Current leader for {} is : {}", pulsar.getWebServiceAddress(),
+                            pulsar.getLeaderElectionService().getCurrentLeader());
+                    // loop if current leader isn't yet available
+                    assertNotEquals(pulsar.getLeaderElectionService().readCurrentLeader().get(1, TimeUnit.SECONDS), Optional.empty());
+                });
                 assertEquals(pulsar.getLeaderElectionService().readCurrentLeader().join(), Optional.of(oldLeader));
             }
 
             // Do leader election by killing the leader broker
             leaderPulsar.close();
-            LeaderBroker newLeader = oldLeader;
-            newLeader = loopUntilLeaderChanges(followerPulsar.getLeaderElectionService(), oldLeader, newLeader);
+            LeaderBroker newLeader = loopUntilLeaderChanges(followerPulsar.getLeaderElectionService(), oldLeader);
             log.info("New leader is : {}", newLeader.getServiceUrl());
             Assert.assertNotEquals(newLeader, oldLeader);
         }
