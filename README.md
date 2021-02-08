@@ -86,8 +86,7 @@ components in the Pulsar ecosystem, including connectors, adapters, and other la
 ## Build Pulsar
 
 Requirements:
- * Java 8 JDK (for building Pulsar)
-   * When building Pulsar on a higher version (higher than Java 8), the resulting artifacts are not compatible with Java 8 runtime because of some issues, such as [issue 8445](https://github.com/apache/pulsar/issues/8445).
+ * Java 11 JDK (for building Pulsar)
  * Maven 3.6.1+
 
 Compile and install:

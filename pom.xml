@@ -1065,8 +1065,7 @@ flexible messaging model and an intuitive client API.</description>
       <plugin>
         <artifactId>maven-compiler-plugin</artifactId>
         <configuration>
-          <source>1.8</source>
-          <target>1.8</target>
+          <release>8</release>
           <encoding>UTF-8</encoding>
           <showDeprecation>true</showDeprecation>
           <showWarnings>true</showWarnings>
@@ -1332,16 +1331,17 @@ flexible messaging model and an intuitive client API.</description>
         <executions>
             <execution>
                 <id>enforce-maven</id>
+                <phase>validate</phase>
                 <goals>
                     <goal>enforce</goal>
                 </goals>
               <configuration>
                 <rules>
                   <requireJavaVersion>
-                    <version>[1.8.0,)</version>
+                    <version>[11,)</version>
                   </requireJavaVersion>
                   <requireMavenVersion>
-                    <version>[3.3.9,)</version>
+                    <version>[3.6.1,)</version>
                   </requireMavenVersion>
                 </rules>
               </configuration>
