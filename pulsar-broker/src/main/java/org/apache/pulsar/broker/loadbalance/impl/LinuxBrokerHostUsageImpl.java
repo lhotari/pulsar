@@ -104,26 +104,29 @@ public class LinuxBrokerHostUsageImpl implements BrokerHostUsage {
         double totalCpuLimit = getTotalCpuLimit();
 
         SystemResourceUsage usage = new SystemResourceUsage();
-        long now = System.currentTimeMillis();
-        double elapsedSeconds = (now - lastCollection) / 1000d;
-        double cpuUsage = getTotalCpuUsage(elapsedSeconds);
+        usage.setMemory(getMemUsage());
 
-        if (lastCollection == 0L) {
-            usage.setMemory(getMemUsage());
+        long now = System.nanoTime();
+        double cpuUsage;
+        double elapsedSeconds = lastCollection != 0L ? TimeUnit.NANOSECONDS.toSeconds(now - lastCollection) : 0;
+
+        if (elapsedSeconds <= 0) {
             usage.setBandwidthIn(new ResourceUsage(0d, totalNicLimit));
             usage.setBandwidthOut(new ResourceUsage(0d, totalNicLimit));
+            cpuUsage = 0;
         } else {
-            double nicUsageTx = (totalNicUsageTx - lastTotalNicUsageTx) / elapsedSeconds;
             double nicUsageRx = (totalNicUsageRx - lastTotalNicUsageRx) / elapsedSeconds;
-
-            usage.setMemory(getMemUsage());
             usage.setBandwidthIn(new ResourceUsage(nicUsageRx, totalNicLimit));
+
+            double nicUsageTx = (totalNicUsageTx - lastTotalNicUsageTx) / elapsedSeconds;
             usage.setBandwidthOut(new ResourceUsage(nicUsageTx, totalNicLimit));
+
+            cpuUsage = getTotalCpuUsage(elapsedSeconds);
         }
 
         lastTotalNicUsageTx = totalNicUsageTx;
         lastTotalNicUsageRx = totalNicUsageRx;
-        lastCollection = System.currentTimeMillis();
+        lastCollection = now;
         this.usage = usage;
         usage.setCpu(new ResourceUsage(cpuUsage, totalCpuLimit));
     }
