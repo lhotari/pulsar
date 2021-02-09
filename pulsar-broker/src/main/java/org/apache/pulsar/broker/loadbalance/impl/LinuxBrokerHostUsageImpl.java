@@ -20,6 +20,7 @@ package org.apache.pulsar.broker.loadbalance.impl;
 
 import com.google.common.base.Charsets;
 import com.sun.management.OperatingSystemMXBean;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
@@ -56,9 +57,9 @@ public class LinuxBrokerHostUsageImpl implements BrokerHostUsage {
     private final Optional<Double> overrideBrokerNicSpeedGbps;
     private final boolean isCGroupsEnabled;
 
-    private static final String CGROUPS_CPU_USAGE_PATH = "/sys/fs/cgroup/cpu/cpuacct.usage";
-    private static final String CGROUPS_CPU_LIMIT_QUOTA_PATH = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us";
-    private static final String CGROUPS_CPU_LIMIT_PERIOD_PATH = "/sys/fs/cgroup/cpu/cpu.cfs_period_us";
+    private static final Path CGROUPS_CPU_USAGE_PATH = Paths.get("/sys/fs/cgroup/cpu/cpuacct.usage");
+    private static final Path CGROUPS_CPU_LIMIT_QUOTA_PATH = Paths.get("/sys/fs/cgroup/cpu/cpu.cfs_quota_us");
+    private static final Path CGROUPS_CPU_LIMIT_PERIOD_PATH = Paths.get("/sys/fs/cgroup/cpu/cpu.cfs_period_us");
 
     public LinuxBrokerHostUsageImpl(PulsarService pulsar) {
         this(
@@ -80,7 +81,7 @@ public class LinuxBrokerHostUsageImpl implements BrokerHostUsage {
 
         boolean isCGroupsEnabled = false;
         try {
-             isCGroupsEnabled = Files.exists(Paths.get(CGROUPS_CPU_USAGE_PATH));
+             isCGroupsEnabled = Files.exists(CGROUPS_CPU_USAGE_PATH);
         } catch (Exception e) {
             log.warn("Failed to check cgroup CPU usage file: {}", e.getMessage());
         }
@@ -216,7 +217,7 @@ public class LinuxBrokerHostUsageImpl implements BrokerHostUsage {
     private boolean isPhysicalNic(Path path) {
         if (!path.toString().contains("/virtual/")) {
             try {
-                Files.readAllBytes(path.resolve("speed"));
+                readFileToString(path.resolve("speed"));
                 return true;
             } catch (Exception e) {
                 // wireless nics don't report speed, ignore them.
@@ -237,7 +238,7 @@ public class LinuxBrokerHostUsageImpl implements BrokerHostUsage {
                 .orElseGet(() -> nics.stream().mapToDouble(s -> {
                     // Nic speed is in Mbits/s, return kbits/s
                     try {
-                        return Double.parseDouble(new String(Files.readAllBytes(getNicSpeedPath(s))));
+                        return readDoubleFromFile(getNicSpeedPath(s));
                     } catch (IOException e) {
                         log.error("Failed to read speed for nic " + s, e);
                         return 0d;
@@ -256,7 +257,7 @@ public class LinuxBrokerHostUsageImpl implements BrokerHostUsage {
     private double getTotalNicUsageRxKb(List<String> nics) {
         return nics.stream().mapToDouble(s -> {
             try {
-                return Double.parseDouble(new String(Files.readAllBytes(getNicRxPath(s))));
+                return readDoubleFromFile(getNicRxPath(s));
             } catch (IOException e) {
                 log.error("Failed to read rx_bytes for NIC " + s, e);
                 return 0d;
@@ -267,7 +268,7 @@ public class LinuxBrokerHostUsageImpl implements BrokerHostUsage {
     private double getTotalNicUsageTxKb(List<String> nics) {
         return nics.stream().mapToDouble(s -> {
             try {
-                return Double.parseDouble(new String(Files.readAllBytes(getNicTxPath(s))));
+                return readDoubleFromFile(getNicTxPath(s));
             } catch (IOException e) {
                 log.error("Failed to read tx_bytes for NIC " + s, e);
                 return 0d;
@@ -275,7 +276,19 @@ public class LinuxBrokerHostUsageImpl implements BrokerHostUsage {
         }).sum() * 8 / 1024;
     }
 
-    private static long readLongFromFile(String path) throws IOException {
-        return Long.parseLong(new String(Files.readAllBytes(Paths.get(path)), Charsets.UTF_8).trim());
+    private static double readDoubleFromFile(Path path) throws IOException {
+        return Double.parseDouble(readFileToString(path));
+    }
+
+    private static long readLongFromFile(Path path) throws IOException {
+        return Long.parseLong(readFileToString(path));
+    }
+
+    private static String readFileToString(Path path) throws IOException {
+        // replacement for Files.readAllBytes since it could sometimes fail
+        // to read "files" from /proc or /sys/fs filesystems
+        ByteArrayOutputStream bout = new ByteArrayOutputStream();
+        Files.copy(path, bout);
+        return new String(bout.toByteArray(), Charsets.UTF_8).trim();
     }
 }
