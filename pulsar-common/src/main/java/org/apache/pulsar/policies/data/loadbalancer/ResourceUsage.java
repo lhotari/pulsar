@@ -25,8 +25,8 @@ import lombok.EqualsAndHashCode;
  */
 @EqualsAndHashCode
 public class ResourceUsage {
-    public double usage;
-    public double limit;
+    public final double usage;
+    public final double limit;
 
     public ResourceUsage(double usage, double limit) {
         this.usage = usage;
@@ -39,9 +39,6 @@ public class ResourceUsage {
     }
 
     public ResourceUsage() {
-    }
-
-    public void reset() {
         this.usage = -1;
         this.limit = -1;
     }

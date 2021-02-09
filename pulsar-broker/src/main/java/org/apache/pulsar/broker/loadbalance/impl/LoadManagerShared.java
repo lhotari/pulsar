@@ -49,6 +49,7 @@ import org.apache.pulsar.common.policies.data.LocalPolicies;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.collections.ConcurrentOpenHashMap;
 import org.apache.pulsar.common.util.collections.ConcurrentOpenHashSet;
+import org.apache.pulsar.policies.data.loadbalancer.ResourceUsage;
 import org.apache.pulsar.policies.data.loadbalancer.SystemResourceUsage;
 import org.apache.pulsar.zookeeper.ZooKeeperDataCache;
 import org.slf4j.Logger;
@@ -221,13 +222,12 @@ public class LoadManagerShared {
         // Override System memory usage and limit with JVM heap usage and limit
         long maxHeapMemoryInBytes = Runtime.getRuntime().maxMemory();
         long memoryUsageInBytes = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-        systemResourceUsage.memory.usage = (double) memoryUsageInBytes / MIBI;
-        systemResourceUsage.memory.limit = (double) maxHeapMemoryInBytes / MIBI;
+        systemResourceUsage.setMemory(new ResourceUsage((double) memoryUsageInBytes / MIBI,
+                (double) maxHeapMemoryInBytes / MIBI));
 
         // Collect JVM direct memory
-        systemResourceUsage.directMemory.usage = (double) (getJvmDirectMemoryUsed() / MIBI);
-        systemResourceUsage.directMemory.limit =
-                (double) (io.netty.util.internal.PlatformDependent.maxDirectMemory() / MIBI);
+        systemResourceUsage.setDirectMemory(new ResourceUsage((double) getJvmDirectMemoryUsed() / MIBI,
+                (double) io.netty.util.internal.PlatformDependent.maxDirectMemory() / MIBI));
 
         return systemResourceUsage;
     }

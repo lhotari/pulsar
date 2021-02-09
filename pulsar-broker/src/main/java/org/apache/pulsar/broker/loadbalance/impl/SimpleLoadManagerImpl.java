@@ -66,6 +66,7 @@ import org.apache.pulsar.common.util.collections.ConcurrentOpenHashSet;
 import org.apache.pulsar.policies.data.loadbalancer.LoadReport;
 import org.apache.pulsar.policies.data.loadbalancer.NamespaceBundleStats;
 import org.apache.pulsar.policies.data.loadbalancer.ResourceUnitRanking;
+import org.apache.pulsar.policies.data.loadbalancer.ResourceUsage;
 import org.apache.pulsar.policies.data.loadbalancer.SystemResourceUsage;
 import org.apache.pulsar.policies.data.loadbalancer.SystemResourceUsage.ResourceType;
 import org.apache.pulsar.zookeeper.ZooKeeperCache.Deserializer;
@@ -1110,7 +1111,8 @@ public class SimpleLoadManagerImpl implements LoadManager, ZooKeeperCacheListene
     public SystemResourceUsage getSystemResourceUsage() throws IOException {
         SystemResourceUsage systemResourceUsage = LoadManagerShared.getSystemResourceUsage(brokerHostUsage);
         long memoryUsageInMBytes = getAverageJvmHeapUsageMBytes();
-        systemResourceUsage.memory.usage = (double) memoryUsageInMBytes;
+        systemResourceUsage.setMemory(
+                new ResourceUsage((double) memoryUsageInMBytes, systemResourceUsage.getMemory().limit));
         return systemResourceUsage;
     }
 
