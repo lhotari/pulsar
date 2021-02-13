@@ -28,6 +28,7 @@
   </parent>
 
   <artifactId>pulsar-io-aerospike</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: Aerospike</name>
 
   <dependencies>

@@ -26,6 +26,7 @@
     <version>2.8.0-SNAPSHOT</version>
   </parent>
   <artifactId>pulsar-io-hdfs2</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: Hdfs2</name>
   
     <dependencies>

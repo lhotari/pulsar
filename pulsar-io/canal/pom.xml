@@ -30,6 +30,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>pulsar-io-canal</artifactId>
+    <packaging>nar</packaging>
     <name>Pulsar IO :: Canal</name>
 
     <dependencies>

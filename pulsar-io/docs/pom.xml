@@ -51,71 +51,85 @@
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-canal</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-cassandra</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-data-generator</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-elastic-search</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-hdfs2</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-hdfs3</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-jdbc-clickhouse</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-jdbc-mariadb</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-jdbc-postgres</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-jdbc-sqlite</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-kafka</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-kinesis</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-rabbitmq</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-twitter</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
     </dependency>
   </dependencies>
 

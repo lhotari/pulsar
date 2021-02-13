@@ -29,6 +29,7 @@
     </parent>
 
     <artifactId>pulsar-io-netty</artifactId>
+    <packaging>nar</packaging>
     <name>Pulsar IO :: Netty</name>
 
     <dependencies>

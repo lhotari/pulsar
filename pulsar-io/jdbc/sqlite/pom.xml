@@ -28,6 +28,7 @@
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>pulsar-io-jdbc-sqlite</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: Jdbc :: Sqlite</name>
 
   <dependencies>

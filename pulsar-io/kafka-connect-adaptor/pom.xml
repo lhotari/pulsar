@@ -28,6 +28,7 @@
   </parent>
 
   <artifactId>pulsar-io-kafka-connect-adaptor</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: Kafka Connect Adaptor</name>
 
   <dependencies>

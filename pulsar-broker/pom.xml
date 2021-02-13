@@ -315,6 +315,7 @@
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-data-generator</artifactId>
       <version>${project.version}</version>
+      <type>nar</type>
       <scope>test</scope>
     </dependency>
 
@@ -357,6 +358,14 @@
       <type>test-jar</type>
       <scope>test</scope>
     </dependency>
+
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-io-data-generator</artifactId>
+      <version>${project.version}</version>
+      <type>nar</type>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -393,6 +402,17 @@
       </plugin>
 
       <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <systemPropertyVariables>
+            <pulsar-io-data-generator.nar.path>${settings.localRepository}/org/apache/pulsar/pulsar-io-data-generator/${project.version}/pulsar-io-data-generator-${project.version}.nar</pulsar-io-data-generator.nar.path>
+            <pulsar-functions-api-examples.jar.path>${settings.localRepository}/org/apache/pulsar/pulsar-functions-api-examples/${project.version}/pulsar-functions-api-examples-${project.version}.jar</pulsar-functions-api-examples.jar.path>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+
+      <plugin>
         <groupId>org.xolstice.maven.plugins</groupId>
         <artifactId>protobuf-maven-plugin</artifactId>
         <version>${protobuf-maven-plugin.version}</version>
@@ -410,30 +430,6 @@
           </execution>
         </executions>
       </plugin>
-
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-antrun-plugin</artifactId>
-        <executions>
-          <execution>
-            <phase>compile</phase>
-            <goals>
-              <goal>run</goal>
-            </goals>
-            <configuration>
-              <target>
-                <echo>copy test examples package</echo>
-                <mkdir dir="${basedir}/src/test/resources"/>
-                <copy file="${basedir}/../pulsar-functions/java-examples/target/pulsar-functions-api-examples.jar"
-                      tofile="${basedir}/src/test/resources/pulsar-functions-api-examples.jar"/>
-                <copy file="${basedir}/../pulsar-io/data-generator/target/pulsar-io-data-generator-${project.version}.nar"
-                      tofile="${basedir}/src/test/resources/pulsar-io-data-generator.nar"/>
-              </target>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
-
     </plugins>
     <resources>
       <resource>

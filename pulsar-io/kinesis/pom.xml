@@ -28,6 +28,7 @@
   </parent>
 
   <artifactId>pulsar-io-kinesis</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: Kinesis</name>
 
   <dependencies>

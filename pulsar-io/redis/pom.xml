@@ -29,6 +29,7 @@
     </parent>
 
     <artifactId>pulsar-io-redis</artifactId>
+    <packaging>nar</packaging>
     <name>Pulsar IO :: Redis</name>
 
     <dependencies>

@@ -29,6 +29,7 @@
     </parent>
 
     <artifactId>pulsar-io-influxdb</artifactId>
+    <packaging>nar</packaging>
     <name>Pulsar IO :: InfluxDB</name>
 
     <dependencies>

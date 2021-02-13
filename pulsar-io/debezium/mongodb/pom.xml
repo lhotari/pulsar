@@ -28,6 +28,7 @@
     </parent>
 
     <artifactId>pulsar-io-debezium-mongodb</artifactId>
+    <packaging>nar</packaging>
     <name>Pulsar IO :: Debezium :: mongodb</name>
 
     <dependencies>

@@ -184,14 +184,18 @@ The easiest approach to package a Pulsar connector is to create a NAR package us
 Include this [nifi-nar-maven-plugin](https://mvnrepository.com/artifact/org.apache.nifi/nifi-nar-maven-plugin) in your maven project for your connector as below. 
 
 ```xml
-<plugins>
-  <plugin>
-    <groupId>org.apache.nifi</groupId>
-    <artifactId>nifi-nar-maven-plugin</artifactId>
-    <version>1.2.0</version>
-  </plugin>
-</plugins>
+  <packaging>nar</packaging>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.nifi</groupId>
+        <artifactId>nifi-nar-maven-plugin</artifactId>
+        <version>1.2.0</version>
+      </plugin>
+    </plugins>
+  </build>
 ```
+
 
 You must also create a `resources/META-INF/services/pulsar-io.yaml` file with the following contents:
 

@@ -28,6 +28,7 @@
   </parent>
  
   <artifactId>pulsar-io-nsq</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: NSQ</name>
 
   <dependencies>

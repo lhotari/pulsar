@@ -27,6 +27,7 @@
   </parent>
 
   <artifactId>pulsar-io-file</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: File</name>
   
   <dependencies>

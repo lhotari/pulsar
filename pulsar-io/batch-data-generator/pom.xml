@@ -28,6 +28,7 @@
     </parent>
 
     <artifactId>pulsar-io-batch-data-generator</artifactId>
+    <packaging>nar</packaging>
     <name>Pulsar IO :: Batch Data Generator</name>
 
     <dependencies>

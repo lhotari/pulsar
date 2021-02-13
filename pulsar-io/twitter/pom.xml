@@ -28,6 +28,7 @@
   </parent>
 
   <artifactId>pulsar-io-twitter</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: Twitter</name>
 
   <dependencies>

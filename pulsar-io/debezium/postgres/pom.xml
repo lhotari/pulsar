@@ -28,6 +28,7 @@
   </parent>
 
   <artifactId>pulsar-io-debezium-postgres</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: Debezium :: postgres</name>
 
   <dependencies>

@@ -28,6 +28,7 @@
   </parent>
 
   <artifactId>pulsar-io-dynamodb</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: DynamoDB</name>
 
   <dependencies>

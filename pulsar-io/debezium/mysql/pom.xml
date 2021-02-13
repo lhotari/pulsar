@@ -28,6 +28,7 @@
   </parent>
 
   <artifactId>pulsar-io-debezium-mysql</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: Debezium :: mysql</name>
 
   <dependencies>

@@ -28,6 +28,7 @@
   </parent>
 
   <artifactId>pulsar-io-rabbitmq</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: RabbitMQ</name>
 
   <dependencies>

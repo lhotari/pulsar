@@ -30,6 +30,7 @@
     </parent>
 
     <artifactId>tiered-storage-file-system</artifactId>
+    <packaging>nar</packaging>
     <name>Apache Pulsar :: Tiered Storage :: File System</name>
     <dependencies>
         <dependency>

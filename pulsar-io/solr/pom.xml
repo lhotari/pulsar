@@ -33,6 +33,7 @@
     </properties>
 
     <artifactId>pulsar-io-solr</artifactId>
+    <packaging>nar</packaging>
     <name>Pulsar IO :: Solr</name>
 
     <dependencies>

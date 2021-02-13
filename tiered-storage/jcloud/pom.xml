@@ -30,6 +30,7 @@
   </parent>
 
   <artifactId>tiered-storage-jcloud</artifactId>
+  <packaging>nar</packaging>
   <name>Apache Pulsar :: Tiered Storage :: JCloud</name>
 
   <dependencies>

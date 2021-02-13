@@ -30,6 +30,7 @@
   </parent>
 
   <artifactId>pulsar-io-mongo</artifactId>
+  <packaging>nar</packaging>
   <name>Pulsar IO :: MongoDB</name>
 
   <properties>
