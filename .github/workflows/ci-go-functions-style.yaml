@@ -22,63 +22,65 @@ on:
   pull_request:
     branches:
       - master
-    paths:
-      - '.github/workflows/**'
-      - 'pulsar-function-go/**'
   push:
     branches:
       - branch-*
-    paths:
-      - '.github/workflows/**'
-      - 'pulsar-function-go/**'
 
 env:
-  MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.count=3
+  MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.class=standard -Dmaven.wagon.http.retryHandler.count=3
 
 jobs:
-  check-style:
+  skip_check_job:
+    name: 'Check if workflow should be skipped'
+    runs-on: ubuntu-20.04
+    outputs:
+      should_skip: ${{ steps.skip_check.outputs.should_skip }}
+    steps:
+      - id: skip_check
+        uses: fkirc/skip-duplicate-actions@master
+        with:
+          paths: '[".github/workflows/**", "pulsar-function-go/**"]'
+          skip_after_successful_duplicate: 'false'
+          cancel_others: 'false'
 
+  check-style:
+    needs: skip_check_job
+    if: ${{ needs.skip_check_job.outputs.should_skip != 'true' }}
     name: Go ${{ matrix.go-version }} Functions style check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     strategy:
       matrix:
         go-version: [1.11, 1.12, 1.13, 1.14]
 
     steps:
-      - name: Check out code into the Go module directory
+      - name: Checkout pull request HEAD commit
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v2
         with:
-          fetch-depth: 100
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Check if this pull request only changes documentation
-        id:   docs
-        uses: apache/pulsar-test-infra/diff-only@master
-        with:
-          args: site2 deployment .asf.yaml .ci ct.yaml
+      - name: Checkout pushed commit on branch
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@v2
 
       - name: Set up Go
         uses: actions/setup-go@v2
-        if: steps.docs.outputs.changed_only == 'no'
         with:
           go-version: ${{ matrix.go-version }}
         id: go
 
       - name: InstallTool
-        if: steps.docs.outputs.changed_only == 'no'
         run: |
           cd pulsar-function-go
           wget -O - -q https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s v1.18.0
           ./bin/golangci-lint --version
 
       - name: Build
-        if: steps.docs.outputs.changed_only == 'no'
         run: |
           cd pulsar-function-go
           go build ./...
 
       - name: CheckStyle
-        if: steps.docs.outputs.changed_only == 'no'
         run: |
           cd pulsar-function-go
           ./bin/golangci-lint run -c ./golangci.yml ./pf

@@ -25,21 +25,19 @@ on:
     types: [closed]
 
 env:
-  MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.count=3
+  MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.class=standard -Dmaven.wagon.http.retryHandler.count=3
 
 jobs:
 
   action-runner:
     name:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    runs-on: ubuntu-20.04
+    timeout-minutes: 10
 
     steps:
       - name: checkout
         uses: actions/checkout@v2
-        with:
-          fetch-depth: 100
-          ref: ${{ github.event.pull_request.head.sha }}
+        if: github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/pulsarbot')
 
       - name: Execute pulsarbot command
         id:   pulsarbot

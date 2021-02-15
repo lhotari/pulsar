@@ -23,16 +23,22 @@ on:
     - cron: '0 */6 * * *'
 
 env:
-  MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.count=3
+  MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.class=standard -Dmaven.wagon.http.retryHandler.count=3
 
 jobs:
   build-website:
     name: Build and publish pulsar website
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     timeout-minutes: 120
     steps:
-      - name: checkout
+      - name: Checkout
         uses: actions/checkout@v2
+
+      - name: Tune OS
+        uses: ./.github/actions/tune-os
+
+      - name: Clean Disk
+        uses: ./.github/actions/clean-disk
 
       - name: build
         run: mvn -B clean package -DskipTests -Pswagger
