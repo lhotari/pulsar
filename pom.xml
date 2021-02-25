@@ -1623,6 +1623,10 @@ flexible messaging model and an intuitive client API.</description>
     </profile>
     <profile>
       <id>docker</id>
+      <modules>
+        <module>docker</module>
+        <module>tests</module>
+      </modules>
     </profile>
 
     <profile>
