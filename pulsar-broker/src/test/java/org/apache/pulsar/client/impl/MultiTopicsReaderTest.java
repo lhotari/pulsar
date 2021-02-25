@@ -84,7 +84,7 @@ public class MultiTopicsReaderTest extends MockedPulsarServiceBaseTest {
         testReadMessages(topic, false);
     }
 
-    @Test(timeOut = 10000)
+    @Test(timeOut = 20000)
     public void testReadMessageWithoutBatchingWithMessageInclusive() throws Exception {
         String topic = "persistent://my-property/my-ns/my-reader-topic-inclusive";
         int topicNum = 3;
@@ -102,14 +102,14 @@ public class MultiTopicsReaderTest extends MockedPulsarServiceBaseTest {
         Assert.assertFalse(reader.hasMessageAvailable());
     }
 
-    @Test(timeOut = 10000)
+    @Test(timeOut = 20000)
     public void testReadMessageWithBatching() throws Exception {
         String topic = "persistent://my-property/my-ns/my-reader-topic-with-batching";
         admin.topics().createPartitionedTopic(topic, 3);
         testReadMessages(topic, true);
     }
 
-    @Test(timeOut = 10000)
+    @Test(timeOut = 20000)
     public void testReadMessageWithBatchingWithMessageInclusive() throws Exception {
         String topic = "persistent://my-property/my-ns/my-reader-topic-with-batching-inclusive";
         int topicNum = 3;
@@ -131,7 +131,7 @@ public class MultiTopicsReaderTest extends MockedPulsarServiceBaseTest {
         Assert.assertFalse(reader.hasMessageAvailable());
     }
 
-    @Test(timeOut = 10000)
+    @Test(timeOut = 20000)
     public void testReaderWithTimeLong() throws Exception {
         String ns = "my-property/my-ns";
         String topic = "persistent://" + ns + "/testReadFromPartition";
@@ -194,7 +194,7 @@ public class MultiTopicsReaderTest extends MockedPulsarServiceBaseTest {
         assertFalse(reader.hasMessageAvailable());
     }
 
-    @Test(timeOut = 10000)
+    @Test(timeOut = 20000)
     public void testRemoveSubscriptionForReaderNeedRemoveCursor() throws IOException, PulsarAdminException {
 
         final String topic = "persistent://my-property/my-ns/testRemoveSubscriptionForReaderNeedRemoveCursor";
@@ -232,7 +232,7 @@ public class MultiTopicsReaderTest extends MockedPulsarServiceBaseTest {
 
     }
 
-    @Test(timeOut = 10000)
+    @Test(timeOut = 20000)
     public void testMultiReaderSeek() throws Exception {
         String topic = "persistent://my-property/my-ns/testKeyHashRangeReader";
         admin.topics().createPartitionedTopic(topic, 3);
@@ -241,7 +241,7 @@ public class MultiTopicsReaderTest extends MockedPulsarServiceBaseTest {
         Collections.sort(idList);
     }
 
-    @Test(timeOut = 10000)
+    @Test(timeOut = 20000)
     public void testKeyHashRangeReader() throws Exception {
         final List<String> keys = Arrays.asList("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
         final String topic = "persistent://my-property/my-ns/testKeyHashRangeReader";
