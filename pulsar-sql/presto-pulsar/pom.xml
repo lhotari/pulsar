@@ -36,6 +36,7 @@
         <dep.airlift.version>0.199</dep.airlift.version>
         <jctools.version>2.1.2</jctools.version>
         <dslJson.verson>1.8.4</dslJson.verson>
+        <shadePluginPhase>package</shadePluginPhase>
     </properties>
 
     <dependencies>
@@ -130,7 +131,7 @@
                 <artifactId>maven-shade-plugin</artifactId>
                 <executions>
                     <execution>
-                        <phase>package</phase>
+                        <phase>${shadePluginPhase}</phase>
                         <goals>
                             <goal>shade</goal>
                         </goals>

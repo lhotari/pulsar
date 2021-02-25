@@ -32,6 +32,9 @@
 
   <artifactId>jclouds-shaded</artifactId>
   <name>Apache Pulsar :: Jclouds shaded</name>
+  <properties>
+    <shadePluginPhase>package</shadePluginPhase>
+  </properties>
 
   <dependencies>
     <dependency>
@@ -59,7 +62,7 @@
         <artifactId>maven-shade-plugin</artifactId>
         <executions>
           <execution>
-            <phase>package</phase>
+            <phase>${shadePluginPhase}</phase>
             <goals>
               <goal>shade</goal>
             </goals>

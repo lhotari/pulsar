@@ -28,6 +28,9 @@
     <modelVersion>4.0.0</modelVersion>
     <artifactId>java-test-functions</artifactId>
     <name>Apache Pulsar :: Tests :: Docker Images :: Java Test Functions</name>
+    <properties>
+        <shadePluginPhase>package</shadePluginPhase>
+    </properties>
     <dependencies>
         <dependency>
             <groupId>org.apache.pulsar</groupId>
@@ -61,7 +64,7 @@
                 <artifactId>maven-shade-plugin</artifactId>
                 <executions>
                     <execution>
-                        <phase>package</phase>
+                        <phase>${shadePluginPhase}</phase>
                         <goals>
                             <goal>shade</goal>
                         </goals>

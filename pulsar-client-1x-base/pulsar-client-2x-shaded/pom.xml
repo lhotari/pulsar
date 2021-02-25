@@ -32,6 +32,10 @@
   <artifactId>pulsar-client-2x-shaded</artifactId>
   <name>Pulsar Client 2.x Shaded API</name>
 
+  <properties>
+    <shadePluginPhase>package</shadePluginPhase>
+  </properties>
+
   <dependencies>
     <dependency>
       <groupId>${project.groupId}</groupId>
@@ -48,7 +52,7 @@
         <artifactId>maven-shade-plugin</artifactId>
         <executions>
           <execution>
-            <phase>package</phase>
+            <phase>${shadePluginPhase}</phase>
             <goals>
               <goal>shade</goal>
             </goals>

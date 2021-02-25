@@ -34,6 +34,10 @@
   <packaging>jar</packaging>
   <name>Pulsar Shaded Broker</name>
 
+  <properties>
+    <shadePluginPhase>package</shadePluginPhase>
+  </properties>
+
   <dependencies>
     <dependency>
       <groupId>${project.groupId}</groupId>
@@ -49,7 +53,7 @@
         <artifactId>maven-shade-plugin</artifactId>
         <executions>
           <execution>
-            <phase>package</phase>
+            <phase>${shadePluginPhase}</phase>
             <goals>
               <goal>shade</goal>
             </goals>
