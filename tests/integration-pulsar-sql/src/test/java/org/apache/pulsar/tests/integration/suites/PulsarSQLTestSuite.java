@@ -22,11 +22,13 @@ import java.util.HashMap;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.tests.integration.containers.BrokerContainer;
+import org.apache.pulsar.tests.integration.containers.PulsarContainer;
 import org.apache.pulsar.tests.integration.containers.S3Container;
+import org.apache.pulsar.tests.integration.presto.PulsarClusterWithPresto;
 import org.apache.pulsar.tests.integration.topologies.PulsarClusterSpec;
 
 @Slf4j
-public abstract class PulsarSQLTestSuite extends PulsarTestSuite {
+public abstract class PulsarSQLTestSuite extends AbstractPulsarTestSuite<PulsarClusterWithPresto> {
 
     public final static int ENTRIES_PER_LEDGER = 100;
     public final static String OFFLOAD_DRIVER = "aws-s3";
@@ -34,11 +36,17 @@ public abstract class PulsarSQLTestSuite extends PulsarTestSuite {
     public final static String ENDPOINT = "http://" + S3Container.NAME + ":9090";
 
     @Override
+    protected PulsarClusterWithPresto createPulsarClusterInstance(PulsarClusterSpec spec) {
+        return new PulsarClusterWithPresto(spec);
+    }
+
+    @Override
     protected PulsarClusterSpec.PulsarClusterSpecBuilder beforeSetupCluster(String clusterName, PulsarClusterSpec.PulsarClusterSpecBuilder specBuilder) {
-        specBuilder.queryLastMessage(true);
-        specBuilder.clusterName("pulsar-sql-test");
-        specBuilder.numBrokers(1);
-        return super.beforeSetupCluster(clusterName, specBuilder);
+        return super.beforeSetupCluster(clusterName, specBuilder)
+                .pulsarTestImage(PulsarContainer.DEFAULT_SYSTEM_IMAGE_NAME)
+                .queryLastMessage(true)
+                .clusterName("pulsar-sql-test")
+                .numBrokers(1);
     }
 
     @Override

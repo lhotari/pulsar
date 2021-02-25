@@ -64,7 +64,6 @@ public class ClusterMetadataTearDownTest {
             .clusterName("ClusterMetadataTearDownTest-" + UUID.randomUUID().toString().substring(0, 8))
             .numProxies(0)
             .numFunctionWorkers(0)
-            .enablePrestoWorker(false)
             .build();
 
     private final PulsarCluster pulsarCluster = PulsarCluster.forSpec(spec);

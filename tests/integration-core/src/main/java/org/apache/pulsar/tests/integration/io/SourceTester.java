@@ -18,11 +18,11 @@
  */
 package org.apache.pulsar.tests.integration.io;
 
+import com.google.common.collect.Maps;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.api.Consumer;
@@ -32,7 +32,6 @@ import org.apache.pulsar.client.api.schema.GenericRecord;
 import org.apache.pulsar.common.schema.KeyValue;
 import org.testcontainers.containers.GenericContainer;
 import org.testng.Assert;
-import org.testng.collections.Maps;
 
 /**
  * A tester used for testing a specific source.

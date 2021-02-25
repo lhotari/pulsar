@@ -31,16 +31,6 @@
   <groupId>org.apache.pulsar.tests</groupId>
   <artifactId>tests-parent</artifactId>
   <name>Apache Pulsar :: Tests</name>
-  <modules>
-    <module>docker-images</module>
-    <module>integration</module>
-    <module>bc_2_0_0</module>
-    <module>bc_2_0_1</module>
-    <module>bc_2_6_0</module>
-    <module>pulsar-client-all-shade-test</module>
-    <module>pulsar-client-shade-test</module>
-    <module>pulsar-client-admin-shade-test</module>
-  </modules>
   <build>
     <plugins>
       <plugin>
@@ -52,4 +42,80 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <profile>
+      <id>main</id>
+      <activation>
+        <activeByDefault>true</activeByDefault>
+      </activation>
+      <modules>
+        <module>integration</module>
+        <module>bc_2_0_0</module>
+        <module>bc_2_0_1</module>
+        <module>bc_2_6_0</module>
+        <module>integration-core</module>
+        <module>integration-pulsar-connectors</module>
+        <module>integration-pulsar-sql</module>
+        <module>docker-images</module>
+      </modules>
+    </profile>
+    <profile>
+      <id>docker</id>
+      <modules>
+        <module>docker-images</module>
+      </modules>
+    </profile>
+    <profile>
+      <id>integrationTests</id>
+      <activation>
+        <property>
+          <name>integrationTests</name>
+        </property>
+      </activation>
+      <modules>
+        <module>integration</module>
+        <module>bc_2_0_0</module>
+        <module>bc_2_0_1</module>
+        <module>bc_2_6_0</module>
+        <module>integration-core</module>
+      </modules>
+    </profile>
+    <profile>
+      <id>integrationTestsPulsarConnectors</id>
+      <activation>
+        <property>
+          <name>integrationTestsPulsarConnectors</name>
+        </property>
+      </activation>
+      <modules>
+        <module>integration-core</module>
+        <module>integration-pulsar-connectors</module>
+      </modules>
+    </profile>
+    <profile>
+      <id>integrationTestsPulsarSql</id>
+      <activation>
+        <property>
+          <name>integrationTestsPulsarSql</name>
+        </property>
+      </activation>
+      <modules>
+        <module>integration-core</module>
+        <module>integration-pulsar-sql</module>
+      </modules>
+    </profile>
+    <profile>
+      <id>ShadeTests</id>
+      <activation>
+        <property>
+          <name>ShadeTests</name>
+        </property>
+      </activation>
+      <modules>
+        <module>pulsar-client-all-shade-test</module>
+        <module>pulsar-client-shade-test</module>
+        <module>pulsar-client-admin-shade-test</module>
+      </modules>
+    </profile>
+  </profiles>
 </project>

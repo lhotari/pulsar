@@ -24,7 +24,6 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 import com.google.gson.Gson;
-
 import java.time.Duration;
 import java.util.Collections;
 import java.util.HashSet;
@@ -35,7 +34,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-
 import lombok.Cleanup;
 import lombok.extern.slf4j.Slf4j;
 import net.jodah.failsafe.Failsafe;
@@ -72,6 +70,7 @@ import org.apache.pulsar.functions.api.examples.serde.CustomObject;
 import org.apache.pulsar.tests.integration.containers.DebeziumMongoDbContainer;
 import org.apache.pulsar.tests.integration.containers.DebeziumMySQLContainer;
 import org.apache.pulsar.tests.integration.containers.DebeziumPostgreSqlContainer;
+import org.apache.pulsar.tests.integration.containers.PulsarContainer;
 import org.apache.pulsar.tests.integration.docker.ContainerExecException;
 import org.apache.pulsar.tests.integration.docker.ContainerExecResult;
 import org.apache.pulsar.tests.integration.functions.utils.CommandGenerator;
@@ -92,6 +91,7 @@ import org.apache.pulsar.tests.integration.io.SinkTester;
 import org.apache.pulsar.tests.integration.io.SourceTester;
 import org.apache.pulsar.tests.integration.topologies.FunctionRuntimeType;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
+import org.apache.pulsar.tests.integration.topologies.PulsarClusterSpec;
 import org.assertj.core.api.Assertions;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.shaded.com.google.common.collect.Sets;
@@ -115,6 +115,13 @@ public abstract class PulsarFunctionsTest extends PulsarFunctionsTestBase {
 
     PulsarFunctionsTest(FunctionRuntimeType functionRuntimeType) {
         super(functionRuntimeType);
+    }
+
+    @Override
+    protected PulsarClusterSpec.PulsarClusterSpecBuilder beforeSetupCluster(String clusterName,
+                                                                            PulsarClusterSpec.PulsarClusterSpecBuilder specBuilder) {
+        return super.beforeSetupCluster(clusterName, specBuilder)
+                .pulsarTestImage(PulsarContainer.DEFAULT_SYSTEM_IMAGE_NAME);
     }
 
     @Test(groups = "sink")
@@ -889,8 +896,8 @@ public abstract class PulsarFunctionsTest extends PulsarFunctionsTestBase {
         }
 
         if (pulsarCluster == null) {
-            super.setupCluster();
-            super.setupFunctionWorkers();
+            setupCluster();
+            setupFunctionWorkers();
         }
 
         String inputTopicName = "persistent://public/default/test-function-local-run-" + runtime + "-input-" + randomName(8);
@@ -1783,7 +1790,7 @@ public abstract class PulsarFunctionsTest extends PulsarFunctionsTestBase {
         assertTrue(result.getStdout().contains("\"Updated successfully\""));
     }
 
-    private <T> void submitFunction(Runtime runtime,
+    private     <T> void submitFunction(Runtime runtime,
                                            String inputTopicName,
                                            String outputTopicName,
                                            String functionName,

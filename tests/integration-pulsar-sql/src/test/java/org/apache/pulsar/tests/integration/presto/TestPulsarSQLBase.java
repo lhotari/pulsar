@@ -19,7 +19,6 @@
 package org.apache.pulsar.tests.integration.presto;
 
 import static org.assertj.core.api.Assertions.assertThat;
-
 import com.google.common.base.Stopwatch;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -34,10 +33,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.schema.SchemaType;
+import org.apache.pulsar.tests.integration.containers.PulsarContainer;
 import org.apache.pulsar.tests.integration.docker.ContainerExecException;
 import org.apache.pulsar.tests.integration.docker.ContainerExecResult;
 import org.apache.pulsar.tests.integration.suites.PulsarSQLTestSuite;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
+import org.apache.pulsar.tests.integration.topologies.PulsarClusterSpec;
 import org.awaitility.Awaitility;
 import org.testcontainers.shaded.okhttp3.OkHttpClient;
 import org.testcontainers.shaded.okhttp3.Request;
@@ -50,6 +51,12 @@ import org.testng.Assert;
  */
 @Slf4j
 public class TestPulsarSQLBase extends PulsarSQLTestSuite {
+    @Override
+    protected PulsarClusterSpec.PulsarClusterSpecBuilder beforeSetupCluster(String clusterName,
+                                                                            PulsarClusterSpec.PulsarClusterSpecBuilder specBuilder) {
+        return super.beforeSetupCluster(clusterName, specBuilder)
+                .pulsarTestImage(PulsarContainer.DEFAULT_SYSTEM_IMAGE_NAME);
+    }
 
     protected void pulsarSQLBasicTest(TopicName topic,
                                       boolean isBatch,
@@ -170,8 +177,8 @@ public class TestPulsarSQLBase extends PulsarSQLTestSuite {
         String url = String.format("jdbc:presto://%s",  pulsarCluster.getPrestoWorkerContainer().getUrl());
         Connection connection = DriverManager.getConnection(url, "test", null);
 
-        String query = String.format("select * from pulsar" +
-                ".\"%s\".\"%s\" order by __publish_time__", namespace, topic);
+        String query = String.format("select * from pulsar"
+               + ".\"%s\".\"%s\" order by __publish_time__", namespace, topic);
         log.info("Executing query: {}", query);
         ResultSet res = connection.createStatement().executeQuery(query);
 
@@ -184,8 +191,8 @@ public class TestPulsarSQLBase extends PulsarSQLTestSuite {
 
         assertThat(timestamps.size()).isGreaterThan(messageNum - 2);
 
-        query = String.format("select * from pulsar" +
-                ".\"%s\".\"%s\" where __publish_time__ > timestamp '%s' order by __publish_time__",
+        query = String.format("select * from pulsar"
+                + ".\"%s\".\"%s\" where __publish_time__ > timestamp '%s' order by __publish_time__",
                 namespace, topic, timestamps.get(timestamps.size() / 2));
         log.info("Executing query: {}", query);
         res = connection.createStatement().executeQuery(query);
@@ -260,7 +267,9 @@ public class TestPulsarSQLBase extends PulsarSQLTestSuite {
         ResultSetMetaData rsmd = rs.getMetaData();
         int columnsNumber = rsmd.getColumnCount();
         for (int i = 1; i <= columnsNumber; i++) {
-            if (i > 1) System.out.print(",  ");
+            if (i > 1) {
+                System.out.print(",  ");
+            }
             String columnValue = rs.getString(i);
             System.out.print(columnValue + " " + rsmd.getColumnName(i));
         }

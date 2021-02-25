@@ -35,6 +35,7 @@ import org.apache.pulsar.tests.integration.docker.ContainerExecException;
 import org.apache.pulsar.tests.integration.docker.ContainerExecResult;
 import org.apache.pulsar.tests.integration.suites.PulsarTestSuite;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
+import org.awaitility.Awaitility;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
@@ -196,8 +197,6 @@ public class CLITest extends PulsarTestSuite {
 
     @Test
     public void testSetInfiniteRetention() throws Exception {
-        ContainerExecResult result;
-
         String namespace = "get-and-set-retention" + randomName(8);
         pulsarCluster.createNamespace(namespace);
 
@@ -206,28 +205,30 @@ public class CLITest extends PulsarTestSuite {
             "--size", "-1",
             "--time", "-1"
         };
-
-        result = pulsarCluster.runAdminCommandOnAnyBroker(setCommand);
-        assertTrue(
-            result.getStdout().isEmpty(),
-            result.getStdout()
-        );
-        assertTrue(
-            result.getStderr().isEmpty(),
-            result.getStdout()
-        );
+        {
+            ContainerExecResult result = pulsarCluster.runAdminCommandOnAnyBroker(setCommand);
+            assertTrue(
+                    result.getStdout().isEmpty(),
+                    result.getStdout()
+            );
+            assertTrue(
+                    result.getStderr().isEmpty(),
+                    result.getStdout()
+            );
+        }
 
         String[] getCommand = {
-            "namespaces", "get-retention", "public/" + namespace
+                "namespaces", "get-retention", "public/" + namespace
         };
-
-        result = pulsarCluster.runAdminCommandOnAnyBroker(getCommand);
-        assertTrue(
-            result.getStdout().contains("\"retentionTimeInMinutes\" : -1"),
-            result.getStdout());
-        assertTrue(
-            result.getStdout().contains("\"retentionSizeInMB\" : -1"),
-            result.getStdout());
+        Awaitility.await().untilAsserted(() -> {
+            ContainerExecResult result = pulsarCluster.runAdminCommandOnAnyBroker(getCommand);
+            assertTrue(
+                    result.getStdout().contains("\"retentionTimeInMinutes\" : -1"),
+                    result.getStdout());
+            assertTrue(
+                    result.getStdout().contains("\"retentionSizeInMB\" : -1"),
+                    result.getStdout());
+        });
     }
 
     // authorization related tests

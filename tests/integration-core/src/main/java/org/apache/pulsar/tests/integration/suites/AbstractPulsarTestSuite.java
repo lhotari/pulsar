@@ -19,11 +19,13 @@
 package org.apache.pulsar.tests.integration.suites;
 
 import java.util.function.Predicate;
+import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
 import org.apache.pulsar.tests.integration.topologies.PulsarClusterTestBase;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 
-public class PulsarTestSuite extends PulsarClusterTestBase {
+public abstract class AbstractPulsarTestSuite<T extends PulsarCluster>
+        extends PulsarClusterTestBase<T> {
 
     @BeforeClass
     @Override
@@ -40,6 +42,7 @@ public class PulsarTestSuite extends PulsarClusterTestBase {
     public static void retryStrategically(Predicate<Void> predicate, int retryCount, long intSleepTimeInMillis) throws Exception {
         retryStrategically(predicate, retryCount, intSleepTimeInMillis, false);
     }
+
 
     public static void retryStrategically(Predicate<Void> predicate, int retryCount, long intSleepTimeInMillis, boolean throwException)
             throws Exception {

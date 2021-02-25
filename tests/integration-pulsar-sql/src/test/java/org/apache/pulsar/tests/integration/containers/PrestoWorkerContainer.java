@@ -37,7 +37,7 @@ public class PrestoWorkerContainer extends PulsarContainer<PrestoWorkerContainer
                 -1,
                 PRESTO_HTTP_PORT,
                 "/v1/info/state");
-
+        setDockerImageName(DEFAULT_SYSTEM_IMAGE_NAME);
     }
 
     @Override

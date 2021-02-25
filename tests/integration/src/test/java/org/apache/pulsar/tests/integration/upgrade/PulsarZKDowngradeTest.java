@@ -40,7 +40,7 @@ import org.testng.annotations.Test;
  * Test downgrading ZK from 3.5.x to 3.4.x. This is part of the upgrade from Pulsar 2.1.0 to 2.1.1.
  */
 @Slf4j
-public class PulsarZKDowngradeTest extends PulsarClusterTestBase {
+public class PulsarZKDowngradeTest extends PulsarClusterTestBase<PulsarCluster> {
 
     protected static final int ENTRIES_PER_LEDGER = 1024;
 
@@ -68,6 +68,11 @@ public class PulsarZKDowngradeTest extends PulsarClusterTestBase {
         pulsarCluster.start();
 
         log.info("Cluster {} is setup", spec.clusterName());
+    }
+
+    @Override
+    protected PulsarCluster createPulsarClusterInstance(PulsarClusterSpec spec) {
+        return PulsarCluster.forSpec(spec);
     }
 
     @AfterClass(alwaysRun = true)

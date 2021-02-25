@@ -18,12 +18,12 @@
  */
 package org.apache.pulsar.tests.integration.io;
 
+import com.google.common.collect.Maps;
 import java.util.Map;
 import lombok.Getter;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
 import org.testcontainers.containers.GenericContainer;
-import org.testng.collections.Maps;
 
 /**
  * A tester used for testing a specific sink.

@@ -18,16 +18,13 @@
  */
 package org.apache.pulsar.tests.integration.topologies;
 
+import static java.util.stream.Collectors.joining;
+import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
 import org.testng.annotations.DataProvider;
 
-import java.util.stream.Stream;
-
-import static java.util.stream.Collectors.joining;
-
 @Slf4j
-public abstract class PulsarClusterTestBase extends PulsarTestBase {
-
+public abstract class PulsarClusterTestBase<T extends PulsarCluster> extends PulsarTestBase {
     @DataProvider(name = "ServiceUrlAndTopics")
     public Object[][] serviceUrlAndTopics() {
         return new Object[][] {
@@ -65,7 +62,7 @@ public abstract class PulsarClusterTestBase extends PulsarTestBase {
         };
     }
 
-    protected PulsarCluster pulsarCluster;
+    protected T pulsarCluster;
 
     public void setupCluster() throws Exception {
         this.setupCluster("");
@@ -96,7 +93,7 @@ public abstract class PulsarClusterTestBase extends PulsarTestBase {
         log.info("Setting up cluster {} with {} bookies, {} brokers",
                 spec.clusterName(), spec.numBookies(), spec.numBrokers());
 
-        pulsarCluster = PulsarCluster.forSpec(spec);
+        pulsarCluster = createPulsarClusterInstance(spec);
 
         beforeStartCluster();
 
@@ -105,9 +102,12 @@ public abstract class PulsarClusterTestBase extends PulsarTestBase {
         log.info("Cluster {} is setup", spec.clusterName());
     }
 
+    protected abstract T createPulsarClusterInstance(PulsarClusterSpec spec);
+
     public void tearDownCluster() {
         if (null != pulsarCluster) {
             pulsarCluster.stop();
+            pulsarCluster = null;
         }
     }
 

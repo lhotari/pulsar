@@ -23,15 +23,30 @@ import java.util.Map;
 import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.tests.integration.containers.BrokerContainer;
+import org.apache.pulsar.tests.integration.containers.PulsarContainer;
+import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
 import org.apache.pulsar.tests.integration.topologies.PulsarClusterSpec;
 import org.apache.pulsar.tests.integration.topologies.PulsarClusterTestBase;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 
 @Slf4j
-public abstract class PulsarTieredStorageTestSuite extends PulsarClusterTestBase {
+public abstract class PulsarTieredStorageTestSuite extends PulsarClusterTestBase<PulsarCluster> {
 
     protected static final int ENTRIES_PER_LEDGER = 1024;
+
+    @Override
+    protected PulsarCluster createPulsarClusterInstance(PulsarClusterSpec spec) {
+        return PulsarCluster.forSpec(spec);
+    }
+
+    @Override
+    protected PulsarClusterSpec.PulsarClusterSpecBuilder beforeSetupCluster(String clusterName,
+                                                                            PulsarClusterSpec.PulsarClusterSpecBuilder
+                                                                                    specBuilder) {
+        return super.beforeSetupCluster(clusterName, specBuilder)
+                .pulsarTestImage(PulsarContainer.DEFAULT_SYSTEM_IMAGE_NAME);
+    }
 
     @BeforeClass
     @Override

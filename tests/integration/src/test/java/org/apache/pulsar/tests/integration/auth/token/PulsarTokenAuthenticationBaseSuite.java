@@ -52,7 +52,7 @@ import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 @Slf4j
-public abstract class PulsarTokenAuthenticationBaseSuite extends PulsarClusterTestBase {
+public abstract class PulsarTokenAuthenticationBaseSuite extends PulsarClusterTestBase<PulsarCluster> {
 
     protected String superUserAuthToken;
     protected String proxyAuthToken;
@@ -69,6 +69,11 @@ public abstract class PulsarTokenAuthenticationBaseSuite extends PulsarClusterTe
     protected static final String REGULAR_USER_ROLE = "client";
 
     protected ZKContainer<?> cmdContainer;
+
+    @Override
+    protected PulsarCluster createPulsarClusterInstance(PulsarClusterSpec spec) {
+        return PulsarCluster.forSpec(spec);
+    }
 
     @BeforeClass
     @Override

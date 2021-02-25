@@ -18,7 +18,15 @@
  */
 package org.apache.pulsar.tests.integration.auth.admin;
 
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.fail;
+import com.google.common.collect.Sets;
 import com.google.common.io.Files;
+import java.io.File;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import lombok.Cleanup;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.broker.authentication.AuthenticationProviderToken;
@@ -32,21 +40,11 @@ import org.apache.pulsar.tests.integration.containers.ZKContainer;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
 import org.apache.pulsar.tests.integration.topologies.PulsarClusterSpec;
 import org.apache.pulsar.tests.integration.utils.DockerUtils;
-import org.elasticsearch.common.collect.Set;
 import org.testcontainers.containers.Network;
 import org.testcontainers.shaded.org.apache.commons.lang.RandomStringUtils;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
-
-import java.io.File;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.fail;
 
 
 /**
@@ -198,7 +196,7 @@ public class PackagesOpsWithAuthTest {
 
         // grant package permission to the role
         superUserAdmin.namespaces().grantPermissionOnNamespace("public/default",
-            REGULAR_USER_ROLE, Set.of(AuthAction.packages));
+            REGULAR_USER_ROLE, Sets.newHashSet(AuthAction.packages));
 
         // then do some package operations again, it should success
         List<String> packagesName = clientAdmin.packages().listPackages("function", "public/default");
