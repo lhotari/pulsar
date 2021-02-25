@@ -92,6 +92,7 @@ flexible messaging model and an intuitive client API.</description>
     <testRetryCount>1</testRetryCount>
     <docker.organization>apachepulsar</docker.organization>
     <skipSourceReleaseAssembly>false</skipSourceReleaseAssembly>
+    <nifiNarPhase>package</nifiNarPhase>
 
     <!-- apache commons -->
     <commons-compress.version>1.19</commons-compress.version>
@@ -1496,7 +1497,7 @@ flexible messaging model and an intuitive client API.</description>
           <executions>
             <execution>
               <id>default-nar</id>
-              <phase>package</phase>
+              <phase>${nifiNarPhase}</phase>
               <goals>
                 <goal>nar</goal>
               </goals>
