@@ -19,177 +19,178 @@
 #
 
 set -e
-set -x
 set -o pipefail
 set -o errexit
 
-MVN_TEST_COMMAND='build/retry.sh mvn -B -ntp test'
+MVN_TEST_OPTIONS='mvn -B -ntp -Dassembly.skipAssembly=true -DskipSourceReleaseAssembly=true -DskipBuildDistribution=true -Dspotbugs.skip=true -Dlicense.skip=true -DnifiNarPhase=none'
+MVN_SKIP_SHADE='-DshadePluginPhase=none'
+
+function mvn_test() {
+  $MVN_TEST_OPTIONS test "$@" "${COMMANDLINE_ARGS[@]}"
+}
+
+function mvn_verify() {
+  $MVN_TEST_OPTIONS $MVN_SKIP_SHADE verify "$@" "${COMMANDLINE_ARGS[@]}"
+}
+
+function mvn_install() {
+  $MVN_TEST_OPTIONS -Dmaven.test.skip=true install "$@" "${COMMANDLINE_ARGS[@]}"
+}
+
+function mvn_install_and_test() {
+  $MVN_TEST_OPTIONS install "$@" "${COMMANDLINE_ARGS[@]}"
+}
 
 # Test Groups  -- start --
-function broker_group_1() {
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="**/AdminApiOffloadTest.java" \
-                                      -DtestForkCount=1 \
-                                      -DtestReuseFork=true
+function test_group_broker_group_1() {
+  mvn_test -pl pulsar-broker -Dinclude="**/AdminApiOffloadTest.java" \
+                             -DtestForkCount=1 \
+                             -DtestReuseFork=true
 
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="org/apache/pulsar/broker/**/*.java" \
-                                      -Dexclude="org/apache/pulsar/broker/zookeeper/**/*.java,
-                                                 org/apache/pulsar/broker/loadbalance/**/*.java,
-                                                 org/apache/pulsar/broker/service/**/*.java,
-                                                 **/AdminApiOffloadTest.java"
+  mvn_test -pl pulsar-broker -Dinclude="org/apache/pulsar/broker/**/*.java" \
+                    -Dexclude="org/apache/pulsar/broker/zookeeper/**/*.java,
+                               org/apache/pulsar/broker/loadbalance/**/*.java,
+                               org/apache/pulsar/broker/service/**/*.java,
+                               **/AdminApiOffloadTest.java"
+}
+
+function test_group_broker_group_2() {
+  mvn_test -pl pulsar-broker -Dinclude="**/MessagePublishBufferThrottleTest.java" \
+                             -DtestForkCount=1 \
+                             -DtestReuseFork=true
+
+  mvn_test -pl pulsar-broker -Dinclude="**/ReplicatorTest.java" \
+                             -DtestForkCount=1 \
+                             -DtestReuseFork=true
+
+  mvn_test -pl pulsar-broker -Dinclude="**/TopicOwnerTest.java" \
+                             -DtestForkCount=1 \
+                             -DtestReuseFork=true
+
+  mvn_test -pl pulsar-broker -Dinclude="**/AntiAffinityNamespaceGroupTest.java" \
+                             -DtestForkCount=1 \
+                             -DtestReuseFork=true
+
+  mvn_test -pl pulsar-broker -Dinclude="**/*StreamingDispatcher*Test.java" \
+                             -DtestForkCount=1 \
+                             -DtestReuseFork=true
+
+  mvn_test -pl pulsar-broker -Dinclude="org/apache/pulsar/broker/zookeeper/**/*.java,
+                                        org/apache/pulsar/broker/loadbalance/**/*.java,
+                                        org/apache/pulsar/broker/service/**/*.java" \
+                             -Dexclude="**/ReplicatorTest.java,
+                                        **/MessagePublishBufferThrottleTest.java,
+                                        **/TopicOwnerTest.java,
+                                        **/*StreamingDispatcher*Test.java,
+                                        **/AntiAffinityNamespaceGroupTest.java"
+}
+
+function test_group_broker_client_api() {
+  mvn_test -pl pulsar-broker -Dinclude="**/DispatcherBlockConsumerTest.java" \
+                             -DtestForkCount=1 \
+                             -DtestReuseFork=true
+
+  mvn_test -pl pulsar-broker -Dinclude="**/SimpleProducerConsumerTest.java" \
+                             -DtestForkCount=1 \
+                             -DtestReuseFork=true
+
+  mvn_test -pl pulsar-broker -Dinclude="org/apache/pulsar/client/api/**/*.java" \
+                             -Dexclude="**/DispatcherBlockConsumerTest.java,
+                                        **/SimpleProducerConsumerTest.java"
+}
+
+function test_group_broker_client_impl() {
+  mvn_test -pl pulsar-broker -Dinclude="org/apache/pulsar/client/impl/**/*.java"
+}
+
+function test_group_broker_client_other() {
+  mvn_test -pl pulsar-broker -Dexclude="org/apache/pulsar/broker/**/*.java,
+                                        org/apache/pulsar/client/**/*.java"
+}
+
+function test_group_proxy() {
+  mvn_test -pl pulsar-proxy -DtestForkCount=1 \
+                            -DtestReuseFork=true \
+                            -Dinclude="**/ProxyRolesEnforcementTest.java"
+
+  mvn_test -pl pulsar-proxy -DtestForkCount=1 \
+                            -DtestReuseFork=true \
+                            -Dinclude="**/ProxyAuthenticationTest.java"
+
+  mvn_test -pl pulsar-proxy -DtestForkCount=1 \
+                            -DtestReuseFork=true \
+                            -Dinclude="**/ProxyTest.java"
+
+  mvn_test -pl pulsar-proxy -DtestForkCount=1 \
+                            -DtestReuseFork=true \
+                            -Dinclude="**/MessagePublishBufferThrottleTest.java"
+
+  mvn_test -pl pulsar-proxy -DtestForkCount=1 \
+                            -DtestReuseFork=true \
+                            -Dexclude="**/ProxyRolesEnforcementTest.java,
+                                       **/ProxyAuthenticationTest.java,
+                                       **/ProxyTest.java,
+                                       **/MessagePublishBufferThrottleTest.java"
 
 }
 
-function broker_group_2() {
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="**/MessagePublishBufferThrottleTest.java" \
-                                      -DtestForkCount=1 \
-                                      -DtestReuseFork=true
+function test_group_other() {
+  # shaded kafka-connect-avro-converter-shaded is required test and install it first
+  mvn_install_and_test -pl org.apache.pulsar:kafka-connect-avro-converter-shaded
 
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="**/ReplicatorTest.java" \
-                                      -DtestForkCount=1 \
-                                      -DtestReuseFork=true
+  # skip projects that are covered by other test runs
+  local skipProjects='!pulsar-proxy,!pulsar-broker,!org.apache.pulsar:pulsar-io-flume'
+  # skip distribution modules
+  local skipDistributionModules='!org.apache.pulsar:distribution,!org.apache.pulsar:pulsar-server-distribution,
+  !org.apache.pulsar:pulsar-offloader-distribution,!org.apache.pulsar:pulsar-io-distribution,
+  !org.apache.pulsar:pulsar-presto-distribution,!org.apache.pulsar:pulsar-io-docs'
+  # skip docker build modules
+  local skipDockerBuildModules='!org.apache.pulsar:docker-images,!org.apache.pulsar:grafana-docker-image,
+  !org.apache.pulsar:pulsar-docker-image, !org.apache.pulsar:dashboard-docker-image,
+  !org.apache.pulsar:pulsar-all-docker-image,!org.apache.pulsar:pulsar-standalone-docker-image'
+  # skip modules referencing shaded classes which don't include unit tests or are covered by other test runs
+  local skipModuleReferencingShadedClasses='!org.apache.pulsar:pulsar-client-1x,!org.apache.pulsar:kafka-connect-avro-converter-shaded,!org.apache.pulsar:tiered-storage-jcloud'
+  # skip prebuilt modules
+  local skipPrebuiltModules='!org.apache.pulsar:pulsar-functions-api-examples,!org.apache.pulsar:pulsar-io-twitter,!org.apache.pulsar:pulsar-io-cassandra'
+  local skipModules="${skipProjects},${skipDistributionModules},${skipDockerBuildModules},${skipModuleReferencingShadedClasses},${skipPrebuiltModules}"
 
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="**/TopicOwnerTest.java" \
-                                      -DtestForkCount=1 \
-                                      -DtestReuseFork=true
+  mvn_test -pl "$skipModules" \
+             -Dexclude="**/ManagedLedgerTest.java,
+                        **/PrimitiveSchemaTest.java"
 
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="**/AntiAffinityNamespaceGroupTest.java" \
-                                      -DtestForkCount=1 \
-                                      -DtestReuseFork=true
+  mvn_test -pl managed-ledger -Dinclude="**/ManagedLedgerTest.java" \
+                              -DtestForkCount=1 \
+                              -DtestReuseFork=true
 
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="**/*StreamingDispatcher*Test.java" \
-                                      -DtestForkCount=1 \
-                                      -DtestReuseFork=true
+  mvn_test -pl pulsar-client -Dinclude="**/PrimitiveSchemaTest.java" \
+                             -DtestForkCount=1 \
+                             -DtestReuseFork=true
 
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="org/apache/pulsar/broker/zookeeper/**/*.java,
-                                                 org/apache/pulsar/broker/loadbalance/**/*.java,
-                                                 org/apache/pulsar/broker/service/**/*.java" \
-                                      -Dexclude="**/ReplicatorTest.java,
-                                                 **/MessagePublishBufferThrottleTest.java,
-                                                 **/TopicOwnerTest.java,
-                                                 **/*StreamingDispatcher*Test.java,
-                                                 **/AntiAffinityNamespaceGroupTest.java"
-}
+  # run unit tests for tiered-storage-jcloud which requires shaded dependencies
+  mvn_install -pl jclouds-shaded
+  mvn_test -pl org.apache.pulsar:tiered-storage-jcloud -DtestForkCount=1 \
+                                                       -DtestReuseFork=true
 
-function broker_client_api() {
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="**/DispatcherBlockConsumerTest.java" \
-                                      -DtestForkCount=1 \
-                                      -DtestReuseFork=true
-
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="**/SimpleProducerConsumerTest.java" \
-                                      -DtestForkCount=1 \
-                                      -DtestReuseFork=true
-
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="org/apache/pulsar/client/api/**/*.java" \
-                                      -Dexclude="**/DispatcherBlockConsumerTest.java,
-                                                 **/SimpleProducerConsumerTest.java"
-}
-
-function broker_client_impl() {
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dinclude="org/apache/pulsar/client/impl/**/*.java"
-}
-
-function broker_client_other() {
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dexclude="org/apache/pulsar/broker/**/*.java,
-                                                 org/apache/pulsar/client/**/*.java"
-}
-
-function proxy() {
-  $MVN_TEST_COMMAND -pl pulsar-proxy -DtestForkCount=1 \
-                                     -DtestReuseFork=true \
-                                     -Dinclude="**/ProxyRolesEnforcementTest.java" \
-                                     -DtestForkCount=1 \
-                                     -DtestReuseFork=true
-
-  $MVN_TEST_COMMAND -pl pulsar-proxy -DtestForkCount=1 \
-                                     -DtestReuseFork=true \
-                                     -Dinclude="**/ProxyAuthenticationTest.java" \
-                                     -DtestForkCount=1 \
-                                     -DtestReuseFork=true
-
-  $MVN_TEST_COMMAND -pl pulsar-proxy -DtestForkCount=1 \
-                                     -DtestReuseFork=true \
-                                     -Dinclude="**/ProxyTest.java" \
-                                     -DtestForkCount=1 \
-                                     -DtestReuseFork=true
-
-  $MVN_TEST_COMMAND -pl pulsar-proxy -DtestForkCount=1 \
-                                     -DtestReuseFork=true \
-                                     -Dinclude="**/MessagePublishBufferThrottleTest.java" \
-                                     -DtestForkCount=1 \
-                                     -DtestReuseFork=true
-
-  $MVN_TEST_COMMAND -pl pulsar-proxy -DtestForkCount=1 \
-                                     -Dexclude="**/ProxyRolesEnforcementTest.java,
-                                                **/ProxyAuthenticationTest.java,
-                                                **/ProxyTest.java,
-                                                **/MessagePublishBufferThrottleTest.java" \
-                                     -DtestReuseFork=true
-}
-
-function other() {
-  build/retry.sh mvn -B -ntp install -PbrokerSkipTest \
-                                     -Dexclude="org/apache/pulsar/proxy/**/*.java,
-                                                **/ManagedLedgerTest.java,
-                                                **/TestPulsarKeyValueSchemaHandler.java,
-                                                **/PrimitiveSchemaTest.java,
-                                                BlobStoreManagedLedgerOffloaderTest.java"
-
-  $MVN_TEST_COMMAND -pl managed-ledger -Dinclude="**/ManagedLedgerTest.java" \
-                                       -DtestForkCount=1 \
-                                       -DtestReuseFork=true
-
-  $MVN_TEST_COMMAND -pl pulsar-sql/presto-pulsar-plugin -Dinclude="**/TestPulsarKeyValueSchemaHandler.java" \
-                                                        -DtestForkCount=1 \
-                                                        -DtestReuseFork=true
-
-  $MVN_TEST_COMMAND -pl pulsar-client -Dinclude="**/PrimitiveSchemaTest.java" \
-                                      -DtestForkCount=1 \
-                                      -DtestReuseFork=true
-
-  $MVN_TEST_COMMAND -pl tiered-storage/jcloud -Dinclude="**/BlobStoreManagedLedgerOffloaderTest.java" \
-                                              -DtestForkCount=1 \
-                                              -DtestReuseFork=true
+  # run pulsar-io-flume tests separately
+  mvn_test -pl org.apache.pulsar:pulsar-io-flume -DtestForkCount=1 \
+                                                 -DtestReuseFork=true
 }
 
 # Test Groups  -- end --
 
 TEST_GROUP=$1
-
-echo -n "Test Group : $TEST_GROUP"
-
-case $TEST_GROUP in
-
-  BROKER_GROUP_1)
-    broker_group_1
-    ;;
-
-  BROKER_GROUP_2)
-    broker_group_2
-    ;;
-
-  BROKER_CLIENT_API)
-    broker_client_api
-    ;;
-
-  BROKER_CLIENT_IMPL)
-    broker_client_impl
-    ;;
-
-  BROKER_CLIENT_OTHER)
-    broker_client_other
-    ;;
-
-  PROXY)
-    proxy
-    ;;
-
-  OTHER)
-    other
-    ;;
-
-  *)
-    echo -n "INVALID TEST GROUP"
-    exit 1
-    ;;
-esac
-
+if [ -z "$TEST_GROUP" ]; then
+  echo "usage: $0 [test_group]"
+  exit 1
+fi
+shift
+COMMANDLINE_ARGS=("$@")
+echo "Test Group : $TEST_GROUP"
+test_group_function_name="test_group_$(echo "$TEST_GROUP"| tr '[:upper:]' '[:lower:]')"
+if [[ "$(LC_ALL=C type -t $test_group_function_name)" == "function" ]]; then
+  set -x
+  eval "$test_group_function_name"
+else
+  echo "INVALID TEST GROUP"
+  exit 1
+fi
