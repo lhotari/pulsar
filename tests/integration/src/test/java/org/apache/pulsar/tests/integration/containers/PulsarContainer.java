@@ -19,7 +19,7 @@
 package org.apache.pulsar.tests.integration.containers;
 
 import static java.time.temporal.ChronoUnit.SECONDS;
-
+import com.google.common.collect.ImmutableMap;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.UUID;
@@ -60,6 +60,10 @@ public abstract class PulsarContainer<SelfT extends PulsarContainer<SelfT>> exte
      */
     public static final boolean PULSAR_CONTAINERS_LEAVE_RUNNING =
             Boolean.parseBoolean(System.getenv("PULSAR_CONTAINERS_LEAVE_RUNNING"));
+
+    // use tmpfs for /pulsar/data and /tmp inside containers if PULSAR_CONTAINERS_USE_TMPFS=true
+    private static final boolean PULSAR_CONTAINERS_USE_TMPFS =
+            Boolean.parseBoolean(System.getenv("PULSAR_CONTAINERS_USE_TMPFS"));
 
     private final String hostname;
     private final String serviceName;
@@ -105,6 +109,13 @@ public abstract class PulsarContainer<SelfT extends PulsarContainer<SelfT>> exte
         this.httpPath = httpPath;
 
         configureLeaveContainerRunning(this);
+
+        if (PULSAR_CONTAINERS_USE_TMPFS) {
+            withTmpFs(ImmutableMap.of(
+                    "/pulsar/data", "rw",
+                    "/tmp", "rw,exec"
+            ));
+        }
     }
 
     public static void configureLeaveContainerRunning(
