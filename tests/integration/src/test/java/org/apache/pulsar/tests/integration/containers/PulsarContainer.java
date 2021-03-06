@@ -23,6 +23,7 @@ import static java.time.temporal.ChronoUnit.SECONDS;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.tests.integration.utils.DockerUtils;
 import org.testcontainers.containers.GenericContainer;
@@ -60,6 +61,27 @@ public abstract class PulsarContainer<SelfT extends PulsarContainer<SelfT>> exte
      */
     public static final boolean PULSAR_CONTAINERS_LEAVE_RUNNING =
             Boolean.parseBoolean(System.getenv("PULSAR_CONTAINERS_LEAVE_RUNNING"));
+
+    private static final boolean PULSAR_CONTAINERS_DEBUGGER_ENABLED =
+            Boolean.parseBoolean(System.getenv("PULSAR_CONTAINERS_DEBUGGER_ENABLED"));
+
+    private static final int PULSAR_CONTAINERS_DEBUGGER_PORT = Integer.parseInt(System.getenv()
+            .getOrDefault("PULSAR_CONTAINERS_DEBUGGER_PORT", "5005"));
+
+    private static final boolean PULSAR_CONTAINERS_DEBUGGER_SUSPEND =
+            Boolean.parseBoolean(System.getenv("PULSAR_CONTAINERS_DEBUGGER_SUSPEND"));
+
+    private static final String PULSAR_CONTAINERS_DEBUGGER_OPTIONS = System.getenv()
+            .getOrDefault("PULSAR_CONTAINERS_DEBUGGER_OPTIONS",
+                    // Note: in Java11, the syntax of address is address=*:5005 instead of address=5005
+                    "-agentlib:jdwp=transport=dt_socket,server=y,suspend="
+                            + (PULSAR_CONTAINERS_DEBUGGER_SUSPEND ? "y" : "n")
+                            +",address="
+                            + PULSAR_CONTAINERS_DEBUGGER_PORT);
+
+    // can be used to limit the debugging to specific containers
+    private static final Pattern PULSAR_CONTAINERS_DEBUGGER_FILTER = Pattern.compile(System.getenv()
+            .getOrDefault("PULSAR_CONTAINERS_DEBUGGER_FILTER", ".*"));
 
     private final String hostname;
     private final String serviceName;
@@ -105,6 +127,17 @@ public abstract class PulsarContainer<SelfT extends PulsarContainer<SelfT>> exte
         this.httpPath = httpPath;
 
         configureLeaveContainerRunning(this);
+
+        if (PULSAR_CONTAINERS_DEBUGGER_ENABLED && PULSAR_CONTAINERS_DEBUGGER_FILTER
+                .matcher(serviceName)
+                .find()) {
+            log.warn("[{}] Adding debugger options '{}' for pulsar service {}",
+                    getContainerName(), PULSAR_CONTAINERS_DEBUGGER_OPTIONS, serviceName);
+            // passes JVM debugger options in PULSAR_EXTRA_OPTS and BOOKIE_EXTRA_OPTS
+            withEnv("PULSAR_EXTRA_OPTS", PULSAR_CONTAINERS_DEBUGGER_OPTIONS);
+            withEnv("BOOKIE_EXTRA_OPTS", PULSAR_CONTAINERS_DEBUGGER_OPTIONS);
+            addExposedPort(PULSAR_CONTAINERS_DEBUGGER_PORT);
+        }
     }
 
     public static void configureLeaveContainerRunning(
@@ -182,6 +215,9 @@ public abstract class PulsarContainer<SelfT extends PulsarContainer<SelfT>> exte
         super.start();
         afterStart();
         log.info("[{}] Start pulsar service {} at container {}", getContainerName(), serviceName, getContainerId());
+        if (PULSAR_CONTAINERS_DEBUGGER_ENABLED) {
+            log.warn("[{}] Debugger available for pulsar service {} on local port {}", getContainerName(), serviceName, getMappedPort(PULSAR_CONTAINERS_DEBUGGER_PORT));
+        }
     }
 
     @Override
