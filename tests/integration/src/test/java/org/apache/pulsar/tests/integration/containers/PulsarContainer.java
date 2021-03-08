@@ -29,6 +29,7 @@ import org.apache.pulsar.tests.integration.utils.DockerUtils;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.HostPortWaitStrategy;
 import org.testcontainers.containers.wait.strategy.HttpWaitStrategy;
+import org.testcontainers.shaded.org.apache.commons.io.FileUtils;
 
 /**
  * Abstract Test Container for Pulsar.
@@ -82,6 +83,9 @@ public abstract class PulsarContainer<SelfT extends PulsarContainer<SelfT>> exte
     // can be used to limit the debugging to specific containers
     private static final Pattern PULSAR_CONTAINERS_DEBUGGER_FILTER = Pattern.compile(System.getenv()
             .getOrDefault("PULSAR_CONTAINERS_DEBUGGER_FILTER", ".*"));
+
+    private static final boolean PULSAR_CONTAINERS_LIMIT_RESOURCES =
+            Boolean.parseBoolean(System.getenv("PULSAR_CONTAINERS_LIMIT_RESOURCES"));
 
     private final String hostname;
     private final String serviceName;
@@ -138,6 +142,14 @@ public abstract class PulsarContainer<SelfT extends PulsarContainer<SelfT>> exte
             withEnv("BOOKIE_EXTRA_OPTS", PULSAR_CONTAINERS_DEBUGGER_OPTIONS);
             addExposedPort(PULSAR_CONTAINERS_DEBUGGER_PORT);
         }
+
+        if (PULSAR_CONTAINERS_LIMIT_RESOURCES) {
+            // limit resources to simulate CI build environment
+            withCreateContainerCmdModifier(cmd -> cmd.getHostConfig()
+                    .withMemory(6 * FileUtils.ONE_GB)
+                    .withCpuCount(2L));
+        }
+
     }
 
     public static void configureLeaveContainerRunning(
