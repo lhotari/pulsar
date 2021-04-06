@@ -25,6 +25,7 @@ import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.TenantInfo;
+import org.apache.pulsar.tests.TestRetrySupport;
 import org.apache.pulsar.zookeeper.LocalBookkeeperEnsemble;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
@@ -38,7 +39,7 @@ import lombok.extern.slf4j.Slf4j;
  * Test base for tests requires a bk ensemble.
  */
 @Slf4j
-public abstract class BkEnsemblesTestBase {
+public abstract class BkEnsemblesTestBase extends TestRetrySupport {
 
     protected PulsarService pulsar;
     protected ServiceConfiguration config;
@@ -61,6 +62,7 @@ public abstract class BkEnsemblesTestBase {
         //overridable by subclasses
     }
 
+    @Override
     @BeforeMethod(alwaysRun = true)
     protected void setup() throws Exception {
         try {
@@ -98,8 +100,9 @@ public abstract class BkEnsemblesTestBase {
         }
     }
 
+    @Override
     @AfterMethod(alwaysRun = true)
-    protected void shutdown() throws Exception {
+    protected void cleanup() throws Exception {
         admin.close();
         pulsar.close();
         bkEnsemble.stop();
