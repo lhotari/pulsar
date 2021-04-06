@@ -29,7 +29,7 @@ import org.testng.annotations.Test;
 @Test(groups = "flaky")
 public class SimpleProducerConsumerTestStreamingDispatcherTest extends SimpleProducerConsumerTest {
 
-    @BeforeMethod
+    @BeforeMethod(groups = {"broker", "flaky", "quarantine"})
     @Override
     protected void setup() throws Exception {
         super.setup();

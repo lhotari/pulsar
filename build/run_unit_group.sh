@@ -45,11 +45,27 @@ function broker_client_impl() {
 }
 
 function broker_flaky() {
+  echo "::endgroup::"
+  echo "::group::Running quarantined tests"
+  mvn -B -ntp test -pl pulsar-broker -Dgroups='quarantine' -DexcludedGroups='' \
+    -DtestForkCount=1 -DredirectTestOutputToFile=false -DfailIfNoTests=false || \
+      echo "::warning::There were test failures in the 'quarantine' test group."
+  echo "::endgroup::"
+  echo "::group::Running flaky tests"
   $MVN_TEST_COMMAND -pl pulsar-broker -Dgroups='flaky' -DtestForkCount=1 -DtestReuseFork=false
+  echo "::endgroup::"
 }
 
 function proxy() {
+  echo "::endgroup::"
+  echo "::group::Running quarantined pulsar-proxy tests"
+  mvn -B -ntp test -pl pulsar-proxy -Dgroups='quarantine' -DexcludedGroups='' \
+    -DtestForkCount=1 -DredirectTestOutputToFile=false -DfailIfNoTests=false || \
+      echo "::warning::There were test failures in the 'quarantine' test group."
+  echo "::endgroup::"
+  echo "::group::Running pulsar-proxy tests"
   $MVN_TEST_COMMAND -pl pulsar-proxy
+  echo "::endgroup::"
 }
 
 function other() {
@@ -73,6 +89,18 @@ function other() {
 
   $MVN_TEST_COMMAND -pl tiered-storage/jcloud -Dinclude='**/BlobStoreManagedLedgerOffloaderTest.java' \
                                               -DtestForkCount=1
+
+  echo "::endgroup::"
+  local modules_with_quarantined_tests=$(git grep -l '@Test.*"quarantine"' | grep '/src/test/java/' | \
+    awk -F '/src/test/java/' '{ print $1 }' | egrep -v 'pulsar-broker|pulsar-proxy' | sort | uniq | \
+    perl -0777 -p -e 's/\n(\S)/,$1/g')
+  if [ -n "${modules_with_quarantined_tests}" ]; then
+    echo "::group::Running quarantined tests outside of pulsar-broker & pulsar-proxy (if any)"
+    mvn -B -ntp -pl "${modules_with_quarantined_tests}" test -Dgroups='quarantine' -DexcludedGroups='' \
+      -DtestForkCount=1 -DredirectTestOutputToFile=false -DfailIfNoTests=false || \
+        echo "::warning::There were test failures in the 'quarantine' test group."
+    echo "::endgroup::"
+  fi
 }
 
 # Test Groups  -- end --
