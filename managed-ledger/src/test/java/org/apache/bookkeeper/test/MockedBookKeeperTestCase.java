@@ -30,6 +30,7 @@ import org.apache.bookkeeper.util.ZkUtils;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.MockZooKeeper;
 import org.apache.zookeeper.ZooDefs;
+import org.mockito.Mockito;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.annotations.AfterClass;
@@ -66,8 +67,8 @@ public abstract class MockedBookKeeperTestCase {
         this.numBookies = numBookies;
     }
 
-    @BeforeMethod(groups = { "broker" })
-    public void setUp(Method method) throws Exception {
+    @BeforeMethod(alwaysRun = true)
+    public final void setUp(Method method) throws Exception {
         LOG.info(">>>>>> starting {}", method);
         try {
             // start bookkeeper service
@@ -81,10 +82,15 @@ public abstract class MockedBookKeeperTestCase {
         factory = new ManagedLedgerFactoryImpl(bkc, zkc, conf);
 
         zkc.create("/managed-ledgers", new byte[0], ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
+        setUpTestCase();
     }
 
-    @AfterMethod(alwaysRun = true, groups = { "broker" })
-    public void tearDown(Method method) {
+    protected void setUpTestCase() throws Exception {
+
+    }
+
+    @AfterMethod(alwaysRun = true)
+    public final void tearDown(Method method) {
         try {
             LOG.info("@@@@@@@@@ stopping " + method);
             factory.shutdown();
@@ -95,16 +101,17 @@ public abstract class MockedBookKeeperTestCase {
         } catch (Exception e) {
             LOG.error("tearDown Error", e);
         }
+        Mockito.reset();
     }
 
-    @BeforeClass(groups = { "broker" })
-    public void setUpClass() {
+    @BeforeClass(alwaysRun = true)
+    public final void setUpClass() {
         executor = OrderedScheduler.newSchedulerBuilder().numThreads(2).name("test").build();
         cachedExecutor = Executors.newCachedThreadPool();
     }
 
-    @AfterClass(alwaysRun = true, groups = { "broker" })
-    public void tearDownClass() {
+    @AfterClass(alwaysRun = true)
+    public final void tearDownClass() {
         if (executor != null) {
             executor.shutdown();
         }
