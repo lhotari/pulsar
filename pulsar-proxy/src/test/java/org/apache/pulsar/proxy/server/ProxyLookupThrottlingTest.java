@@ -47,7 +47,7 @@ public class ProxyLookupThrottlingTest extends MockedPulsarServiceBaseTest {
     private ProxyConfiguration proxyConfig = new ProxyConfiguration();
 
     @Override
-    @BeforeMethod(groups = "quarantine")
+    @BeforeMethod(alwaysRun = true)
     protected void setup() throws Exception {
         internalSetup();
 

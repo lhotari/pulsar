@@ -62,7 +62,7 @@ public class MultiTopicsReaderTest extends MockedPulsarServiceBaseTest {
 
     private static final String subscription = "reader-multi-topics-sub";
 
-    @BeforeMethod(groups = {"flaky", "quarantine"})
+    @BeforeMethod(alwaysRun = true)
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

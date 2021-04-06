@@ -109,7 +109,7 @@ public class TokenOauth2AuthenticatedProducerConsumerTest extends ProducerConsum
                 .authentication(authentication));
     }
 
-    @AfterMethod(alwaysRun = true, groups = "broker-api")
+    @AfterMethod(alwaysRun = true)
     @Override
     protected void cleanup() throws Exception {
         super.internalCleanup();

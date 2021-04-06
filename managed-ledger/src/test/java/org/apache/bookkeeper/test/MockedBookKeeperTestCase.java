@@ -66,7 +66,7 @@ public abstract class MockedBookKeeperTestCase {
         this.numBookies = numBookies;
     }
 
-    @BeforeMethod(groups = { "broker" })
+    @BeforeMethod(alwaysRun = true)
     public void setUp(Method method) throws Exception {
         LOG.info(">>>>>> starting {}", method);
         try {
@@ -83,7 +83,7 @@ public abstract class MockedBookKeeperTestCase {
         zkc.create("/managed-ledgers", new byte[0], ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
     }
 
-    @AfterMethod(alwaysRun = true, groups = { "broker" })
+    @AfterMethod(alwaysRun = true)
     public void tearDown(Method method) {
         try {
             LOG.info("@@@@@@@@@ stopping " + method);

@@ -93,7 +93,7 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         };
     }
 
-    @BeforeMethod(groups = {"flaky", "quarantine"})
+    @BeforeMethod(alwaysRun = true)
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

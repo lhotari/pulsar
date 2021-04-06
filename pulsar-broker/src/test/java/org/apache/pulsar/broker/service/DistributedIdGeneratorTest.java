@@ -49,7 +49,7 @@ public class DistributedIdGeneratorTest {
         coordinationService = new CoordinationServiceImpl(store);
     }
 
-    @AfterMethod(alwaysRun = true, groups = "broker")
+    @AfterMethod(alwaysRun = true)
     public void teardown() throws Exception {
         coordinationService.close();
         store.close();
