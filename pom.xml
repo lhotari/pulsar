@@ -84,7 +84,7 @@ flexible messaging model and an intuitive client API.</description>
     <include>*</include>
     <exclude/>
     <groups/>
-    <excludedGroups/>
+    <excludedGroups>quarantine</excludedGroups>
 
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>

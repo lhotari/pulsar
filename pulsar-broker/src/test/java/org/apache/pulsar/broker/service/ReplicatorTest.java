@@ -95,7 +95,7 @@ public class ReplicatorTest extends ReplicatorTestBase {
 
     protected String methodName;
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void beforeMethod(Method m) throws Exception {
         methodName = m.getName();
         admin1.namespaces().removeBacklogQuota("pulsar/ns");
@@ -104,7 +104,7 @@ public class ReplicatorTest extends ReplicatorTestBase {
     }
 
     @Override
-    @BeforeClass(timeOut = 300000)
+    @BeforeClass(alwaysRun = true, timeOut = 300000)
     public void setup() throws Exception {
         super.setup();
     }
@@ -651,7 +651,7 @@ public class ReplicatorTest extends ReplicatorTestBase {
      * @throws Exception
      */
 
-    @Test(timeOut = 60000, priority = -1)
+    @Test(timeOut = 60000, priority = -1, groups = "quarantine")
     public void testResumptionAfterBacklogRelaxed() throws Exception {
         List<RetentionPolicy> policies = Lists.newArrayList();
         policies.add(RetentionPolicy.producer_exception);
