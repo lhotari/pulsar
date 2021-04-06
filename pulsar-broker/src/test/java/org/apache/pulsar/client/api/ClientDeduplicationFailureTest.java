@@ -20,12 +20,13 @@ package org.apache.pulsar.client.api;
 
 import static org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest.retryStrategically;
 import static org.mockito.Mockito.spy;
-import static org.testng.Assert.*;
-
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
 import com.google.common.base.Function;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
-import java.lang.reflect.Method;
 import java.net.URL;
 import java.util.LinkedList;
 import java.util.List;
@@ -50,6 +51,7 @@ import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.TenantInfo;
 import org.apache.pulsar.common.policies.data.TopicStats;
+import org.apache.pulsar.tests.TestRetrySupport;
 import org.apache.pulsar.zookeeper.LocalBookkeeperEnsemble;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -57,7 +59,7 @@ import org.testng.annotations.Test;
 
 @Slf4j
 @Test(groups = "broker-api")
-public class ClientDeduplicationFailureTest {
+public class ClientDeduplicationFailureTest extends TestRetrySupport {
     LocalBookkeeperEnsemble bkEnsemble;
 
     ServiceConfiguration config;
@@ -69,10 +71,9 @@ public class ClientDeduplicationFailureTest {
     final String tenant = "external-repl-prop";
     String primaryHost;
 
-    @BeforeMethod(timeOut = 300000)
-    void setup(Method method) throws Exception {
-        log.info("--- Setting up method {} ---", method.getName());
-
+    @Override
+    @BeforeMethod(alwaysRun = true, timeOut = 300000)
+    protected void setup() throws Exception {
         // Start local bookkeeper ensemble
         bkEnsemble = new LocalBookkeeperEnsemble(3, 0, () -> 0);
         bkEnsemble.start();
@@ -116,8 +117,9 @@ public class ClientDeduplicationFailureTest {
         admin.tenants().createTenant(tenant, tenantInfo);
     }
 
+    @Override
     @AfterMethod(alwaysRun = true)
-    void shutdown() throws Exception {
+    protected void cleanup() throws Exception {
         log.info("--- Shutting down ---");
         pulsarClient.close();
         admin.close();
