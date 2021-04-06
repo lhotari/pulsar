@@ -93,7 +93,7 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         };
     }
 
-    @BeforeMethod
+    @BeforeMethod(groups = {"flaky", "quarantine"})
     @Override
     protected void setup() throws Exception {
         super.internalSetup();
@@ -885,7 +885,7 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         Assert.assertNotNull(consumer3.receive(1, TimeUnit.SECONDS));
     }
 
-    @Test(dataProvider = "partitioned")
+    @Test(dataProvider = "partitioned", groups = "quarantine")
     public void testOrderingWithConsumerListener(boolean partitioned) throws Exception {
         final String topic = "persistent://public/default/key_shared-" + UUID.randomUUID();
         if (partitioned) {

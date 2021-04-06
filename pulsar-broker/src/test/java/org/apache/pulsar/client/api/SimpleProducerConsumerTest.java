@@ -113,7 +113,7 @@ import org.testng.annotations.Test;
 public class SimpleProducerConsumerTest extends ProducerConsumerBase {
     private static final Logger log = LoggerFactory.getLogger(SimpleProducerConsumerTest.class);
 
-    @BeforeMethod(groups = { "broker", "flaky" })
+    @BeforeMethod(groups = {"broker", "flaky", "quarantine"})
     @Override
     protected void setup() throws Exception {
         super.internalSetup();
@@ -141,7 +141,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         return new Object[][] { { true }, { false } };
     }
 
-    @AfterMethod(alwaysRun = true, groups = { "broker" })
+    @AfterMethod(alwaysRun = true, groups = {"broker", "flaky", "quarantine"})
     @Override
     protected void cleanup() throws Exception {
         super.internalCleanup();
@@ -2335,7 +2335,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         log.info("-- Exiting {} test --", methodName);
     }
 
-    @Test(dataProvider = "ackReceiptEnabled")
+    @Test(dataProvider = "ackReceiptEnabled", groups = "quarantine")
     public void testRedeliveryFailOverConsumer(boolean ackReceiptEnabled) throws Exception {
         log.info("-- Starting {} test --", methodName);
 
@@ -3961,7 +3961,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
      * <p>
      * Test starts consumer with 10 partitions where one of the partition listener gets blocked but that will not impact
      * processing of other 9 partitions and they will be processed successfully.
-     * 
+     *
      * @throws Exception
      */
     @Test(timeOut = 20000)
