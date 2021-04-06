@@ -61,7 +61,7 @@ public abstract class BkEnsemblesTestBase {
         //overridable by subclasses
     }
 
-    @BeforeMethod(groups = {"broker-impl", "broker"})
+    @BeforeMethod(alwaysRun = true)
     protected void setup() throws Exception {
         try {
             // start local bookie and zookeeper
@@ -98,7 +98,7 @@ public abstract class BkEnsemblesTestBase {
         }
     }
 
-    @AfterMethod(alwaysRun = true, groups = {"broker-impl", "broker"})
+    @AfterMethod(alwaysRun = true)
     protected void shutdown() throws Exception {
         admin.close();
         pulsar.close();

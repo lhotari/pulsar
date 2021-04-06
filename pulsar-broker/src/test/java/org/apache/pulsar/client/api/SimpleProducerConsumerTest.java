@@ -113,7 +113,7 @@ import org.testng.annotations.Test;
 public class SimpleProducerConsumerTest extends ProducerConsumerBase {
     private static final Logger log = LoggerFactory.getLogger(SimpleProducerConsumerTest.class);
 
-    @BeforeMethod(groups = {"broker", "flaky", "quarantine"})
+    @BeforeMethod(alwaysRun = true)
     @Override
     protected void setup() throws Exception {
         super.internalSetup();
@@ -141,7 +141,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         return new Object[][] { { true }, { false } };
     }
 
-    @AfterMethod(alwaysRun = true, groups = {"broker", "flaky", "quarantine"})
+    @AfterMethod(alwaysRun = true)
     @Override
     protected void cleanup() throws Exception {
         super.internalCleanup();

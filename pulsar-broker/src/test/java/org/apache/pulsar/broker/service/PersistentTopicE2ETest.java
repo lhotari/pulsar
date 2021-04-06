@@ -93,7 +93,7 @@ import org.testng.annotations.Test;
 @Test(groups = "flaky")
 public class PersistentTopicE2ETest extends BrokerTestBase {
 
-    @BeforeMethod(groups = {"flaky", "quarantine"})
+    @BeforeMethod(alwaysRun = true)
     @Override
     protected void setup() throws Exception {
         super.baseSetup();
