@@ -95,6 +95,11 @@ public class InfluxDBSinkTest {
         when(influxDBClient.getWriteApiBlocking()).thenReturn(writeApi);
     }
 
+    @AfterMethod(alwaysRun = true)
+    public void resetMockito() {
+        Mockito.reset();
+    }
+
     @Test
     public void testJsonSchema() {
         JSONSchema<Cpu> schema = JSONSchema.of(Cpu.class);

@@ -176,4 +176,8 @@ public class HbaseGenericRecordSinkTest {
         sink.close();
     }
 
+    @AfterMethod(alwaysRun = true)
+    public void cleanup() {
+        Mockito.reset();
+    }
 }

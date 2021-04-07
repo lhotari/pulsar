@@ -67,6 +67,7 @@ public class SolrGenericRecordSinkTest {
     @AfterMethod(alwaysRun = true)
     public void tearDown() throws Exception {
         solrServerUtil.stopStandaloneSolr();
+        Mockito.reset();
     }
 
     @Test

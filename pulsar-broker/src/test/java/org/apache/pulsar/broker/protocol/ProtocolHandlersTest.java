@@ -35,6 +35,7 @@ import java.util.Map;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.common.nar.NarClassLoader;
+import org.mockito.Mockito;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -81,6 +82,8 @@ public class ProtocolHandlersTest {
         verify(handler2, times(1)).close();
         verify(ncl1, times(1)).close();
         verify(ncl2, times(1)).close();
+
+        Mockito.reset(handler1, handler2, ncl1, ncl2);
     }
 
     @Test

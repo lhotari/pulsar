@@ -111,6 +111,7 @@ public class MongoSourceTest {
     public void tearDown() throws Exception {
         source.close();
         verify(mockMongoClient, times(1)).close();
+        Mockito.reset();
     }
 
     @Test

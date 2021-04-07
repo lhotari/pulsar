@@ -100,6 +100,11 @@ public class MongoSinkTest {
         when(mockMongoDb.getCollection(anyString()).insertMany(any())).thenReturn(mockPublisher);
     }
 
+    @AfterMethod(alwaysRun = true)
+    public void resetMockito() {
+        Mockito.reset();
+    }
+
     private void initContext(boolean throwBulkError) {
         when(mockRecord.getValue()).thenReturn("{\"hello\":\"pulsar\"}".getBytes());
 

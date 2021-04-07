@@ -54,6 +54,7 @@ public class TestApplication {
     @AfterMethod
     public void tearDown() throws Exception {
         FileUtils.deleteDirectory(baseDir);
+        Mockito.reset();
     }
 
     private <T extends LifecycleAware> T mockLifeCycle(Class<T> klass) {

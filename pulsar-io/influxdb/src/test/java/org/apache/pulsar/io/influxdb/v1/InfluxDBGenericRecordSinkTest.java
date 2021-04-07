@@ -104,6 +104,7 @@ public class InfluxDBGenericRecordSinkTest {
     public void tearDown() throws Exception {
         influxSink.close();
         verify(influxDB, times(1)).close();
+        Mockito.reset();
     }
 
     @Test

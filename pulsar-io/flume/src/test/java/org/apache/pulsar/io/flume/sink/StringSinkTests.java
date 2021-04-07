@@ -106,6 +106,7 @@ public class StringSinkTests extends AbstractFlumeTests {
     @AfterMethod(alwaysRun = true)
     public void tearDown() {
         source.stop();
+        Mockito.reset();
     }
 
     protected final void send(StringSink stringSink, int numRecords) {

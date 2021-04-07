@@ -690,6 +690,7 @@ public abstract class TestPulsarConnector {
     @AfterMethod(alwaysRun = true)
     public void cleanup() {
         completedBytes = 0L;
+        Mockito.reset();
     }
 
     @DataProvider(name = "rewriteNamespaceDelimiter")
