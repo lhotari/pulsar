@@ -58,7 +58,7 @@ public class DeadLetterTopicTest extends ProducerConsumerBase {
         super.internalCleanup();
     }
 
-    @Test
+    @Test(groups = "quarantine")
     public void testDeadLetterTopic() throws Exception {
         final String topic = "persistent://my-property/my-ns/dead-letter-topic";
 
