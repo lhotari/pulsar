@@ -33,6 +33,7 @@ import org.apache.pulsar.io.elasticsearch.data.Profile;
 import org.apache.pulsar.io.elasticsearch.data.UserProfile;
 import org.elasticsearch.ElasticsearchStatusException;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import org.testng.annotations.AfterMethod;

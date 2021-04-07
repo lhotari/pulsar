@@ -29,6 +29,7 @@ import org.apache.pulsar.io.core.SinkContext;
 import org.bson.BsonDocument;
 import org.bson.Document;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
 import org.testng.IObjectFactory;

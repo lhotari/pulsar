@@ -38,6 +38,7 @@ import org.apache.pulsar.io.influxdb.v1.InfluxDBGenericRecordSink;
 import org.influxdb.InfluxDB;
 import org.influxdb.dto.BatchPoints;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
