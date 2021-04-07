@@ -70,8 +70,10 @@ public class ConsumerImplTest {
 
     @AfterMethod(alwaysRun = true)
     public void cleanup() {
-        executorProvider.shutdownNow();
-        executorProvider = null;
+        if (executorProvider != null) {
+            executorProvider.shutdownNow();
+            executorProvider = null;
+        }
     }
 
     @Test(invocationTimeOut = 1000)
