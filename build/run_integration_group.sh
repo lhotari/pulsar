@@ -48,7 +48,7 @@ mvn_run_integration_test() {
   set -x
 
   # run the integration tests
-  $RETRY mvn -B -ntp -DredirectTestOutputToFile=false -f tests/pom.xml -Dsurefire.skipAfterFailureCount=1 test "$@"
+  $RETRY mvn -B -ntp -DredirectTestOutputToFile=false -f tests/pom.xml test "$@"
   )
 }
 
