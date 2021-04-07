@@ -23,7 +23,9 @@ set -x
 set -o pipefail
 set -o errexit
 
-MVN_TEST_COMMAND='build/retry.sh mvn -B -ntp test -DtestForkCount=2'
+MVN_COMMAND='mvn -B -ntp -DtestForkCount=2'
+MVN_COMMAND_WITH_RETRY="build/retry.sh ${MVN_COMMAND}"
+MVN_TEST_COMMAND="${MVN_COMMAND_WITH_RETRY} test"
 
 echo -n "Test Group : $TEST_GROUP"
 
@@ -47,7 +49,7 @@ function broker_client_impl() {
 function broker_flaky() {
   echo "::endgroup::"
   echo "::group::Running quarantined tests"
-  mvn -B -ntp test -pl pulsar-broker -Dgroups='quarantine' -DexcludedGroups='' -DfailIfNoTests=false || \
+  $MVN_COMMAND test -pl pulsar-broker -Dgroups='quarantine' -DexcludedGroups='' -DfailIfNoTests=false || \
       echo "::warning::There were test failures in the 'quarantine' test group."
   echo "::endgroup::"
   echo "::group::Running flaky tests"
@@ -58,7 +60,7 @@ function broker_flaky() {
 function proxy() {
   echo "::endgroup::"
   echo "::group::Running quarantined pulsar-proxy tests"
-  mvn -B -ntp test -pl pulsar-proxy -Dgroups='quarantine' -DexcludedGroups='' -DfailIfNoTests=false || \
+  $MVN_COMMAND test -pl pulsar-proxy -Dgroups='quarantine' -DexcludedGroups='' -DfailIfNoTests=false || \
       echo "::warning::There were test failures in the 'quarantine' test group."
   echo "::endgroup::"
   echo "::group::Running pulsar-proxy tests"
@@ -67,7 +69,7 @@ function proxy() {
 }
 
 function other() {
-  build/retry.sh mvn -B -ntp install -PbrokerSkipTest \
+  $MVN_COMMAND_WITH_RETRY install -PbrokerSkipTest \
                                      -Dexclude='org/apache/pulsar/proxy/**/*.java,
                                                 **/ManagedLedgerTest.java,
                                                 **/TestPulsarKeyValueSchemaHandler.java,
@@ -89,7 +91,7 @@ function other() {
     perl -0777 -p -e 's/\n(\S)/,$1/g')
   if [ -n "${modules_with_quarantined_tests}" ]; then
     echo "::group::Running quarantined tests outside of pulsar-broker & pulsar-proxy (if any)"
-    mvn -B -ntp -pl "${modules_with_quarantined_tests}" test -Dgroups='quarantine' -DexcludedGroups='' \
+    $MVN_COMMAND -pl "${modules_with_quarantined_tests}" test -Dgroups='quarantine' -DexcludedGroups='' \
       -DfailIfNoTests=false || \
         echo "::warning::There were test failures in the 'quarantine' test group."
     echo "::endgroup::"
