@@ -37,7 +37,7 @@ mvn_run_integration_test() {
   RETRY=""
   # wrap with retry.sh script if next parameter is "--retry"
   if [[ "$1" == "--retry" ]]; then
-    RETRY="./build/retry_integration.sh"
+    RETRY="./build/retry.sh"
     shift
   fi
   # skip wrapping with retry.sh script if next parameter is "--no-retry"
