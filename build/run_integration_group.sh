@@ -53,12 +53,12 @@ mvn_run_integration_test() {
 }
 
 test_group_shade() {
-  mvn_run_integration_test "$@" -DShadeTests -DtestForkCount=1
+  mvn_run_integration_test "$@" -DShadeTests -DtestForkCount=1 -DtestReuseFork=false
 }
 
 test_group_backwards_compat() {
   mvn_run_integration_test --retry "$@" -DintegrationTestSuiteFile=pulsar-backwards-compatibility.xml -DintegrationTests
-  mvn_run_integration_test "$@" -DBackwardsCompatTests -DtestForkCount=1
+  mvn_run_integration_test "$@" -DBackwardsCompatTests -DtestForkCount=1 -DtestReuseFork=false
 }
 
 test_group_cli() {
@@ -125,7 +125,7 @@ test_group_pulsar_connectors_process() {
 }
 
 test_group_sql() {
-  mvn_run_integration_test "$@" -DintegrationTestSuiteFile=pulsar-sql.xml -DintegrationTests -DtestForkCount=1
+  mvn_run_integration_test "$@" -DintegrationTestSuiteFile=pulsar-sql.xml -DintegrationTests -DtestForkCount=1 -DtestReuseFork=false
 }
 
 echo "Test Group : $TEST_GROUP"
