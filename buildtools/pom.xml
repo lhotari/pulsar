@@ -37,6 +37,7 @@
   <properties>
     <maven.compiler.source>1.8</maven.compiler.source>
     <maven.compiler.target>1.8</maven.compiler.target>
+    <surefire.version>3.0.0-M3</surefire.version>
   </properties>
 
   <dependencies>
