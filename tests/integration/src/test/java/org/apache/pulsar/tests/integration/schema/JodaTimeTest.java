@@ -51,6 +51,7 @@ public class JodaTimeTest extends PulsarTestSuite {
 
     @BeforeMethod
     public void setup() throws Exception {
+        super.setup();
         this.client = PulsarClient.builder()
                 .serviceUrl(pulsarCluster.getPlainTextServiceUrl())
                 .build();
