@@ -29,11 +29,13 @@ import static java.util.stream.Collectors.joining;
 public abstract class PulsarClusterTestBase extends PulsarTestBase {
     @Override
     protected void setup() throws Exception {
+        incrementSetupNumber();
         setupCluster();
     }
 
     @Override
     protected void cleanup() throws Exception {
+        markCurrentSetupNumberCleaned();
         tearDownCluster();
     }
 

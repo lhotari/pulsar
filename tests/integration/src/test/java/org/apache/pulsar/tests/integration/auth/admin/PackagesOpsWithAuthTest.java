@@ -74,6 +74,7 @@ public class PackagesOpsWithAuthTest extends TestRetrySupport {
     @Override
     @BeforeClass
     public void setup() throws Exception {
+        incrementSetupNumber();
         // Before starting the cluster, generate the secret key and the token
         // Use Zk container to have 1 container available before starting the cluster
         final String clusterName = String.format("%s-%s", CLUSTER_PREFIX, RandomStringUtils.randomAlphabetic(6));
@@ -105,6 +106,7 @@ public class PackagesOpsWithAuthTest extends TestRetrySupport {
     @Override
     @AfterClass(alwaysRun = true)
     public void cleanup() {
+        markCurrentSetupNumberCleaned();
         if (cmdContainer != null) {
             cmdContainer.stop();
         }

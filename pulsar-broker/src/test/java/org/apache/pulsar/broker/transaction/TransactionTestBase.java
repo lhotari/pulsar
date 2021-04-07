@@ -80,6 +80,7 @@ public abstract class TransactionTestBase extends TestRetrySupport {
     private NonClosableMockBookKeeper mockBookKeeper;
 
     public void internalSetup() throws Exception {
+        incrementSetupNumber();
         init();
 
         admin = spy(PulsarAdmin.builder().serviceHttpUrl(pulsarServiceList.get(0).getWebServiceAddress()).build());
@@ -223,6 +224,7 @@ public abstract class TransactionTestBase extends TestRetrySupport {
     };
 
     protected final void internalCleanup() {
+        markCurrentSetupNumberCleaned();
         try {
             // if init fails, some of these could be null, and if so would throw
             // an NPE in shutdown, obscuring the real error

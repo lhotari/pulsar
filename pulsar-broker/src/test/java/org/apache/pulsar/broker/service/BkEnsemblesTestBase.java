@@ -65,6 +65,7 @@ public abstract class BkEnsemblesTestBase extends TestRetrySupport {
     @Override
     @BeforeMethod(alwaysRun = true)
     protected void setup() throws Exception {
+        incrementSetupNumber();
         try {
             // start local bookie and zookeeper
             bkEnsemble = new LocalBookkeeperEnsemble(numberOfBookies, 0, () -> 0);
@@ -103,6 +104,7 @@ public abstract class BkEnsemblesTestBase extends TestRetrySupport {
     @Override
     @AfterMethod(alwaysRun = true)
     protected void cleanup() throws Exception {
+        markCurrentSetupNumberCleaned();
         admin.close();
         pulsar.close();
         bkEnsemble.stop();

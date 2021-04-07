@@ -41,6 +41,7 @@ public class PulsarVersionTest extends TestRetrySupport {
     @Override
     @BeforeClass
     public void setup() throws Exception {
+        incrementSetupNumber();
         PulsarClusterSpec spec = PulsarClusterSpec.builder()
                 .clusterName(String.format("%s-%s", clusterNamePrefix, RandomStringUtils.randomAlphabetic(6)))
                 .build();
@@ -51,6 +52,7 @@ public class PulsarVersionTest extends TestRetrySupport {
     @Override
     @AfterClass(alwaysRun = true)
     public void cleanup() {
+        markCurrentSetupNumberCleaned();
         if (pulsarCluster != null) {
             pulsarCluster.stop();
             pulsarCluster = null;

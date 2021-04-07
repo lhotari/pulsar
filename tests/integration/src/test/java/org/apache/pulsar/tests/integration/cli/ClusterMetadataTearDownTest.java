@@ -83,6 +83,7 @@ public class ClusterMetadataTearDownTest extends TestRetrySupport {
     @Override
     @BeforeClass
     public void setup() throws Exception {
+        incrementSetupNumber();
         pulsarCluster = PulsarCluster.forSpec(spec);
         pulsarCluster.start();
         metadataServiceUri = "zk+null://" + pulsarCluster.getZKConnString() + "/ledgers";
@@ -102,6 +103,7 @@ public class ClusterMetadataTearDownTest extends TestRetrySupport {
     @Override
     @AfterClass(alwaysRun = true)
     public void cleanup() {
+        markCurrentSetupNumberCleaned();
         try {
             ledgerManager.close();
         } catch (IOException e) {

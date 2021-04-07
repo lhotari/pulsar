@@ -37,11 +37,13 @@ public class PulsarStandaloneTestSuite2_2 extends PulsarStandaloneTestBase {
 
     @Override
     protected void setup() throws Exception {
+        incrementSetupNumber();
         setUpCluster();
     }
 
     @Override
     protected void cleanup() throws Exception {
+        markCurrentSetupNumberCleaned();
         tearDownCluster();
     }
 }

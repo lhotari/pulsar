@@ -74,6 +74,7 @@ public class ClientDeduplicationFailureTest extends TestRetrySupport {
     @Override
     @BeforeMethod(alwaysRun = true, timeOut = 300000)
     protected void setup() throws Exception {
+        incrementSetupNumber();
         // Start local bookkeeper ensemble
         bkEnsemble = new LocalBookkeeperEnsemble(3, 0, () -> 0);
         bkEnsemble.start();
@@ -120,6 +121,7 @@ public class ClientDeduplicationFailureTest extends TestRetrySupport {
     @Override
     @AfterMethod(alwaysRun = true)
     protected void cleanup() throws Exception {
+        markCurrentSetupNumberCleaned();
         log.info("--- Shutting down ---");
         pulsarClient.close();
         admin.close();
