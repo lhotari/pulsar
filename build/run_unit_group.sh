@@ -48,7 +48,7 @@ function broker_flaky() {
   echo "::endgroup::"
   echo "::group::Running quarantined tests"
   mvn -B -ntp test -pl pulsar-broker -Dgroups='quarantine' -DexcludedGroups='' \
-    -DtestForkCount=1 -DredirectTestOutputToFile=false -DfailIfNoTests=false || \
+    -DtestForkCount=1 -DfailIfNoTests=false || \
       echo "::warning::There were test failures in the 'quarantine' test group."
   echo "::endgroup::"
   echo "::group::Running flaky tests"
@@ -60,7 +60,7 @@ function proxy() {
   echo "::endgroup::"
   echo "::group::Running quarantined pulsar-proxy tests"
   mvn -B -ntp test -pl pulsar-proxy -Dgroups='quarantine' -DexcludedGroups='' \
-    -DtestForkCount=1 -DredirectTestOutputToFile=false -DfailIfNoTests=false || \
+    -DtestForkCount=1 -DfailIfNoTests=false || \
       echo "::warning::There were test failures in the 'quarantine' test group."
   echo "::endgroup::"
   echo "::group::Running pulsar-proxy tests"
@@ -97,7 +97,7 @@ function other() {
   if [ -n "${modules_with_quarantined_tests}" ]; then
     echo "::group::Running quarantined tests outside of pulsar-broker & pulsar-proxy (if any)"
     mvn -B -ntp -pl "${modules_with_quarantined_tests}" test -Dgroups='quarantine' -DexcludedGroups='' \
-      -DtestForkCount=1 -DredirectTestOutputToFile=false -DfailIfNoTests=false || \
+      -DtestForkCount=1 -DfailIfNoTests=false || \
         echo "::warning::There were test failures in the 'quarantine' test group."
     echo "::endgroup::"
   fi
