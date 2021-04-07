@@ -29,13 +29,11 @@ import static java.util.stream.Collectors.joining;
 public abstract class PulsarClusterTestBase extends PulsarTestBase {
     @Override
     protected void setup() throws Exception {
-        incrementSetupNumber();
         setupCluster();
     }
 
     @Override
-    protected void cleanup() throws Exception {
-        markCurrentSetupNumberCleaned();
+    protected void cleanup() {
         tearDownCluster();
     }
 
@@ -104,6 +102,7 @@ public abstract class PulsarClusterTestBase extends PulsarTestBase {
     }
 
     protected void setupCluster(PulsarClusterSpec spec) throws Exception {
+        incrementSetupNumber();
         log.info("Setting up cluster {} with {} bookies, {} brokers",
                 spec.clusterName(), spec.numBookies(), spec.numBrokers());
 
@@ -117,6 +116,7 @@ public abstract class PulsarClusterTestBase extends PulsarTestBase {
     }
 
     public void tearDownCluster() {
+        markCurrentSetupNumberCleaned();
         if (null != pulsarCluster) {
             pulsarCluster.stop();
         }

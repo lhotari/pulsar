@@ -27,23 +27,23 @@ public class PulsarStandaloneTestSuite2_4 extends PulsarStandaloneTestBase {
 
     @BeforeClass
     public void setUpCluster() throws Exception {
+        incrementSetupNumber();
         super.startCluster(PulsarContainer.PULSAR_2_4_IMAGE_NAME);
     }
 
     @AfterClass(alwaysRun = true)
     public void tearDownCluster() throws Exception {
+        markCurrentSetupNumberCleaned();
         super.stopCluster();
     }
 
     @Override
     protected void setup() throws Exception {
-        incrementSetupNumber();
         setUpCluster();
     }
 
     @Override
     protected void cleanup() throws Exception {
-        markCurrentSetupNumberCleaned();
         tearDownCluster();
     }
 }

@@ -28,13 +28,13 @@ public abstract class PulsarTestSuite extends PulsarClusterTestBase {
     @BeforeClass
     @Override
     public void setupCluster() throws Exception {
-        super.setupCluster();
+        setup();
     }
 
     @AfterClass(alwaysRun = true)
     @Override
     public void tearDownCluster() {
-        super.tearDownCluster();
+        cleanup();
     }
 
     public static void retryStrategically(Predicate<Void> predicate, int retryCount, long intSleepTimeInMillis) throws Exception {
