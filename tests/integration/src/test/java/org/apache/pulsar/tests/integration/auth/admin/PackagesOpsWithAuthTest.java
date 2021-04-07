@@ -27,6 +27,7 @@ import org.apache.pulsar.client.admin.PulsarAdminException;
 import org.apache.pulsar.client.api.AuthenticationFactory;
 import org.apache.pulsar.client.impl.auth.AuthenticationToken;
 import org.apache.pulsar.common.policies.data.AuthAction;
+import org.apache.pulsar.tests.TestRetrySupport;
 import org.apache.pulsar.tests.integration.containers.PulsarContainer;
 import org.apache.pulsar.tests.integration.containers.ZKContainer;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
@@ -53,7 +54,7 @@ import static org.testng.Assert.fail;
  * PackagesOpsWithAuthTest will test all package operations with and without the proper permission.
  */
 @Slf4j
-public class PackagesOpsWithAuthTest {
+public class PackagesOpsWithAuthTest extends TestRetrySupport {
 
     private static final String CLUSTER_PREFIX = "package-auth";
     private static final String PRIVATE_KEY_PATH_INSIDE_CONTAINER = "/tmp/private.key";
@@ -70,6 +71,7 @@ public class PackagesOpsWithAuthTest {
     private PulsarCluster pulsarCluster;
     private PulsarContainer cmdContainer;
 
+    @Override
     @BeforeClass
     public void setup() throws Exception {
         // Before starting the cluster, generate the secret key and the token
@@ -100,8 +102,9 @@ public class PackagesOpsWithAuthTest {
         pulsarCluster.start();
     }
 
+    @Override
     @AfterClass(alwaysRun = true)
-    public void teardown() {
+    public void cleanup() {
         if (cmdContainer != null) {
             cmdContainer.stop();
         }

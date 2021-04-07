@@ -34,9 +34,10 @@ import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.common.util.FutureUtil;
+import org.apache.pulsar.tests.TestRetrySupport;
 import org.testng.Assert;
 
-public class PulsarTestBase {
+public abstract class PulsarTestBase extends TestRetrySupport {
 
     public static String randomName(int numChars) {
         StringBuilder sb = new StringBuilder();

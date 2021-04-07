@@ -66,6 +66,18 @@ public abstract class PulsarFunctionsTestBase extends PulsarTestSuite {
         log.info("All functions workers are stopped.");
     }
 
+    @Override
+    protected void setup() throws Exception {
+        super.setup();
+        setupFunctionWorkers();
+    }
+
+    @Override
+    protected void cleanup() throws Exception {
+        teardownFunctionWorkers();
+        super.cleanup();
+    }
+
     //
     // Common Variables used by functions test
     //

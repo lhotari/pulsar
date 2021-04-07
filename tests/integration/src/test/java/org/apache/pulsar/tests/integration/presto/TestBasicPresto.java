@@ -64,6 +64,18 @@ public class TestBasicPresto extends TestPulsarSQLBase {
         pulsarCluster.stopPrestoWorker();
     }
 
+    @Override
+    protected void setup() throws Exception {
+        super.setup();
+        setupPresto();
+    }
+
+    @Override
+    protected void cleanup() throws Exception {
+        teardownPresto();
+        super.cleanup();
+    }
+
     @DataProvider(name = "schemaProvider")
     public Object[][] schemaProvider() {
         return new Object[][] {

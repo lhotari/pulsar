@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.tests.integration.cli;
 
+import org.apache.pulsar.tests.TestRetrySupport;
 import org.apache.pulsar.tests.integration.docker.ContainerExecResult;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
 import org.apache.pulsar.tests.integration.topologies.PulsarClusterSpec;
@@ -32,11 +33,12 @@ import static org.testng.Assert.assertTrue;
 /**
  * Pulsar version test class.
  */
-public class PulsarVersionTest {
+public class PulsarVersionTest extends TestRetrySupport {
 
     private final static String clusterNamePrefix = "pulsar-version";
     private PulsarCluster pulsarCluster;
 
+    @Override
     @BeforeClass
     public void setup() throws Exception {
         PulsarClusterSpec spec = PulsarClusterSpec.builder()
@@ -46,8 +48,9 @@ public class PulsarVersionTest {
         pulsarCluster.start();
     }
 
+    @Override
     @AfterClass(alwaysRun = true)
-    public void teardown() {
+    public void cleanup() {
         if (pulsarCluster != null) {
             pulsarCluster.stop();
             pulsarCluster = null;

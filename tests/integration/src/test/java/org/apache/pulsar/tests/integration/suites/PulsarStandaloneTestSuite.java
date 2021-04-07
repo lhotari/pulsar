@@ -23,7 +23,7 @@ import org.apache.pulsar.tests.integration.topologies.PulsarStandaloneTestBase;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 
-public class PulsarStandaloneTestSuite extends PulsarStandaloneTestBase {
+public abstract class PulsarStandaloneTestSuite extends PulsarStandaloneTestBase {
 
     @BeforeClass
     public void setUpCluster() throws Exception {
@@ -35,4 +35,13 @@ public class PulsarStandaloneTestSuite extends PulsarStandaloneTestBase {
         super.stopCluster();
     }
 
+    @Override
+    protected void setup() throws Exception {
+        setUpCluster();
+    }
+
+    @Override
+    protected void cleanup() throws Exception {
+        tearDownCluster();
+    }
 }

@@ -35,4 +35,13 @@ public class PulsarStandaloneTestSuite2_2 extends PulsarStandaloneTestBase {
         super.stopCluster();
     }
 
+    @Override
+    protected void setup() throws Exception {
+        setUpCluster();
+    }
+
+    @Override
+    protected void cleanup() throws Exception {
+        tearDownCluster();
+    }
 }

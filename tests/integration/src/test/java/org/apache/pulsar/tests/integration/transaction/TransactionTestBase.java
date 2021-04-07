@@ -57,6 +57,12 @@ public class TransactionTestBase extends PulsarTestSuite {
                 "-c", pulsarCluster.getClusterName());
     }
 
+    @Override
+    protected void setup() throws Exception {
+        super.setup();
+        transactionCoordinatorMetadataInitialize();
+    }
+
     public void prepareTransferData(Producer<TransferOperation> transferProducer, int messageCnt) {
         for (int i = 0; i < messageCnt; i++) {
             TransferOperation transferOperation = new TransferOperation();

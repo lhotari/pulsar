@@ -27,6 +27,15 @@ import static java.util.stream.Collectors.joining;
 
 @Slf4j
 public abstract class PulsarClusterTestBase extends PulsarTestBase {
+    @Override
+    protected void setup() throws Exception {
+        setupCluster();
+    }
+
+    @Override
+    protected void cleanup() throws Exception {
+        tearDownCluster();
+    }
 
     @DataProvider(name = "ServiceUrlAndTopics")
     public Object[][] serviceUrlAndTopics() {
@@ -110,5 +119,4 @@ public abstract class PulsarClusterTestBase extends PulsarTestBase {
             pulsarCluster.stop();
         }
     }
-
 }
