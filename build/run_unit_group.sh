@@ -52,7 +52,7 @@ function broker_flaky() {
       echo "::warning::There were test failures in the 'quarantine' test group."
   echo "::endgroup::"
   echo "::group::Running flaky tests"
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dgroups='flaky' -DtestForkCount=1 -DtestReuseFork=false
+  $MVN_TEST_COMMAND -pl pulsar-broker -Dgroups='flaky' -DtestForkCount=1
   echo "::endgroup::"
 }
 
