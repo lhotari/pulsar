@@ -65,15 +65,15 @@ public abstract class PulsarFunctionsTestBase extends PulsarTestSuite {
     }
 
     @Override
-    protected void setup() throws Exception {
-        super.setup();
+    public void setupCluster() throws Exception {
+        super.setupCluster();
         setupFunctionWorkers();
     }
 
     @Override
-    protected void cleanup() {
+    public void tearDownCluster() throws Exception {
         teardownFunctionWorkers();
-        super.cleanup();
+        super.tearDownCluster();
     }
 
     //

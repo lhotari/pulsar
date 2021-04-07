@@ -56,15 +56,15 @@ public class TestPrestoQueryTieredStorage extends TestPulsarSQLBase {
     private S3Container s3Container;
 
     @Override
-    protected void setup() throws Exception {
-        super.setup();
+    public void setupCluster() throws Exception {
+        super.setupCluster();
         setupExtraContainers();
     }
 
     @Override
-    protected void cleanup() {
+    public void tearDownCluster() throws Exception {
         teardownPresto();
-        super.cleanup();
+        super.tearDownCluster();
     }
 
     private void setupExtraContainers() throws Exception {

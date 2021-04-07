@@ -58,14 +58,14 @@ public class HealthCheckTest extends TestRetrySupport {
     private PulsarCluster pulsarCluster = null;
 
     @BeforeMethod
-    public void setup() throws Exception {
+    public final void setup() throws Exception {
         incrementSetupNumber();
         pulsarCluster = PulsarCluster.forSpec(spec);
         pulsarCluster.start();
     }
 
     @AfterMethod(alwaysRun = true)
-    public void cleanup() {
+    public final void cleanup() {
         markCurrentSetupNumberCleaned();
         if (pulsarCluster != null) {
             pulsarCluster.stop();

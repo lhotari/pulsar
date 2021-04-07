@@ -74,7 +74,7 @@ public class PulsarZKDowngradeTest extends PulsarClusterTestBase {
 
     @AfterClass(alwaysRun = true)
     @Override
-    public final void tearDownCluster() {
+    public final void tearDownCluster() throws Exception {
         super.tearDownCluster();
     }
 

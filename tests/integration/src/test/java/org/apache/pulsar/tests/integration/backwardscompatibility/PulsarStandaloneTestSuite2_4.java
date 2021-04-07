@@ -19,31 +19,10 @@
 package org.apache.pulsar.tests.integration.backwardscompatibility;
 
 import org.apache.pulsar.tests.integration.containers.PulsarContainer;
-import org.apache.pulsar.tests.integration.topologies.PulsarStandaloneTestBase;
-import org.testng.annotations.AfterClass;
-import org.testng.annotations.BeforeClass;
+import org.apache.pulsar.tests.integration.suites.PulsarStandaloneTestSuite;
 
-public class PulsarStandaloneTestSuite2_4 extends PulsarStandaloneTestBase {
-
-    @BeforeClass
-    public final void setUpCluster() throws Exception {
-        incrementSetupNumber();
-        super.startCluster(PulsarContainer.PULSAR_2_4_IMAGE_NAME);
-    }
-
-    @AfterClass(alwaysRun = true)
-    public final void tearDownCluster() throws Exception {
-        markCurrentSetupNumberCleaned();
-        super.stopCluster();
-    }
-
-    @Override
-    protected void setup() throws Exception {
-        setUpCluster();
-    }
-
-    @Override
-    protected void cleanup() throws Exception {
-        tearDownCluster();
+public abstract class PulsarStandaloneTestSuite2_4 extends PulsarStandaloneTestSuite {
+    public PulsarStandaloneTestSuite2_4() {
+        super(PulsarContainer.PULSAR_2_4_IMAGE_NAME);
     }
 }

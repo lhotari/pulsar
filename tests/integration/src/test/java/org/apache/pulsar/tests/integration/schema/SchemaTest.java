@@ -54,9 +54,8 @@ public class SchemaTest extends PulsarTestSuite {
     private PulsarClient client;
     private PulsarAdmin admin;
 
-    @BeforeMethod
-    public void setup() throws Exception {
-        super.setup();
+    public void setupCluster() throws Exception {
+        super.setupCluster();
         this.client = PulsarClient.builder()
             .serviceUrl(pulsarCluster.getPlainTextServiceUrl())
             .build();

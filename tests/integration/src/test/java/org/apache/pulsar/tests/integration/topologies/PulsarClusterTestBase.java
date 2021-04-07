@@ -33,12 +33,15 @@ public abstract class PulsarClusterTestBase extends PulsarTestBase {
     }
 
     @Override
-    protected final void cleanup() {
+    protected final void cleanup() throws Exception {
         tearDownCluster();
     }
 
     @DataProvider(name = "ServiceUrlAndTopics")
     public Object[][] serviceUrlAndTopics() {
+        if (pulsarCluster == null) {
+            return new Object[][]{};
+        }
         return new Object[][] {
                 // plain text, persistent topic
                 {
@@ -55,6 +58,9 @@ public abstract class PulsarClusterTestBase extends PulsarTestBase {
 
     @DataProvider(name = "ServiceUrls")
     public Object[][] serviceUrls() {
+        if (pulsarCluster == null) {
+            return new Object[][]{};
+        }
         return new Object[][] {
                 // plain text
                 {
@@ -65,6 +71,9 @@ public abstract class PulsarClusterTestBase extends PulsarTestBase {
 
     @DataProvider(name = "ServiceAndAdminUrls")
     public Object[][] serviceAndAdminUrls() {
+        if (pulsarCluster == null) {
+            return new Object[][]{};
+        }
         return new Object[][] {
                 // plain text
                 {
@@ -115,7 +124,7 @@ public abstract class PulsarClusterTestBase extends PulsarTestBase {
         log.info("Cluster {} is setup", spec.clusterName());
     }
 
-    public void tearDownCluster() {
+    public void tearDownCluster() throws Exception {
         markCurrentSetupNumberCleaned();
         if (null != pulsarCluster) {
             pulsarCluster.stop();

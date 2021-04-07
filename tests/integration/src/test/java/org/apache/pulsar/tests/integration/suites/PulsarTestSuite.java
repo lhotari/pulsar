@@ -31,7 +31,7 @@ public abstract class PulsarTestSuite extends PulsarClusterTestBase {
     }
 
     @AfterClass(alwaysRun = true)
-    public final void tearDownAfterClass() {
+    public final void tearDownAfterClass() throws Exception {
         cleanup();
     }
 

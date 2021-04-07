@@ -40,7 +40,7 @@ public class SmokeTest extends TestRetrySupport {
 
     @Override
     @BeforeClass
-    public void setup(){
+    public final void setup(){
         pulsarContainer = new PulsarContainer();
         pulsarContainer.start();
     }
@@ -76,7 +76,7 @@ public class SmokeTest extends TestRetrySupport {
 
     @Override
     @AfterClass(alwaysRun = true)
-    public void cleanup(){
+    public final void cleanup(){
         pulsarContainer.stop();
     }
 

@@ -39,6 +39,9 @@ public abstract class PulsarStandaloneTestBase extends PulsarTestBase {
 
     @DataProvider(name = "StandaloneServiceUrlAndTopics")
     public Object[][] serviceUrlAndTopics() {
+        if (container == null) {
+            return new Object[][]{};
+        }
         return new Object[][] {
                 // plain text, persistent topic
                 {
@@ -55,6 +58,9 @@ public abstract class PulsarStandaloneTestBase extends PulsarTestBase {
 
     @DataProvider(name = "StandaloneServiceUrlAndHttpUrl")
     public Object[][] serviceUrlAndHttpUrl() {
+        if (container == null) {
+            return new Object[][]{};
+        }
         return new Object[][] {
                 {
                         container.getPlainTextServiceUrl(),

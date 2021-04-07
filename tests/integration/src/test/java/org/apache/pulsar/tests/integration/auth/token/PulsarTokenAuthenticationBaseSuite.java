@@ -131,7 +131,7 @@ public abstract class PulsarTokenAuthenticationBaseSuite extends PulsarClusterTe
 
     @AfterClass(alwaysRun = true)
     @Override
-    public final void tearDownCluster() {
+    public final void tearDownCluster() throws Exception {
         super.tearDownCluster();
         cmdContainer.close();
     }
