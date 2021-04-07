@@ -53,12 +53,12 @@ mvn_run_integration_test() {
 }
 
 test_group_shade() {
-  mvn_run_integration_test "$@" -DShadeTests
+  mvn_run_integration_test "$@" -DShadeTests -DtestForkCount=1
 }
 
 test_group_backwards_compat() {
   mvn_run_integration_test --retry "$@" -DintegrationTestSuiteFile=pulsar-backwards-compatibility.xml -DintegrationTests
-  mvn_run_integration_test "$@" -DBackwardsCompatTests
+  mvn_run_integration_test "$@" -DBackwardsCompatTests -DtestForkCount=1
 }
 
 test_group_cli() {
