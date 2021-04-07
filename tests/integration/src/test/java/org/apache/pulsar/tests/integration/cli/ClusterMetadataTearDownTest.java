@@ -67,7 +67,7 @@ public class ClusterMetadataTearDownTest {
             .enablePrestoWorker(false)
             .build();
 
-    private final PulsarCluster pulsarCluster = PulsarCluster.forSpec(spec);
+    private PulsarCluster pulsarCluster;
 
     private ZooKeeper localZk;
     private ZooKeeper configStoreZk;
@@ -81,6 +81,7 @@ public class ClusterMetadataTearDownTest {
 
     @BeforeClass
     public void setupCluster() throws Exception {
+        pulsarCluster = PulsarCluster.forSpec(spec);
         pulsarCluster.start();
         metadataServiceUri = "zk+null://" + pulsarCluster.getZKConnString() + "/ledgers";
 
