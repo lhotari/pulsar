@@ -89,7 +89,7 @@ function broker_flaky() {
     print_testng_failures pulsar-broker/target/surefire-reports/testng-failed.xml "Quarantined test failure in" "Quarantined test failures"
   echo "::endgroup::"
   echo "::group::Running flaky tests"
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dgroups='flaky'
+  $MVN_TEST_COMMAND -pl pulsar-broker -Dgroups='flaky' -DtestForkCount=1 -DtestReuseFork=false
   echo "::endgroup::"
 }
 
