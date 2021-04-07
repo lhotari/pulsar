@@ -49,7 +49,7 @@ public abstract class TransactionTestBase extends PulsarTestSuite {
     }
 
     @BeforeClass
-    public void transactionCoordinatorMetadataInitialize() throws Exception {
+    public final void transactionCoordinatorMetadataInitialize() throws Exception {
         BrokerContainer brokerContainer = pulsarCluster.getBrokers().iterator().next();
         ContainerExecResult result = brokerContainer.execCmd(
                 "/pulsar/bin/pulsar", "initialize-transaction-coordinator-metadata",
@@ -58,8 +58,8 @@ public abstract class TransactionTestBase extends PulsarTestSuite {
     }
 
     @Override
-    protected void setup() throws Exception {
-        super.setup();
+    public void setupCluster() throws Exception {
+        super.setupCluster();
         transactionCoordinatorMetadataInitialize();
     }
 

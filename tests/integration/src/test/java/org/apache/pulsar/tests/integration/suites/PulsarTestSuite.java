@@ -26,14 +26,12 @@ import org.testng.annotations.BeforeClass;
 public abstract class PulsarTestSuite extends PulsarClusterTestBase {
 
     @BeforeClass
-    @Override
-    public void setupCluster() throws Exception {
+    public final void setupBeforeClass() throws Exception {
         setup();
     }
 
     @AfterClass(alwaysRun = true)
-    @Override
-    public void tearDownCluster() {
+    public final void tearDownAfterClass() {
         cleanup();
     }
 

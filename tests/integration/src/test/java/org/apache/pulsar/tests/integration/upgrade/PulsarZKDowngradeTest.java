@@ -46,7 +46,9 @@ public class PulsarZKDowngradeTest extends PulsarClusterTestBase {
 
     @BeforeClass
     @Override
-    public void setupCluster() throws Exception {
+    public final void setupCluster() throws Exception {
+        incrementSetupNumber();
+
         final String clusterName = Stream.of(this.getClass().getSimpleName(), randomName(5))
                 .filter(s -> !s.isEmpty())
                 .collect(joining("-"));
@@ -72,7 +74,7 @@ public class PulsarZKDowngradeTest extends PulsarClusterTestBase {
 
     @AfterClass(alwaysRun = true)
     @Override
-    public void tearDownCluster() {
+    public final void tearDownCluster() {
         super.tearDownCluster();
     }
 

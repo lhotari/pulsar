@@ -42,7 +42,7 @@ public class PackagesCliTest extends TestRetrySupport {
     private PulsarCluster pulsarCluster;
 
     @BeforeClass
-    public void setup() throws Exception {
+    public final void setup() throws Exception {
         incrementSetupNumber();
         PulsarClusterSpec spec = PulsarClusterSpec.builder()
             .clusterName(String.format("%s-%s", clusterNamePrefix, RandomStringUtils.randomAlphabetic(6)))
@@ -53,7 +53,7 @@ public class PackagesCliTest extends TestRetrySupport {
     }
 
     @AfterClass(alwaysRun = true)
-    public void cleanup() {
+    public final void cleanup() {
         markCurrentSetupNumberCleaned();
         if (pulsarCluster != null) {
             pulsarCluster.stop();

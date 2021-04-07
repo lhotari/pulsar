@@ -35,7 +35,7 @@ public abstract class PulsarTieredStorageTestSuite extends PulsarClusterTestBase
 
     @BeforeClass
     @Override
-    public void setupCluster() throws Exception {
+    public final void setupCluster() throws Exception {
         final String clusterName = Stream.of(this.getClass().getSimpleName(), randomName(5))
                 .filter(s -> s != null && !s.isEmpty())
                 .collect(joining("-"));
@@ -51,7 +51,7 @@ public abstract class PulsarTieredStorageTestSuite extends PulsarClusterTestBase
 
     @AfterClass(alwaysRun = true)
     @Override
-    public void tearDownCluster() {
+    public final void tearDownCluster() {
         super.tearDownCluster();
     }
 

@@ -82,7 +82,7 @@ public class ClusterMetadataTearDownTest extends TestRetrySupport {
 
     @Override
     @BeforeClass
-    public void setup() throws Exception {
+    public final void setup() throws Exception {
         incrementSetupNumber();
         pulsarCluster = PulsarCluster.forSpec(spec);
         pulsarCluster.start();
@@ -102,7 +102,7 @@ public class ClusterMetadataTearDownTest extends TestRetrySupport {
 
     @Override
     @AfterClass(alwaysRun = true)
-    public void cleanup() {
+    public final void cleanup() {
         markCurrentSetupNumberCleaned();
         try {
             ledgerManager.close();

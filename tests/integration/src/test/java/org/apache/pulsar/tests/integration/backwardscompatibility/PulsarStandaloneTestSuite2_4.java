@@ -26,13 +26,13 @@ import org.testng.annotations.BeforeClass;
 public class PulsarStandaloneTestSuite2_4 extends PulsarStandaloneTestBase {
 
     @BeforeClass
-    public void setUpCluster() throws Exception {
+    public final void setUpCluster() throws Exception {
         incrementSetupNumber();
         super.startCluster(PulsarContainer.PULSAR_2_4_IMAGE_NAME);
     }
 
     @AfterClass(alwaysRun = true)
-    public void tearDownCluster() throws Exception {
+    public final void tearDownCluster() throws Exception {
         markCurrentSetupNumberCleaned();
         super.stopCluster();
     }

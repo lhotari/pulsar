@@ -52,26 +52,26 @@ public class TestBasicPresto extends TestPulsarSQLBase {
 
     private static final int NUM_OF_STOCKS = 10;
 
-    @BeforeClass
-    public void setupPresto() throws Exception {
+    private void setupPresto() throws Exception {
         log.info("[TestBasicPresto] setupPresto...");
         pulsarCluster.startPrestoWorker();
     }
 
-    @AfterClass(alwaysRun = true)
-    public void teardownPresto() {
+    private void teardownPresto() {
         log.info("[TestBasicPresto] tearing down...");
         pulsarCluster.stopPrestoWorker();
     }
 
+    @BeforeClass
     @Override
-    protected void setup() throws Exception {
+    protected final void setup() throws Exception {
         super.setup();
         setupPresto();
     }
 
+    @AfterClass(alwaysRun = true)
     @Override
-    protected void cleanup() throws Exception {
+    protected final void cleanup() {
         teardownPresto();
         super.cleanup();
     }

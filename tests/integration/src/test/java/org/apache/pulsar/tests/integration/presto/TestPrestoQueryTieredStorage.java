@@ -55,8 +55,19 @@ public class TestPrestoQueryTieredStorage extends TestPulsarSQLBase {
 
     private S3Container s3Container;
 
-    @BeforeClass
-    public void setupExtraContainers() throws Exception {
+    @Override
+    protected void setup() throws Exception {
+        super.setup();
+        setupExtraContainers();
+    }
+
+    @Override
+    protected void cleanup() {
+        teardownPresto();
+        super.cleanup();
+    }
+
+    private void setupExtraContainers() throws Exception {
         log.info("[TestPrestoQueryTieredStorage] setupExtraContainers...");
         pulsarCluster.runAdminCommandOnAnyBroker( "tenants",
                 "create", "--allowed-clusters", pulsarCluster.getClusterName(),
@@ -94,7 +105,6 @@ public class TestPrestoQueryTieredStorage extends TestPulsarSQLBase {
         return sb.toString();
     }
 
-    @AfterClass(alwaysRun = true)
     public void teardownPresto() {
         log.info("[TestPrestoQueryTieredStorage] tearing down...");
         if (null != s3Container) {
