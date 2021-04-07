@@ -23,7 +23,7 @@ set -x
 set -o pipefail
 set -o errexit
 
-MVN_TEST_COMMAND='build/retry.sh mvn -B -ntp test'
+MVN_TEST_COMMAND='build/retry.sh mvn -B -ntp test -DtestForkCount=2'
 
 echo -n "Test Group : $TEST_GROUP"
 
@@ -47,20 +47,18 @@ function broker_client_impl() {
 function broker_flaky() {
   echo "::endgroup::"
   echo "::group::Running quarantined tests"
-  mvn -B -ntp test -pl pulsar-broker -Dgroups='quarantine' -DexcludedGroups='' \
-    -DtestForkCount=1 -DfailIfNoTests=false || \
+  mvn -B -ntp test -pl pulsar-broker -Dgroups='quarantine' -DexcludedGroups='' -DfailIfNoTests=false || \
       echo "::warning::There were test failures in the 'quarantine' test group."
   echo "::endgroup::"
   echo "::group::Running flaky tests"
-  $MVN_TEST_COMMAND -pl pulsar-broker -Dgroups='flaky' -DtestForkCount=1
+  $MVN_TEST_COMMAND -pl pulsar-broker -Dgroups='flaky'
   echo "::endgroup::"
 }
 
 function proxy() {
   echo "::endgroup::"
   echo "::group::Running quarantined pulsar-proxy tests"
-  mvn -B -ntp test -pl pulsar-proxy -Dgroups='quarantine' -DexcludedGroups='' \
-    -DtestForkCount=1 -DfailIfNoTests=false || \
+  mvn -B -ntp test -pl pulsar-proxy -Dgroups='quarantine' -DexcludedGroups='' -DfailIfNoTests=false || \
       echo "::warning::There were test failures in the 'quarantine' test group."
   echo "::endgroup::"
   echo "::group::Running pulsar-proxy tests"
@@ -77,18 +75,13 @@ function other() {
                                                 BlobStoreManagedLedgerOffloaderTest.java'
 
   $MVN_TEST_COMMAND -pl managed-ledger -Dinclude='**/ManagedLedgerTest.java,
-                                                  **/OffloadersCacheTest.java' \
-                                       -DtestForkCount=1 \
-                                       -DtestReuseFork=true
+                                                  **/OffloadersCacheTest.java'
 
-  $MVN_TEST_COMMAND -pl pulsar-sql/presto-pulsar-plugin -Dinclude='**/TestPulsarKeyValueSchemaHandler.java' \
-                                                        -DtestForkCount=1
+  $MVN_TEST_COMMAND -pl pulsar-sql/presto-pulsar-plugin -Dinclude='**/TestPulsarKeyValueSchemaHandler.java'
 
-  $MVN_TEST_COMMAND -pl pulsar-client -Dinclude='**/PrimitiveSchemaTest.java' \
-                                      -DtestForkCount=1
+  $MVN_TEST_COMMAND -pl pulsar-client -Dinclude='**/PrimitiveSchemaTest.java'
 
-  $MVN_TEST_COMMAND -pl tiered-storage/jcloud -Dinclude='**/BlobStoreManagedLedgerOffloaderTest.java' \
-                                              -DtestForkCount=1
+  $MVN_TEST_COMMAND -pl tiered-storage/jcloud -Dinclude='**/BlobStoreManagedLedgerOffloaderTest.java'
 
   echo "::endgroup::"
   local modules_with_quarantined_tests=$(git grep -l '@Test.*"quarantine"' | grep '/src/test/java/' | \
@@ -97,7 +90,7 @@ function other() {
   if [ -n "${modules_with_quarantined_tests}" ]; then
     echo "::group::Running quarantined tests outside of pulsar-broker & pulsar-proxy (if any)"
     mvn -B -ntp -pl "${modules_with_quarantined_tests}" test -Dgroups='quarantine' -DexcludedGroups='' \
-      -DtestForkCount=1 -DfailIfNoTests=false || \
+      -DfailIfNoTests=false || \
         echo "::warning::There were test failures in the 'quarantine' test group."
     echo "::endgroup::"
   fi
