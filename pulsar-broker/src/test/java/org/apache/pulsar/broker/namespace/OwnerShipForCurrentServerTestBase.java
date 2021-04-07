@@ -56,7 +56,7 @@ import java.util.function.Supplier;
 import static org.mockito.Mockito.*;
 
 @Slf4j
-public class OwnerShipForCurrentServerTestBase {
+public abstract class OwnerShipForCurrentServerTestBase {
 
     public final static String CLUSTER_NAME = "test";
 

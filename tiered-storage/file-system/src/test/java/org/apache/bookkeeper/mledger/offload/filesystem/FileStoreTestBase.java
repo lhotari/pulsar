@@ -31,7 +31,7 @@ import java.io.File;
 import java.nio.file.Files;
 import java.util.Properties;
 
-public class FileStoreTestBase {
+public abstract class FileStoreTestBase {
     protected FileSystemManagedLedgerOffloader fileSystemManagedLedgerOffloader;
     protected OrderedScheduler scheduler = OrderedScheduler.newSchedulerBuilder().numThreads(1).name("offloader").build();
     protected final String basePath = "pulsar";

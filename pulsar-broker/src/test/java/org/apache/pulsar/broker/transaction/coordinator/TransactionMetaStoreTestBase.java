@@ -33,7 +33,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.annotations.AfterClass;
 
-public class TransactionMetaStoreTestBase {
+public abstract class TransactionMetaStoreTestBase {
 
     private static final Logger log = LoggerFactory.getLogger(TransactionMetaStoreTestBase.class);
 

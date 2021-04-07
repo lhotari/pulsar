@@ -33,7 +33,7 @@ import org.testng.annotations.BeforeClass;
  * Transaction test base.
  */
 @Slf4j
-public class TransactionTestBase extends PulsarTestSuite {
+public abstract class TransactionTestBase extends PulsarTestSuite {
 
     @Override
     protected void beforeStartCluster() throws Exception {
