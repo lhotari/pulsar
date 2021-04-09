@@ -111,6 +111,9 @@ public abstract class PulsarContainer<SelfT extends PulsarContainer<SelfT>> exte
         // This helps save CPU cycles in CI environments with limited CPU
         withEnv("PULSAR_EXTRA_OPTS", LIMIT_JIT_COMPILER_TO_LEVEL_1);
         withEnv("BOOKIE_EXTRA_OPTS", LIMIT_JIT_COMPILER_TO_LEVEL_1);
+        // Make sure that the default PULSAR_GC options are sane for low-resource environments
+        // related to the issue explained in https://github.com/apache/pulsar/pull/3650
+        withEnv("PULSAR_GC", "XX:+UseG1GC");
     }
 
     public static void configureLeaveContainerRunning(
