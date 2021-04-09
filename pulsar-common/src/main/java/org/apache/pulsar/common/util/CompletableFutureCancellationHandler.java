@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.client.impl;
+package org.apache.pulsar.common.util;
 
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
@@ -41,10 +41,11 @@ import java.util.function.BiConsumer;
  * any "downstream" dependent futures. A cancellation or timeout that happens in any "upstream"
  * future will get handled.
  */
-class CompletableFutureCancellationHandler {
+public class CompletableFutureCancellationHandler {
     private volatile boolean cancelled;
     private volatile Runnable cancelAction;
     private final AtomicBoolean cancelHandled = new AtomicBoolean();
+    private boolean attached;
 
     /**
      * Creates a new {@link CompletableFuture} and attaches the cancellation handler
@@ -61,12 +62,16 @@ class CompletableFutureCancellationHandler {
 
     /**
      * Attaches the cancellation handler to handle cancels
-     * and timeouts
+     * and timeouts. A cancellation handler instance can be used only once.
      *
      * @param future the future to attach the handler to
      * @param <T>    the result type of the future
      */
-    public <T> void attachToFuture(CompletableFuture<T> future) {
+    public synchronized  <T> void attachToFuture(CompletableFuture<T> future) {
+        if (attached) {
+            throw new IllegalStateException("A future has already been attached to this instance.");
+        }
+        attached = true;
         future.whenComplete(whenCompleteFunction());
     }
 
