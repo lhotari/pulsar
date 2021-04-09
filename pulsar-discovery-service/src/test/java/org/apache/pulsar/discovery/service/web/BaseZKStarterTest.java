@@ -28,6 +28,7 @@ import org.apache.pulsar.metadata.impl.ZKMetadataStore;
 import org.apache.zookeeper.MockZooKeeper;
 
 import com.google.common.util.concurrent.MoreExecutors;
+import org.mockito.Mockito;
 
 public class BaseZKStarterTest {
 
@@ -43,6 +44,7 @@ public class BaseZKStarterTest {
     protected void close() throws Exception {
         mockZooKeeper.shutdown();
         zkStore.close();
+        Mockito.reset();
     }
 
     /**

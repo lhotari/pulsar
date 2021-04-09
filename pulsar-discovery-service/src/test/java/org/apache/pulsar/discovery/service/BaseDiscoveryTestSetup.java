@@ -32,6 +32,7 @@ import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 import org.apache.pulsar.metadata.impl.ZKMetadataStore;
 import org.apache.zookeeper.MockZooKeeper;
 import org.apache.zookeeper.KeeperException.Code;
+import org.mockito.Mockito;
 
 
 public class BaseDiscoveryTestSetup {
@@ -67,6 +68,7 @@ public class BaseDiscoveryTestSetup {
         mockZooKeeper.shutdown();
         zkStore.close();
         service.close();
+        Mockito.reset();
     }
 
     protected MockZooKeeper createMockZooKeeper() throws Exception {

@@ -40,7 +40,9 @@ import org.apache.zookeeper.MockZooKeeper;
 import org.apache.zookeeper.data.ACL;
 import org.jclouds.blobstore.BlobStore;
 import org.jclouds.domain.Credentials;
+import org.mockito.Mockito;
 import org.testng.Assert;
+import org.testng.annotations.AfterClass;
 
 public abstract class BlobStoreManagedLedgerOffloaderBase {
 
@@ -173,4 +175,8 @@ public abstract class BlobStoreManagedLedgerOffloaderBase {
             .withPassword("foobar".getBytes()).withDigestType(DigestType.CRC32).execute().get();
     }
 
+    @AfterClass(alwaysRun = true)
+    public void resetMockito() {
+        Mockito.reset();
+    }
 }

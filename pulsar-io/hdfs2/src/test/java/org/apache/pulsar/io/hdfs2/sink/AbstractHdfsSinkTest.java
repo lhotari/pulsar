@@ -30,8 +30,10 @@ import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SinkContext;
 import org.apache.pulsar.io.hdfs2.sink.HdfsAbstractSink;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
+import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 
 /**
@@ -40,16 +42,16 @@ import org.testng.annotations.BeforeMethod;
  *
  */
 public abstract class AbstractHdfsSinkTest<K, V> {
-    
+
     @Mock
     protected SinkContext mockSinkContext;
-    
+
     @Mock
     protected Record<V> mockRecord;
-    
+
     protected Map<String, Object> map;
     protected HdfsAbstractSink<K, V> sink;
-    
+
     @SuppressWarnings("unchecked")
     @BeforeMethod(alwaysRun = true)
     public final void setUp() throws Exception {
@@ -58,29 +60,34 @@ public abstract class AbstractHdfsSinkTest<K, V> {
                 + "../pulsar/pulsar-io/hdfs2/src/test/resources/hadoop/hdfs-site.xml");
         map.put("directory", "/tmp/testing");
         map.put("filenamePrefix", "prefix");
-        
+
         mockSinkContext = mock(SinkContext.class);
-        
+
         mockRecord = mock(Record.class);
         when(mockRecord.getRecordSequence()).thenAnswer(new Answer<Optional<Long>>() {
           long sequenceCounter = 0;
           public Optional<Long> answer(InvocationOnMock invocation) throws Throwable {
              return Optional.of(sequenceCounter++);
           }});
-        
+
         when(mockRecord.getKey()).thenAnswer(new Answer<Optional<String>>() {
             long sequenceCounter = 0;
             public Optional<String> answer(InvocationOnMock invocation) throws Throwable {
                return Optional.of( "key-" + sequenceCounter++);
             }});
-        
+
         when(mockRecord.getValue()).thenAnswer(new Answer<String>() {
             long sequenceCounter = 0;
             public String answer(InvocationOnMock invocation) throws Throwable {
                  return new String( "value-" + sequenceCounter++ + "-" + UUID.randomUUID().toString());
             }});
-        
+
         createSink();
+    }
+
+    @AfterMethod(alwaysRun = true)
+    public void resetMockito() {
+        Mockito.reset();
     }
 
     protected abstract void createSink();
@@ -90,7 +97,7 @@ public abstract class AbstractHdfsSinkTest<K, V> {
             sink.write(mockRecord);
         }
     }
-    
+
     protected final void runFor(int numSeconds) throws InterruptedException {
         Producer producer = new Producer();
         producer.start();
@@ -98,7 +105,7 @@ public abstract class AbstractHdfsSinkTest<K, V> {
         producer.halt();
         producer.join(2000);
     }
-    
+
     protected final class Producer extends Thread {
         public boolean keepRunning = true;
         @Override
@@ -111,10 +118,10 @@ public abstract class AbstractHdfsSinkTest<K, V> {
                     e.printStackTrace();
                 }
         }
-        
-        public void halt() { 
-            keepRunning = false; 
+
+        public void halt() {
+            keepRunning = false;
         }
-        
+
     }
 }

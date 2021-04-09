@@ -64,6 +64,7 @@ import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.MockZooKeeper;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.ACL;
+import org.mockito.Mockito;
 import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,6 +79,7 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
     protected final String GLOBAL_DUMMY_VALUE = "GLOBAL_DUMMY_VALUE";
 
     protected ServiceConfiguration conf;
+
     protected PulsarService pulsar;
     protected PulsarAdmin admin;
     protected PulsarClient pulsarClient;
@@ -177,53 +179,60 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
     }
 
     protected final void internalCleanup() throws Exception {
-        markCurrentSetupNumberCleaned();
-        // if init fails, some of these could be null, and if so would throw
-        // an NPE in shutdown, obscuring the real error
-        if (admin != null) {
-            admin.close();
-            admin = null;
-        }
-        if (pulsarClient != null) {
-            pulsarClient.shutdown();
-            pulsarClient = null;
-        }
-        if (pulsar != null) {
-            stopBroker();
-            pulsar = null;
-        }
-        resetConfig();
-        if (mockBookKeeper != null) {
-            mockBookKeeper.reallyShutdown();
-            mockBookKeeper = null;
-        }
-        if (mockZooKeeperGlobal != null) {
-            mockZooKeeperGlobal.shutdown();
-            mockZooKeeperGlobal = null;
-        }
-        if (mockZooKeeper != null) {
-            mockZooKeeper.shutdown();
-            mockZooKeeper = null;
-        }
-        if(sameThreadOrderedSafeExecutor != null) {
-            try {
-                sameThreadOrderedSafeExecutor.shutdownNow();
-                sameThreadOrderedSafeExecutor.awaitTermination(5, TimeUnit.SECONDS);
-            } catch (InterruptedException ex) {
-                log.error("sameThreadOrderedSafeExecutor shutdown had error", ex);
-                Thread.currentThread().interrupt();
+        try {
+            markCurrentSetupNumberCleaned();
+            // if init fails, some of these could be null, and if so would throw
+            // an NPE in shutdown, obscuring the real error
+            if (admin != null) {
+                admin.close();
+                admin = null;
             }
-            sameThreadOrderedSafeExecutor = null;
-        }
-        if(bkExecutor != null) {
-            try {
-                bkExecutor.shutdownNow();
-                bkExecutor.awaitTermination(5, TimeUnit.SECONDS);
-            } catch (InterruptedException ex) {
-                log.error("bkExecutor shutdown had error", ex);
-                Thread.currentThread().interrupt();
+            if (pulsarClient != null) {
+                pulsarClient.shutdown();
+                pulsarClient = null;
             }
-            bkExecutor = null;
+            if (pulsar != null) {
+                stopBroker();
+                pulsar = null;
+            }
+            resetConfig();
+            if (mockBookKeeper != null) {
+                mockBookKeeper.reallyShutdown();
+                mockBookKeeper = null;
+            }
+            if (mockZooKeeperGlobal != null) {
+                mockZooKeeperGlobal.shutdown();
+                mockZooKeeperGlobal = null;
+            }
+            if (mockZooKeeper != null) {
+                mockZooKeeper.shutdown();
+                mockZooKeeper = null;
+            }
+            if (sameThreadOrderedSafeExecutor != null) {
+                try {
+                    sameThreadOrderedSafeExecutor.shutdownNow();
+                    sameThreadOrderedSafeExecutor.awaitTermination(5, TimeUnit.SECONDS);
+                } catch (InterruptedException ex) {
+                    log.error("sameThreadOrderedSafeExecutor shutdown had error", ex);
+                    Thread.currentThread().interrupt();
+                }
+                sameThreadOrderedSafeExecutor = null;
+            }
+            if (bkExecutor != null) {
+                try {
+                    bkExecutor.shutdownNow();
+                    bkExecutor.awaitTermination(5, TimeUnit.SECONDS);
+                } catch (InterruptedException ex) {
+                    log.error("bkExecutor shutdown had error", ex);
+                    Thread.currentThread().interrupt();
+                }
+                bkExecutor = null;
+            }
+        } finally {
+            // it's necessary to call Mockito.reset() even with no arguments since
+            // otherwise there will be a memory leak in the ThreadLocal
+            // org.mockito.internal.progress.ThreadSafeMockingProgress.MOCKING_PROGRESS_PROVIDER
+            Mockito.reset();
         }
     }
 

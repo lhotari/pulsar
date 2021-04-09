@@ -32,6 +32,7 @@ import org.bson.BsonInt64;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.reactivestreams.Subscriber;
 import org.testng.IObjectFactory;
 import org.testng.annotations.AfterMethod;
@@ -82,7 +83,7 @@ public class MongoSourceTest {
         return new org.powermock.modules.testng.PowerMockObjectFactory();
     }
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void setUp() {
 
         map = TestHelper.createMap(true);
@@ -111,6 +112,7 @@ public class MongoSourceTest {
     public void tearDown() throws Exception {
         source.close();
         verify(mockMongoClient, times(1)).close();
+        Mockito.reset();
     }
 
     @Test

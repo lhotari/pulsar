@@ -52,11 +52,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
+import org.mockito.Mockito;
 
 import static org.mockito.Mockito.*;
 
 @Slf4j
-public class OwnerShipForCurrentServerTestBase {
+public abstract class OwnerShipForCurrentServerTestBase {
 
     public final static String CLUSTER_NAME = "test";
 
@@ -268,6 +269,8 @@ public class OwnerShipForCurrentServerTestBase {
             }
         } catch (Exception e) {
             log.warn("Failed to clean up mocked pulsar service:", e);
+        } finally {
+            Mockito.reset();
         }
     }
 
