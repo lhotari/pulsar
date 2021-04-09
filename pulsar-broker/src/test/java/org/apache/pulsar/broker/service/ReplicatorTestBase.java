@@ -23,9 +23,11 @@ import static org.testng.Assert.assertNotNull;
 
 import com.google.common.collect.Sets;
 
+import com.google.common.util.concurrent.MoreExecutors;
 import io.netty.util.concurrent.DefaultThreadFactory;
 
 import java.net.URL;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
@@ -245,7 +247,7 @@ public abstract class ReplicatorTestBase extends TestRetrySupport {
         markCurrentSetupNumberCleaned();
         log.info("--- Shutting down ---");
         if (executor != null) {
-            executor.shutdown();
+            MoreExecutors.shutdownAndAwaitTermination(executor, Duration.ofSeconds(2));
             executor = null;
         }
 
