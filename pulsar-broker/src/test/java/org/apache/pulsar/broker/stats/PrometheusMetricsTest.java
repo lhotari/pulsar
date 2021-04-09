@@ -50,6 +50,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.crypto.SecretKey;
 import javax.naming.AuthenticationException;
+import lombok.Cleanup;
 import org.apache.commons.io.IOUtils;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
@@ -1058,8 +1059,9 @@ public class PrometheusMetricsTest extends BrokerTestBase {
         compareBrokerConnectionStateCount(cm, 1.0);
 
         pulsar.getConfiguration().setAuthenticationEnabled(true);
-        pulsarClient = PulsarClient.builder().serviceUrl(lookupUrl.toString())
-                .operationTimeout(1, TimeUnit.MILLISECONDS).build();
+
+        replacePulsarClient(PulsarClient.builder().serviceUrl(lookupUrl.toString())
+                .operationTimeout(1, TimeUnit.MILLISECONDS));
 
         try {
             pulsarClient.newProducer()
