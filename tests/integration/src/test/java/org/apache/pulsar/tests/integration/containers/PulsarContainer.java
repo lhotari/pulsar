@@ -60,6 +60,7 @@ public abstract class PulsarContainer<SelfT extends PulsarContainer<SelfT>> exte
      */
     public static final boolean PULSAR_CONTAINERS_LEAVE_RUNNING =
             Boolean.parseBoolean(System.getenv("PULSAR_CONTAINERS_LEAVE_RUNNING"));
+    private static final String LIMIT_JIT_COMPILER_TO_LEVEL_1 = "-XX:TieredStopAtLevel=1";
 
     private final String hostname;
     private final String serviceName;
@@ -105,6 +106,11 @@ public abstract class PulsarContainer<SelfT extends PulsarContainer<SelfT>> exte
         this.httpPath = httpPath;
 
         configureLeaveContainerRunning(this);
+
+        // Limit JVM's tiered jit compilation to level 1
+        // This helps save CPU cycles in CI environments with limited CPU
+        withEnv("PULSAR_EXTRA_OPTS", LIMIT_JIT_COMPILER_TO_LEVEL_1);
+        withEnv("BOOKIE_EXTRA_OPTS", LIMIT_JIT_COMPILER_TO_LEVEL_1);
     }
 
     public static void configureLeaveContainerRunning(
