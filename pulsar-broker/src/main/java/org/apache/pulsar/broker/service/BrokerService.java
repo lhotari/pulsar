@@ -59,6 +59,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
@@ -746,8 +747,14 @@ public class BrokerService implements Closeable, ZooKeeperCacheListener<Policies
 
     private CompletableFuture<Void> closeChannel(Channel channel) {
         return ChannelFutures.toCompletableFuture(channel.close())
-                // convert to CompletableFuture<Void>
-                .thenAccept(__ -> {});
+                .handle((c, t) -> {
+                    // log problem if closing of channel fails
+                    // ignore RejectedExecutionException
+                    if (t != null && !(t instanceof RejectedExecutionException)) {
+                        log.warn("Cannot close channel {}", channel, t);
+                    }
+                    return null;
+                });
     }
 
     /**
