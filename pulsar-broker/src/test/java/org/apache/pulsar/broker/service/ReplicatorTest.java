@@ -770,12 +770,14 @@ public class ReplicatorTest extends ReplicatorTestBase {
     public void verifyChecksumAfterReplication() throws Exception {
         final String topicName = BrokerTestUtil.newUniqueName("persistent://pulsar/ns/checksumAfterReplication");
 
+        @Cleanup
         PulsarClient c1 = PulsarClient.builder().serviceUrl(url1.toString()).build();
         Producer<byte[]> p1 = c1.newProducer().topic(topicName)
             .enableBatching(false)
             .messageRoutingMode(MessageRoutingMode.SinglePartition)
             .create();
 
+        @Cleanup
         PulsarClient c2 = PulsarClient.builder().serviceUrl(url2.toString()).build();
         RawReader reader2 = RawReader.create(c2, topicName, "sub").get();
 
@@ -820,6 +822,7 @@ public class ReplicatorTest extends ReplicatorTestBase {
         }
 
         // load namespace with dummy topic on ns
+        @Cleanup
         PulsarClient client = PulsarClient.builder().serviceUrl(url1.toString()).build();
         client.newProducer().topic("persistent://" + namespace + "/dummyTopic")
             .enableBatching(false)
@@ -865,8 +868,10 @@ public class ReplicatorTest extends ReplicatorTestBase {
         admin1.namespaces().setNamespaceReplicationClusters(namespace, Sets.newHashSet("r1", "r2", "r3"));
         admin1.topics().createPartitionedTopic(topicName, 4);
 
+        @Cleanup
         PulsarClient client1 = PulsarClient.builder().serviceUrl(url1.toString()).statsInterval(0, TimeUnit.SECONDS)
                 .build();
+        @Cleanup
         PulsarClient client2 = PulsarClient.builder().serviceUrl(url2.toString()).statsInterval(0, TimeUnit.SECONDS)
                 .build();
 
@@ -915,8 +920,10 @@ public class ReplicatorTest extends ReplicatorTestBase {
         admin1.namespaces().createNamespace(namespace, Sets.newHashSet(cluster1, cluster2));
         admin1.topics().createPartitionedTopic(topicName, startPartitions);
 
+        @Cleanup
         PulsarClient client1 = PulsarClient.builder().serviceUrl(url1.toString()).statsInterval(0, TimeUnit.SECONDS)
                 .build();
+        @Cleanup
         PulsarClient client2 = PulsarClient.builder().serviceUrl(url2.toString()).statsInterval(0, TimeUnit.SECONDS)
                 .build();
 
@@ -943,9 +950,6 @@ public class ReplicatorTest extends ReplicatorTestBase {
         producer2.close();
         consumer1.close();
         consumer2.close();
-
-        client1.close();
-        client2.close();
     }
 
     @DataProvider(name = "topicPrefix")
@@ -968,8 +972,10 @@ public class ReplicatorTest extends ReplicatorTestBase {
         admin1.topics().createPartitionedTopic(partitionedTopicName, startPartitions);
         admin1.topics().createNonPartitionedTopic(nonPartitionedTopicName);
 
+        @Cleanup
         PulsarClient client1 = PulsarClient.builder().serviceUrl(url1.toString()).statsInterval(0, TimeUnit.SECONDS)
                 .build();
+        @Cleanup
         PulsarClient client2 = PulsarClient.builder().serviceUrl(url2.toString()).statsInterval(0, TimeUnit.SECONDS)
                 .build();
 

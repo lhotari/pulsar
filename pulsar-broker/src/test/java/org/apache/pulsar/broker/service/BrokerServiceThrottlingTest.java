@@ -35,6 +35,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import lombok.Cleanup;
 import org.apache.bookkeeper.util.ZkUtils;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.PulsarClient;
@@ -87,6 +88,7 @@ public class BrokerServiceThrottlingTest extends BrokerTestBase {
 
         final String topicName = "persistent://prop/ns-abc/newTopic";
 
+        @Cleanup
         PulsarClient pulsarClient = PulsarClient.builder()
                 .serviceUrl(pulsar.getBrokerServiceUrl())
                 .statsInterval(0, TimeUnit.SECONDS)
@@ -129,6 +131,7 @@ public class BrokerServiceThrottlingTest extends BrokerTestBase {
     public void testLookupThrottlingForClientByBroker() throws Exception {
         final String topicName = "persistent://prop/ns-abc/newTopic";
 
+        @Cleanup
         PulsarClient pulsarClient = PulsarClient.builder()
                 .serviceUrl(pulsar.getBrokerServiceUrl())
                 .statsInterval(0, TimeUnit.SECONDS)
@@ -169,7 +172,6 @@ public class BrokerServiceThrottlingTest extends BrokerTestBase {
                 c.close();
             }
         }
-        pulsarClient.close();
         executor.shutdown();
         assertNotEquals(successfulConsumers.size(), totalConsumers);
     }
@@ -192,6 +194,7 @@ public class BrokerServiceThrottlingTest extends BrokerTestBase {
     public void testLookupThrottlingForClientByBrokerInternalRetry() throws Exception {
         final String topicName = "persistent://prop/ns-abc/newTopic-" + UUID.randomUUID().toString();
 
+        @Cleanup
         PulsarClient pulsarClient = PulsarClient.builder()
                 .serviceUrl(pulsar.getBrokerServiceUrl())
                 .statsInterval(0, TimeUnit.SECONDS)

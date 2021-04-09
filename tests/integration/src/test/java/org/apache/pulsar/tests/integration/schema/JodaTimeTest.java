@@ -63,9 +63,11 @@ public class JodaTimeTest extends PulsarTestSuite {
     public void tearDownCluster() throws Exception {
         if (client != null) {
             client.close();
+            client = null;
         }
         if (admin != null) {
             admin.close();
+            admin = null;
         }
         super.tearDownCluster();
     }
