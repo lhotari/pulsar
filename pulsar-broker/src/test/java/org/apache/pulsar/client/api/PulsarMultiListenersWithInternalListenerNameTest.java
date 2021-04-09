@@ -19,6 +19,7 @@
 package org.apache.pulsar.client.api;
 
 import com.google.common.collect.Sets;
+import lombok.Cleanup;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest;
 import org.apache.pulsar.client.impl.BinaryProtoLookupService;
@@ -44,11 +45,9 @@ public class PulsarMultiListenersWithInternalListenerNameTest extends MockedPuls
 
     private ExecutorService executorService;
     //
-    private LookupService lookupService;
-    //
     private String host;
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     @Override
     protected void setup() throws Exception {
         this.executorService = Executors.newFixedThreadPool(1);
@@ -77,7 +76,8 @@ public class PulsarMultiListenersWithInternalListenerNameTest extends MockedPuls
         tenantInfo.setAllowedClusters(Sets.newHashSet("localhost"));
         this.admin.tenants().createTenant("public", tenantInfo);
         this.admin.namespaces().createNamespace("public/default");
-        this.lookupService = new BinaryProtoLookupService((PulsarClientImpl) this.pulsarClient, lookupUrl.toString(),
+        @Cleanup
+        LookupService lookupService = new BinaryProtoLookupService((PulsarClientImpl) this.pulsarClient, lookupUrl.toString(),
                 "internal", false, this.executorService);
         // test request 1
         {
@@ -98,9 +98,6 @@ public class PulsarMultiListenersWithInternalListenerNameTest extends MockedPuls
     @AfterMethod(alwaysRun = true)
     @Override
     protected void cleanup() throws Exception {
-        if (this.lookupService != null) {
-            this.lookupService.close();
-        }
         if (this.executorService != null) {
             this.executorService.shutdown();
         }
