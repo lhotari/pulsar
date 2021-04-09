@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -306,7 +307,10 @@ public class PulsarService implements AutoCloseable {
     @Override
     public void close() throws PulsarServerException {
         try {
-            closeAsync().get();
+            CompletableFuture<Void> shutdownFuture = closeAsync();
+            // close immediately
+            shutdownFuture.cancel(false);
+            shutdownFuture.get();
         } catch (ExecutionException e) {
             if (e.getCause() instanceof PulsarServerException) {
                 throw (PulsarServerException) e.getCause();
@@ -315,6 +319,8 @@ public class PulsarService implements AutoCloseable {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        } catch (CancellationException e) {
+            // ignore
         }
     }
 
@@ -460,10 +466,7 @@ public class PulsarService implements AutoCloseable {
             state = State.Closed;
             isClosedCondition.signalAll();
 
-            CompletableFuture<Void> shutdownFuture =
-                    CompletableFuture.allOf(asyncCloseFutures.toArray(new CompletableFuture[0]));
-            closeFuture = shutdownFuture;
-            return shutdownFuture;
+            return closeFuture = FutureUtil.waitForAllAndSupportCancel(asyncCloseFutures);
         } catch (Exception e) {
             PulsarServerException pse;
             if (e instanceof CompletionException && e.getCause() instanceof MetadataStoreException) {

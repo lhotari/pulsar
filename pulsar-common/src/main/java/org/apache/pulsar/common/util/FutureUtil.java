@@ -39,7 +39,7 @@ public class FutureUtil {
      * @param futures futures to wait for
      * @return a new CompletableFuture that is completed when all of the given CompletableFutures complete
      */
-    public static CompletableFuture<Void> waitForAll(List<CompletableFuture<?>> futures) {
+    public static <T> CompletableFuture<Void> waitForAll(List<CompletableFuture<T>> futures) {
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
     }
 
@@ -52,7 +52,7 @@ public class FutureUtil {
      * @param futures futures to wait for
      * @return a new CompletableFuture that is completed when all of the given CompletableFutures complete
      */
-    public static CompletableFuture<Void> waitForAllAndSupportCancel(List<CompletableFuture<?>> futures) {
+    public static <T> CompletableFuture<Void> waitForAllAndSupportCancel(List<CompletableFuture<T>> futures) {
         CompletableFuture[] futuresArray = futures.toArray(new CompletableFuture[0]);
         CompletableFuture<Void> combinedFuture = CompletableFuture.allOf(futuresArray);
         whenCancelledOrTimedOut(combinedFuture, () -> {

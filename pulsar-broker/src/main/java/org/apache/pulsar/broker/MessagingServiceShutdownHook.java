@@ -20,13 +20,15 @@ package org.apache.pulsar.broker;
 
 import io.netty.util.concurrent.DefaultThreadFactory;
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import lombok.Cleanup;
+import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.zookeeper.ZooKeeperSessionWatcher.ShutdownService;
 import org.apache.zookeeper.ZooKeeper.States;
 import org.slf4j.ILoggerFactory;
@@ -54,14 +56,21 @@ public class MessagingServiceShutdownHook extends Thread implements ShutdownServ
         }
 
         @Cleanup("shutdownNow")
-        ExecutorService executor = Executors.newSingleThreadExecutor(new DefaultThreadFactory("shutdown-thread"));
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(
+                new DefaultThreadFactory("shutdown-thread"));
 
         try {
             CompletableFuture<Void> future = new CompletableFuture<>();
 
+            long brokerShutdownTimeoutMs = service.getConfiguration().getBrokerShutdownTimeoutMs();
             executor.execute(() -> {
                 try {
-                    service.closeAsync().whenComplete((result, throwable) -> {
+                    CompletableFuture<Void> closeFuture = service.closeAsync();
+                    // make the future timeout
+                    FutureUtil.addTimeoutHandling(closeFuture,
+                            Duration.ofMillis(Math.max(1L, brokerShutdownTimeoutMs - 1000L)),
+                            executor, () -> FutureUtil.createTimeoutException("Timeout", getClass(), "run"));
+                    closeFuture.whenComplete((result, throwable) -> {
                         if (throwable != null) {
                             future.completeExceptionally(throwable);
                         } else {
@@ -73,7 +82,7 @@ public class MessagingServiceShutdownHook extends Thread implements ShutdownServ
                 }
             });
 
-            future.get(service.getConfiguration().getBrokerShutdownTimeoutMs(), TimeUnit.MILLISECONDS);
+            future.get(brokerShutdownTimeoutMs, TimeUnit.MILLISECONDS);
 
             LOG.info("Completed graceful shutdown. Exiting");
         } catch (TimeoutException e) {
