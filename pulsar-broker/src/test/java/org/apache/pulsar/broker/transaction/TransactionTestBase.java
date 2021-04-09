@@ -56,6 +56,7 @@ import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.MockZooKeeper;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.ACL;
+import org.mockito.Mockito;
 
 @Slf4j
 public class TransactionTestBase {
@@ -275,6 +276,8 @@ public class TransactionTestBase {
             }
         } catch (Exception e) {
             log.warn("Failed to clean up mocked pulsar service:", e);
+        } finally {
+            Mockito.reset();
         }
     }
 

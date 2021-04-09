@@ -30,6 +30,7 @@ import org.apache.pulsar.client.impl.schema.generic.GenericAvroSchema;
 import org.apache.pulsar.client.impl.schema.generic.GenericSchemaImpl;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.functions.source.PulsarRecord;
+import org.mockito.Mockito;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -58,7 +59,7 @@ public class SolrGenericRecordSinkTest {
         private String field2;
     }
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void setUp() throws Exception {
         solrServerUtil = new SolrServerUtil(8983);
         solrServerUtil.startStandaloneSolr();
@@ -67,6 +68,7 @@ public class SolrGenericRecordSinkTest {
     @AfterMethod(alwaysRun = true)
     public void tearDown() throws Exception {
         solrServerUtil.stopStandaloneSolr();
+        Mockito.reset();
     }
 
     @Test

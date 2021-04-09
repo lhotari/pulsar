@@ -34,6 +34,7 @@ import org.apache.pulsar.client.impl.schema.generic.GenericAvroSchema;
 import org.apache.pulsar.client.impl.schema.generic.GenericSchemaImpl;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.functions.source.PulsarRecord;
+import org.mockito.Mockito;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -66,7 +67,7 @@ public class SqliteJdbcSinkTest {
         private int field3;
     }
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void setUp() throws Exception {
         sqliteUtils.setUp();
         sqliteUtils.createTable(
@@ -108,6 +109,7 @@ public class SqliteJdbcSinkTest {
     public void tearDown() throws Exception {
         sqliteUtils.tearDown();
         jdbcSink.close();
+        Mockito.reset();
     }
 
     private void testOpenAndWriteSinkNullValue(Map<String, String> actionProperties) throws Exception {
@@ -117,7 +119,7 @@ public class SqliteJdbcSinkTest {
         Foo insertObj = new Foo();
         insertObj.setField1("ValueOfField1");
         // Not setting field2
-        // Field1 is the key and field3 is used for selecting records 
+        // Field1 is the key and field3 is used for selecting records
         insertObj.setField3(3);
         AvroSchema<Foo> schema = AvroSchema.of(SchemaDefinition.<Foo>builder().withPojo(Foo.class).withAlwaysAllowNull(true).build());
 
@@ -204,7 +206,7 @@ public class SqliteJdbcSinkTest {
         Foo insertObj = new Foo();
         insertObj.setField1("ValueOfField1");
         // Not setting field2
-        // Field1 is the key and field3 is used for selecting records 
+        // Field1 is the key and field3 is used for selecting records
         insertObj.setField3(3);
         JSONSchema<Foo> schema = JSONSchema.of(SchemaDefinition.<Foo>builder().withPojo(Foo.class).withAlwaysAllowNull(true).build());
 

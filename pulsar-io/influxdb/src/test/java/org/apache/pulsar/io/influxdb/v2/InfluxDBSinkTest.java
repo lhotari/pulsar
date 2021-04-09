@@ -50,6 +50,8 @@ import org.apache.pulsar.client.impl.schema.generic.GenericSchemaImpl;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.functions.source.PulsarRecord;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
+import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
@@ -72,7 +74,7 @@ public class InfluxDBSinkTest {
 
     private Long timestamp;
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void setUp() throws Exception {
         // prepare a cpu Record
         cpu = new Cpu();
@@ -93,6 +95,11 @@ public class InfluxDBSinkTest {
 
         when(influxSink.influxDBClientBuilder.build(any())).thenReturn(influxDBClient);
         when(influxDBClient.getWriteApiBlocking()).thenReturn(writeApi);
+    }
+
+    @AfterMethod(alwaysRun = true)
+    public void resetMockito() {
+        Mockito.reset();
     }
 
     @Test

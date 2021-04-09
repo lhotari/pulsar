@@ -434,7 +434,7 @@ public abstract class TestPulsarConnector {
             .collect(Collectors.toList());
     }
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void setup() throws Exception {
         this.pulsarConnectorConfig = spy(new PulsarConnectorConfig());
         this.pulsarConnectorConfig.setMaxEntryReadBatchSize(1);
@@ -690,6 +690,7 @@ public abstract class TestPulsarConnector {
     @AfterMethod(alwaysRun = true)
     public void cleanup() {
         completedBytes = 0L;
+        Mockito.reset();
     }
 
     @DataProvider(name = "rewriteNamespaceDelimiter")
