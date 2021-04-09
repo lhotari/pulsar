@@ -907,6 +907,7 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
             }
         }).when(ledgerMock).asyncDeleteCursor(matches(".*success.*"), any(DeleteCursorCallback.class), any());
 
+        @Cleanup("shutdownNow")
         ExecutorService executor = Executors.newCachedThreadPool();
 
         executor.submit(() -> {
@@ -921,7 +922,6 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         } catch (BrokerServiceException e) {
             assertTrue(e instanceof BrokerServiceException.SubscriptionFencedException);
         }
-        executor.shutdown();
     }
 
     @Test
@@ -1169,6 +1169,7 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
             }
         }).when(ledgerMock).asyncDelete(any(DeleteLedgerCallback.class), any());
 
+        @Cleanup("shutdownNow")
         ExecutorService executor = Executors.newCachedThreadPool();
 
         executor.submit(() -> {
@@ -1206,7 +1207,6 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
             assertTrue(ee.getCause() instanceof BrokerServiceException.TopicFencedException);
             // Expected
         }
-        executor.shutdown();
     }
 
     @SuppressWarnings("unchecked")

@@ -284,6 +284,7 @@ public class TopicsConsumerImplTest extends ProducerConsumerBase {
 
         log.info("start async consume");
         CountDownLatch latch = new CountDownLatch(totalMessages);
+        @Cleanup("shutdownNow")
         ExecutorService executor = Executors.newFixedThreadPool(1);
         executor.execute(() -> IntStream.range(0, totalMessages).forEach(index ->
             consumer.receiveAsync()
@@ -311,7 +312,6 @@ public class TopicsConsumerImplTest extends ProducerConsumerBase {
         producer1.close();
         producer2.close();
         producer3.close();
-        executor.shutdownNow();
     }
 
     @Test(timeOut = testTimeout)
