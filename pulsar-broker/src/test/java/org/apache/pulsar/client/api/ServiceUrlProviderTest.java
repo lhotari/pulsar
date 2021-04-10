@@ -104,6 +104,7 @@ public class ServiceUrlProviderTest extends ProducerConsumerBase {
                 .subscribe();
 
         PulsarService pulsarService1 = pulsar;
+        conf.setBrokerShutdownTimeoutMs(100L);
         conf.setBrokerServicePort(Optional.of(0));
         conf.setWebServicePort(Optional.of(0));
         restartBroker();
