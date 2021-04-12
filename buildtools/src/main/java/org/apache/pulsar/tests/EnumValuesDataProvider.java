@@ -18,21 +18,38 @@
  */
 package org.apache.pulsar.tests;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.testng.annotations.DataProvider;
 
 /**
- * TestNG DataProvider for passing all Enum values as parameters to a test method.
- *
- * Supports currently a single Enum parameter for a test method.
+ * TestNG DataProvider for passing all Enum values as parameters to a test method or a test constructor.
+ * <p>
+ * Example of passing Enum values to a test method:
+ * <p>
+ * {@code @Test(dataProviderClass = EnumValuesDataProvider.class, dataProvider = "values")}
+ * <pre> public void testMethod(SomeEnumClass enumvalue) {</pre>
+ * <p>
+ * Example of passing Enum values to a test constructor:
+ * <p>
+ * {@code @Factory(dataProviderClass = EnumValuesDataProvider.class, dataProvider = "values")}
+ * <pre> public SomeTestClass(SomeEnumClass enumvalue) {</pre>
+ * <p>
+ * Supports currently a single Enum parameter for a test method or a test constructor.
  */
 public abstract class EnumValuesDataProvider {
     @DataProvider
-    public static final Object[][] values(Method testMethod) {
-        Class<?> enumClass = Arrays.stream(testMethod.getParameterTypes())
+    public static final Object[][] values(Method testMethod, Constructor<?> testConstructor) {
+        Executable testMethodOrConstructor = Objects.requireNonNull(testMethod != null ? testMethod :
+                        testConstructor != null ? testConstructor : null,
+                "testMethod or testConstructor must be non-null");
+        Class<?> enumClass = Arrays.stream(
+                testMethodOrConstructor.getParameterTypes())
                 .findFirst()
                 .filter(Class::isEnum)
                 .orElseThrow(() -> new IllegalArgumentException("The test method should have an enum parameter."));

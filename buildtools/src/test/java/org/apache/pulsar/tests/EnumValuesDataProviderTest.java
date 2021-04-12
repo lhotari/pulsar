@@ -24,11 +24,35 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.testng.annotations.Factory;
 import org.testng.annotations.Test;
 
 public class EnumValuesDataProviderTest {
+    private final SampleForConstructor sampleEnum;
+
     enum Sample {
         A, B, C
+    }
+
+    enum SampleForConstructor {
+        SAMPLE
+    }
+
+
+    @Factory(dataProviderClass = EnumValuesDataProvider.class, dataProvider = "values")
+    public EnumValuesDataProviderTest(SampleForConstructor sampleEnum) {
+        this.sampleEnum = sampleEnum;
+    }
+
+    static class TestClassExample {
+        public TestClassExample(Sample sample) {
+
+        }
+    }
+
+    @Test
+    void shouldPassEnumToConstructor() {
+        assertEquals(sampleEnum, SampleForConstructor.SAMPLE);
     }
 
     @Test(dataProviderClass = EnumValuesDataProvider.class, dataProvider = "values")
@@ -47,7 +71,7 @@ public class EnumValuesDataProviderTest {
                 .filter(method -> method.getName().equals("testEnumValuesProvider"))
                 .findFirst()
                 .get();
-        verifyTestParameters(EnumValuesDataProvider.values(testMethod));
+        verifyTestParameters(EnumValuesDataProvider.values(testMethod, null));
     }
 
     private void verifyTestParameters(Object[][] testParameters) {
@@ -64,6 +88,12 @@ public class EnumValuesDataProviderTest {
                 .filter(method -> method.getName().equals("shouldFailIfEnumParameterIsMissing"))
                 .findFirst()
                 .get();
-        EnumValuesDataProvider.values(testMethod);
+        EnumValuesDataProvider.values(testMethod, null);
+    }
+
+    @Test
+    void shouldDetermineEnumValuesFromConstructor() {
+        verifyTestParameters(EnumValuesDataProvider.values(null,
+                TestClassExample.class.getConstructors()[0]));
     }
 }
