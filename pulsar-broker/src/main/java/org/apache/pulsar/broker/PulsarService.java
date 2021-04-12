@@ -395,7 +395,10 @@ public class PulsarService implements AutoCloseable {
                 client = null;
             }
 
-            nsService = null;
+            if (nsService != null) {
+                nsService.close();
+                nsService = null;
+            }
 
             if (compactorExecutor != null) {
                 compactorExecutor.shutdown();
