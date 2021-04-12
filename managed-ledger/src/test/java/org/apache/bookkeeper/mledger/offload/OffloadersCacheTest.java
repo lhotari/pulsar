@@ -23,6 +23,7 @@ import org.powermock.api.mockito.PowerMockito;
 import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.testng.IObjectFactory;
+import org.testng.annotations.AfterMethod;
 import org.testng.annotations.ObjectFactory;
 import org.testng.annotations.Test;
 
@@ -58,5 +59,10 @@ public class OffloadersCacheTest {
         Offloaders offloaders2 = cache.getOrLoadOffloaders("./offloaders", "/tmp");
 
         assertSame(offloaders2, expectedOffloaders, "The offloaders should be the mocked one.");
+    }
+
+    @AfterMethod(alwaysRun = true)
+    public void resetMockito() {
+        Mockito.reset();
     }
 }

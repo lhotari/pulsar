@@ -38,6 +38,7 @@ import org.apache.pulsar.io.influxdb.v1.InfluxDBGenericRecordSink;
 import org.influxdb.InfluxDB;
 import org.influxdb.dto.BatchPoints;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -80,7 +81,7 @@ public class InfluxDBGenericRecordSinkTest {
 
     private Map<String, Object> configMap = Maps.newHashMap();
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void setUp() throws Exception {
         influxSink = new InfluxDBGenericRecordSink();
 
@@ -104,6 +105,7 @@ public class InfluxDBGenericRecordSinkTest {
     public void tearDown() throws Exception {
         influxSink.close();
         verify(influxDB, times(1)).close();
+        Mockito.reset();
     }
 
     @Test

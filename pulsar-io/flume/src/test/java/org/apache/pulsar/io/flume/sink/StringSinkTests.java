@@ -44,6 +44,7 @@ import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SinkContext;
 import org.apache.pulsar.io.flume.AbstractFlumeTests;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import org.testng.Assert;
@@ -63,7 +64,7 @@ public class StringSinkTests extends AbstractFlumeTests {
     private AvroSource source;
     private Channel channel;
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void setUp() {
         mockRecord = mock(Record.class);
         mockSinkContext = mock(SinkContext.class);
@@ -106,6 +107,7 @@ public class StringSinkTests extends AbstractFlumeTests {
     @AfterMethod(alwaysRun = true)
     public void tearDown() {
         source.stop();
+        Mockito.reset();
     }
 
     protected final void send(StringSink stringSink, int numRecords) {

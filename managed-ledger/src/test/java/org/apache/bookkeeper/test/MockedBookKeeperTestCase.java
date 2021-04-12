@@ -30,6 +30,7 @@ import org.apache.bookkeeper.util.ZkUtils;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.MockZooKeeper;
 import org.apache.zookeeper.ZooDefs;
+import org.mockito.Mockito;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.annotations.AfterClass;
@@ -95,6 +96,7 @@ public abstract class MockedBookKeeperTestCase {
         } catch (Exception e) {
             LOG.error("tearDown Error", e);
         }
+        Mockito.reset();
     }
 
     @BeforeClass(groups = { "broker" })

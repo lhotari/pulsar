@@ -36,6 +36,7 @@ import org.apache.flume.SinkRunner;
 import org.apache.flume.SourceRunner;
 import org.apache.flume.lifecycle.LifecycleAware;
 import org.apache.flume.lifecycle.LifecycleState;
+import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import org.testng.annotations.AfterMethod;
@@ -54,6 +55,7 @@ public class TestApplication {
     @AfterMethod
     public void tearDown() throws Exception {
         FileUtils.deleteDirectory(baseDir);
+        Mockito.reset();
     }
 
     private <T extends LifecycleAware> T mockLifeCycle(Class<T> klass) {

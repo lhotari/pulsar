@@ -24,6 +24,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 
 import org.apache.pulsar.common.policies.data.OffloadPolicies;
+import org.mockito.Mockito;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 
@@ -57,6 +58,7 @@ public class FileStoreTestBase {
     public void tearDown() {
         hdfsCluster.shutdown(true, true);
         hdfsCluster.close();
+        Mockito.reset();
     }
 
     public String getURI() {

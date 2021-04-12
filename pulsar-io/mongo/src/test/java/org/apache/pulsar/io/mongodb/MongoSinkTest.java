@@ -29,6 +29,7 @@ import org.apache.pulsar.io.core.SinkContext;
 import org.bson.BsonDocument;
 import org.bson.Document;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
 import org.testng.IObjectFactory;
@@ -81,7 +82,7 @@ public class MongoSinkTest {
         return new org.powermock.modules.testng.PowerMockObjectFactory();
     }
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void setUp() {
 
         map = TestHelper.createMap(true);
@@ -98,6 +99,11 @@ public class MongoSinkTest {
         when(mockMongoClient.getDatabase(anyString())).thenReturn(mockMongoDb);
         when(mockMongoDb.getCollection(anyString())).thenReturn(mockMongoColl);
         when(mockMongoDb.getCollection(anyString()).insertMany(any())).thenReturn(mockPublisher);
+    }
+
+    @AfterMethod(alwaysRun = true)
+    public void resetMockito() {
+        Mockito.reset();
     }
 
     private void initContext(boolean throwBulkError) {

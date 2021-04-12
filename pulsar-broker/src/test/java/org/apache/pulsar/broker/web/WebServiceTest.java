@@ -76,6 +76,7 @@ import org.asynchttpclient.AsyncHttpClient;
 import org.asynchttpclient.BoundRequestBuilder;
 import org.asynchttpclient.DefaultAsyncHttpClient;
 import org.asynchttpclient.Response;
+import org.mockito.Mockito;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.Assert;
@@ -427,6 +428,7 @@ public class WebServiceTest {
                 Assert.fail("Got exception while closing the pulsar instance ", e);
             }
         }
+        Mockito.reset();
     }
 
     private static final Logger log = LoggerFactory.getLogger(WebServiceTest.class);
