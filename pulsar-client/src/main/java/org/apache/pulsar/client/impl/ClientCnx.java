@@ -797,13 +797,25 @@ public class ClientCnx extends PulsarHandler {
 
         long requestId = commandGetSchemaResponse.getRequestId();
 
-        CompletableFuture<CommandGetSchemaResponse> future = (CompletableFuture<CommandGetSchemaResponse>) pendingRequests
+        CompletableFuture<Optional<SchemaInfo>> future = (CompletableFuture<Optional<SchemaInfo>>) pendingRequests
                 .remove(requestId);
         if (future == null) {
             log.warn("{} Received unknown request id from server: {}", ctx.channel(), requestId);
             return;
         }
-        future.complete(commandGetSchemaResponse);
+
+        if (commandGetSchemaResponse.hasErrorCode()) {
+            // Request has failed
+            ServerError rc = commandGetSchemaResponse.getErrorCode();
+            if (rc == ServerError.TopicNotFound) {
+                future.complete(Optional.empty());
+            } else {
+                future.completeExceptionally(
+                        getPulsarClientException(rc, commandGetSchemaResponse.getErrorMessage()));
+            }
+        } else {
+            future.complete(Optional.of(SchemaInfoUtil.newSchemaInfo(commandGetSchemaResponse.getSchema())));
+        }
     }
 
     @Override
@@ -876,24 +888,10 @@ public class ClientCnx extends PulsarHandler {
     }
 
     public CompletableFuture<Optional<SchemaInfo>> sendGetSchema(ByteBuf request, long requestId) {
-        return sendGetRawSchema(request, requestId).thenCompose(commandGetSchemaResponse -> {
-            if (commandGetSchemaResponse.hasErrorCode()) {
-                // Request has failed
-                ServerError rc = commandGetSchemaResponse.getErrorCode();
-                if (rc == ServerError.TopicNotFound) {
-                    return CompletableFuture.completedFuture(Optional.empty());
-                } else {
-                    return FutureUtil.failedFuture(
-                        getPulsarClientException(rc, commandGetSchemaResponse.getErrorMessage()));
-                }
-            } else {
-                return CompletableFuture.completedFuture(
-                    Optional.of(SchemaInfoUtil.newSchemaInfo(commandGetSchemaResponse.getSchema())));
-            }
-        });
+        return sendGetRawSchema(request, requestId);
     }
 
-    public CompletableFuture<CommandGetSchemaResponse> sendGetRawSchema(ByteBuf request, long requestId) {
+    public CompletableFuture<Optional<SchemaInfo>> sendGetRawSchema(ByteBuf request, long requestId) {
         return sendRequestAndHandleTimeout(request, requestId, RequestType.GetSchema, true);
     }
 
