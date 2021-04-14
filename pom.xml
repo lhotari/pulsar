@@ -1181,6 +1181,7 @@ flexible messaging model and an intuitive client API.</description>
           <systemPropertyVariables>
             <testRealAWS>${testRealAWS}</testRealAWS>
             <testRetryCount>${testRetryCount}</testRetryCount>
+            <testExcludedGroups>${excludedGroups}</testExcludedGroups>
           </systemPropertyVariables>
           <properties>
             <property>

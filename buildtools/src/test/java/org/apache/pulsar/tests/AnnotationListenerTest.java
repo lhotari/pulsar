@@ -19,10 +19,35 @@
 package org.apache.pulsar.tests;
 
 import static org.testng.Assert.assertEquals;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 import org.testng.internal.annotations.TestAnnotation;
 
 public class AnnotationListenerTest {
+
+    @DataProvider
+    Object[][] testGroups() {
+        return new Object[][]{
+                {new String[]{"a"}, false},
+                {new String[]{"a", "b"}, false},
+                {new String[]{"g1"}, true},
+                {new String[]{"g2"}, true},
+                {new String[]{"g3"}, true},
+                {new String[]{"a", "b", "c", "g1", "g2", "g3"}, true},
+        };
+    }
+
+    @Test(dataProvider = "testGroups")
+    void shouldExcludeMethodIfIncludedInExcludedGroups(String[] groups, boolean matches) {
+        AnnotationListener annotationListener = new AnnotationListener(
+                AnnotationListener.parseExcludedGroups("g1,g2 , g3"));
+
+        TestAnnotation testAnnotation = new TestAnnotation();
+        testAnnotation.setGroups(groups);
+        annotationListener.transform(testAnnotation, null, null, null);
+        assertEquals(testAnnotation.getEnabled(), !matches);
+    }
+
     @Test
     void shouldSetDefaultRetryAnalyser() {
         AnnotationListener annotationListener = new AnnotationListener();

@@ -20,18 +20,39 @@ package org.apache.pulsar.tests;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
-
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.testng.IAnnotationTransformer;
 import org.testng.annotations.ITestAnnotation;
 import org.testng.internal.annotations.DisabledRetryAnalyzer;
 
 public class AnnotationListener implements IAnnotationTransformer {
-
+    private static final Logger LOG = LoggerFactory.getLogger(AnnotationListener.class);
     private static final long DEFAULT_TEST_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(5);
+    private static Set<String> EXCLUDED_GROUPS = parseExcludedGroups(
+            System.getProperty("testExcludedGroups", ""));
+
+    static Set<String> parseExcludedGroups(String excludedGroupsString) {
+        return Collections.unmodifiableSet(new HashSet<>(
+                Arrays.asList(StringUtils.split(excludedGroupsString, ", ")
+                )));
+    }
+
+    private final Set<String> excludedGroups;
 
     public AnnotationListener() {
-        System.out.println("Created annotation listener");
+        this(EXCLUDED_GROUPS);
+    }
+
+    AnnotationListener(Set<String> excludedGroups) {
+        this.excludedGroups = excludedGroups;
+        LOG.info("Created annotation listener");
     }
 
     @Override
@@ -42,6 +63,12 @@ public class AnnotationListener implements IAnnotationTransformer {
         if (annotation.getRetryAnalyzerClass() == null
                 || annotation.getRetryAnalyzerClass() == DisabledRetryAnalyzer.class) {
             annotation.setRetryAnalyzer(RetryAnalyzer.class);
+        }
+
+        if (annotation.getGroups() != null
+                && Arrays.stream(annotation.getGroups()).anyMatch(excludedGroups::contains)) {
+            LOG.info("Skipping test method {}", testMethod);
+            annotation.setEnabled(false);
         }
 
         // Enforce default test timeout
