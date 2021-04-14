@@ -192,6 +192,7 @@ public class DeadLetterTopicTest extends ProducerConsumerBase {
         //1 start 3 parallel consumers
         List<Consumer<String>> consumers = new ArrayList<>();
         final AtomicInteger totalReceived = new AtomicInteger(0);
+        @Cleanup("shutdownNow")
         ExecutorService executor = Executors.newFixedThreadPool(consumerCount);
         for (int i = 0; i < consumerCount; i++) {
             executor.execute(() -> {
@@ -246,7 +247,6 @@ public class DeadLetterTopicTest extends ProducerConsumerBase {
         assertEquals(totalInDeadLetter, messageCount);
 
         //6 clean up
-        executor.shutdownNow();
         producer.close();
         deadLetterConsumer.close();
         for (Consumer<String> consumer : consumers) {

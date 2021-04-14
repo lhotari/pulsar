@@ -850,6 +850,7 @@ public class BrokerServiceTest extends BrokerTestBase {
             fail(e.getMessage());
         }
 
+        @Cleanup("shutdownNow")
         ExecutorService executor = Executors.newSingleThreadExecutor();
         BrokerService service = spy(pulsar.getBrokerService());
         // create topic will fail to get managedLedgerConfig
@@ -874,8 +875,6 @@ public class BrokerServiceTest extends BrokerTestBase {
             fail("there is a dead-lock and it should have been prevented");
         } catch (ExecutionException e) {
             assertTrue(e.getCause() instanceof NullPointerException);
-        } finally {
-            executor.shutdownNow();
         }
     }
 
@@ -893,6 +892,7 @@ public class BrokerServiceTest extends BrokerTestBase {
             fail(e.getMessage());
         }
 
+        @Cleanup("shutdownNow")
         ExecutorService executor = Executors.newSingleThreadExecutor();
         BrokerService service = spy(pulsar.getBrokerService());
         // create topic will fail to get managedLedgerConfig
@@ -927,7 +927,6 @@ public class BrokerServiceTest extends BrokerTestBase {
         } catch (ExecutionException e) {
             assertEquals(e.getCause().getClass(), PersistenceException.class);
         } finally {
-            executor.shutdownNow();
             ledgers.clear();
         }
     }

@@ -149,6 +149,7 @@ public class BrokerServiceThrottlingTest extends BrokerTestBase {
         }
 
         List<Consumer<byte[]>> successfulConsumers = Collections.synchronizedList(Lists.newArrayList());
+        @Cleanup("shutdownNow")
         ExecutorService executor = Executors.newFixedThreadPool(10);
         final int totalConsumers = 20;
         CountDownLatch latch = new CountDownLatch(totalConsumers);
@@ -172,7 +173,6 @@ public class BrokerServiceThrottlingTest extends BrokerTestBase {
                 c.close();
             }
         }
-        executor.shutdown();
         assertNotEquals(successfulConsumers.size(), totalConsumers);
     }
 
@@ -201,6 +201,7 @@ public class BrokerServiceThrottlingTest extends BrokerTestBase {
                 .ioThreads(20).connectionsPerBroker(20).build();
         upsertLookupPermits(100);
         List<Consumer<byte[]>> consumers = Collections.synchronizedList(Lists.newArrayList());
+        @Cleanup("shutdownNow")
         ExecutorService executor = Executors.newFixedThreadPool(10);
         final int totalConsumers = 8;
         CountDownLatch latch = new CountDownLatch(totalConsumers);
@@ -234,8 +235,6 @@ public class BrokerServiceThrottlingTest extends BrokerTestBase {
 
         }
         assertEquals(totalConnectedConsumers, totalConsumers);
-
-        executor.shutdown();
     }
 
     private boolean areAllConsumersConnected(List<Consumer<byte[]>> consumers) {

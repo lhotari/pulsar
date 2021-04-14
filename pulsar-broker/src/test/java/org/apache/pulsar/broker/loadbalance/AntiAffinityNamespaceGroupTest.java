@@ -152,7 +152,7 @@ public class AntiAffinityNamespaceGroupTest {
 
     @AfterMethod(alwaysRun = true)
     void shutdown() throws Exception {
-        executor.shutdown();
+        executor.shutdownNow();
 
         admin1.close();
         admin2.close();

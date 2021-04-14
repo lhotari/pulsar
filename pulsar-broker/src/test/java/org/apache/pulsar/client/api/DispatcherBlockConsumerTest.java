@@ -684,6 +684,7 @@ public class DispatcherBlockConsumerTest extends ProducerConsumerBase {
         double unAckedMessagePercentage = pulsar.getConfiguration()
                 .getMaxUnackedMessagesPerSubscriptionOnBrokerBlocked();
 
+        @Cleanup("shutdownNow")
         ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
 
         try {
@@ -864,7 +865,6 @@ public class DispatcherBlockConsumerTest extends ProducerConsumerBase {
         } finally {
             pulsar.getConfiguration().setMaxUnackedMessagesPerBroker(unAckedMessages);
             pulsar.getConfiguration().setMaxUnackedMessagesPerSubscriptionOnBrokerBlocked(unAckedMessagePercentage);
-            executor.shutdownNow();
         }
     }
 
@@ -886,6 +886,7 @@ public class DispatcherBlockConsumerTest extends ProducerConsumerBase {
 
         log.info("-- Starting {} test --", methodName);
 
+        @Cleanup("shutdownNow")
         ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
 
         int unAckedMessages = pulsar.getConfiguration().getMaxUnackedMessagesPerBroker();
@@ -1033,7 +1034,6 @@ public class DispatcherBlockConsumerTest extends ProducerConsumerBase {
         } finally {
             pulsar.getConfiguration().setMaxUnackedMessagesPerBroker(unAckedMessages);
             pulsar.getConfiguration().setMaxUnackedMessagesPerSubscriptionOnBrokerBlocked(unAckedMessagePercentage);
-            executor.shutdownNow();
         }
     }
 
