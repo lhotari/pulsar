@@ -69,7 +69,7 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
         String subscriptionName = "cluster-subscription";
         // Subscription replication produces duplicates, https://github.com/apache/pulsar/issues/10054
         // TODO: duplications shouldn't be allowed, change to "false" when fixing the issue
-        boolean allowDuplicates = true;
+        boolean allowDuplicates = false;
         // this setting can be used to manually run the test with subscription replication disabled
         // it shows that subscription replication has no impact in behavior for this test case
         boolean replicateSubscriptionState = true;
@@ -90,8 +90,8 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
                 .statsInterval(0, TimeUnit.SECONDS)
                 .build();
 
-        // create subscription in r2
-        createReplicatedSubscription(client2, topicName, subscriptionName, replicateSubscriptionState);
+        // wait for subscription to be replicated
+        Thread.sleep(2 * config1.getReplicatedSubscriptionsSnapshotFrequencyMillis());
 
         Set<String> sentMessages = new LinkedHashSet<>();
 
@@ -136,7 +136,7 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
 
         // assert that all messages have been received
         assertEquals(new ArrayList<>(sentMessages), new ArrayList<>(receivedMessages), "Sent and received " +
-                "messages don't match.");
+                "messages don't match. sent=" + sentMessages + " received=" + receivedMessages);
     }
 
     void readMessages(Consumer<byte[]> consumer, Set<String> messages, int maxMessages, boolean allowDuplicates)
