@@ -30,7 +30,7 @@ echo_and_restore_trace() {
 }
 alias echo='{ [[ $- =~ .*x.* ]] && trace_enabled=1 || trace_enabled=0; set +x; } 2> /dev/null; echo_and_restore_trace'
 
-MVN_COMMAND='mvn -B -ntp'
+MVN_COMMAND='mvn -B -ntp -DmainModules'
 MVN_COMMAND_WITH_RETRY="build/retry.sh ${MVN_COMMAND}"
 MVN_TEST_COMMAND="${MVN_COMMAND_WITH_RETRY} test"
 

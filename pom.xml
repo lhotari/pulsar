@@ -1823,7 +1823,9 @@ flexible messaging model and an intuitive client API.</description>
       <id>main</id>
       <activation>
         <activeByDefault>true</activeByDefault>
-        <jdk>[8,)</jdk>
+        <property>
+          <name>mainModules</name>
+        </property>
       </activation>
       <modules>
         <module>buildtools</module>

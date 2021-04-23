@@ -91,7 +91,7 @@ jobs:
 
       - name: run install by skip tests
         if: ${{ steps.changes.outputs.all_count }} > ${{ steps.changes.outputs.docs_count }}
-        run: mvn -q -B -ntp clean install -DskipTests
+        run: mvn -q -B -ntp clean install -DmainModules -DskipTests
 
       - name: build pulsar image
         if: ${{ steps.changes.outputs.all_count }} > ${{ steps.changes.outputs.docs_count }}
