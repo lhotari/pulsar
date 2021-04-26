@@ -19,10 +19,10 @@
 package org.apache.pulsar.proxy.server;
 
 import com.google.common.collect.Lists;
-
 import io.prometheus.client.jetty.JettyStatisticsCollector;
 import java.io.IOException;
 import java.net.URI;
+import java.security.Security;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -39,6 +39,7 @@ import org.apache.pulsar.broker.web.RateLimitingFilter;
 import org.apache.pulsar.broker.web.WebExecutorThreadPool;
 import org.apache.pulsar.common.util.SecurityUtility;
 import org.apache.pulsar.common.util.keystoretls.KeyStoreSSLContext;
+import org.conscrypt.OpenSSLProvider;
 import org.eclipse.jetty.server.Connector;
 import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.HttpConfiguration;
@@ -99,6 +100,8 @@ public class WebServer {
         }
         if (config.getWebServicePortTls().isPresent()) {
             try {
+                Security.insertProviderAt(new OpenSSLProvider(), 1);
+
                 SslContextFactory sslCtxFactory;
                 if (config.isTlsEnabledWithKeyStore()) {
                     sslCtxFactory = KeyStoreSSLContext.createSslContextFactory(
