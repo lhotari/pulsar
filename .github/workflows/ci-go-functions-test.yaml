@@ -68,15 +68,18 @@ jobs:
               - '*.md'
               - '**/*.md'
 
+      - id: skipcheck
+        run: echo "::set-output name=docsonly::${{ fromJSON(steps.changes.outputs.all_count) == fromJSON(steps.changes.outputs.docs_count) && fromJSON(steps.changes.outputs.docs_count) > 0 }}"
+
       - name: Set up Go
         uses: actions/setup-go@v2
-        if: ${{ steps.changes.outputs.all_count }} > ${{ steps.changes.outputs.docs_count }}
+        if: ${{ steps.skipcheck.outputs.docsonly != 'true' }}
         with:
           go-version: ${{ matrix.go-version }}
         id: go
 
       - name: Run tests
-        if: ${{ steps.changes.outputs.all_count }} > ${{ steps.changes.outputs.docs_count }}
+        if: ${{ steps.skipcheck.outputs.docsonly != 'true' }}
         run: |
           cd pulsar-function-go
           go test -v $(go list ./... | grep -v examples)
