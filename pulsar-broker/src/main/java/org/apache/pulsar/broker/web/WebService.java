@@ -21,6 +21,7 @@ package org.apache.pulsar.broker.web;
 import com.google.common.collect.Lists;
 import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.jetty.JettyStatisticsCollector;
+import java.security.Security;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
@@ -33,6 +34,7 @@ import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.common.util.SecurityUtility;
 import org.apache.pulsar.common.util.keystoretls.KeyStoreSSLContext;
+import org.conscrypt.OpenSSLProvider;
 import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
@@ -98,6 +100,8 @@ public class WebService implements AutoCloseable {
         Optional<Integer> tlsPort = pulsar.getConfiguration().getWebServicePortTls();
         if (tlsPort.isPresent()) {
             try {
+                Security.insertProviderAt(new OpenSSLProvider(), 1);
+
                 SslContextFactory sslCtxFactory;
                 ServiceConfiguration config = pulsar.getConfiguration();
                 if (config.isTlsEnabledWithKeyStore()) {
