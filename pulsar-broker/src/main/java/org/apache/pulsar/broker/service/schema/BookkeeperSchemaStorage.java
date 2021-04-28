@@ -520,14 +520,17 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
     private CompletableFuture<Void> updateSchemaLocator(String id,
                                                         SchemaStorageFormat.SchemaLocator schema, int version) {
         CompletableFuture<Void> future = new CompletableFuture<>();
-        zooKeeper.setData(id, schema.toByteArray(), version, (rc, path, ctx, stat) -> {
-            Code code = Code.get(rc);
-            if (code != Code.OK) {
-                future.completeExceptionally(KeeperException.create(code));
-            } else {
-                future.complete(null);
-            }
-        }, null);
+        zooKeeper.setData(id, schema.toByteArray(), version, localZkCache.getZooKeeperCallbackExecutor()
+                .decorateStatCallback((rc, path, ctx, stat) -> {
+                    pulsar.getExecutor().execute(() -> {
+                        Code code = Code.get(rc);
+                        if (code != Code.OK) {
+                            future.completeExceptionally(KeeperException.create(code));
+                        } else {
+                            future.complete(null);
+                        }
+                    });
+                }), null);
         return future;
     }
 
@@ -536,7 +539,8 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
         CompletableFuture<LocatorEntry> future = new CompletableFuture<>();
 
         ZkUtils.asyncCreateFullPathOptimistic(zooKeeper, id, locator.toByteArray(), Acl,
-                CreateMode.PERSISTENT, (rc, path, ctx, name) -> {
+                CreateMode.PERSISTENT,
+                localZkCache.getZooKeeperCallbackExecutor().decorateStringCallback((rc, path, ctx, name) -> {
                     Code code = Code.get(rc);
                     if (code != Code.OK) {
                         future.completeExceptionally(KeeperException.create(code));
@@ -544,7 +548,7 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
                         // Newly created z-node will have version 0
                         future.complete(new LocatorEntry(locator, 0));
                     }
-                }, null);
+                }), null);
 
         return future;
     }

@@ -19,15 +19,12 @@
 package org.apache.pulsar.metadata.impl;
 
 import com.google.common.annotations.VisibleForTesting;
-
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-
 import lombok.extern.slf4j.Slf4j;
-
 import org.apache.bookkeeper.util.ZkUtils;
 import org.apache.bookkeeper.zookeeper.BoundExponentialBackoffRetryPolicy;
 import org.apache.bookkeeper.zookeeper.ZooKeeperClient;
@@ -40,8 +37,8 @@ import org.apache.pulsar.metadata.api.MetadataStoreException.NotFoundException;
 import org.apache.pulsar.metadata.api.Notification;
 import org.apache.pulsar.metadata.api.NotificationType;
 import org.apache.pulsar.metadata.api.Stat;
-import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 import org.apache.pulsar.metadata.api.extended.CreateOption;
+import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.KeeperException.Code;
@@ -56,6 +53,7 @@ public class ZKMetadataStore extends AbstractMetadataStore implements MetadataSt
     private final boolean isZkManaged;
     private final ZooKeeper zkc;
     private ZKSessionWatcher sessionWatcher;
+    private final ZooKeeperCallbackExecutor zooKeeperCallbackExecutor;
 
     public ZKMetadataStore(String metadataURL, MetadataStoreConfig metadataStoreConfig) throws MetadataStoreException {
         try {
@@ -70,6 +68,7 @@ public class ZKMetadataStore extends AbstractMetadataStore implements MetadataSt
                         }
                     }))
                     .build();
+            zooKeeperCallbackExecutor = new ZooKeeperCallbackExecutor(getExecutor());
             sessionWatcher = new ZKSessionWatcher(zkc, this::receivedSessionEvent);
         } catch (Throwable t) {
             throw new MetadataStoreException(t);
@@ -81,6 +80,7 @@ public class ZKMetadataStore extends AbstractMetadataStore implements MetadataSt
         this.isZkManaged = false;
         this.zkc = zkc;
         this.sessionWatcher = new ZKSessionWatcher(zkc, this::receivedSessionEvent);
+        this.zooKeeperCallbackExecutor = new ZooKeeperCallbackExecutor(getExecutor());
     }
 
     @Override
@@ -88,35 +88,34 @@ public class ZKMetadataStore extends AbstractMetadataStore implements MetadataSt
         CompletableFuture<Optional<GetResult>> future = new CompletableFuture<>();
 
         try {
-            zkc.getData(path, this, (rc, path1, ctx, data, stat) -> {
-                execute(() -> {
-                    Code code = Code.get(rc);
-                    if (code == Code.OK) {
-                        future.complete(Optional.of(new GetResult(data, getStat(path1, stat))));
-                    } else if (code == Code.NONODE) {
-                        // Place a watch on the non-existing node, so we'll get notified
-                        // when it gets created and we can invalidate the negative cache.
-                        existsFromStore(path).thenAccept(exists -> {
-                            if (exists) {
-                                get(path).thenAccept(c -> future.complete(c))
-                                        .exceptionally(ex -> {
-                                            future.completeExceptionally(ex);
-                                            return null;
-                                        });
-                            } else {
-                                // Z-node does not exist
-                                future.complete(Optional.empty());
-                            }
-                        }).exceptionally(ex -> {
-                            future.completeExceptionally(ex);
-                            return null;
-                        });
-                        future.complete(Optional.empty());
-                    } else {
-                        future.completeExceptionally(getException(code, path));
-                    }
-                }, future);
-            }, null);
+            zkc.getData(path, this, zooKeeperCallbackExecutor
+                    .decorateDataCallback((rc, path1, ctx, data, stat) -> {
+                        Code code = Code.get(rc);
+                        if (code == Code.OK) {
+                            future.complete(Optional.of(new GetResult(data, getStat(path1, stat))));
+                        } else if (code == Code.NONODE) {
+                            // Place a watch on the non-existing node, so we'll get notified
+                            // when it gets created and we can invalidate the negative cache.
+                            existsFromStore(path).thenAccept(exists -> {
+                                if (exists) {
+                                    get(path).thenAccept(c -> future.complete(c))
+                                            .exceptionally(ex -> {
+                                                future.completeExceptionally(ex);
+                                                return null;
+                                            });
+                                } else {
+                                    // Z-node does not exist
+                                    future.complete(Optional.empty());
+                                }
+                            }).exceptionally(ex -> {
+                                future.completeExceptionally(ex);
+                                return null;
+                            });
+                            future.complete(Optional.empty());
+                        } else {
+                            future.completeExceptionally(getException(code, path));
+                        }
+                    }), null);
         } catch (Throwable t) {
             future.completeExceptionally(new MetadataStoreException(t));
         }
@@ -129,37 +128,36 @@ public class ZKMetadataStore extends AbstractMetadataStore implements MetadataSt
         CompletableFuture<List<String>> future = new CompletableFuture<>();
 
         try {
-            zkc.getChildren(path, this, (rc, path1, ctx, children) -> {
-                execute(() -> {
-                    Code code = Code.get(rc);
-                    if (code == Code.OK) {
-                        Collections.sort(children);
-                        future.complete(children);
-                    } else if (code == Code.NONODE) {
-                        // The node we want may not exist yet, so put a watcher on its existence
-                        // before throwing up the exception. Its possible that the node could have
-                        // been created after the call to getChildren, but before the call to exists().
-                        // If this is the case, exists will return true, and we just call getChildren
-                        // again.
-                        existsFromStore(path).thenAccept(exists -> {
-                            if (exists) {
-                                getChildrenFromStore(path).thenAccept(c -> future.complete(c)).exceptionally(ex -> {
-                                    future.completeExceptionally(ex);
-                                    return null;
-                                });
-                            } else {
-                                // Z-node does not exist
-                                future.complete(Collections.emptyList());
-                            }
-                        }).exceptionally(ex -> {
-                            future.completeExceptionally(ex);
-                            return null;
-                        });
-                    } else {
-                        future.completeExceptionally(getException(code, path));
-                    }
-                }, future);
-            }, null);
+            zkc.getChildren(path, this, zooKeeperCallbackExecutor
+                    .decorateChildrenCallback((rc, path1, ctx, children) -> {
+                        Code code = Code.get(rc);
+                        if (code == Code.OK) {
+                            Collections.sort(children);
+                            future.complete(children);
+                        } else if (code == Code.NONODE) {
+                            // The node we want may not exist yet, so put a watcher on its existence
+                            // before throwing up the exception. Its possible that the node could have
+                            // been created after the call to getChildren, but before the call to exists().
+                            // If this is the case, exists will return true, and we just call getChildren
+                            // again.
+                            existsFromStore(path).thenAccept(exists -> {
+                                if (exists) {
+                                    getChildrenFromStore(path).thenAccept(c -> future.complete(c)).exceptionally(ex -> {
+                                        future.completeExceptionally(ex);
+                                        return null;
+                                    });
+                                } else {
+                                    // Z-node does not exist
+                                    future.complete(Collections.emptyList());
+                                }
+                            }).exceptionally(ex -> {
+                                future.completeExceptionally(ex);
+                                return null;
+                            });
+                        } else {
+                            future.completeExceptionally(getException(code, path));
+                        }
+                    }), null);
         } catch (Throwable t) {
             future.completeExceptionally(new MetadataStoreException(t));
         }
@@ -172,18 +170,16 @@ public class ZKMetadataStore extends AbstractMetadataStore implements MetadataSt
         CompletableFuture<Boolean> future = new CompletableFuture<>();
 
         try {
-            zkc.exists(path, this, (rc, path1, ctx, stat) -> {
-                execute(() -> {
-                    Code code = Code.get(rc);
-                    if (code == Code.OK) {
-                        future.complete(true);
-                    } else if (code == Code.NONODE) {
-                        future.complete(false);
-                    } else {
-                        future.completeExceptionally(getException(code, path));
-                    }
-                }, future);
-            }, future);
+            zkc.exists(path, this, zooKeeperCallbackExecutor.decorateStatCallback((rc, path1, ctx, stat) -> {
+                Code code = Code.get(rc);
+                if (code == Code.OK) {
+                    future.complete(true);
+                } else if (code == Code.NONODE) {
+                    future.complete(false);
+                } else {
+                    future.completeExceptionally(getException(code, path));
+                }
+            }), future);
         } catch (Throwable t) {
             future.completeExceptionally(new MetadataStoreException(t));
         }
@@ -208,43 +204,41 @@ public class ZKMetadataStore extends AbstractMetadataStore implements MetadataSt
             if (hasVersion && expectedVersion == -1) {
                 CreateMode createMode = getCreateMode(options);
                 ZkUtils.asyncCreateFullPathOptimistic(zkc, path, value, ZooDefs.Ids.OPEN_ACL_UNSAFE,
-                        createMode, (rc, path1, ctx, name) -> {
-                            execute(() -> {
-                                Code code = Code.get(rc);
-                                if (code == Code.OK) {
-                                    future.complete(new Stat(name, 0, 0, 0, createMode.isEphemeral(), true));
-                                } else if (code == Code.NODEEXISTS) {
-                                    // We're emulating a request to create node, so the version is invalid
-                                    future.completeExceptionally(getException(Code.BADVERSION, path));
-                                } else {
-                                    future.completeExceptionally(getException(code, path));
-                                }
-                            }, future);
-                        }, null);
-            } else {
-                zkc.setData(path, value, expectedVersion, (rc, path1, ctx, stat) -> {
-                    execute(() -> {
-                        Code code = Code.get(rc);
-                        if (code == Code.OK) {
-                            future.complete(getStat(path1, stat));
-                        } else if (code == Code.NONODE) {
-                            if (hasVersion) {
-                                // We're emulating here a request to update or create the znode, depending on
-                                // the version
+                        createMode, zooKeeperCallbackExecutor.decorateStringCallback((rc, path1, ctx, name) -> {
+                            Code code = Code.get(rc);
+                            if (code == Code.OK) {
+                                future.complete(new Stat(name, 0, 0, 0,
+                                        createMode.isEphemeral(), true));
+                            } else if (code == Code.NODEEXISTS) {
+                                // We're emulating a request to create node, so the version is invalid
                                 future.completeExceptionally(getException(Code.BADVERSION, path));
                             } else {
-                                // The z-node does not exist, let's create it first
-                                put(path, value, Optional.of(-1L)).thenAccept(s -> future.complete(s))
-                                        .exceptionally(ex -> {
-                                            future.completeExceptionally(ex.getCause());
-                                            return null;
-                                        });
+                                future.completeExceptionally(getException(code, path));
                             }
-                        } else {
-                            future.completeExceptionally(getException(code, path));
-                        }
-                    }, future);
-                }, null);
+                        }), null);
+            } else {
+                zkc.setData(path, value, expectedVersion, zooKeeperCallbackExecutor
+                        .decorateStatCallback((rc, path1, ctx, stat) -> {
+                            Code code = Code.get(rc);
+                            if (code == Code.OK) {
+                                future.complete(getStat(path1, stat));
+                            } else if (code == Code.NONODE) {
+                                if (hasVersion) {
+                                    // We're emulating here a request to update or create the znode, depending on
+                                    // the version
+                                    future.completeExceptionally(getException(Code.BADVERSION, path));
+                                } else {
+                                    // The z-node does not exist, let's create it first
+                                    put(path, value, Optional.of(-1L)).thenAccept(s -> future.complete(s))
+                                            .exceptionally(ex -> {
+                                                future.completeExceptionally(ex.getCause());
+                                                return null;
+                                            });
+                                }
+                            } else {
+                                future.completeExceptionally(getException(code, path));
+                            }
+                        }), null);
             }
         } catch (Throwable t) {
             future.completeExceptionally(new MetadataStoreException(t));
@@ -260,16 +254,14 @@ public class ZKMetadataStore extends AbstractMetadataStore implements MetadataSt
         CompletableFuture<Void> future = new CompletableFuture<>();
 
         try {
-            zkc.delete(path, expectedVersion, (rc, path1, ctx) -> {
-                execute(() -> {
-                    Code code = Code.get(rc);
-                    if (code == Code.OK) {
-                        future.complete(null);
-                    } else {
-                        future.completeExceptionally(getException(code, path));
-                    }
-                }, future);
-            }, null);
+            zkc.delete(path, expectedVersion, zooKeeperCallbackExecutor.decorateVoidCallback((rc, path1, ctx) -> {
+                Code code = Code.get(rc);
+                if (code == Code.OK) {
+                    future.complete(null);
+                } else {
+                    future.completeExceptionally(getException(code, path));
+                }
+            }), null);
         } catch (Throwable t) {
             future.completeExceptionally(new MetadataStoreException(t));
         }

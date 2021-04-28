@@ -98,6 +98,7 @@ import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.common.util.collections.ConcurrentOpenHashMap;
 import org.apache.pulsar.policies.data.loadbalancer.AdvertisedListener;
 import org.apache.pulsar.policies.data.loadbalancer.LocalBrokerData;
+import org.apache.pulsar.zookeeper.ZooKeeperCache;
 import org.apache.zookeeper.AsyncCallback.StatCallback;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.KeeperException.Code;
@@ -686,15 +687,17 @@ public class NamespaceService implements AutoCloseable {
     public CompletableFuture<Boolean> isNamespaceBundleOwned(NamespaceBundle bundle) {
         String bundlePath = ServiceUnitZkUtils.path(bundle);
         CompletableFuture<Boolean> isExistFuture = new CompletableFuture<Boolean>();
-        pulsar.getLocalZkCache().getZooKeeper().exists(bundlePath, false, (rc, path, ctx, stat) -> {
-            if (rc == Code.OK.intValue()) {
-                isExistFuture.complete(true);
-            } else if (rc == Code.NONODE.intValue()) {
-                isExistFuture.complete(false);
-            } else {
-                isExistFuture.completeExceptionally(KeeperException.create(rc));
-            }
-        }, null);
+        pulsar.getLocalZkCache().getZooKeeper().exists(bundlePath, false,
+                pulsar.getLocalZkCache().getZooKeeperCallbackExecutor().decorateStatCallback(
+                        (rc, path, ctx, stat) -> {
+                            if (rc == Code.OK.intValue()) {
+                                isExistFuture.complete(true);
+                            } else if (rc == Code.NONODE.intValue()) {
+                                isExistFuture.complete(false);
+                            } else {
+                                isExistFuture.completeExceptionally(KeeperException.create(rc));
+                            }
+                        }), null);
         return isExistFuture;
     }
 
@@ -946,8 +949,10 @@ public class NamespaceService implements AutoCloseable {
 
         byte[] data = ObjectMapperFactory.getThreadLocal().writeValueAsBytes(local);
 
-        this.pulsar.getLocalZkCache().getZooKeeper()
-            .setData(path, data, Math.toIntExact(version), callback, null);
+        ZooKeeperCache localZkCache = this.pulsar.getLocalZkCache();
+        localZkCache.getZooKeeper()
+            .setData(path, data, Math.toIntExact(version),
+                    localZkCache.getZooKeeperCallbackExecutor().decorateStatCallback(callback), null);
 
         // invalidate namespace's local-policies
         this.pulsar.getLocalZkCacheService().policiesCache().invalidate(path);
