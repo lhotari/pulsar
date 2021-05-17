@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.Entry;
@@ -53,6 +54,30 @@ public abstract class AbstractBaseDispatcher implements Dispatcher {
     }
 
     /**
+     * Update Entries with the metadata of each entry.
+     *
+     * @param entries
+     * @return
+     */
+    protected int updateEntryWrapperWithMetadata(EntryWrapper[] entryWrappers, List<Entry> entries) {
+        int totalMessages = 0;
+        for (int i = 0, entriesSize = entries.size(); i < entriesSize; i++) {
+            Entry entry = entries.get(i);
+            if (entry == null) {
+                continue;
+            }
+
+            ByteBuf metadataAndPayload = entry.getDataBuffer();
+            MessageMetadata msgMetadata = Commands.peekMessageMetadata(metadataAndPayload, subscription.toString(), -1);
+            EntryWrapper entryWrapper = EntryWrapper.get(entry, msgMetadata);
+            entryWrappers[i] = entryWrapper;
+            int batchSize = msgMetadata.getNumMessagesInBatch();
+            totalMessages += batchSize;
+        }
+        return totalMessages;
+    }
+
+    /**
      * Filter messages that are being sent to a consumers.
      * <p>
      * Messages can be filtered out for multiple reasons:
@@ -73,8 +98,15 @@ public abstract class AbstractBaseDispatcher implements Dispatcher {
      *            an object where the total size in messages and bytes will be returned back to the caller
      */
     public void filterEntriesForConsumer(List<Entry> entries, EntryBatchSizes batchSizes,
-                                         SendMessageInfo sendMessageInfo, EntryBatchIndexesAcks indexesAcks,
-                                         ManagedCursor cursor, boolean isReplayRead) {
+            SendMessageInfo sendMessageInfo, EntryBatchIndexesAcks indexesAcks,
+            ManagedCursor cursor, boolean isReplayRead) {
+        filterEntriesForConsumer(Optional.empty(), entries, batchSizes, sendMessageInfo, indexesAcks, cursor,
+                isReplayRead);
+    }
+
+    public void filterEntriesForConsumer(Optional<EntryWrapper[]> entryWrapper, List<Entry> entries,
+            EntryBatchSizes batchSizes, SendMessageInfo sendMessageInfo, EntryBatchIndexesAcks indexesAcks,
+            ManagedCursor cursor, boolean isReplayRead) {
         int totalMessages = 0;
         long totalBytes = 0;
         int totalChunkedMessages = 0;
@@ -86,10 +118,13 @@ public abstract class AbstractBaseDispatcher implements Dispatcher {
             if (entry == null) {
                 continue;
             }
-
             ByteBuf metadataAndPayload = entry.getDataBuffer();
-
-            MessageMetadata msgMetadata = Commands.peekMessageMetadata(metadataAndPayload, subscription.toString(), -1);
+            MessageMetadata msgMetadata = entryWrapper.isPresent() && entryWrapper.get()[i] != null
+                    ? entryWrapper.get()[i].getMetadata()
+                    : null;
+            msgMetadata = msgMetadata == null
+                    ? Commands.peekMessageMetadata(metadataAndPayload, subscription.toString(), -1)
+                    : msgMetadata;
 
             try {
                 if (!isReplayRead && msgMetadata != null
@@ -158,10 +193,11 @@ public abstract class AbstractBaseDispatcher implements Dispatcher {
                 }
 
             } finally {
-                msgMetadata.recycle();
+                if (msgMetadata != null) {
+                    msgMetadata.recycle();
+                }
             }
         }
-
         sendMessageInfo.setTotalMessages(totalMessages);
         sendMessageInfo.setTotalBytes(totalBytes);
         sendMessageInfo.setTotalChunkedMessages(totalChunkedMessages);
