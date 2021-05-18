@@ -59,7 +59,10 @@ public class EntryWrapper {
 
     public void recycle() {
         entry = null;
-        metadata = null;
+        if (metadata != null) {
+            metadata.recycle();
+            metadata = null;
+        }
         handle.recycle(this);
     }
 }

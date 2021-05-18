@@ -122,9 +122,11 @@ public abstract class AbstractBaseDispatcher implements Dispatcher {
             MessageMetadata msgMetadata = entryWrapper.isPresent() && entryWrapper.get()[i] != null
                     ? entryWrapper.get()[i].getMetadata()
                     : null;
-            msgMetadata = msgMetadata == null
-                    ? Commands.peekMessageMetadata(metadataAndPayload, subscription.toString(), -1)
-                    : msgMetadata;
+            boolean recycleMetadata = false;
+            if (msgMetadata == null) {
+                msgMetadata = Commands.peekMessageMetadata(metadataAndPayload, subscription.toString(), -1);
+                recycleMetadata = true;
+            }
 
             try {
                 if (!isReplayRead && msgMetadata != null
@@ -193,7 +195,7 @@ public abstract class AbstractBaseDispatcher implements Dispatcher {
                 }
 
             } finally {
-                if (msgMetadata != null) {
+                if (recycleMetadata) {
                     msgMetadata.recycle();
                 }
             }
