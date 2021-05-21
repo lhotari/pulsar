@@ -28,6 +28,7 @@ import java.util.List;
 import javax.naming.AuthenticationException;
 import javax.net.ssl.SSLSession;
 
+import io.jsonwebtoken.JwtParser;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.utils.AuthTokenUtils;
@@ -70,6 +71,7 @@ public class AuthenticationProviderToken implements AuthenticationProvider {
     private SignatureAlgorithm publicKeyAlg;
     private String audienceClaim;
     private String audience;
+    private JwtParser parser;
 
     @Override
     public void close() throws IOException {
@@ -84,6 +86,8 @@ public class AuthenticationProviderToken implements AuthenticationProvider {
         this.roleClaim = getTokenRoleClaim(config);
         this.audienceClaim = getTokenAudienceClaim(config);
         this.audience = getTokenAudience(config);
+
+        this.parser = Jwts.parserBuilder().setSigningKey(this.validationKey).build();
 
         if (audienceClaim != null && audience == null ) {
             throw new IllegalArgumentException("Token Audience Claim [" + audienceClaim
@@ -142,7 +146,7 @@ public class AuthenticationProviderToken implements AuthenticationProvider {
     @SuppressWarnings("unchecked")
     private Jwt<?, Claims> authenticateToken(final String token) throws AuthenticationException {
         try {
-            Jwt<?, Claims> jwt = Jwts.parserBuilder().setSigningKey(validationKey).build().parseClaimsJws(token);
+            Jwt<?, Claims> jwt = parser.parseClaimsJws(token);
 
             if (audienceClaim != null) {
                 Object object = jwt.getBody().get(audienceClaim);
