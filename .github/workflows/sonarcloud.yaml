@@ -36,8 +36,10 @@ jobs:
             ${{ runner.os }}-m2-dependencies-core-modules-${{ hashFiles('**/pom.xml') }}
             ${{ runner.os }}-m2-dependencies-all-
             ${{ runner.os }}-m2-dependencies-core-modules-
-      - name: Build and analyze
+      - name: Build core-modules
+        run: mvn -B -ntp clean install -Pcore-modules,-main -DskipTests
+      - name: Run Sonar scanner for core-modules
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+        run: mvn -B -Pcore-modules,-main initialize org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
