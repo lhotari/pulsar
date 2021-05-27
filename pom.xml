@@ -87,6 +87,7 @@ flexible messaging model and an intuitive client API.</description>
     <excludedGroups>quarantine</excludedGroups>
 
     <sonar.projectKey>lhotari_pulsar</sonar.projectKey>
+    <sonar.moduleKey>${artifactId}</sonar.moduleKey>
     <sonar.organization>lhotari</sonar.organization>
     <sonar.host.url>https://sonarcloud.io</sonar.host.url>
 
