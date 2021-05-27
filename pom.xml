@@ -86,6 +86,10 @@ flexible messaging model and an intuitive client API.</description>
     <groups/>
     <excludedGroups>quarantine</excludedGroups>
 
+    <sonar.projectKey>lhotari_pulsar</sonar.projectKey>
+    <sonar.organization>lhotari</sonar.organization>
+    <sonar.host.url>https://sonarcloud.io</sonar.host.url>
+
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <redirectTestOutputToFile>true</redirectTestOutputToFile>
