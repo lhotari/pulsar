@@ -87,7 +87,7 @@ jobs:
         if: always()
         run: |
           set +e
-          find -path "*/surefire-reports/*.xml" -print0 |xargs -0 grep LEAK || { echo "Found LEAK reports!"; exit 1; }
+          find -path "*/surefire-reports/*.xml" -print0 |xargs -0 grep LEAK && { echo "Found LEAK reports!"; exit 1; }
           exit 0
 
       - name: package surefire artifacts
