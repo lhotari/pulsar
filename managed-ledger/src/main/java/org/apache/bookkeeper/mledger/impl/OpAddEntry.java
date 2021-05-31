@@ -223,29 +223,28 @@ public class OpAddEntry extends SafeRunnable implements AddCallback, CloseCallba
 
     @Override
     public void closeComplete(int rc, LedgerHandle lh, Object ctx) {
-        checkArgument(ledger.getId() == lh.getId(), "ledgerId %s doesn't match with acked ledgerId %s", ledger.getId(),
-                lh.getId());
+        try {
+            checkArgument(ledger.getId() == lh.getId(), "ledgerId %s doesn't match with acked ledgerId %s",
+                    ledger.getId(),
+                    lh.getId());
 
-        if (rc == BKException.Code.OK) {
-            log.debug("Successfully closed ledger {}", lh.getId());
-        } else {
-            log.warn("Error when closing ledger {}. Status={}", lh.getId(), BKException.getMessage(rc));
-        }
+            if (rc == BKException.Code.OK) {
+                log.debug("Successfully closed ledger {}", lh.getId());
+            } else {
+                log.warn("Error when closing ledger {}. Status={}", lh.getId(), BKException.getMessage(rc));
+            }
 
-        ml.ledgerClosed(lh);
-        updateLatency();
+            ml.ledgerClosed(lh);
+            updateLatency();
 
-        AddEntryCallback cb = callbackUpdater.getAndSet(this, null);
-        if (cb != null) {
-            try {
+            AddEntryCallback cb = callbackUpdater.getAndSet(this, null);
+            if (cb != null) {
                 cb.addComplete(PositionImpl.get(lh.getId(), entryId), data.asReadOnly(), ctx);
                 ml.notifyCursors();
                 ml.notifyWaitingEntryCallBacks();
-            } finally {
-                ReferenceCountUtil.release(data);
+                this.recycle();
             }
-            this.recycle();
-        } else {
+        } finally {
             ReferenceCountUtil.release(data);
         }
     }
