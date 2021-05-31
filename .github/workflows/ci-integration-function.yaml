@@ -107,7 +107,7 @@ jobs:
 
       - name: Upload container logs
         uses: actions/upload-artifact@v2
-        if: ${{ cancelled() || failure() }}
+        if: always()
         continue-on-error: true
         with:
           name: container-logs
@@ -115,7 +115,7 @@ jobs:
 
       - name: Upload surefire-reports
         uses: actions/upload-artifact@v2
-        if: ${{ cancelled() || failure() }}
+        if: always()
         continue-on-error: true
         with:
           name: surefire-reports
