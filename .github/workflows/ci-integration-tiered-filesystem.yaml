@@ -104,6 +104,13 @@ jobs:
         if: ${{ steps.check_changes.outputs.docs_only != 'true' }}
         run: ./build/run_integration_group.sh TIERED_FILESYSTEM
 
+      - name: Check for LEAK reports
+        if: always()
+        run: |
+          set +e
+          find -path "*/surefire-reports/*.xml" -or -path "*/tests/integration/target/container-logs/*" -type f -print0 |xargs -0 grep LEAK && { echo "Found LEAK reports!"; exit 1; }
+          exit 0
+
       - name: Upload container logs
         uses: actions/upload-artifact@v2
         if: always()
