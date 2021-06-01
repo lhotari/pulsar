@@ -39,8 +39,11 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
+import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
 
+import org.apache.bookkeeper.common.util.OrderedExecutor;
+import org.apache.bookkeeper.common.util.SafeRunnable;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.metadata.api.MetadataCache;
 import org.apache.pulsar.metadata.api.MetadataSerde;
@@ -59,7 +62,7 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
 
     private final CopyOnWriteArrayList<Consumer<Notification>> listeners = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<Consumer<SessionEvent>> sessionListeners = new CopyOnWriteArrayList<>();
-    private final ExecutorService executor;
+    private final OrderedExecutor executor;
     private final AsyncLoadingCache<String, List<String>> childrenCache;
     private final AsyncLoadingCache<String, Boolean> existsCache;
     private final CopyOnWriteArrayList<MetadataCacheImpl<?>> metadataCaches = new CopyOnWriteArrayList<>();
@@ -69,8 +72,9 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
     protected abstract CompletableFuture<Boolean> existsFromStore(String path);
 
     protected AbstractMetadataStore() {
-        this.executor = Executors
-                .newSingleThreadExecutor(new DefaultThreadFactory("metadata-store"));
+        this.executor = OrderedExecutor.newBuilder()
+                .numThreads(Math.min(4 * Runtime.getRuntime().availableProcessors(), 64))
+                .name("metadata-store[" + getClass().getSimpleName() + "]").build();
         registerListener(this);
 
         this.childrenCache = Caffeine.newBuilder()
@@ -78,13 +82,13 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
                 .buildAsync(new AsyncCacheLoader<String, List<String>>() {
                     @Override
                     public CompletableFuture<List<String>> asyncLoad(String key, Executor executor) {
-                        return getChildrenFromStore(key);
+                        return executeFutureInOrder(key, () -> getChildrenFromStore(key));
                     }
 
                     @Override
                     public CompletableFuture<List<String>> asyncReload(String key, List<String> oldValue,
                             Executor executor) {
-                        return getChildrenFromStore(key);
+                        return executeFutureInOrder(key, () -> getChildrenFromStore(key));
                     }
                 });
 
@@ -93,15 +97,38 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
                 .buildAsync(new AsyncCacheLoader<String, Boolean>() {
                     @Override
                     public CompletableFuture<Boolean> asyncLoad(String key, Executor executor) {
-                        return existsFromStore(key);
+                        return executeFutureInOrder(key, () -> existsFromStore(key));
                     }
 
                     @Override
                     public CompletableFuture<Boolean> asyncReload(String key, Boolean oldValue,
                             Executor executor) {
-                        return existsFromStore(key);
+                        return executeFutureInOrder(key, () -> existsFromStore(key));
                     }
                 });
+    }
+
+    protected <T> CompletableFuture<T> executeFutureInOrder(Object key, Supplier<CompletableFuture<T>> supplier) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        try {
+            executor.executeOrdered(key, () -> {
+                try {
+                    CompletableFuture<T> result = supplier.get();
+                    result.whenComplete((value, cause) -> {
+                        if (null == cause) {
+                            future.complete(value);
+                        } else {
+                            future.completeExceptionally(cause);
+                        }
+                    });
+                } catch (Exception e) {
+                    future.completeExceptionally(e);
+                }
+            });
+        } catch (Exception e) {
+            future.completeExceptionally(e);
+        }
+        return future;
     }
 
     @Override
@@ -141,22 +168,16 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
         listeners.add(listener);
     }
 
-    protected CompletableFuture<Void> receivedNotification(Notification notification) {
-        try {
-            return CompletableFuture.supplyAsync(() -> {
-                listeners.forEach(listener -> {
-                    try {
-                        listener.accept(notification);
-                    } catch (Throwable t) {
-                        log.error("Failed to process metadata store notification", t);
-                    }
-                });
-
-                return null;
-            }, executor);
-        } catch (RejectedExecutionException e) {
-            return FutureUtil.failedFuture(e);
-        }
+    protected void receivedNotification(Notification notification) {
+        executor.executeOrdered(notification.getPath(), SafeRunnable.safeRun(() -> {
+            listeners.forEach(listener -> {
+                try {
+                    listener.accept(notification);
+                } catch (Throwable t) {
+                    log.error("Failed to process metadata store notification", t);
+                }
+            });
+        }));
     }
 
     @Override
@@ -249,15 +270,8 @@ public abstract class AbstractMetadataStore implements MetadataStoreExtended, Co
         existsCache.synchronous().invalidateAll();
     }
 
-    /**
-     * Run the task in the executor thread and fail the future if the executor is shutting down
-     */
-    protected void execute(Runnable task, CompletableFuture<?> future) {
-        try {
-            executor.execute(task);
-        } catch (Throwable t) {
-            future.completeExceptionally(t);
-        }
+    public OrderedExecutor getExecutor() {
+        return executor;
     }
 
     protected static String parent(String path) {

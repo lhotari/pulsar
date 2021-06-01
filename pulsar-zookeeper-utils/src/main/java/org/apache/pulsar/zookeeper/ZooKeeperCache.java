@@ -19,11 +19,9 @@
 package org.apache.pulsar.zookeeper;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-
 import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.collect.Sets;
-
 import java.io.IOException;
 import java.util.AbstractMap.SimpleImmutableEntry;
 import java.util.Collections;
@@ -38,7 +36,6 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
-
 import org.apache.bookkeeper.common.util.OrderedExecutor;
 import org.apache.bookkeeper.util.SafeRunnable;
 import org.apache.commons.lang3.tuple.ImmutablePair;
@@ -89,6 +86,7 @@ public abstract class ZooKeeperCache implements Watcher {
     protected final AsyncLoadingCache<String, Set<String>> childrenCache;
     protected final AsyncLoadingCache<String, Boolean> existsCache;
     private final OrderedExecutor executor;
+    private final ZooKeeperCallbackExecutor zooKeeperCallbackExecutor;
     private final OrderedExecutor backgroundExecutor = OrderedExecutor.newBuilder().name("zk-cache-background").numThreads(2).build();
     private boolean shouldShutdownExecutor;
     private final int zkOperationTimeoutSeconds;
@@ -100,12 +98,13 @@ public abstract class ZooKeeperCache implements Watcher {
     public ZooKeeperCache(String cacheName, ZooKeeper zkSession, int zkOperationTimeoutSeconds, OrderedExecutor executor) {
         this(cacheName, zkSession, zkOperationTimeoutSeconds, executor, DEFAULT_CACHE_EXPIRY_SECONDS);
     }
-    
+
     public ZooKeeperCache(String cacheName, ZooKeeper zkSession, int zkOperationTimeoutSeconds,
             OrderedExecutor executor, int cacheExpirySeconds) {
         checkNotNull(executor);
         this.zkOperationTimeoutSeconds = zkOperationTimeoutSeconds;
         this.executor = executor;
+        this.zooKeeperCallbackExecutor = new ZooKeeperCallbackExecutor(executor);
         this.zkSession.set(zkSession);
         this.shouldShutdownExecutor = false;
         this.cacheExpirySeconds = cacheExpirySeconds;
@@ -131,12 +130,17 @@ public abstract class ZooKeeperCache implements Watcher {
 
     public ZooKeeperCache(String cacheName, ZooKeeper zkSession, int zkOperationTimeoutSeconds) {
         this(cacheName, zkSession, zkOperationTimeoutSeconds,
-                OrderedExecutor.newBuilder().name("zk-cache-callback-executor").build());
+                OrderedExecutor.newBuilder()
+                        .name("zk-cache-callback-executor[" + cacheName + "]").build());
         this.shouldShutdownExecutor = true;
     }
 
     public ZooKeeper getZooKeeper() {
         return this.zkSession.get();
+    }
+
+    public ZooKeeperCallbackExecutor getZooKeeperCallbackExecutor() {
+        return zooKeeperCallbackExecutor;
     }
 
     public <T> void process(WatchedEvent event, final CacheUpdater<T> updater) {
@@ -244,7 +248,7 @@ public abstract class ZooKeeperCache implements Watcher {
             }
 
             CompletableFuture<Boolean> future = new CompletableFuture<>();
-            zk.exists(path, watcher, (rc, path1, ctx, stat) -> {
+            zk.exists(path, watcher, zooKeeperCallbackExecutor.decorateStatCallback((rc, path1, ctx, stat) -> {
                 if (rc == Code.OK.intValue()) {
                     future.complete(true);
                 } else if (rc == Code.NONODE.intValue()) {
@@ -252,7 +256,7 @@ public abstract class ZooKeeperCache implements Watcher {
                 } else {
                     future.completeExceptionally(KeeperException.create(rc));
                 }
-            }, null);
+            }), null);
 
             return future;
         });
@@ -351,30 +355,30 @@ public abstract class ZooKeeperCache implements Watcher {
 
         // refresh zk-cache entry in background if it's already expired
         checkAndRefreshExpiredEntry(path, deserializer);
-        CompletableFuture<Optional<Entry<T,Stat>>> future = new CompletableFuture<>();
+        CompletableFuture<Optional<Entry<T, Stat>>> future = new CompletableFuture<>();
         dataCache.get(path, (p, executor) -> {
             // Return a future for the z-node to be fetched from ZK
             CompletableFuture<Pair<Entry<Object, Stat>, Long>> zkFuture = new CompletableFuture<>();
 
             // Broker doesn't restart on global-zk session lost: so handling unexpected exception
             try {
-                this.zkSession.get().getData(path, watcher, (rc, path1, ctx, content, stat) -> {
+                this.zkSession.get().getData(path, watcher, zooKeeperCallbackExecutor.decorateDataCallback(
+                        (rc, path1, ctx, content, stat) -> {
                     if (rc == Code.OK.intValue()) {
                         try {
                             T obj = deserializer.deserialize(path, content);
-                            // avoid using the zk-client thread to process the result
-                            executor.execute(() -> zkFuture.complete(ImmutablePair
-                                    .of(new SimpleImmutableEntry<Object, Stat>(obj, stat), System.nanoTime())));
+                            zkFuture.complete(ImmutablePair
+                                    .of(new SimpleImmutableEntry<Object, Stat>(obj, stat), System.nanoTime()));
                         } catch (Exception e) {
-                            executor.execute(() -> zkFuture.completeExceptionally(e));
+                            zkFuture.completeExceptionally(e);
                         }
                     } else if (rc == Code.NONODE.intValue()) {
                         // Return null values for missing z-nodes, as this is not "exceptional" condition
-                        executor.execute(() -> zkFuture.complete(null));
+                        zkFuture.complete(null);
                     } else {
-                        executor.execute(() -> zkFuture.completeExceptionally(KeeperException.create(rc)));
+                        zkFuture.completeExceptionally(KeeperException.create(rc));
                     }
-                }, null);
+                }), null);
             } catch (Exception e) {
                 LOG.warn("Failed to access zkSession for {} {}", path, e.getMessage(), e);
                 zkFuture.completeExceptionally(e);
@@ -401,7 +405,8 @@ public abstract class ZooKeeperCache implements Watcher {
             Pair<Entry<Object, Stat>, Long> entryPair = result.getNow(null);
             if (entryPair != null && entryPair.getRight() != null) {
                 if ((System.nanoTime() - entryPair.getRight()) > TimeUnit.SECONDS.toNanos(cacheExpirySeconds)) {
-                    this.zkSession.get().getData(path, this, (rc, path1, ctx, content, stat) -> {
+                    this.zkSession.get().getData(path, this,
+                            zooKeeperCallbackExecutor.decorateDataCallback((rc, path1, ctx, content, stat) -> {
                         if (rc != Code.OK.intValue()) {
                             log.warn("Failed to refresh zookeeper-cache for {} due to {}", path, rc);
                             return;
@@ -413,7 +418,7 @@ public abstract class ZooKeeperCache implements Watcher {
                         } catch (Exception e) {
                             log.warn("Failed to refresh zookeeper-cache for {}", path, e);
                         }
-                    }, null);
+                    }), null);
                 }
             }
         }
@@ -458,7 +463,8 @@ public abstract class ZooKeeperCache implements Watcher {
                     return;
                 }
 
-                zk.getChildren(path, watcher, (rc, path1, ctx, children) -> {
+                zk.getChildren(path, watcher, zooKeeperCallbackExecutor
+                        .decorateChildrenCallback((rc, path1, ctx, children) -> {
                     if (rc == Code.OK.intValue()) {
                         future.complete(Sets.newTreeSet(children));
                     } else if (rc == Code.NONODE.intValue()) {
@@ -485,8 +491,8 @@ public abstract class ZooKeeperCache implements Watcher {
                     } else {
                         future.completeExceptionally(KeeperException.create(rc));
                     }
-                }, null);
-            }));
+                }), null);
+            }, future::completeExceptionally));
 
             return future;
         });
