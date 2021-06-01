@@ -131,7 +131,8 @@ public class OwnershipCache {
 
             CompletableFuture<OwnedBundle> future = new CompletableFuture<>();
             ZkUtils.asyncCreateFullPathOptimistic(localZkCache.getZooKeeper(), namespaceBundleZNode, znodeContent,
-                    Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL, (rc, path, ctx, name) -> {
+                    Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL,
+                    localZkCache.getZooKeeperCallbackExecutor().decorateStringCallback((rc, path, ctx, name) -> {
                         if (rc == KeeperException.Code.OK.intValue()) {
                             if (LOG.isDebugEnabled()) {
                                 LOG.debug("Successfully acquired zk lock on {}", namespaceBundleZNode);
@@ -143,7 +144,7 @@ public class OwnershipCache {
                             // Failed to acquire lock
                             future.completeExceptionally(KeeperException.create(rc));
                         }
-                    }, null);
+                    }), null);
 
             return future;
         }
@@ -306,20 +307,21 @@ public class OwnershipCache {
     public CompletableFuture<Void> removeOwnership(NamespaceBundle bundle) {
         CompletableFuture<Void> result = new CompletableFuture<>();
         String key = ServiceUnitUtils.path(bundle);
-        localZkCache.getZooKeeper().delete(key, -1, (rc, path, ctx) -> {
-            // Invalidate cache even in error since this operation may succeed in server side.
-            ownedBundlesCache.synchronous().invalidate(key);
-            ownershipReadOnlyCache.invalidate(key);
-            namespaceService.onNamespaceBundleUnload(bundle);
-            if (rc == KeeperException.Code.OK.intValue() || rc == KeeperException.Code.NONODE.intValue()) {
-                LOG.info("[{}] Removed zk lock for service unit: {}", key, KeeperException.Code.get(rc));
-                result.complete(null);
-            } else {
-                LOG.warn("[{}] Failed to delete the namespace ephemeral node. key={}", key,
-                        KeeperException.Code.get(rc));
-                result.completeExceptionally(KeeperException.create(rc));
-            }
-        }, null);
+        localZkCache.getZooKeeper().delete(key, -1,
+                localZkCache.getZooKeeperCallbackExecutor().decorateVoidCallback((rc, path, ctx) -> {
+                    // Invalidate cache even in error since this operation may succeed in server side.
+                    ownedBundlesCache.synchronous().invalidate(key);
+                    ownershipReadOnlyCache.invalidate(key);
+                    namespaceService.onNamespaceBundleUnload(bundle);
+                    if (rc == KeeperException.Code.OK.intValue() || rc == KeeperException.Code.NONODE.intValue()) {
+                        LOG.info("[{}] Removed zk lock for service unit: {}", key, KeeperException.Code.get(rc));
+                        result.complete(null);
+                    } else {
+                        LOG.warn("[{}] Failed to delete the namespace ephemeral node. key={}", key,
+                                KeeperException.Code.get(rc));
+                        result.completeExceptionally(KeeperException.create(rc));
+                    }
+                }), null);
         return result;
     }
 
@@ -397,14 +399,16 @@ public class OwnershipCache {
                         return;
                     }
 
-                    localZkCache.getZooKeeper().setData(path, value, -1, (rc, path1, ctx, stat) -> {
+                    localZkCache.getZooKeeper().setData(path, value, -1,
+                            localZkCache.getZooKeeperCallbackExecutor()
+                                    .decorateStatCallback((rc, path1, ctx, stat) -> {
                         if (rc == KeeperException.Code.OK.intValue()) {
                             ownershipReadOnlyCache.invalidate(path1);
                             future.complete(null);
                         } else {
                             future.completeExceptionally(KeeperException.create(rc));
                         }
-                    }, null);
+                    }), null);
                 })
                 .exceptionally(ex -> {
                     LOG.warn("Failed to update state on namespace bundle {}: {}", bundle, ex.getMessage(), ex);
