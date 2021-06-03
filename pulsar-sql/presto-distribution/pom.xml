@@ -159,7 +159,6 @@
             <type>tar.gz</type>
             <scope>provided</scope>
         </dependency>
-
         <dependency>
             <groupId>org.objenesis</groupId>
             <artifactId>objenesis</artifactId>
@@ -358,4 +357,25 @@
             </extension>
         </extensions>
     </build>
+
+  <profiles>
+    <profile>
+      <id>skipBuildDistributionDisabled</id>
+      <activation>
+        <property>
+          <name>skipBuildDistribution</name>
+          <value>false</value>
+        </property>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>${project.groupId}</groupId>
+          <artifactId>pulsar-presto-connector</artifactId>
+          <version>${project.version}</version>
+          <type>tar.gz</type>
+          <scope>provided</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+  </profiles>
 </project>
