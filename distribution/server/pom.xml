@@ -197,6 +197,7 @@
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-functions-runtime-all</artifactId>
       <version>${project.version}</version>
+      <type>pom</type>
       <!-- make sure the api examples are compiled before assembly -->
       <scope>provided</scope>
       <exclusions>

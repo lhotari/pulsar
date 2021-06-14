@@ -45,6 +45,7 @@
 
   <artifactId>pulsar-functions-runtime-all</artifactId>
   <name>Pulsar Functions :: Runtime All</name>
+  <packaging>pom</packaging>
 
   <dependencies>
     <dependency>
