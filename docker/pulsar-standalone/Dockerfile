@@ -24,7 +24,7 @@ FROM apachepulsar/pulsar-all:latest as pulsar
 FROM apachepulsar/pulsar-dashboard:latest as dashboard
 
 # Restart from
-FROM openjdk:11-jdk
+FROM adoptopenjdk:11-jdk
 
 # Help to make these directories persist between container restarts
 VOLUME  ["/pulsar/conf", "/pulsar/data"]
@@ -32,11 +32,10 @@ VOLUME  ["/pulsar/conf", "/pulsar/data"]
 # Note that the libpq-dev package is needed here in order to install
 # the required python psycopg2 package (for postgresql) later
 RUN apt-get update \
-    && apt-get -y install python3.7 python3.7-dev python3-pip postgresql sudo nginx supervisor libpq-dev
+    && apt-get -y install python3 python3-dev python3-pip postgresql sudo nginx supervisor libpq-dev
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 10
 RUN update-ca-certificates
-RUN ln -s /usr/bin/pip3 /usr/bin/pip
 
 # Postgres configuration
 COPY --from=dashboard /etc/postgresql/11/main/postgresql.conf /etc/postgresql/11/main/postgresql.conf
@@ -76,7 +75,7 @@ RUN pip install -r /pulsar/django/requirements.txt
 COPY --from=dashboard /pulsar/init-postgres.sh /pulsar/django/init-postgres.sh
 RUN mkdir /data
 RUN /pulsar/django/init-postgres.sh
-RUN sudo -u postgres /etc/init.d/postgresql stop 
+RUN sudo -u postgres /etc/init.d/postgresql stop
 # Add postgresql to supervisord. Redirect logs to stdout
 RUN echo "\n[program:postgresql]\n\
 command = /etc/init.d/postgresql start\n\
