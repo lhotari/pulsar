@@ -2300,6 +2300,16 @@ flexible messaging model and an intuitive client API.</description>
       </releases>
     </repository>
     <repository>
+      <id>ossrh-snap</id>
+      <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+      <snapshots>
+        <enabled>true</enabled>
+      </snapshots>
+      <releases>
+        <enabled>false</enabled>
+      </releases>
+    </repository>
+    <repository>
       <id>datastax-snapshots-local</id>
       <url>https://repo.sjc.dsinternal.org/artifactory/datastax-snapshots-local</url>
       <snapshots>
