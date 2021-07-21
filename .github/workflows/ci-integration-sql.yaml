@@ -121,3 +121,7 @@ jobs:
         with:
           name: surefire-reports
           path: tests/integration/target/surefire-reports
+
+      - name: Setup upterm ssh session
+        uses: lhotari/action-upterm@main
+        if: always()
