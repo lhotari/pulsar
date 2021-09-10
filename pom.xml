@@ -2150,7 +2150,7 @@ flexible messaging model and an intuitive client API.</description>
       <properties>
         <!-- pass the additional properties to -Xplugin:ErrorProne argument defined in errorprone profile -->
         <!-- change configuration of slf4j checks to be more permissive -->
-        <errorprone.arguments.jdk11>-Xep:Slf4jDoNotLogMessageOfExceptionExplicitly:WARN -Xep:Slf4jSignOnlyFormat:WARN -Xep:Slf4jFormatShouldBeConst:WARN -Xep:Slf4jLoggerShouldBePrivate:WARN -Xep:Slf4jLoggerShouldBeNonStatic:OFF</errorprone.arguments.jdk11>
+        <errorprone.arguments.jdk11>-Xep:Slf4jDoNotLogMessageOfExceptionExplicitly:WARN -Xep:Slf4jSignOnlyFormat:WARN -Xep:Slf4jFormatShouldBeConst:WARN -Xep:Slf4jLoggerShouldBePrivate:WARN -Xep:Slf4jLoggerShouldBeNonStatic:OFF -Xep:Slf4jPlaceholderMismatch:WARN</errorprone.arguments.jdk11>
       </properties>
       <build>
         <plugins>
