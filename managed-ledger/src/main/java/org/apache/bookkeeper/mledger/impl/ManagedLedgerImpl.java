@@ -713,7 +713,6 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     }
 
     private synchronized void internalAsyncAddEntry(OpAddEntry addOperation) {
-        pendingAddEntries.add(addOperation);
         final State state = STATE_UPDATER.get(this);
         if (state == State.Fenced) {
             addOperation.failed(new ManagedLedgerFencedException());
@@ -725,10 +724,10 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             addOperation.failed(new ManagedLedgerAlreadyClosedException("Managed ledger was already closed"));
             return;
         } else if (state == State.WriteFailed) {
-            pendingAddEntries.remove(addOperation);
             addOperation.failed(new ManagedLedgerAlreadyClosedException("Waiting to recover from failure"));
             return;
         }
+        pendingAddEntries.add(addOperation);
 
         if (state == State.ClosingLedger || state == State.CreatingLedger) {
             // We don't have a ready ledger to write into
