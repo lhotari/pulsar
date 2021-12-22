@@ -45,7 +45,6 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.SystemUtils;
 import org.apache.pulsar.broker.BrokerData;
 import org.apache.pulsar.broker.BundleData;
 import org.apache.pulsar.broker.PulsarServerException;
@@ -57,6 +56,7 @@ import org.apache.pulsar.broker.TimeAverageMessageData;
 import org.apache.pulsar.broker.loadbalance.BrokerFilter;
 import org.apache.pulsar.broker.loadbalance.BrokerFilterException;
 import org.apache.pulsar.broker.loadbalance.BrokerHostUsage;
+import org.apache.pulsar.broker.loadbalance.BrokerHostUsageFactory;
 import org.apache.pulsar.broker.loadbalance.BundleSplitStrategy;
 import org.apache.pulsar.broker.loadbalance.LoadData;
 import org.apache.pulsar.broker.loadbalance.LoadManager;
@@ -242,11 +242,7 @@ public class ModularLoadManagerImpl implements ModularLoadManager, Consumer<Noti
         timeAverageBrokerDataCache = pulsar.getLocalMetadataStore().getMetadataCache(TimeAverageBrokerData.class);
         pulsar.getLocalMetadataStore().registerListener(this);
 
-        if (SystemUtils.IS_OS_LINUX) {
-            brokerHostUsage = new LinuxBrokerHostUsageImpl(pulsar);
-        } else {
-            brokerHostUsage = new GenericBrokerHostUsageImpl(pulsar);
-        }
+        brokerHostUsage = BrokerHostUsageFactory.createInstance(pulsar);
 
         bundleSplitStrategy = new BundleSplitterTask();
 

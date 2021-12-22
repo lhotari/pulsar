@@ -1619,6 +1619,13 @@ public class ServiceConfiguration implements PulsarConfiguration {
         doc = "maximum interval to update load report"
     )
     private int loadBalancerReportUpdateMaxIntervalMinutes = 15;
+
+    @FieldContext(
+            category = CATEGORY_LOAD_BALANCER,
+            doc = "load balance host usage factory"
+    )
+    private String loadBalancerHostUsageFactory = "org.apache.pulsar.broker.loadbalance.impl.DefaultBrokerHostUsageFactory";
+
     @FieldContext(
         category = CATEGORY_LOAD_BALANCER,
         doc = "Frequency of report to collect, in minutes"

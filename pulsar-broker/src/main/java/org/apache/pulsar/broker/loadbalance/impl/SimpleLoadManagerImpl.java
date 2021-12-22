@@ -46,10 +46,10 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import org.apache.commons.lang3.SystemUtils;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.loadbalance.BrokerHostUsage;
+import org.apache.pulsar.broker.loadbalance.BrokerHostUsageFactory;
 import org.apache.pulsar.broker.loadbalance.LoadManager;
 import org.apache.pulsar.broker.loadbalance.PlacementStrategy;
 import org.apache.pulsar.broker.loadbalance.ResourceUnit;
@@ -216,11 +216,7 @@ public class SimpleLoadManagerImpl implements LoadManager, Consumer<Notification
 
     @Override
     public void initialize(final PulsarService pulsar) {
-        if (SystemUtils.IS_OS_LINUX) {
-            brokerHostUsage = new LinuxBrokerHostUsageImpl(pulsar);
-        } else {
-            brokerHostUsage = new GenericBrokerHostUsageImpl(pulsar);
-        }
+        brokerHostUsage = BrokerHostUsageFactory.createInstance(pulsar);
         this.policies = new SimpleResourceAllocationPolicies(pulsar);
         lastLoadReport = new LoadReport(pulsar.getSafeWebServiceAddress(), pulsar.getWebServiceAddressTls(),
                 pulsar.getSafeBrokerServiceUrl(), pulsar.getBrokerServiceUrlTls());
