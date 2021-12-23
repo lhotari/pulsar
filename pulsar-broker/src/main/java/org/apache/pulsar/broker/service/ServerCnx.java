@@ -1238,31 +1238,41 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                                         userProvidedProducerName, producerAccessMode, topicEpoch);
 
                                 topic.addProducer(producer, producerQueuedFuture).thenAccept(newTopicEpoch -> {
-                                    if (isActive()) {
-                                        if (producerFuture.complete(producer)) {
-                                            log.info("[{}] Created new producer: {}", remoteAddress, producer);
-                                            commandSender.sendProducerSuccessResponse(requestId, producerName,
-                                                    producer.getLastSequenceId(), producer.getSchemaVersion(),
-                                                    newTopicEpoch, true /* producer is ready now */);
-                                            return;
-                                        } else {
-                                            // The producer's future was completed before by
-                                            // a close command
+                                    boolean removeProducer = true;
+                                    try {
+                                        if (isActive()) {
+                                            if (producerFuture.complete(producer)) {
+                                                removeProducer = false;
+                                                log.info("[{}] Created new producer: {}", remoteAddress, producer);
+                                                commandSender.sendProducerSuccessResponse(requestId, producerName,
+                                                        producer.getLastSequenceId(), producer.getSchemaVersion(),
+                                                        newTopicEpoch, true /* producer is ready now */);
+                                                return;
+                                            } else {
+                                                // The producer's future was completed before by
+                                                // a close command
+                                                producer.closeNow(true);
+                                                log.info("[{}] Cleared producer created after"
+                                                                + " timeout on client side {}",
+                                                        remoteAddress, producer);
+                                            }
+                                        } else if (!producerFuture.isDone()
+                                                && producerFuture
+                                                .completeExceptionally(
+                                                        new IllegalStateException(
+                                                                "Producer created after connection was closed")
+                                                )
+                                        ) {
                                             producer.closeNow(true);
-                                            log.info("[{}] Cleared producer created after"
-                                                            + " timeout on client side {}",
+                                            log.info(
+                                                    "[{}] Cleared producer created after connection was closed: {}",
                                                     remoteAddress, producer);
                                         }
-                                        } else {
-                                            producer.closeNow(true);
-                                        log.info("[{}] Cleared producer created after connection was closed: {}",
-                                                remoteAddress, producer);
-                                        producerFuture.completeExceptionally(
-                                                new IllegalStateException(
-                                                        "Producer created after connection was closed"));
+                                    } finally {
+                                        if (removeProducer) {
+                                            producers.remove(producerId, producerFuture);
                                         }
-
-                                        producers.remove(producerId, producerFuture);
+                                    }
                                 }).exceptionally(ex -> {
                                     log.error("[{}] Failed to add producer to topic {}: producerId={}, {}",
                                               remoteAddress, topicName, producerId, ex.getMessage());
@@ -1272,6 +1282,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                                         commandSender.sendErrorResponse(requestId,
                                                 BrokerServiceException.getClientErrorCode(ex), ex.getMessage());
                                     }
+                                    producers.remove(producerId, producerFuture);
                                     return null;
                                 });
 
@@ -2185,7 +2196,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
 
     @Override
     public boolean isActive() {
-        return isActive;
+        return isActive && ctx.channel().isActive();
     }
 
     @Override
