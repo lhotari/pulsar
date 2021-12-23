@@ -398,11 +398,13 @@ public abstract class AbstractTopic implements Topic {
 
                         future.complete(producerEpoch);
                     } catch (Throwable e) {
+                        removeProducer(producer);
                         future.completeExceptionally(e);
                     } finally {
                         lock.writeLock().unlock();
                     }
                 }).exceptionally(ex -> {
+                    removeProducer(producer);
                     future.completeExceptionally(ex);
                     return null;
                 });

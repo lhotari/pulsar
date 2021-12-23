@@ -1316,12 +1316,15 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                             // If client timed out, the future would have been completed
                             // by subsequent close. Send error back to
                             // client, only if not completed already.
+                            producers.remove(producerId, producerFuture);
                             if (producerFuture.completeExceptionally(exception)) {
                                 commandSender.sendErrorResponse(requestId,
                                         BrokerServiceException.getClientErrorCode(cause), cause.getMessage());
+                            } else {
+                                producerFuture.whenComplete((producer, t) -> {
+                                    producer.closeNow(true);
+                                });
                             }
-                            producers.remove(producerId, producerFuture);
-
                             return null;
                         });
                     } else {
