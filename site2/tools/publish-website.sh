@@ -45,7 +45,7 @@ PULSAR_SITE_TMP=/tmp/pulsar-site
   cp -r $GENERATED_SITE_DIR/content/* $PULSAR_SITE_TMP/content
 
   git add -A .
-  git diff-index --quiet HEAD || (git commit -m "Updated site at revision $REVISION" && git push -q origin HEAD:asf-site)
+  git diff-index --quiet HEAD || (git commit --amend -m "Updated site at revision $REVISION" && git push -f -q origin HEAD:asf-site)
 
   rm -rf $PULSAR_SITE_TMP
 )
