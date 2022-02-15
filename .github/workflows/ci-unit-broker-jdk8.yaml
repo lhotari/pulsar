@@ -79,6 +79,16 @@ jobs:
         if: ${{ steps.check_changes.outputs.docs_only != 'true' }}
         run: ./build/run_unit_group.sh BROKER_JDK8
 
+      - name: find codecov files
+        id: find_codecov_files
+        run: echo "::set-output name=coveragefiles::$(find . -path '*/target/jacoco/jacoco.xml' -printf "%p," | sed 's/,$//')"
+
+      - uses: codecov/codecov-action@v2
+        with:
+          files: ${{ steps.find_codecov_files.outputs.coveragefiles }}
+          flags: unittests
+          verbose: true
+
       - name: print JVM thread dumps when cancelled
         if: cancelled()
         run: ./build/pulsar_ci_tool.sh print_thread_dumps
