@@ -1988,7 +1988,7 @@ flexible messaging model and an intuitive client API.</description>
             <reportSets>
               <reportSet>
                 <reports>
-                  <report>jacoco</report>
+                  <report>report</report>
                 </reports>
               </reportSet>
             </reportSets>
