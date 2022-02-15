@@ -73,7 +73,7 @@ jobs:
 
       - name: build modules
         if: ${{ steps.check_changes.outputs.docs_only != 'true' }}
-        run: mvn -B -ntp -q install -Pcore-modules,-main -DskipTests
+        run: mvn -B -ntp -q install -Pcore-modules,-main,coverage -DskipTests
 
       - name: run unit test 'BROKER_CLIENT_API'
         if: ${{ steps.check_changes.outputs.docs_only != 'true' }}

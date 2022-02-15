@@ -30,7 +30,7 @@ echo_and_restore_trace() {
 }
 alias echo='{ [[ $- =~ .*x.* ]] && trace_enabled=1 || trace_enabled=0; set +x; } 2> /dev/null; echo_and_restore_trace'
 
-MVN_COMMAND='mvn -B -ntp'
+MVN_COMMAND='mvn -B -ntp -Pmain,coverage'
 MVN_COMMAND_WITH_RETRY="build/retry.sh ${MVN_COMMAND}"
 MVN_TEST_COMMAND="${MVN_COMMAND_WITH_RETRY} test"
 
@@ -112,7 +112,7 @@ function proxy() {
 }
 
 function other() {
-  $MVN_COMMAND_WITH_RETRY clean install -PbrokerSkipTest \
+  $MVN_COMMAND_WITH_RETRY clean install -PbrokerSkipTest,coverage \
                                      -Dexclude='org/apache/pulsar/proxy/**/*.java,
                                                 **/ManagedLedgerTest.java,
                                                 **/TestPulsarKeyValueSchemaHandler.java,
