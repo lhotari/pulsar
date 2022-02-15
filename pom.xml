@@ -1941,6 +1941,12 @@ flexible messaging model and an intuitive client API.</description>
             <artifactId>jacoco-maven-plugin</artifactId>
             <version>${jacoco-maven-plugin.version}</version>
             <configuration>
+              <!-- collect coverage only for Pulsar classes -->
+              <includes>
+                <include>org.apache.pulsar.*</include>
+                <!-- Pulsar's Managed Ledger uses this package name -->
+                <include>org.apache.bookkeeper.mledger.*</include>
+              </includes>
               <propertyName>jacoco.agent.argument</propertyName>
             </configuration>
             <executions>
