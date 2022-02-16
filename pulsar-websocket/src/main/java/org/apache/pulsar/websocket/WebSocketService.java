@@ -59,9 +59,7 @@ public class WebSocketService implements Closeable {
     AuthorizationService authorizationService;
     PulsarClient pulsarClient;
 
-    private final ScheduledExecutorService executor = Executors
-            .newScheduledThreadPool(WebSocketProxyConfiguration.WEBSOCKET_SERVICE_THREADS,
-                    new DefaultThreadFactory("pulsar-websocket"));
+    private final ScheduledExecutorService executor;
     private final OrderedScheduler orderedExecutor = OrderedScheduler.newSchedulerBuilder()
             .numThreads(WebSocketProxyConfiguration.GLOBAL_ZK_THREADS).name("pulsar-websocket-ordered").build();
     private PulsarResources pulsarResources;
@@ -80,6 +78,9 @@ public class WebSocketService implements Closeable {
 
     public WebSocketService(ClusterData localCluster, ServiceConfiguration config) {
         this.config = config;
+        this.executor = Executors
+                .newScheduledThreadPool(config.getWebSocketNumServiceThreads(),
+                        new DefaultThreadFactory("pulsar-websocket"));
         this.localCluster = localCluster;
         this.topicProducerMap =
                 ConcurrentOpenHashMap.<String,
