@@ -20,18 +20,26 @@ package org.apache.bookkeeper.mledger.impl;
 
 import io.netty.util.Recycler;
 import io.netty.util.Recycler.Handle;
+import io.netty.util.concurrent.FastThreadLocal;
 import org.apache.bookkeeper.mledger.Position;
 
 public class PositionImplRecyclable extends PositionImpl implements Position {
 
     private final Handle<PositionImplRecyclable> recyclerHandle;
 
-    private static final Recycler<PositionImplRecyclable> RECYCLER = new Recycler<PositionImplRecyclable>() {
-        @Override
-        protected PositionImplRecyclable newObject(Recycler.Handle<PositionImplRecyclable> recyclerHandle) {
-            return new PositionImplRecyclable(recyclerHandle);
-        }
-    };
+    private static final FastThreadLocal<Recycler<PositionImplRecyclable>> RECYCLER =
+            new FastThreadLocal<Recycler<PositionImplRecyclable>>() {
+                @Override
+                protected Recycler<PositionImplRecyclable> initialValue() {
+                    return new Recycler<PositionImplRecyclable>() {
+                        @Override
+                        protected PositionImplRecyclable newObject(
+                                Recycler.Handle<PositionImplRecyclable> recyclerHandle) {
+                            return new PositionImplRecyclable(recyclerHandle);
+                        }
+                    };
+                }
+            };
 
     private PositionImplRecyclable(Handle<PositionImplRecyclable> recyclerHandle) {
         super(PositionImpl.EARLIEST);
@@ -39,7 +47,7 @@ public class PositionImplRecyclable extends PositionImpl implements Position {
     }
 
     public static PositionImplRecyclable create() {
-        return RECYCLER.get();
+        return RECYCLER.get().get();
     }
 
     public void recycle() {
