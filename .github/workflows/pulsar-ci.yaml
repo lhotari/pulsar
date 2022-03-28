@@ -472,14 +472,7 @@ jobs:
     timeout-minutes: 60
     needs: [
       'changed_files_job',
-      'CI - Integration - Backwards Compatibility',
-      'CI - Integration - Cli',
-      'CI - Integration - Function',
-      'CI - Integration - Messaging',
-      'CI - Integration - Schema',
-      'CI - Integration - Shade',
-      'CI - Integration - Standalone',
-      'CI - Integration - Transaction'
+      'integration-tests'
     ]
     if: ${{ needs.changed_files_job.outputs.docs_only != 'true' }}
     steps:
@@ -718,13 +711,7 @@ jobs:
     timeout-minutes: 60
     needs: [
       'changed_files_job',
-      'CI - System - Tiered FileSystem',
-      'CI - System - Tiered JCloud',
-      'CI - System - Pulsar Connectors - Thread',
-      'CI - System - Pulsar Connectors - Process',
-      'CI - System - Pulsar IO',
-      'CI - System - Pulsar IO - Oracle',
-      'CI - System - Sql'
+      'system-tests'
     ]
     if: ${{ needs.changed_files_job.outputs.docs_only != 'true' }}
     steps:
@@ -747,30 +734,9 @@ jobs:
     timeout-minutes: 60
     needs: [
       'changed_files_job',
-      'CI - Unit - Other',
-      'CI - Unit - Brokers - Broker Group 1',
-      'CI - Unit - Brokers - Broker Group 2',
-      'CI - Unit - Brokers - Broker Group 3',
-      'CI - Unit - Brokers - JDK 8',
-      'CI - Unit - Brokers - Client Api',
-      'CI - Unit - Brokers - Client Impl',
-      'CI - Unit - Brokers - Flaky',
-      'CI - Unit - Proxy',
-      'CI - Integration - Backwards Compatibility',
-      'CI - Integration - Cli',
-      'CI - Integration - Function',
-      'CI - Integration - Messaging',
-      'CI - Integration - Schema',
-      'CI - Integration - Shade',
-      'CI - Integration - Standalone',
-      'CI - Integration - Transaction',
-      'CI - System - Tiered FileSystem',
-      'CI - System - Tiered JCloud',
-      'CI - System - Pulsar Connectors - Thread',
-      'CI - System - Pulsar Connectors - Process',
-      'CI - System - Pulsar IO',
-      'CI - System - Pulsar IO - Oracle',
-      'CI - System - Sql'
+      'unit-tests',
+      'integration-tests',
+      'system-tests'
     ]
     if: ${{ needs.changed_files_job.outputs.docs_only != 'true' }}
     steps:
