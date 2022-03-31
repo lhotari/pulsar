@@ -154,6 +154,7 @@ jobs:
         uses: ./.github/actions/ssh-access
         with:
           limit-access-to-actor: true
+          limit-access-to-users: cbornet,dave2wave,dlg99,eolivelli,lhotari,michaeljmarshall,MMirelli,nicoloboschi,vroyer
 
       - name: Clean Disk
         if: ${{ needs.changed_files_job.outputs.docs_only != 'true' }}
