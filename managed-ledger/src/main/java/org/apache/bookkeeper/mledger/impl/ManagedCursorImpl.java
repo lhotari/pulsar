@@ -123,6 +123,11 @@ public class ManagedCursorImpl implements ManagedCursor {
 
     // this position is have persistent mark delete position
     protected volatile PositionImpl persistentMarkDeletePosition;
+    protected static final AtomicReferenceFieldUpdater<ManagedCursorImpl, PositionImpl>
+            INPROGRESS_MARKDELETE_PERSIST_POSITION_UPDATER =
+            AtomicReferenceFieldUpdater.newUpdater(ManagedCursorImpl.class, PositionImpl.class,
+                    "inProgressMarkDeletePersistPosition");
+    protected volatile PositionImpl inProgressMarkDeletePersistPosition;
 
     protected static final AtomicReferenceFieldUpdater<ManagedCursorImpl, PositionImpl> READ_POSITION_UPDATER =
             AtomicReferenceFieldUpdater.newUpdater(ManagedCursorImpl.class, PositionImpl.class, "readPosition");
@@ -1122,6 +1127,8 @@ public class ManagedCursorImpl implements ManagedCursor {
 
         };
 
+        persistentMarkDeletePosition = null;
+        inProgressMarkDeletePersistPosition = null;
         internalAsyncMarkDelete(newPosition, isCompactionCursor() ? getProperties() : Collections.emptyMap(),
                 new MarkDeleteCallback() {
             @Override
@@ -1791,6 +1798,32 @@ public class ManagedCursorImpl implements ManagedCursor {
     }
 
     void internalMarkDelete(final MarkDeleteEntry mdEntry) {
+        if (persistentMarkDeletePosition != null
+                && mdEntry.newPosition.compareTo(persistentMarkDeletePosition) <= 0) {
+            if (log.isInfoEnabled()) {
+                log.info("Skipping updating mark delete position to {}. The persisted mark delete position {} "
+                        + "is already latest.", mdEntry.newPosition, persistentMarkDeletePosition);
+            }
+            return;
+        }
+
+        PositionImpl inProgressLatest = INPROGRESS_MARKDELETE_PERSIST_POSITION_UPDATER.updateAndGet(this, current -> {
+            if (current != null && current.compareTo(mdEntry.newPosition) >= 0) {
+                return current;
+            } else {
+                return mdEntry.newPosition;
+            }
+        });
+
+        // if there's a newer or equal mark delete update in progress, skip it.
+        if (inProgressLatest != mdEntry.newPosition) {
+            if (log.isInfoEnabled()) {
+                log.info("Skipping updating mark delete position to {}. The mark delete position update "
+                        + "in progress {} is already latest.", mdEntry.newPosition, inProgressLatest);
+            }
+            return;
+        }
+
         // The counter is used to mark all the pending mark-delete request that were submitted to BK and that are not
         // yet finished. While we have outstanding requests we cannot close the current ledger, so the switch to new
         // ledger is postponed to when the counter goes to 0.
@@ -1813,6 +1846,8 @@ public class ManagedCursorImpl implements ManagedCursor {
                             mdEntry.newPosition);
                 }
 
+                INPROGRESS_MARKDELETE_PERSIST_POSITION_UPDATER.compareAndSet(ManagedCursorImpl.this, mdEntry.newPosition, null);
+
                 // Remove from the individual deleted messages all the entries before the new mark delete
                 // point.
                 lock.writeLock().lock();
@@ -1826,11 +1861,7 @@ public class ManagedCursorImpl implements ManagedCursor {
                         subMap.values().forEach(BitSetRecyclable::recycle);
                         subMap.clear();
                     }
-                    if (persistentMarkDeletePosition == null
-                            || mdEntry.newPosition.compareTo(persistentMarkDeletePosition) > 0) {
-                        persistentMarkDeletePosition = mdEntry.newPosition;
-                    }
-
+                    persistentMarkDeletePosition = mdEntry.newPosition;
                 } finally {
                     lock.writeLock().unlock();
                 }
@@ -1855,6 +1886,7 @@ public class ManagedCursorImpl implements ManagedCursor {
 
             @Override
             public void operationFailed(ManagedLedgerException exception) {
+                INPROGRESS_MARKDELETE_PERSIST_POSITION_UPDATER.compareAndSet(ManagedCursorImpl.this, mdEntry.newPosition, null);
                 isDirty = true;
                 log.warn("[{}] Failed to mark delete position for cursor={} position={}", ledger.getName(),
                         ManagedCursorImpl.this, mdEntry.newPosition);
