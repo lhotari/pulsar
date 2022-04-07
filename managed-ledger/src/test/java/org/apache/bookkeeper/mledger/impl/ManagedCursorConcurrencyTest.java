@@ -42,6 +42,7 @@ import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
+import org.apache.commons.lang3.RandomUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.annotations.DataProvider;
@@ -265,11 +266,11 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 30000)
     public void testConcurrentIndividualDeletes() throws Exception {
-        ManagedLedger ledger = factory.open("my_test_ledger", new ManagedLedgerConfig().setMaxEntriesPerLedger(100));
+        ManagedLedger ledger = factory.open("my_test_ledger", new ManagedLedgerConfig().setMaxEntriesPerLedger(299).setThrottleMarkDelete(1.0));
 
         final ManagedCursor cursor = ledger.openCursor("c1");
 
-        final int N = 1000;
+        final int N = 1000 * 3;
         final List<Position> addedEntries = Lists.newArrayListWithExpectedSize(N);
 
         for (int i = 0; i < N; i++) {
@@ -288,10 +289,25 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
                 try {
                     barrier.await();
 
-                    for (int i = 0; i < N; i++) {
+                    for (int i = 0; i < N; i = i + 3) {
                         int threadId = i % Threads;
                         if (threadId == myThread) {
-                            cursor.delete(addedEntries.get(i));
+                            cursor.asyncDelete(Lists.newArrayList(addedEntries.get(i), addedEntries.get(i + 1),
+                                            addedEntries.get(i + 2)),
+                                    new DeleteCallback() {
+                                        @Override
+                                        public void deleteComplete(Object ctx) {
+                                            // ok
+                                        }
+
+                                        @Override
+                                        public void deleteFailed(ManagedLedgerException exception, Object ctx) {
+                                            exception.printStackTrace();
+                                            gotException.set(true);
+                                        }
+                                    }, null);
+                            // random sleep
+                            Thread.sleep(RandomUtils.nextLong(1, 15));
                         }
                     }
 
