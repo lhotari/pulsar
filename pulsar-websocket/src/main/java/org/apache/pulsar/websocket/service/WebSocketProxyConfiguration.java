@@ -132,8 +132,10 @@ public class WebSocketProxyConfiguration implements PulsarConfiguration {
     @FieldContext(doc = "Number of IO threads in Pulsar client used in WebSocket proxy")
     private int webSocketNumIoThreads = Runtime.getRuntime().availableProcessors();
 
-    @FieldContext(doc = "Number of threads to used in HTTP server")
-    private int numHttpServerThreads = Math.max(6, Runtime.getRuntime().availableProcessors());
+    @FieldContext(doc = "Maximum number of threads to use for HTTP requests processing"
+                    + " Default is set to 50."
+    )
+    private int numHttpServerThreads = 50;
 
     @FieldContext(doc = "Max concurrent web requests")
     private int maxConcurrentHttpRequests = 1024;
