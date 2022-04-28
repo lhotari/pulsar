@@ -210,13 +210,20 @@ public class ProxyConnection extends PulsarHandler {
 
     @Override
     public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
-        if (directProxyHandler != null && directProxyHandler.outboundChannel != null) {
+        if (directProxyHandler != null) {
             // handle backpressure
             // stop/resume reading input from connection between the proxy and the broker
             // when the writability of the connection between the client and the proxy changes
-            directProxyHandler.outboundChannel.config().setAutoRead(ctx.channel().isWritable());
+            directProxyHandler.handleClientChannelWritabilityChanged(ctx.channel().isWritable());
         }
         super.channelWritabilityChanged(ctx);
+    }
+
+    public void handleBrokerChannelWritabilityChanged(boolean channelWritable) {
+        // handle backpressure
+        // stop/resume reading input from connection between the client and the proxy
+        // when the writability of the connection between the proxy and the broker changes
+        ctx.channel().config().setAutoRead(channelWritable);
     }
 
     @Override
@@ -241,8 +248,7 @@ public class ProxyConnection extends PulsarHandler {
                     directProxyHandler.getInboundChannelRequestsRate().recordEvent(bytes);
                     ProxyService.BYTES_COUNTER.inc(bytes);
                 }
-                directProxyHandler.outboundChannel.writeAndFlush(msg)
-                        .addListener(ChannelFutureListener.FIRE_EXCEPTION_ON_FAILURE);
+                directProxyHandler.writeToBroker(msg);
             } else {
                 LOG.warn("Received message of type {} while connection to broker is missing in state {}. "
                                 + "Dropping the input message (readable bytes={}).", msg.getClass(), state,

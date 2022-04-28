@@ -66,8 +66,8 @@ public class DirectProxyHandler {
     @Getter
     private final Channel inboundChannel;
     private final ProxyConnection proxyConnection;
-    @Getter
-    Channel outboundChannel;
+
+    private Channel outboundChannel;
     @Getter
     private final Rate inboundChannelRequestsRate;
     private final String originalPrincipal;
@@ -149,6 +149,12 @@ public class DirectProxyHandler {
         });
     }
 
+    public void handleClientChannelWritabilityChanged(boolean channelWritable) {
+        if (outboundChannel != null) {
+            outboundChannel.config().setAutoRead(channelWritable);
+        }
+    }
+
     private static String parseHost(String brokerPortAndHost) {
         int pos = brokerPortAndHost.lastIndexOf(':');
         if (pos > 0) {
@@ -216,6 +222,11 @@ public class DirectProxyHandler {
         }
     }
 
+    public void writeToBroker(Object msg) {
+        outboundChannel.writeAndFlush(msg)
+                .addListener(ChannelFutureListener.FIRE_EXCEPTION_ON_FAILURE);
+    }
+
     enum BackendState {
         Init, HandshakeCompleted
     }
@@ -254,10 +265,7 @@ public class DirectProxyHandler {
 
         @Override
         public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
-            // handle backpressure
-            // stop/resume reading input from connection between the client and the proxy
-            // when the writability of the connection between the proxy and the broker changes
-            inboundChannel.config().setAutoRead(ctx.channel().isWritable());
+            proxyConnection.handleBrokerChannelWritabilityChanged(ctx.channel().isWritable());
             super.channelWritabilityChanged(ctx);
         }
 
