@@ -912,13 +912,13 @@ public abstract class NamespacesBase extends AdminResource {
         internalSetAutoSubscriptionCreation(asyncResponse, null);
     }
 
-    protected CompletableFuture<Void> internalModifyDeduplicationAsync(Boolean enableDeduplication) {
-        return validateNamespacePolicyOperationAsync(namespaceName, PolicyName.DEDUPLICATION, PolicyOperation.WRITE)
-                .thenCompose(__ -> validatePoliciesReadOnlyAccessAsync())
-                .thenCompose(__ -> updatePoliciesAsync(namespaceName, policies -> {
-                    policies.deduplicationEnabled = enableDeduplication;
-                    return policies;
-                }));
+    protected void internalModifyDeduplication(Boolean enableDeduplication) {
+        validateNamespacePolicyOperation(namespaceName, PolicyName.DEDUPLICATION, PolicyOperation.WRITE);
+        validatePoliciesReadOnlyAccess();
+        updatePolicies(namespaceName, policies -> {
+            policies.deduplicationEnabled = enableDeduplication;
+            return policies;
+        });
     }
 
     @SuppressWarnings("deprecation")
@@ -2152,10 +2152,9 @@ public abstract class NamespacesBase extends AdminResource {
         }
     }
 
-    protected CompletableFuture<Boolean> internalGetDeduplicationAsync() {
-        return validateNamespacePolicyOperationAsync(namespaceName, PolicyName.DEDUPLICATION, PolicyOperation.READ)
-                .thenCompose(__ -> getNamespacePoliciesAsync(namespaceName))
-                .thenApply(policies -> policies.deduplicationEnabled);
+    protected Boolean internalGetDeduplication() {
+        validateNamespacePolicyOperation(namespaceName, PolicyName.DEDUPLICATION, PolicyOperation.READ);
+        return getNamespacePolicies(namespaceName).deduplicationEnabled;
     }
 
     protected Integer internalGetMaxConsumersPerTopic() {
