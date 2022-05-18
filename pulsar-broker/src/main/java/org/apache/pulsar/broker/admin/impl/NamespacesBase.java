@@ -797,18 +797,16 @@ public abstract class NamespacesBase extends AdminResource {
         });
     }
 
-    protected CompletableFuture<Void> internalSetNamespaceMessageTTLAsync(Integer messageTTL) {
-        return validateNamespacePolicyOperationAsync(namespaceName, PolicyName.TTL, PolicyOperation.WRITE)
-                .thenCompose(__ -> validatePoliciesReadOnlyAccessAsync())
-                .thenAccept(__ -> {
-                    if (messageTTL != null && messageTTL < 0) {
-                        throw new RestException(Status.PRECONDITION_FAILED,
-                                "Invalid value for message TTL, message TTL must >= 0");
-                    }
-                }).thenCompose(__ -> updatePoliciesAsync(namespaceName, policies -> {
-                    policies.message_ttl_in_seconds = messageTTL;
-                    return policies;
-                }));
+    protected void internalSetNamespaceMessageTTL(Integer messageTTL) {
+        validateNamespacePolicyOperation(namespaceName, PolicyName.TTL, PolicyOperation.WRITE);
+        validatePoliciesReadOnlyAccess();
+        if (messageTTL != null && messageTTL < 0) {
+            throw new RestException(Status.PRECONDITION_FAILED, "Invalid value for message TTL");
+        }
+        updatePolicies(namespaceName, policies -> {
+            policies.message_ttl_in_seconds = messageTTL;
+            return policies;
+        });
     }
 
     protected void internalSetSubscriptionExpirationTime(Integer expirationTime) {
