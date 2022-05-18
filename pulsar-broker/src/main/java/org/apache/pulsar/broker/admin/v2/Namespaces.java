@@ -75,9 +75,7 @@ import org.apache.pulsar.common.policies.data.SchemaCompatibilityStrategy;
 import org.apache.pulsar.common.policies.data.SubscribeRate;
 import org.apache.pulsar.common.policies.data.SubscriptionAuthMode;
 import org.apache.pulsar.common.policies.data.impl.DispatchRateImpl;
-import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
-import org.apache.pulsar.metadata.api.MetadataStoreException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -93,15 +91,8 @@ public class Namespaces extends NamespacesBase {
             response = String.class, responseContainer = "Set")
     @ApiResponses(value = {@ApiResponse(code = 403, message = "Don't have admin permission"),
             @ApiResponse(code = 404, message = "Tenant doesn't exist")})
-    public void getTenantNamespaces(@Suspended final AsyncResponse response,
-                                    @PathParam("tenant") String tenant) {
-        internalGetTenantNamespaces(tenant)
-                .thenAccept(response::resume)
-                .exceptionally(ex -> {
-                    log.error("[{}] Failed to get namespaces list: {}", clientAppId(), ex);
-                    resumeAsyncResponseExceptionally(response, ex);
-                    return null;
-                });
+    public List<String> getTenantNamespaces(@PathParam("tenant") String tenant) {
+        return internalGetTenantNamespaces(tenant);
     }
 
     @GET
@@ -111,19 +102,21 @@ public class Namespaces extends NamespacesBase {
     @ApiResponses(value = {
             @ApiResponse(code = 403, message = "Don't have admin or operate permission on the namespace"),
             @ApiResponse(code = 404, message = "Tenant or cluster or namespace doesn't exist")})
-    public void getTopics(@Suspended AsyncResponse response,
-                          @PathParam("tenant") String tenant,
-                          @PathParam("namespace") String namespace,
-                          @QueryParam("mode") @DefaultValue("PERSISTENT") Mode mode) {
+    public void getTopics(@PathParam("tenant") String tenant,
+                                  @PathParam("namespace") String namespace,
+                                  @QueryParam("mode") @DefaultValue("PERSISTENT") Mode mode,
+                                  @Suspended AsyncResponse asyncResponse) {
         validateNamespaceName(tenant, namespace);
-        validateNamespaceOperationAsync(NamespaceName.get(tenant, namespace), NamespaceOperation.GET_TOPICS)
-                // Validate that namespace exists, throws 404 if it doesn't exist
-                .thenCompose(__ -> getNamespacePoliciesAsync(namespaceName))
-                .thenCompose(__ -> pulsar().getNamespaceService().getListOfTopics(namespaceName, mode))
-                .thenAccept(response::resume)
+        validateNamespaceOperation(NamespaceName.get(tenant, namespace), NamespaceOperation.GET_TOPICS);
+
+        // Validate that namespace exists, throws 404 if it doesn't exist
+        getNamespacePolicies(namespaceName);
+
+        pulsar().getNamespaceService().getListOfTopics(namespaceName, mode)
+                .thenAccept(asyncResponse::resume)
                 .exceptionally(ex -> {
                     log.error("Failed to get topics list for namespace {}", namespaceName, ex);
-                    resumeAsyncResponseExceptionally(response, ex);
+                    asyncResponse.resume(ex);
                     return null;
                 });
     }
@@ -133,19 +126,10 @@ public class Namespaces extends NamespacesBase {
     @ApiOperation(value = "Get the dump all the policies specified for a namespace.", response = Policies.class)
     @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
             @ApiResponse(code = 404, message = "Tenant or cluster or namespace doesn't exist") })
-    public void getPolicies(@Suspended AsyncResponse response,
-                            @PathParam("tenant") String tenant,
-                            @PathParam("namespace") String namespace) {
+    public Policies getPolicies(@PathParam("tenant") String tenant, @PathParam("namespace") String namespace) {
         validateNamespaceName(tenant, namespace);
-        validateNamespacePolicyOperationAsync(NamespaceName.get(tenant, namespace), PolicyName.ALL,
-                PolicyOperation.READ)
-                .thenCompose(__ -> getNamespacePoliciesAsync(namespaceName))
-                .thenAccept(response::resume)
-                .exceptionally(ex -> {
-                    log.error("Failed to get policies for namespace {}", namespaceName, ex);
-                    resumeAsyncResponseExceptionally(response, ex);
-                    return null;
-                });
+        validateNamespacePolicyOperation(NamespaceName.get(tenant, namespace), PolicyName.ALL, PolicyOperation.READ);
+        return getNamespacePolicies(namespaceName);
     }
 
     @PUT
@@ -155,24 +139,11 @@ public class Namespaces extends NamespacesBase {
             @ApiResponse(code = 404, message = "Tenant or cluster doesn't exist"),
             @ApiResponse(code = 409, message = "Namespace already exists"),
             @ApiResponse(code = 412, message = "Namespace name is not valid") })
-    public void createNamespace(@Suspended AsyncResponse response,
-                                @PathParam("tenant") String tenant,
-                                @PathParam("namespace") String namespace,
-                                @ApiParam(value = "Policies for the namespace") Policies policies) {
+    public void createNamespace(@PathParam("tenant") String tenant, @PathParam("namespace") String namespace,
+            @ApiParam(value = "Policies for the namespace") Policies policies) {
         validateNamespaceName(tenant, namespace);
         policies = getDefaultPolicesIfNull(policies);
-        internalCreateNamespace(policies)
-                .thenAccept(__ -> response.resume(Response.noContent().build()))
-                .exceptionally(ex -> {
-                    Throwable root = FutureUtil.unwrapCompletionException(ex);
-                    if (root instanceof MetadataStoreException.AlreadyExistsException) {
-                        response.resume(new RestException(Response.Status.CONFLICT, "Namespace already exists"));
-                    } else {
-                        log.error("[{}] Failed to create namespace {}", clientAppId(), namespaceName, ex);
-                        resumeAsyncResponseExceptionally(response, ex);
-                    }
-                    return null;
-                });
+        internalCreateNamespace(policies);
     }
 
     @DELETE
@@ -185,9 +156,9 @@ public class Namespaces extends NamespacesBase {
             @ApiResponse(code = 405, message = "Broker doesn't allow forced deletion of namespaces"),
             @ApiResponse(code = 409, message = "Namespace is not empty") })
     public void deleteNamespace(@Suspended final AsyncResponse asyncResponse, @PathParam("tenant") String tenant,
-                                @PathParam("namespace") String namespace,
-                                @QueryParam("force") @DefaultValue("false") boolean force,
-                                @QueryParam("authoritative") @DefaultValue("false") boolean authoritative) {
+            @PathParam("namespace") String namespace,
+            @QueryParam("force") @DefaultValue("false") boolean force,
+            @QueryParam("authoritative") @DefaultValue("false") boolean authoritative) {
         try {
             validateNamespaceName(tenant, namespace);
             internalDeleteNamespace(asyncResponse, authoritative, force);
@@ -220,18 +191,13 @@ public class Namespaces extends NamespacesBase {
     @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission"),
             @ApiResponse(code = 404, message = "Tenant or cluster or namespace doesn't exist"),
             @ApiResponse(code = 409, message = "Namespace is not empty") })
-    public void getPermissions(@Suspended AsyncResponse response,
-                                                       @PathParam("tenant") String tenant,
-                                                       @PathParam("namespace") String namespace) {
+    public Map<String, Set<AuthAction>> getPermissions(@PathParam("tenant") String tenant,
+            @PathParam("namespace") String namespace) {
         validateNamespaceName(tenant, namespace);
-        validateNamespaceOperationAsync(NamespaceName.get(tenant, namespace), NamespaceOperation.GET_PERMISSION)
-                .thenCompose(__ -> getNamespacePoliciesAsync(namespaceName))
-                .thenAccept(policies -> response.resume(policies.auth_policies.getNamespaceAuthentication()))
-                .exceptionally(ex -> {
-                    log.error("Failed to get permissions for namespace {}", namespaceName, ex);
-                    resumeAsyncResponseExceptionally(response, ex);
-                    return null;
-                });
+        validateNamespaceOperation(NamespaceName.get(tenant, namespace), NamespaceOperation.GET_PERMISSION);
+
+        Policies policies = getNamespacePolicies(namespaceName);
+        return policies.auth_policies.getNamespaceAuthentication();
     }
 
     @GET
