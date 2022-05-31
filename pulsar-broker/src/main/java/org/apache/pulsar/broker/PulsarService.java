@@ -246,6 +246,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
 
     // packages management service
     private Optional<PackagesManagement> packagesManagement = Optional.empty();
+    private PackagesStorage packagesStorage;
     private PulsarPrometheusMetricsServlet metricsServlet;
     private List<PrometheusRawMetricsProvider> pendingMetricsProviders;
 
@@ -544,6 +545,10 @@ public class PulsarService implements AutoCloseable, ShutdownService {
 
             // add timeout handling for closing executors
             asyncCloseFutures.add(executorServicesShutdown.handle());
+
+            if (packagesStorage != null) {
+                asyncCloseFutures.add(packagesStorage.closeAsync());
+            }
 
             closeFuture = addTimeoutHandling(FutureUtil.waitForAllAndSupportCancel(asyncCloseFutures));
             closeFuture.handle((v, t) -> {
@@ -1633,9 +1638,9 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             .newProvider(config.getPackagesManagementStorageProvider());
         DefaultPackagesStorageConfiguration storageConfiguration = new DefaultPackagesStorageConfiguration();
         storageConfiguration.setProperty(config.getProperties());
-        PackagesStorage storage = storageProvider.getStorage(storageConfiguration);
-        storage.initialize();
-        packagesManagementService.initialize(storage);
+        packagesStorage = storageProvider.getStorage(storageConfiguration);
+        packagesStorage.initialize();
+        packagesManagementService.initialize(packagesStorage);
     }
 
     public Optional<Integer> getListenPortHTTP() {
