@@ -244,16 +244,19 @@ public class ReplicatedSubscriptionsController implements AutoCloseable, Topic.P
     }
 
     private void cleanupTimedOutSnapshots() {
-        Iterator<Map.Entry<String, ReplicatedSubscriptionsSnapshotBuilder>> it = pendingSnapshots.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<String, ReplicatedSubscriptionsSnapshotBuilder> entry = it.next();
-            if (entry.getValue().isTimedOut()) {
-                if (log.isInfoEnabled()) {
-                    log.info("[{}] Snapshot creation timed out for {}", topic.getName(), entry.getKey());
-                }
+        if (!pendingSnapshots.isEmpty()) {
+            Iterator<Map.Entry<String, ReplicatedSubscriptionsSnapshotBuilder>> it =
+                    pendingSnapshots.entrySet().iterator();
+            while (it.hasNext()) {
+                Map.Entry<String, ReplicatedSubscriptionsSnapshotBuilder> entry = it.next();
+                if (entry.getValue().isTimedOut()) {
+                    if (log.isInfoEnabled()) {
+                        log.info("[{}] Snapshot creation timed out for {}", topic.getName(), entry.getKey());
+                    }
 
-                pendingSnapshotsMetric.dec();
-                it.remove();
+                    pendingSnapshotsMetric.dec();
+                    it.remove();
+                }
             }
         }
     }
