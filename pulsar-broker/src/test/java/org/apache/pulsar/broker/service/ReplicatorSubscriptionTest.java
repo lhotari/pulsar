@@ -24,6 +24,8 @@ import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectWriter;
 import com.google.common.collect.Sets;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -38,6 +40,7 @@ import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.broker.BrokerTestUtil;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.broker.service.persistent.ReplicatedSubscriptionsController;
+import org.apache.pulsar.client.admin.PulsarAdminException;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageRoutingMode;
@@ -47,6 +50,7 @@ import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.common.policies.data.PartitionedTopicStats;
 import org.apache.pulsar.common.policies.data.TopicStats;
+import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.awaitility.Awaitility;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -146,11 +150,25 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
                 .replicateSubscriptionState(replicateSubscriptionState)
                 .subscribe()) {
             readMessages(consumer2, receivedMessages, -1, allowDuplicates);
+        } finally {
+            printStats(topicName);
         }
 
         // assert that all messages have been received
         assertEquals(new ArrayList<>(sentMessages), new ArrayList<>(receivedMessages), "Sent and received " +
                 "messages don't match.");
+    }
+
+    private void printStats(String topicName) throws JsonProcessingException, PulsarAdminException {
+        ObjectWriter objectWriter = ObjectMapperFactory.getThreadLocal().writerWithDefaultPrettyPrinter();
+        System.out.println("admin1 internal stats:");
+        System.out.println(objectWriter.writeValueAsString(admin1.topics().getInternalStats(topicName)));
+        System.out.println("admin1 stats:");
+        System.out.println(objectWriter.writeValueAsString(admin1.topics().getStats(topicName)));
+        System.out.println("admin2 internal stats:");
+        System.out.println(objectWriter.writeValueAsString(admin2.topics().getInternalStats(topicName)));
+        System.out.println("admin2 stats:");
+        System.out.println(objectWriter.writeValueAsString(admin2.topics().getStats(topicName)));
     }
 
     /**
