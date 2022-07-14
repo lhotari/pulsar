@@ -97,6 +97,8 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
         namespacePolicies.replication_clusters = Sets.newHashSet("r1", "r2");
         admin1.namespaces().createNamespace(namespace, namespacePolicies);
 
+        Thread.sleep(5000L);
+
         @Cleanup
         PulsarClient client1 = PulsarClient.builder().serviceUrl(url1.toString())
                 .statsInterval(0, TimeUnit.SECONDS)
@@ -111,41 +113,41 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
                 .build();
 
         // create subscription in r2
-        createReplicatedSubscription(client2, topicName, subscriptionName, replicateSubscriptionState);
+        //createReplicatedSubscription(client2, topicName, subscriptionName, replicateSubscriptionState);
 
         Set<String> sentMessages = new LinkedHashSet<>();
 
         // send messages in r1
-        {
-            @Cleanup
-            Producer<byte[]> producer = client1.newProducer().topic(topicName)
-                    .enableBatching(false)
-                    .messageRoutingMode(MessageRoutingMode.SinglePartition)
-                    .create();
-            int numMessages = 6;
-            for (int i = 0; i < numMessages; i++) {
-                String body = "message" + i;
-                producer.send(body.getBytes(StandardCharsets.UTF_8));
-                sentMessages.add(body);
-            }
-            producer.close();
+        @Cleanup
+        Producer<byte[]> producer = client1.newProducer().topic(topicName)
+                .enableBatching(false)
+                .messageRoutingMode(MessageRoutingMode.SinglePartition)
+                .create();
+        int numMessages = 6;
+        for (int i = 0; i < numMessages; i++) {
+            String body = "message" + i;
+            producer.send(body.getBytes(StandardCharsets.UTF_8));
+            sentMessages.add(body);
         }
 
         Set<String> receivedMessages = new LinkedHashSet<>();
 
         // consume 3 messages in r1
-        try (Consumer<byte[]> consumer1 = client1.newConsumer()
+        @Cleanup
+        Consumer<byte[]> consumer1 = client1.newConsumer()
                 .topic(topicName)
                 .subscriptionName(subscriptionName)
                 .replicateSubscriptionState(replicateSubscriptionState)
                 .isAckReceiptEnabled(true)
                 .receiverQueueSize(1)
-                .subscribe()) {
-            readMessages(consumer1, receivedMessages, 3, allowDuplicates);
-        }
+                .subscribe();
+        readMessages(consumer1, receivedMessages, 3, allowDuplicates);
 
         // wait for subscription to be replicated
-        Thread.sleep(2 * config1.getReplicatedSubscriptionsSnapshotFrequencyMillis());
+        Thread.sleep(4 * config1.getReplicatedSubscriptionsSnapshotFrequencyMillis());
+
+        producer.close();
+        consumer1.close();
 
         // consume remaining messages in r2
         try (Consumer<byte[]> consumer2 = client2.newConsumer()
@@ -160,6 +162,9 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
         }
 
         // assert that all messages have been received
+        System.out.println("sent:" + sentMessages);
+        System.out.println("received:" + receivedMessages);
+
         assertEquals(new ArrayList<>(sentMessages), new ArrayList<>(receivedMessages), "Sent and received " +
                 "messages don't match.");
     }
@@ -624,7 +629,7 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
             throws PulsarClientException {
         int count = 0;
         while (count < maxMessages || maxMessages == -1) {
-            Message<byte[]> message = consumer.receive(2, TimeUnit.SECONDS);
+            Message<byte[]> message = consumer.receive(10, TimeUnit.SECONDS);
             if (message != null) {
                 count++;
                 String body = new String(message.getValue(), StandardCharsets.UTF_8);
