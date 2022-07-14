@@ -49,6 +49,7 @@ import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.common.policies.data.PartitionedTopicStats;
+import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.TopicStats;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.awaitility.Awaitility;
@@ -92,8 +93,9 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
         // it shows that subscription replication has no impact in behavior for this test case
         boolean replicateSubscriptionState = true;
 
-        admin1.namespaces().createNamespace(namespace);
-        admin1.namespaces().setNamespaceReplicationClusters(namespace, Sets.newHashSet("r1", "r2"));
+        Policies namespacePolicies = new Policies();
+        namespacePolicies.replication_clusters = Sets.newHashSet("r1", "r2");
+        admin1.namespaces().createNamespace(namespace, namespacePolicies);
 
         @Cleanup
         PulsarClient client1 = PulsarClient.builder().serviceUrl(url1.toString())
