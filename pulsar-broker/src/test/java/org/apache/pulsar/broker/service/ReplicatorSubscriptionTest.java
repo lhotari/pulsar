@@ -88,7 +88,7 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
         String subscriptionName = "cluster-subscription";
         // Subscription replication produces duplicates, https://github.com/apache/pulsar/issues/10054
         // TODO: duplications shouldn't be allowed, change to "false" when fixing the issue
-        boolean allowDuplicates = true;
+        boolean allowDuplicates = false;
         // this setting can be used to manually run the test with subscription replication disabled
         // it shows that subscription replication has no impact in behavior for this test case
         boolean replicateSubscriptionState = true;
