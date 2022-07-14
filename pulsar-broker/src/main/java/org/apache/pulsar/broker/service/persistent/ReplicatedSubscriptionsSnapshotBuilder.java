@@ -75,8 +75,8 @@ public class ReplicatedSubscriptionsSnapshotBuilder {
     }
 
     void start() {
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Starting new snapshot {} - Clusters: {}", controller.topic().getName(), snapshotId,
+        if (log.isInfoEnabled()) {
+            log.info("[{}] Starting new snapshot {} - Clusters: {}", controller.topic().getName(), snapshotId,
                     missingClusters);
         }
         startTimeMillis = clock.millis();
@@ -85,16 +85,16 @@ public class ReplicatedSubscriptionsSnapshotBuilder {
     }
 
     synchronized void receivedSnapshotResponse(Position position, ReplicatedSubscriptionsSnapshotResponse response) {
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Received response from {}", controller.topic().getName(),
+        if (log.isInfoEnabled()) {
+            log.info("[{}] Received response from {}", controller.topic().getName(),
                     response.getCluster().getCluster());
         }
         String cluster = response.getCluster().getCluster();
         responses.putIfAbsent(cluster, new MarkersMessageIdData().copyFrom(response.getCluster().getMessageId()));
         missingClusters.remove(cluster);
 
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Missing clusters {}", controller.topic().getName(), missingClusters);
+        if (log.isInfoEnabled()) {
+            log.info("[{}] Missing clusters {}", controller.topic().getName(), missingClusters);
         }
 
         if (!missingClusters.isEmpty()) {
@@ -114,8 +114,8 @@ public class ReplicatedSubscriptionsSnapshotBuilder {
             return;
         }
 
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Snapshot is complete {}", controller.topic().getName(), snapshotId);
+        if (log.isInfoEnabled()) {
+            log.info("[{}] Snapshot is complete {}", controller.topic().getName(), snapshotId);
         }
         // Snapshot is now complete, store it in the local topic
         PositionImpl p = (PositionImpl) position;

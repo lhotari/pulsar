@@ -112,8 +112,8 @@ public class ReplicatedSubscriptionsController implements AutoCloseable, Topic.P
     }
 
     public void localSubscriptionUpdated(String subscriptionName, ReplicatedSubscriptionsSnapshot snapshot) {
-        if (log.isDebugEnabled()) {
-            log.debug("[{}][{}] Updating subscription to snapshot {}", topic, subscriptionName,
+        if (log.isInfoEnabled()) {
+            log.info("[{}][{}] Updating subscription to snapshot {}", topic, subscriptionName,
                     snapshot.getClustersList().stream()
                             .map(cmid -> String.format("%s -> %d:%d", cmid.getCluster(),
                                     cmid.getMessageId().getLedgerId(), cmid.getMessageId().getEntryId()))
@@ -141,8 +141,8 @@ public class ReplicatedSubscriptionsController implements AutoCloseable, Topic.P
         // marker we're publishing locally and then replicating will have a higher
         // message id.
         PositionImpl lastMsgId = (PositionImpl) topic.getLastPosition();
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Received snapshot request. Last msg id: {}", topic.getName(), lastMsgId);
+        if (log.isInfoEnabled()) {
+            log.info("[{}] Received snapshot request. Last msg id: {}", topic.getName(), lastMsgId);
         }
 
         ByteBuf marker = Markers.newReplicatedSubscriptionsSnapshotResponse(
@@ -157,8 +157,8 @@ public class ReplicatedSubscriptionsController implements AutoCloseable, Topic.P
         String snapshotId = response.getSnapshotId();
         ReplicatedSubscriptionsSnapshotBuilder builder = pendingSnapshots.get(snapshotId);
         if (builder == null) {
-            if (log.isDebugEnabled()) {
-                log.debug("[{}] Received late reply for timed-out snapshot {} from {}", topic.getName(), snapshotId,
+            if (log.isInfoEnabled()) {
+                log.info("[{}] Received late reply for timed-out snapshot {} from {}", topic.getName(), snapshotId,
                         response.getCluster().getCluster());
             }
             return;
@@ -183,8 +183,8 @@ public class ReplicatedSubscriptionsController implements AutoCloseable, Topic.P
 
         Position pos = new PositionImpl(updatedMessageId.getLedgerId(), updatedMessageId.getEntryId());
 
-        if (log.isDebugEnabled()) {
-            log.debug("[{}][{}] Received update for subscription to {}", topic, update.getSubscriptionName(), pos);
+        if (log.isInfoEnabled()) {
+            log.info("[{}][{}] Received update for subscription to {}", topic, update.getSubscriptionName(), pos);
         }
 
         PersistentSubscription sub = topic.getSubscription(update.getSubscriptionName());
@@ -204,8 +204,8 @@ public class ReplicatedSubscriptionsController implements AutoCloseable, Topic.P
 
         if (topic.getLastDataMessagePublishedTimestamp() < lastCompletedSnapshotStartTime) {
             // There was no message written since the last snapshot, we can skip creating a new snapshot
-            if (log.isDebugEnabled()) {
-                log.debug("[{}] There is no new data in topic. Skipping snapshot creation.", topic.getName());
+            if (log.isInfoEnabled()) {
+                log.info("[{}] There is no new data in topic. Skipping snapshot creation.", topic.getName());
             }
             return;
         }
@@ -219,15 +219,15 @@ public class ReplicatedSubscriptionsController implements AutoCloseable, Topic.P
 
         if (anyReplicatorDisconnected.isTrue()) {
             // Do not attempt to create snapshot when some of the clusters are not reachable
-            if (log.isDebugEnabled()) {
-                log.debug("[{}] Do not attempt to create snapshot when some of the clusters are not reachable.",
+            if (log.isInfoEnabled()) {
+                log.info("[{}] Do not attempt to create snapshot when some of the clusters are not reachable.",
                         topic.getName());
             }
             return;
         }
 
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Starting snapshot creation.", topic.getName());
+        if (log.isInfoEnabled()) {
+            log.info("[{}] Starting snapshot creation.", topic.getName());
         }
 
         pendingSnapshotsMetric.inc();
@@ -247,8 +247,8 @@ public class ReplicatedSubscriptionsController implements AutoCloseable, Topic.P
         while (it.hasNext()) {
             Map.Entry<String, ReplicatedSubscriptionsSnapshotBuilder> entry = it.next();
             if (entry.getValue().isTimedOut()) {
-                if (log.isDebugEnabled()) {
-                    log.debug("[{}] Snapshot creation timed out for {}", topic.getName(), entry.getKey());
+                if (log.isInfoEnabled()) {
+                    log.info("[{}] Snapshot creation timed out for {}", topic.getName(), entry.getKey());
                 }
 
                 pendingSnapshotsMetric.dec();
@@ -282,8 +282,8 @@ public class ReplicatedSubscriptionsController implements AutoCloseable, Topic.P
     public void completed(Exception e, long ledgerId, long entryId) {
         // Nothing to do in case of publish errors since the retry logic is applied upstream after a snapshot is not
         // closed
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Published marker at {}:{}. Exception: {}", topic.getName(), ledgerId, entryId, e);
+        if (log.isInfoEnabled()) {
+            log.info("[{}] Published marker at {}:{}. Exception: {}", topic.getName(), ledgerId, entryId, e);
         }
 
         this.positionOfLastLocalMarker = new PositionImpl(ledgerId, entryId);

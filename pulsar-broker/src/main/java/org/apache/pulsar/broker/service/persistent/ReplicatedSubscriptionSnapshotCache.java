@@ -44,8 +44,8 @@ public class ReplicatedSubscriptionSnapshotCache {
         MarkersMessageIdData msgId = snapshot.getLocalMessageId();
         PositionImpl position = new PositionImpl(msgId.getLedgerId(), msgId.getEntryId());
 
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Added new replicated-subscription snapshot at {} -- {}", subscription, position,
+        if (log.isInfoEnabled()) {
+            log.info("[{}] Added new replicated-subscription snapshot at {} -- {}", subscription, position,
                     snapshot.getSnapshotId());
         }
 
@@ -75,14 +75,14 @@ public class ReplicatedSubscriptionSnapshotCache {
             }
         }
 
-        if (log.isDebugEnabled()) {
+        if (log.isInfoEnabled()) {
             if (snapshot != null) {
-                log.debug("[{}] Advanced mark-delete position to {} -- found snapshot {} at {}:{}", subscription, pos,
+                log.info("[{}] Advanced mark-delete position to {} -- found snapshot {} at {}:{}", subscription, pos,
                         snapshot.getSnapshotId(),
                         snapshot.getLocalMessageId().getLedgerId(),
                         snapshot.getLocalMessageId().getEntryId());
             } else {
-                log.debug("[{}] Advanced mark-delete position to {} -- snapshot not found", subscription, pos);
+                log.info("[{}] Advanced mark-delete position to {} -- snapshot not found", subscription, pos);
             }
         }
         return snapshot;
