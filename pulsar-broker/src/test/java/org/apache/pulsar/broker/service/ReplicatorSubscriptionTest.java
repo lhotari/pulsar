@@ -138,6 +138,8 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
                 .topic(topicName)
                 .subscriptionName(subscriptionName)
                 .replicateSubscriptionState(replicateSubscriptionState)
+                .isAckReceiptEnabled(true)
+                .receiverQueueSize(1)
                 .subscribe()) {
             readMessages(consumer1, receivedMessages, 3, allowDuplicates);
         }
@@ -150,6 +152,7 @@ public class ReplicatorSubscriptionTest extends ReplicatorTestBase {
                 .topic(topicName)
                 .subscriptionName(subscriptionName)
                 .replicateSubscriptionState(replicateSubscriptionState)
+                .isAckReceiptEnabled(true)
                 .subscribe()) {
             readMessages(consumer2, receivedMessages, -1, allowDuplicates);
         } finally {
