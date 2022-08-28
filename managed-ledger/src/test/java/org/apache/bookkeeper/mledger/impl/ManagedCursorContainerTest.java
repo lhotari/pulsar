@@ -400,7 +400,7 @@ public class ManagedCursorContainerTest {
 
     @Test
     public void testSlowestReadPositionForActiveCursors() throws Exception {
-        ManagedCursorContainer container = ManagedCursorContainer.createWithAllOrderedByReadPosition();
+        ManagedCursorContainer container = ManagedCursorContainer.createWithAllOrdered();
         assertNull(container.getSlowestReaderPosition());
 
         // Add no durable cursor
@@ -408,7 +408,7 @@ public class ManagedCursorContainerTest {
         ManagedCursor cursor1 = spy(new MockManagedCursor(container, "test1", position));
         doReturn(false).when(cursor1).isDurable();
         doReturn(position).when(cursor1).getReadPosition();
-        container.add(cursor1);
+        container.add(cursor1, position);
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(5, 5));
 
         // Add no durable cursor
@@ -416,7 +416,7 @@ public class ManagedCursorContainerTest {
         ManagedCursor cursor2 = spy(new MockManagedCursor(container, "test2", position));
         doReturn(false).when(cursor2).isDurable();
         doReturn(position).when(cursor2).getReadPosition();
-        container.add(cursor2);
+        container.add(cursor2, position);
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(1, 1));
 
         // Move forward cursor, cursor1 = 5:5, cursor2 = 5:6, slowest is 5:5
@@ -438,29 +438,29 @@ public class ManagedCursorContainerTest {
 
     @Test
     public void simple() throws Exception {
-        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrderedByMarkDeletedPosition();
+        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrdered();
         assertNull(container.getSlowestReaderPosition());
 
         ManagedCursor cursor1 = new MockManagedCursor(container, "test1", new PositionImpl(5, 5));
-        container.add(cursor1);
+        container.add(cursor1, cursor1.getMarkDeletedPosition());
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(5, 5));
 
         ManagedCursor cursor2 = new MockManagedCursor(container, "test2", new PositionImpl(2, 2));
-        container.add(cursor2);
+        container.add(cursor2, cursor2.getMarkDeletedPosition());
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(2, 2));
 
         ManagedCursor cursor3 = new MockManagedCursor(container, "test3", new PositionImpl(2, 0));
-        container.add(cursor3);
+        container.add(cursor3, cursor3.getMarkDeletedPosition());
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(2, 0));
 
         assertEquals(container.toString(), "[test1=5:5, test2=2:2, test3=2:0]");
 
         ManagedCursor cursor4 = new MockManagedCursor(container, "test4", new PositionImpl(4, 0));
-        container.add(cursor4);
+        container.add(cursor4, cursor4.getMarkDeletedPosition());
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(2, 0));
 
         ManagedCursor cursor5 = new MockManagedCursor(container, "test5", new PositionImpl(3, 5));
-        container.add(cursor5);
+        container.add(cursor5, cursor5.getMarkDeletedPosition());
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(2, 0));
 
         cursor3.markDelete(new PositionImpl(3, 0));
@@ -485,7 +485,7 @@ public class ManagedCursorContainerTest {
         assertFalse(container.hasDurableCursors());
 
         ManagedCursor cursor6 = new MockManagedCursor(container, "test6", new PositionImpl(6, 5));
-        container.add(cursor6);
+        container.add(cursor6, cursor6.getMarkDeletedPosition());
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(6, 5));
 
         assertEquals(container.toString(), "[test6=6:5]");
@@ -493,14 +493,14 @@ public class ManagedCursorContainerTest {
 
     @Test
     public void updatingCursorOutsideContainer() throws Exception {
-        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrderedByMarkDeletedPosition();
+        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrdered();
 
         ManagedCursor cursor1 = new MockManagedCursor(container, "test1", new PositionImpl(5, 5));
-        container.add(cursor1);
+        container.add(cursor1, cursor1.getMarkDeletedPosition());
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(5, 5));
 
         MockManagedCursor cursor2 = new MockManagedCursor(container, "test2", new PositionImpl(2, 2));
-        container.add(cursor2);
+        container.add(cursor2, cursor2.getMarkDeletedPosition());
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(2, 2));
 
         cursor2.position = new PositionImpl(8, 8);
@@ -515,20 +515,20 @@ public class ManagedCursorContainerTest {
 
     @Test
     public void removingCursor() throws Exception {
-        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrderedByMarkDeletedPosition();
+        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrdered();
 
         ManagedCursor cursor1 = new MockManagedCursor(container, "test1", new PositionImpl(5, 5));
-        container.add(cursor1);
+        container.add(cursor1, cursor1.getMarkDeletedPosition());
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(5, 5));
         assertEquals(container.get("test1"), cursor1);
 
         MockManagedCursor cursor2 = new MockManagedCursor(container, "test2", new PositionImpl(2, 2));
-        container.add(cursor2);
+        container.add(cursor2, cursor2.getMarkDeletedPosition());
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(2, 2));
         assertEquals(container.get("test2"), cursor2);
 
         MockManagedCursor cursor3 = new MockManagedCursor(container, "test3", new PositionImpl(1, 1));
-        container.add(cursor3);
+        container.add(cursor3, cursor3.getMarkDeletedPosition());
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(1, 1));
         assertEquals(container.get("test3"), cursor3);
 
@@ -552,7 +552,7 @@ public class ManagedCursorContainerTest {
 
     @Test
     public void ordering() throws Exception {
-        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrderedByMarkDeletedPosition();
+        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrdered();
 
         ManagedCursor cursor1 = new MockManagedCursor(container, "test1", new PositionImpl(5, 5));
         ManagedCursor cursor2 = new MockManagedCursor(container, "test2", new PositionImpl(5, 1));
@@ -560,11 +560,11 @@ public class ManagedCursorContainerTest {
         ManagedCursor cursor4 = new MockManagedCursor(container, "test4", new PositionImpl(6, 4));
         ManagedCursor cursor5 = new MockManagedCursor(container, "test5", new PositionImpl(7, 0));
 
-        container.add(cursor1);
-        container.add(cursor2);
-        container.add(cursor3);
-        container.add(cursor4);
-        container.add(cursor5);
+        container.add(cursor1, cursor1.getMarkDeletedPosition());
+        container.add(cursor2, cursor2.getMarkDeletedPosition());
+        container.add(cursor3, cursor3.getMarkDeletedPosition());
+        container.add(cursor4, cursor4.getMarkDeletedPosition());
+        container.add(cursor5, cursor5.getMarkDeletedPosition());
 
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(5, 1));
         container.removeCursor("test2");
@@ -586,7 +586,7 @@ public class ManagedCursorContainerTest {
 
     @Test
     public void orderingWithUpdates() throws Exception {
-        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrderedByMarkDeletedPosition();
+        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrdered();
 
         MockManagedCursor c1 = new MockManagedCursor(container, "test1", new PositionImpl(5, 5));
         MockManagedCursor c2 = new MockManagedCursor(container, "test2", new PositionImpl(5, 1));
@@ -594,11 +594,11 @@ public class ManagedCursorContainerTest {
         MockManagedCursor c4 = new MockManagedCursor(container, "test4", new PositionImpl(6, 4));
         MockManagedCursor c5 = new MockManagedCursor(container, "test5", new PositionImpl(7, 0));
 
-        container.add(c1);
-        container.add(c2);
-        container.add(c3);
-        container.add(c4);
-        container.add(c5);
+        container.add(c1, c1.getMarkDeletedPosition());
+        container.add(c2, c2.getMarkDeletedPosition());
+        container.add(c3, c3.getMarkDeletedPosition());
+        container.add(c4, c4.getMarkDeletedPosition());
+        container.add(c5, c5.getMarkDeletedPosition());
 
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(5, 1));
 
@@ -651,7 +651,7 @@ public class ManagedCursorContainerTest {
 
     @Test
     public void orderingWithUpdatesAndReset() throws Exception {
-        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrderedByMarkDeletedPosition();
+        ManagedCursorContainer container = ManagedCursorContainer.createWithDurableOrdered();
 
         MockManagedCursor c1 = new MockManagedCursor(container, "test1", new PositionImpl(5, 5));
         MockManagedCursor c2 = new MockManagedCursor(container, "test2", new PositionImpl(5, 1));
@@ -659,11 +659,11 @@ public class ManagedCursorContainerTest {
         MockManagedCursor c4 = new MockManagedCursor(container, "test4", new PositionImpl(6, 4));
         MockManagedCursor c5 = new MockManagedCursor(container, "test5", new PositionImpl(7, 0));
 
-        container.add(c1);
-        container.add(c2);
-        container.add(c3);
-        container.add(c4);
-        container.add(c5);
+        container.add(c1, c1.getMarkDeletedPosition());
+        container.add(c2, c2.getMarkDeletedPosition());
+        container.add(c3, c3.getMarkDeletedPosition());
+        container.add(c4, c4.getMarkDeletedPosition());
+        container.add(c5, c5.getMarkDeletedPosition());
 
         assertEquals(container.getSlowestReaderPosition(), new PositionImpl(5, 1));
 

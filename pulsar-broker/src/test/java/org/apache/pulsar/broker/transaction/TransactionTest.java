@@ -578,7 +578,7 @@ public class TransactionTest extends TransactionTestBase {
         field.setAccessible(true);
         ManagedCursorContainer managedCursors = (ManagedCursorContainer) field.get(persistentTopic.getManagedLedger());
         managedCursors.removeCursor("transaction-buffer-sub");
-        managedCursors.add(managedCursor);
+        managedCursors.add(managedCursor, managedCursor.getMarkDeletedPosition());
 
         doAnswer(invocation -> {
             AsyncCallbacks.ReadEntriesCallback callback = invocation.getArgument(1);
@@ -597,7 +597,7 @@ public class TransactionTest extends TransactionTestBase {
             return null;
         }).when(managedCursor).asyncReadEntries(anyInt(), any(), any(), any());
 
-        managedCursors.add(managedCursor);
+        managedCursors.add(managedCursor, managedCursor.getMarkDeletedPosition());
         TransactionBuffer buffer3 = new TopicTransactionBuffer(persistentTopic);
         Awaitility.await().atMost(30, TimeUnit.SECONDS).untilAsserted(() ->
                 assertEquals(buffer3.getStats().state, "Ready"));
@@ -1249,7 +1249,7 @@ public class TransactionTest extends TransactionTestBase {
         when(brokerService.getBacklogQuotaManager()).thenReturn(backlogQuotaManager);
         // Mock managedLedger.
         ManagedLedgerImpl managedLedger = mock(ManagedLedgerImpl.class);
-        ManagedCursorContainer managedCursors = ManagedCursorContainer.createWithDurableOrderedByMarkDeletedPosition();
+        ManagedCursorContainer managedCursors = ManagedCursorContainer.createWithDurableOrdered();
         when(managedLedger.getCursors()).thenReturn(managedCursors);
         PositionImpl position = PositionImpl.EARLIEST;
         when(managedLedger.getLastConfirmedEntry()).thenReturn(position);
