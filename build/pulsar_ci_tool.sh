@@ -23,6 +23,8 @@
 set -e
 set -o pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
 ARTIFACT_RETENTION_DAYS="${ARTIFACT_RETENTION_DAYS:-3}"
 
 # lists all available functions in this tool
@@ -152,6 +154,55 @@ function ci_move_test_reports() {
       )
     fi
   )
+}
+
+function ci_check_ready_to_test() {
+  if [[ -z "$GITHUB_EVENT_PATH" ]]; then
+    >&2 echo "GITHUB_EVENT_PATH isn't set"
+    return 1
+  fi
+  yq eval -e '.pull_request.labels[] | .name | select(. == "ready-to-test")' "$GITHUB_EVENT_PATH" &> /dev/null || {
+      FORK_REPO_URL=$(jq -r '.pull_request.head.repo.html_url' "$GITHUB_EVENT_PATH")
+      PR_BRANCH_LABEL=$(jq -r '.pull_request.head.label' "$GITHUB_EVENT_PATH")
+      PR_URL=$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")
+      >&2 tee -a "$GITHUB_STEP_SUMMARY" <<EOF
+
+# Instructions for proceeding with the pull request:
+
+apache/pulsar pull requests should be tested in your own fork since the apache/pulsar CI based on
+GitHub Actions has constrained resources and quota. GitHub Actions provides separate quota for
+pull requests that are executed in a forked repository.
+
+1. Go to ${FORK_REPO_URL} and ensure that your branch is up to date with https://github.com/apache/pulsar .
+   Sync your fork if it's behind.
+2. Open a pull request to your own fork. You can use this link to create the pull request in
+   your own fork:
+   ${FORK_REPO_URL}/compare/master...${PR_BRANCH_LABEL}?expand=1
+3. Edit the description of the pull request ${PR_URL} and add the link to the PR that you opened to your own fork.
+4. Ensure that tests pass in your own fork. Your own fork will be used to run the tests during the PR review
+   and any changes made during the review.
+5. When the PR is reviewed and tests pass there has to be a reviewer that is also a Apache Pulsar Committer.
+   The committer will issue a comment "/pulsarbot ready-to-test" which will add a label "ready-to-test" to the
+   PR and restart the CI workflows.
+6. When tests pass on the apache/pulsar side and the PR has been approved, the PR can be merged by a Apache Pulsar
+   Committer.
+
+If you have any trouble, please join the #contributor channel on Pulsar Slack to get real-time support.
+Instructions for joining Pulsar Slack: https://pulsar.apache.org/community#section-discussions
+
+EOF
+      exit 1
+  }
+}
+
+function ci_check_pulsar_committer() {
+  pulsarci_yaml="${SCRIPT_DIR}/../.pulsarci.yaml"
+  export CHECKUSER="${GITHUB_ACTOR:-"$1"}"
+  if [[ -z "$CHECKUSER" ]]; then
+    >&2 echo "Pass user to check in GITHUB_ACTOR environment or as first parameter."
+    return 1
+  fi
+  yq eval -e '.committers.[] | select(test("(?i)^"+strenv(CHECKUSER)+"$"))' "$pulsarci_yaml"
 }
 
 if [ -z "$1" ]; then
