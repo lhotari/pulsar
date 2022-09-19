@@ -18,13 +18,16 @@
  */
 package org.apache.pulsar.broker.service;
 
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.ScheduledExecutorService;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.PublishRate;
 import org.apache.pulsar.common.util.RateLimitFunction;
 import org.apache.pulsar.common.util.RateLimiter;
+import org.apache.pulsar.common.util.collections.GrowableArrayBlockingQueue;
 
-public class PrecisPublishLimiter implements PublishRateLimiter {
+public class PrecisPublishLimiter implements PublishRateLimiter, LimiterContext {
     protected volatile int publishMaxMessageRate = 0;
     protected volatile long publishMaxByteRate = 0;
     // precise mode for publish rate limiter
@@ -32,6 +35,15 @@ public class PrecisPublishLimiter implements PublishRateLimiter {
     private volatile RateLimiter topicPublishRateLimiterOnByte;
     private final RateLimitFunction rateLimitFunction;
     private final ScheduledExecutorService scheduledExecutorService;
+
+    private final BlockingQueue<Runnable> cleanupRunnables = new GrowableArrayBlockingQueue<>();
+
+    private final Limiter limiter = new Limiter() {
+        @Override
+        public boolean isLimitExceeded() {
+            return topicPublishRateLimiterOnMessage.getAvailablePermits();
+        }
+    };
 
     public PrecisPublishLimiter(Policies policies, String clusterName, RateLimitFunction rateLimitFunction) {
         this.rateLimitFunction = rateLimitFunction;
@@ -158,5 +170,15 @@ public class PrecisPublishLimiter implements PublishRateLimiter {
                 previousTopicPublishRateLimiterOnByte.close();
             }
         }
+    }
+
+    @Override
+    public Limiter getLimiter() {
+        return limiter;
+    }
+
+    @Override
+    public void registerLimitCleanup(Runnable runnable) {
+
     }
 }

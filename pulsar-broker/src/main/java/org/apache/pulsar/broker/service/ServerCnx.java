@@ -2753,7 +2753,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         boolean isPublishRateExceeded = false;
         if (preciseTopicPublishRateLimitingEnable) {
             boolean isPreciseTopicPublishRateExceeded =
-                    producer.getTopic().isTopicPublishRateExceeded(numMessages, msgSize);
+                    producer.getTopic().handlePreciseTopicPublishRateLimiting(numMessages, msgSize);
             if (isPreciseTopicPublishRateExceeded) {
                 producer.getTopic().pauseReadingInput();
                 return;

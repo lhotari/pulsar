@@ -224,7 +224,7 @@ public interface Topic {
 
     boolean isPublishRateExceeded();
 
-    boolean isTopicPublishRateExceeded(int msgSize, int numMessages);
+    boolean handlePreciseTopicPublishRateLimiting(int msgSize, int numMessages);
 
     boolean isResourceGroupRateLimitingEnabled();
 

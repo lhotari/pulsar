@@ -1081,9 +1081,26 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener<TopicP
     }
 
     @Override
-    public boolean isTopicPublishRateExceeded(int numberMessages, int bytes) {
+    public boolean handlePreciseTopicPublishRateLimiting(int numberMessages, int bytes) {
+        if (!preciseTopicPublishRateLimitingEnable) {
+            return false;
+        }
         // whether topic publish rate exceed if precise rate limit is enable
-        return preciseTopicPublishRateLimitingEnable && !this.topicPublishRateLimiter.tryAcquire(numberMessages, bytes);
+        boolean rateExceeded = !this.topicPublishRateLimiter.tryAcquire(numberMessages, bytes);
+        if (rateExceeded) {
+            pauseReadingInput(new LimiterContext() {
+                @Override
+                public Limiter getLimiter() {
+                    return null;
+                }
+
+                @Override
+                public void registerLimitCleanup(Runnable runnable) {
+                    topicPublishRateLimiter.registerLimitCleanup
+                }
+            });
+        }
+        return rateExceeded;
     }
 
     @Override
