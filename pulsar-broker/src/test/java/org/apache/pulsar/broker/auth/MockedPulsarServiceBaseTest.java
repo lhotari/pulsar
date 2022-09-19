@@ -19,12 +19,13 @@
 package org.apache.pulsar.broker.auth;
 
 import static org.apache.pulsar.broker.BrokerTestUtil.spyWithClassAndConstructorArgs;
+import static org.apache.pulsar.broker.BrokerTestUtil.spyWithoutRecordingInvocations;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 import com.google.common.collect.Sets;
 import com.google.common.io.Resources;
 import com.google.common.util.concurrent.MoreExecutors;
@@ -47,6 +48,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import javax.ws.rs.container.AsyncResponse;
+import javax.ws.rs.container.TimeoutHandler;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.EnsemblePlacementPolicy;
 import org.apache.bookkeeper.client.PulsarMockBookKeeper;
@@ -79,9 +82,6 @@ import org.apache.zookeeper.MockZooKeeper;
 import org.apache.zookeeper.data.ACL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import javax.ws.rs.container.AsyncResponse;
-import javax.ws.rs.container.TimeoutHandler;
 
 /**
  * Base class for all tests that need a Pulsar instance without a ZK and BK cluster.
@@ -324,7 +324,7 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
                 ? brokerUrl.toString()
                 : brokerUrlTls.toString());
         customizeNewPulsarAdminBuilder(pulsarAdminBuilder);
-        admin = spy(pulsarAdminBuilder.build());
+        admin = spyWithoutRecordingInvocations(pulsarAdminBuilder.build());
     }
 
     protected void customizeNewPulsarAdminBuilder(PulsarAdminBuilder pulsarAdminBuilder) {
@@ -337,7 +337,7 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
 
     protected PulsarService startBrokerWithoutAuthorization(ServiceConfiguration conf) throws Exception {
         conf.setBrokerShutdownTimeoutMs(0L);
-        PulsarService pulsar = spy(newPulsarService(conf));
+        PulsarService pulsar = spyWithoutRecordingInvocations(newPulsarService(conf));
         setupBrokerMocks(pulsar);
         beforePulsarStartMocks(pulsar);
         pulsar.start();
@@ -353,7 +353,7 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
     protected void setupBrokerMocks(PulsarService pulsar) throws Exception {
         // Override default providers with mocked ones
         doReturn(mockBookKeeperClientFactory).when(pulsar).newBookKeeperClientFactory();
-        
+
         PulsarMetadataEventSynchronizer synchronizer = StringUtils
                 .isNotBlank(pulsar.getConfig().getMetadataSyncEventTopic())
                         ? new PulsarMetadataEventSynchronizer(pulsar, pulsar.getConfig().getMetadataSyncEventTopic())
@@ -374,7 +374,7 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
         doReturn(sameThreadOrderedSafeExecutor).when(pulsar).getOrderedExecutor();
         doReturn(new CounterBrokerInterceptor()).when(pulsar).getBrokerInterceptor();
 
-        doAnswer((invocation) -> spy(invocation.callRealMethod())).when(pulsar).newCompactor();
+        doAnswer((invocation) -> spyWithoutRecordingInvocations(invocation.callRealMethod())).when(pulsar).newCompactor();
         if (enableBrokerInterceptor) {
             mockConfigBrokerInterceptors(pulsar);
         }
@@ -399,8 +399,8 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
     }
 
     private void mockConfigBrokerInterceptors(PulsarService pulsarService) {
-        ServiceConfiguration configuration = spy(conf);
-        Set<String> mockBrokerInterceptors = mock(Set.class);
+        ServiceConfiguration configuration = spyWithoutRecordingInvocations(conf);
+        Set<String> mockBrokerInterceptors = mock(Set.class, withSettings().stubOnly());
         when(mockBrokerInterceptors.isEmpty()).thenReturn(false);
         when(configuration.getBrokerInterceptors()).thenReturn(mockBrokerInterceptors);
         when(pulsarService.getConfig()).thenReturn(configuration);
