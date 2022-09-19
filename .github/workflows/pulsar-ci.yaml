@@ -47,6 +47,13 @@ jobs:
       - name: checkout
         uses: actions/checkout@v2
 
+      - name: Setup ssh access to build runner VM
+        # ssh access is enabled for builds in own forks
+        if: ${{ github.repository != 'apache/pulsar' && github.event_name == 'pull_request' }}
+        uses: ./.github/actions/ssh-access
+        with:
+          limit-access-to-actor: true
+
       - name: Detect changed files
         id:   changes
         uses: apache/pulsar-test-infra/paths-filter@master
@@ -66,6 +73,14 @@ jobs:
           GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           build/pulsar_ci_tool.sh check_ready_to_test
+
+      - name: Wait for ssh connection when build fails
+        # ssh access is enabled for builds in own forks
+        uses: ./.github/actions/ssh-access
+        if: ${{ failure() && github.repository != 'apache/pulsar' && github.event_name == 'pull_request' }}
+        continue-on-error: true
+        with:
+          action: wait
 
   build-and-license-check:
     needs: changed_files_job
