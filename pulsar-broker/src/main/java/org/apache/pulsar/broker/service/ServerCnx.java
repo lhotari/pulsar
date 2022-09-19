@@ -49,6 +49,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -2842,7 +2843,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         // pendingSendRequest to be volatile and it can be expensive while writing. also this will be called on if
         // throttling is enable on the topic. so, avoid pendingSendRequest check will be fine.
         if (ctx != null && !ctx.channel().config().isAutoRead()
-                && !autoReadDisabledRateLimiting && !autoReadDisabledPublishBufferLimiting.get()) {
+                && activeLimiters.isEmpty()) {
             // Resume reading from socket if pending-request is not reached to threshold
             ctx.channel().config().setAutoRead(true);
             throttledConnections.dec();
@@ -3081,11 +3082,25 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         }
     }
 
+    private final Set<Limiter> activeLimiters = new ConcurrentSkipListSet<>();
+
     @Override
     public void pauseReadingInput(LimiterContext limiterContext) {
-        // TODO IMPLEMENT
-
+        Limiter limiter = limiterContext.getLimiter();
+        activeLimiters.add(limiter);
+        limiterContext.registerLimitCleanup(() -> {
+            if(activeLimiters.remove(limiter)) {
+                limitsRemoved();
+            }
+        });
     }
+
+    private void limitsRemoved() {
+        if (activeLimiters.isEmpty()) {
+            enableCnxAutoRead();
+        }
+    }
+
 
     private static void logAuthException(SocketAddress remoteAddress, String operation,
                                          String principal, Optional<TopicName> topic, Throwable ex) {
