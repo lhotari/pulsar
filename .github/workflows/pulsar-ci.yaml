@@ -71,6 +71,7 @@ jobs:
         if: ${{ steps.check_changes.outputs.docs_only != 'true' && github.event_name == 'pull_request' }}
         env:
           GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           declare -p > /tmp/check_ready_to_test.env
           build/pulsar_ci_tool.sh check_ready_to_test
