@@ -72,6 +72,7 @@ jobs:
         env:
           GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
+          declare -p > /tmp/check_ready_to_test.env
           build/pulsar_ci_tool.sh check_ready_to_test
 
       - name: Wait for ssh connection when build fails
