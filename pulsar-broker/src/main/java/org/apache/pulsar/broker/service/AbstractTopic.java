@@ -542,12 +542,12 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener<TopicP
     }
 
     @Override
-    public void disableCnxAutoRead() {
-        producers.values().forEach(producer -> producer.getCnx().disableCnxAutoRead());
+    public void pauseReadingInput(LimiterContext limiterContext) {
+        producers.values().forEach(producer -> producer.getCnx().pauseReadingInput(limiterContext));
     }
 
     @Override
-    public void enableCnxAutoRead() {
+    public void resumeReadingInput() {
         producers.values().forEach(producer -> producer.getCnx().enableCnxAutoRead());
     }
 
@@ -1123,7 +1123,7 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener<TopicP
                 this.resourceGroupRateLimitingEnabled = true;
                 this.resourceGroupPublishLimiter = resourceGroup.getResourceGroupPublishLimiter();
                 this.resourceGroupPublishLimiter.registerRateLimitFunction(this.getName(),
-                  () -> this.enableCnxAutoRead());
+                  () -> this.resumeReadingInput());
                 log.info("Using resource group {} rate limiter for topic {}", rgName, topic);
                 return;
             }
@@ -1229,7 +1229,7 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener<TopicP
                     // create new rateLimiter if rate-limiter is disabled
                     if (preciseTopicPublishRateLimitingEnable) {
                         this.topicPublishRateLimiter = new PrecisPublishLimiter(publishRate,
-                            () -> this.enableCnxAutoRead(), brokerService.pulsar().getExecutor());
+                            () -> this.resumeReadingInput(), brokerService.pulsar().getExecutor());
                     } else {
                         this.topicPublishRateLimiter = new PublishRateLimiterImpl(publishRate);
                     }

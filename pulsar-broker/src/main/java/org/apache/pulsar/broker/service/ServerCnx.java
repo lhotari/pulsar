@@ -51,6 +51,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.naming.AuthenticationException;
@@ -212,7 +213,10 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             .setKeySharedMode(KeySharedMode.AUTO_SPLIT);
 
     // Flag to manage throttling-publish-buffer by atomically enable/disable read-channel.
-    private boolean autoReadDisabledPublishBufferLimiting = false;
+    private final AtomicBoolean autoReadDisabledPublishBufferLimiting = new AtomicBoolean(false);
+
+
+
     private final long maxPendingBytesPerThread;
     private final long resumeThresholdPendingBytesPerThread;
 
@@ -2750,7 +2754,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             boolean isPreciseTopicPublishRateExceeded =
                     producer.getTopic().isTopicPublishRateExceeded(numMessages, msgSize);
             if (isPreciseTopicPublishRateExceeded) {
-                producer.getTopic().disableCnxAutoRead();
+                producer.getTopic().pauseReadingInput();
                 return;
             }
             isPublishRateExceeded = producer.getTopic().isBrokerPublishRateExceeded();
@@ -2759,7 +2763,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                 final boolean resourceGroupPublishRateExceeded =
                   producer.getTopic().isResourceGroupPublishRateExceeded(numMessages, msgSize);
                 if (resourceGroupPublishRateExceeded) {
-                    producer.getTopic().disableCnxAutoRead();
+                    producer.getTopic().pauseReadingInput();
                     return;
                 }
             }
@@ -2775,19 +2779,24 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         }
 
         if (pendingBytesPerThread.get().addAndGet(msgSize) >= maxPendingBytesPerThread
-                && !autoReadDisabledPublishBufferLimiting
                 && maxPendingBytesPerThread > 0) {
-            // Disable reading from all the connections associated with this thread
-            MutableInt pausedConnections = new MutableInt();
-            cnxsPerThread.get().forEach(cnx -> {
-                if (cnx.hasProducers() && !cnx.autoReadDisabledPublishBufferLimiting) {
-                    cnx.disableCnxAutoRead();
-                    cnx.autoReadDisabledPublishBufferLimiting = true;
-                    pausedConnections.increment();
-                }
-            });
+            if (autoReadDisabledPublishBufferLimiting.compareAndSet(false, true)) {
+                // Disable reading from all the connections associated with this thread
+                MutableInt pausedConnections = new MutableInt();
 
-            getBrokerService().pausedConnections(pausedConnections.intValue());
+                disableCnxAutoRead();
+                pausedConnections.increment();
+
+                cnxsPerThread.get().forEach(cnx -> {
+                    if (cnx.hasProducers()
+                            && cnx.autoReadDisabledPublishBufferLimiting.compareAndSet(false, true)) {
+                        cnx.disableCnxAutoRead();
+                        pausedConnections.increment();
+                    }
+                });
+
+                getBrokerService().pausedConnections(pausedConnections.intValue());
+            }
         }
     }
 
@@ -2833,7 +2842,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         // pendingSendRequest to be volatile and it can be expensive while writing. also this will be called on if
         // throttling is enable on the topic. so, avoid pendingSendRequest check will be fine.
         if (ctx != null && !ctx.channel().config().isAutoRead()
-                && !autoReadDisabledRateLimiting && !autoReadDisabledPublishBufferLimiting) {
+                && !autoReadDisabledRateLimiting && !autoReadDisabledPublishBufferLimiting.get()) {
             // Resume reading from socket if pending-request is not reached to threshold
             ctx.channel().config().setAutoRead(true);
             throttledConnections.dec();
@@ -2857,8 +2866,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
 
     @Override
     public void cancelPublishBufferLimiting() {
-        if (autoReadDisabledPublishBufferLimiting) {
-            autoReadDisabledPublishBufferLimiting = false;
+        if (autoReadDisabledPublishBufferLimiting.compareAndSet(true, false)) {
             throttledConnectionsGlobal.dec();
         }
     }
@@ -3071,6 +3079,12 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         } else {
             return null;
         }
+    }
+
+    @Override
+    public void pauseReadingInput(LimiterContext limiterContext) {
+        // TODO IMPLEMENT
+
     }
 
     private static void logAuthException(SocketAddress remoteAddress, String operation,

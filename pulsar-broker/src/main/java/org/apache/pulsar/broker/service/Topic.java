@@ -232,9 +232,9 @@ public interface Topic {
 
     boolean isBrokerPublishRateExceeded();
 
-    void disableCnxAutoRead();
+    void pauseReadingInput(LimiterContext limiterContext);
 
-    void enableCnxAutoRead();
+    void resumeReadingInput();
 
     CompletableFuture<Void> onPoliciesUpdate(Policies data);
 

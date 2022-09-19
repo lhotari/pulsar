@@ -78,4 +78,5 @@ public interface TransportCnx {
 
     String clientSourceAddress();
 
+    void pauseReadingInput(LimiterContext limiterContext);
 }
