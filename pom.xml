@@ -109,6 +109,8 @@ flexible messaging model and an intuitive client API.</description>
     <testRealAWS>false</testRealAWS>
     <testRetryCount>1</testRetryCount>
     <testJacocoAgentArgument/>
+    <integrationtest.coverage.enabled>false</integrationtest.coverage.enabled>
+    <integrationtest.coverage.dir>${project.build.directory}</integrationtest.coverage.dir>
     <testHeapDumpPath>/tmp</testHeapDumpPath>
     <surefire.shutdown>kill</surefire.shutdown>
     <docker.organization>apachepulsar</docker.organization>
