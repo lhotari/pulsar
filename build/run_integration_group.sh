@@ -34,7 +34,7 @@ COVERAGE_COLLECTED=0
 # returns a CSV value
 mvn_list_modules() {
   (
-    mvn -B -ntp "$@" initialize \
+    mvn -B -ntp -Dscan=false "$@" initialize \
       | grep -- "-< .* >-" \
       | sed -E 's/.*-< (.*) >-.*/\1/' \
       | tr '\n' ',' | sed 's/,$/\n/'
@@ -117,7 +117,7 @@ produce_integration_test_coverage_xml_report() {
     cd "$GITHUB_WORKSPACE"
     local jacoco_xml_file=tests/integration/target/site/jacoco/jacoco_inttests.xml
     echo "Creating coverage report to $jacoco_xml_file"
-    local jacoco_version=$(mvn help:evaluate -Dexpression=jacoco-maven-plugin.version -q -DforceStdout)
+    local jacoco_version=$(mvn help:evaluate -Dexpression=jacoco-maven-plugin.version -Dscan=false -q -DforceStdout)
     set -x
     mkdir -p $(dirname $jacoco_xml_file)
     # install jacococli.jar command line tool

@@ -20,6 +20,8 @@
 
 # shell function library for Pulsar CI builds
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
 set -e
 set -o pipefail
 
@@ -91,14 +93,18 @@ function ci_install_tool() {
   local tool_executable=$1
   local tool_package=${2:-$1}
   if ! command -v $tool_executable &>/dev/null; then
-    echo "::group::Installing ${tool_package}"
-    sudo apt-get -y install ${tool_package} >/dev/null || {
-      echo "Installing the package failed. Switching the ubuntu mirror and retrying..."
-      ci_pick_ubuntu_mirror
-      # retry after picking the ubuntu mirror
-      sudo apt-get -y install ${tool_package}
-    }
-    echo '::endgroup::'
+    if [[ "$GITHUB_ACTIONS" == "true" ]]; then
+      echo "::group::Installing ${tool_package}"
+      sudo apt-get -y install ${tool_package} >/dev/null || {
+        echo "Installing the package failed. Switching the ubuntu mirror and retrying..."
+        ci_pick_ubuntu_mirror
+        # retry after picking the ubuntu mirror
+        sudo apt-get -y install ${tool_package}
+      }
+      echo '::endgroup::'
+    else
+      fail "$tool_executable wasn't found on PATH. You should first install $tool_package with your package manager."
+    fi
   fi
 }
 
@@ -142,12 +148,18 @@ function ci_restore_tar_from_github_actions_artifacts() {
 function ci_store_tar_to_github_actions_artifacts() {
   local artifactname="${1}.tar.zst"
   shift
-  ci_install_tool pv
-  echo "::group::Storing $1 tar command output to name ${artifactname} in GitHub Actions Artifacts"
-  # delete possible previous artifact that might exist when re-running
-  gh-actions-artifact-client.js delete "${artifactname}" &>/dev/null || true
-  "$@" | pv -ft -i 5 | pv -Wbaf -i 5 | gh-actions-artifact-client.js upload --retentionDays=$ARTIFACT_RETENTION_DAYS "${artifactname}"
-  echo "::endgroup::"
+  if [[ "$GITHUB_ACTIONS" == "true" ]]; then
+    ci_install_tool pv
+    echo "::group::Storing $1 tar command output to name ${artifactname} in GitHub Actions Artifacts"
+    # delete possible previous artifact that might exist when re-running
+    gh-actions-artifact-client.js delete "${artifactname}" &>/dev/null || true
+    "$@" | pv -ft -i 5 | pv -Wbaf -i 5 | gh-actions-artifact-client.js upload --retentionDays=$ARTIFACT_RETENTION_DAYS "${artifactname}"
+    echo "::endgroup::"
+  else
+    local artifactfile="$(mktemp -t artifact.XXXX)"
+    echo "Storing output for debugging in $artifactfile"
+    "$@" | pv -ft -i 5 | pv -Wbaf -i 5 > $artifactfile
+  fi
 }
 
 # copies test reports into test-reports and surefire-reports directory
@@ -282,6 +294,169 @@ If you have any trouble you can get support in multiple ways:
 
 EOF
   return 1
+}
+
+ci_snapshot_pulsar_maven_artifacts() {
+  (
+  if [ -n "$GITHUB_WORKSPACE" ]; then
+    cd "$GITHUB_WORKSPACE"
+  else
+    fail "This script can only be run in GitHub Actions"
+  fi
+  mkdir -p target
+  find $HOME/.m2/repository/org/apache/pulsar -name "*.jar" > /tmp/provided_pulsar_maven_artifacts
+  )
+}
+
+ci_upload_unittest_coverage_files() {
+  (
+  testgroup="$1"
+  echo "::group::Uploading unittest coverage files"
+  if [ -n "$GITHUB_WORKSPACE" ]; then
+    cd "$GITHUB_WORKSPACE"
+  else
+    fail "This script can only be run in GitHub Actions"
+  fi
+
+  if [ ! -f /tmp/provided_pulsar_maven_artifacts ]; then
+    fail "It is necessary to run '$0 snapshot_pulsar_maven_artifacts' before running any tests."
+  fi
+
+  set -x
+
+  local classpathFile="target/unittest_classpath_${testgroup}"
+
+  local execFiles=$(find . -path "*/target/jacoco.exec" -printf "%P\n")
+  if [[ -n "$execFiles" ]]; then
+    # create temp file
+    local completeClasspathFile=$(mktemp -t tmp.classpath.XXXX)
+
+    ci_install_tool xmlstarlet
+
+    # iterate the exec files that were found
+    for execFile in $execFiles; do
+      local project="${execFile/%"/target/jacoco.exec"}"
+      local artifactId=$(xmlstarlet sel -t -m _:project -v _:artifactId -n $project/pom.xml)
+      # find the runtime classpath for the project to ensure that only production classes get covered
+      mvn -f $project/pom.xml -DincludeScope=runtime -Dscan=false dependency:build-classpath  -B | { grep 'Dependencies classpath:' -A1 || true; } | tail -1 \
+                                    | sed 's/:/\n/g' | { grep 'org/apache/pulsar' || true; } \
+                                    | { tee -a $completeClasspathFile || true; } > target/classpath_$artifactId || true
+    done
+
+    cat $completeClasspathFile | sort | uniq > $classpathFile
+    # delete temp file
+    rm $completeClasspathFile
+
+    # upload target/jacoco.exec, target/classes and any dependent jar files that were built during the unit test execution
+    (
+      cd /
+      ci_store_tar_to_github_actions_artifacts coverage_and_deps_${testgroup} \
+                tar -I zstd -cPf - \
+                  $GITHUB_WORKSPACE/$classpathFile \
+                  $GITHUB_WORKSPACE/target/classpath_* \
+                  $(find "$GITHUB_WORKSPACE" -path "*/target/jacoco.exec" -printf "%p\n%h/classes\n") \
+                  $(cat $GITHUB_WORKSPACE/$classpathFile | sort | uniq | { grep -v -Fx -f /tmp/provided_pulsar_maven_artifacts || true; })
+    )
+  fi
+  echo "::endgroup::"
+  )
+}
+
+ci_restore_unittest_coverage_files() {
+  (
+  cd /
+  for testgroup in $($SCRIPT_DIR/run_unit_group.sh --list | { grep -v FLAKY || true; }); do
+    ci_restore_tar_from_github_actions_artifacts coverage_and_deps_${testgroup} || true
+  done
+  )
+}
+
+# creates an aggregated jacoco xml report for all projects that contain a target/jacoco.exec file
+#
+# the default maven jacoco report has multiple problems:
+# - by default, jacoco:report goal will only report coverage for the current project. it is not suitable for Pulsar's
+#   unit tests that test production code that resides in multiple modules.
+#    - there's jacoco:report-aggregate that is supposed to resolve this. It has 2 issues:
+#       - 0.8.8 version doesn't yet support the required "includeCurrentProject" feature
+#       - the dependent projects must be built as part of the same mvn execution and belong to the same maven "reactor"
+#          - this isn't compatible with the way how Pulsar CI builds in "Build and License check" job and reuses
+#            the build results to run unit tests.
+#
+# This solution resolves the problem by using the Jacoco command line tool to generate the report.
+# It assumes that all projects that contain a target/jacoco.exec file will also contain compiled classfiles.
+ci_create_test_coverage_report() {
+  echo "::group::Create unittest coverage report"
+  if [ -n "$GITHUB_WORKSPACE" ]; then
+    cd "$GITHUB_WORKSPACE"
+  else
+    cd "$SCRIPT_DIR/.."
+  fi
+  local execFiles=$(find . -path "*/target/jacoco.exec" -printf "%P\n")
+  if [[ -n "$execFiles" ]]; then
+    mkdir -p /tmp/jacocoDir
+    if [ ! -f /tmp/jacocoDir/jacococli.jar ]; then
+      local jacoco_version=$(mvn help:evaluate -Dscan=false -Dexpression=jacoco-maven-plugin.version -q -DforceStdout)
+      curl -sL -o /tmp/jacocoDir/jacococli.jar "https://repo1.maven.org/maven2/org/jacoco/org.jacoco.cli/${jacoco_version}/org.jacoco.cli-${jacoco_version}-nodeps.jar"
+    fi
+
+    ci_install_tool xmlstarlet
+    # create mapping from project directory to project artifactId
+    local projectToArtifactIdMapping=$(find -name pom.xml -printf "%P\n" |xargs -I{} bash -c 'echo -n "$(dirname $1) "; xmlstarlet sel -t -m _:project -v _:artifactId -n $1' -- {})
+
+    # create temp files
+    local completeClasspathFile=$(mktemp -t tmp.classpath.XXXX)
+    local filterArtifactsFile=$(mktemp -t tmp.artifacts.XXXX)
+    local classesDirFile=$(mktemp -t tmp.classes.XXXX)
+    local sourcefilesFile=$(mktemp -t tmp.sources.XXXX)
+
+    # iterate the exec files that were found
+    while read execFile; do
+      local project="${execFile/%"/target/jacoco.exec"}"
+      local jacoco_xml_file="$project/"
+      local artifactId="$(printf "%s" "$projectToArtifactIdMapping" | grep -F "$project " | cut -d' ' -f2)"
+      echo "$project/target/classes" >> $classesDirFile
+      echo "$project/src/main/java" >> $sourcefilesFile
+      echo "/$artifactId/" >> $filterArtifactsFile
+      if [ -f target/classpath_$artifactId ]; then
+        cat target/classpath_$artifactId >> $completeClasspathFile
+      else
+        # find the runtime classpath for the project to ensure that only production classes get covered
+        mvn -f $project/pom.xml -DincludeScope=runtime -Dscan=false dependency:build-classpath  -B | { grep 'Dependencies classpath:' -A1 || true; } | tail -1 \
+                                      | sed 's/:/\n/g' | { grep 'org/apache/pulsar' || true; } \
+                                      >> $completeClasspathFile || true
+      fi
+    done <<< "$execFiles"
+
+    local classfilesArgs="--classfiles $({
+      cat $completeClasspathFile | { grep -v -f $filterArtifactsFile || true; } | sort | uniq | { grep -v -E 'bouncy-castle-bc|tests' || true; }
+      cat $classesDirFile
+    } | tr '\n' ':' | sed -e 's/:$//' -e 's/:/ --classfiles /g')"
+
+    local sourcefilesArgs="--sourcefiles $({
+      # find the source file folders for the pulsar .jar files that are on the classpath
+      for artifactId in $(cat $completeClasspathFile  | sort | uniq | { grep -v -E 'bouncy-castle-bc|tests' || true; } | perl -p -e 's|.*/org/apache/pulsar/([^/]*)/.*|$1|'); do
+        local project="$(printf "%s" "$projectToArtifactIdMapping" | { grep $artifactId || true; } | cut -d' ' -f1)"
+        if [ -n "$project" ]; then
+          echo "$project/src/main/java"
+        fi
+      done
+      cat $sourcefilesFile
+    } | tr '\n' ':' | sed -e 's/:$//' -e 's/:/ --sourcefiles /g')"
+
+    rm $completeClasspathFile $classesDirFile $filterArtifactsFile $sourcefilesFile
+
+    set -x
+    mkdir -p target/jacoco_full_coverage_report/html
+    java -jar /tmp/jacocoDir/jacococli.jar report $execFiles \
+          $classfilesArgs \
+          --encoding UTF-8 --name "Apache Pulsar unit test coverage" \
+          $sourcefilesArgs \
+          --xml target/jacoco_full_coverage_report/jacoco.xml \
+          --html target/jacoco_full_coverage_report/html \
+          --csv target/jacoco_full_coverage_report/jacoco.csv
+    set +x
+  fi
+  echo "::endgroup::"
 }
 
 if [ -z "$1" ]; then

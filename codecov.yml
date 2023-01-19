@@ -27,11 +27,11 @@ codecov:
     #   - 8 system test build
     # pulsar-ci-flaky.yaml contains:
     #   - 1 build
-    after_n_builds: 22
+    after_n_builds: 14
 
 comment:
   # should match the number of builds sending coverage reports
-  after_n_builds: 22
+  after_n_builds: 14
   layout: "reach, diff, flags, files"
   behavior: default
   require_changes: false
