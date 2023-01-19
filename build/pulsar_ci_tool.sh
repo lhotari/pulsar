@@ -309,9 +309,22 @@ ci_snapshot_pulsar_maven_artifacts() {
 }
 
 ci_upload_unittest_coverage_files() {
+  _ci_upload_coverage_files unittest "$1"
+}
+
+ci_upload_inttest_coverage_files() {
+  _ci_upload_coverage_files inttest "$1"
+}
+
+ci_upload_systest_coverage_files() {
+  _ci_upload_coverage_files systest "$1"
+}
+
+_ci_upload_coverage_files() {
   (
-  testgroup="$1"
-  echo "::group::Uploading unittest coverage files"
+  testtype="$1"
+  testgroup="$2"
+  echo "::group::Uploading $testtype coverage files"
   if [ -n "$GITHUB_WORKSPACE" ]; then
     cd "$GITHUB_WORKSPACE"
   else
@@ -324,7 +337,7 @@ ci_upload_unittest_coverage_files() {
 
   set -x
 
-  local classpathFile="target/unittest_classpath_${testgroup}"
+  local classpathFile="target/classpath_${testtype}_${testgroup}"
 
   local execFiles=$(find . -path "*/target/jacoco.exec" -printf "%P\n")
   if [[ -n "$execFiles" ]]; then
@@ -350,11 +363,11 @@ ci_upload_unittest_coverage_files() {
     # upload target/jacoco.exec, target/classes and any dependent jar files that were built during the unit test execution
     (
       cd /
-      ci_store_tar_to_github_actions_artifacts coverage_and_deps_${testgroup} \
+      ci_store_tar_to_github_actions_artifacts coverage_and_deps_${testtype}_${testgroup} \
                 tar -I zstd -cPf - \
-                  $GITHUB_WORKSPACE/$classpathFile \
                   $GITHUB_WORKSPACE/target/classpath_* \
                   $(find "$GITHUB_WORKSPACE" -path "*/target/jacoco.exec" -printf "%p\n%h/classes\n") \
+                  $([ -d /tmp/jacocoDir ] && echo "/tmp/jacocoDir" ) \
                   $(cat $GITHUB_WORKSPACE/$classpathFile | sort | uniq | { grep -v -Fx -f /tmp/provided_pulsar_maven_artifacts || true; })
     )
   fi
@@ -366,7 +379,7 @@ ci_restore_unittest_coverage_files() {
   (
   cd /
   for testgroup in $($SCRIPT_DIR/run_unit_group.sh --list | { grep -v FLAKY || true; }); do
-    ci_restore_tar_from_github_actions_artifacts coverage_and_deps_${testgroup} || true
+    ci_restore_tar_from_github_actions_artifacts coverage_and_deps_unittest_${testgroup} || true
   done
   )
 }
@@ -385,7 +398,7 @@ ci_restore_unittest_coverage_files() {
 # This solution resolves the problem by using the Jacoco command line tool to generate the report.
 # It assumes that all projects that contain a target/jacoco.exec file will also contain compiled classfiles.
 ci_create_test_coverage_report() {
-  echo "::group::Create unittest coverage report"
+  echo "::group::Create test coverage report"
   if [ -n "$GITHUB_WORKSPACE" ]; then
     cd "$GITHUB_WORKSPACE"
   else
@@ -412,14 +425,15 @@ ci_create_test_coverage_report() {
     # iterate the exec files that were found
     while read execFile; do
       local project="${execFile/%"/target/jacoco.exec"}"
-      local jacoco_xml_file="$project/"
       local artifactId="$(printf "%s" "$projectToArtifactIdMapping" | grep -F "$project " | cut -d' ' -f2)"
       echo "$project/target/classes" >> $classesDirFile
       echo "$project/src/main/java" >> $sourcefilesFile
       echo "/$artifactId/" >> $filterArtifactsFile
-      if [ -f target/classpath_$artifactId ]; then
-        cat target/classpath_$artifactId >> $completeClasspathFile
+      if [ -f "target/classpath_$artifactId" ]; then
+        echo "Found cached classpath for $artifactId."
+        cat "target/classpath_$artifactId" >> $completeClasspathFile
       else
+        echo "Resolving classpath for $project..."
         # find the runtime classpath for the project to ensure that only production classes get covered
         mvn -f $project/pom.xml -DincludeScope=runtime -Dscan=false dependency:build-classpath  -B | { grep 'Dependencies classpath:' -A1 || true; } | tail -1 \
                                       | sed 's/:/\n/g' | { grep 'org/apache/pulsar' || true; } \
@@ -446,14 +460,14 @@ ci_create_test_coverage_report() {
     rm $completeClasspathFile $classesDirFile $filterArtifactsFile $sourcefilesFile
 
     set -x
-    mkdir -p target/jacoco_full_coverage_report/html
+    mkdir -p target/jacoco_test_coverage_report/html
     java -jar /tmp/jacocoDir/jacococli.jar report $execFiles \
           $classfilesArgs \
-          --encoding UTF-8 --name "Apache Pulsar unit test coverage" \
+          --encoding UTF-8 --name "Apache Pulsar test coverage" \
           $sourcefilesArgs \
-          --xml target/jacoco_full_coverage_report/jacoco.xml \
-          --html target/jacoco_full_coverage_report/html \
-          --csv target/jacoco_full_coverage_report/jacoco.csv
+          --xml target/jacoco_test_coverage_report/jacoco.xml \
+          --html target/jacoco_test_coverage_report/html \
+          --csv target/jacoco_test_coverage_report/jacoco.csv
     set +x
   fi
   echo "::endgroup::"

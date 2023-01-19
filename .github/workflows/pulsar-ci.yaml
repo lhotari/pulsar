@@ -343,7 +343,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: Jacoco-coverage-report-unittests
-          path: target/jacoco_full_coverage_report
+          path: target/jacoco_test_coverage_report
           retention-days: 7
 
       - name: Upload to Codecov
@@ -654,7 +654,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: Jacoco-coverage-report-inttests
-          path: target/jacoco_full_coverage_report
+          path: target/jacoco_test_coverage_report
           retention-days: 7
 
       - name: Upload to Codecov
@@ -1010,7 +1010,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: Jacoco-coverage-report-systests
-          path: target/jacoco_full_coverage_report
+          path: target/jacoco_test_coverage_report
           retention-days: 7
 
       - name: Upload to Codecov
