@@ -376,13 +376,29 @@ _ci_upload_coverage_files() {
 }
 
 ci_restore_unittest_coverage_files() {
+  _ci_restore_coverage_files unittest unit-tests
+}
+
+ci_restore_inttest_coverage_files() {
+  _ci_restore_coverage_files inttest integration-tests
+}
+
+ci_restore_systest_coverage_files() {
+  _ci_restore_coverage_files systest system-tests
+}
+
+_ci_restore_coverage_files() {
   (
+  test_type="$1"
+  job_name="$2"
   cd /
-  for testgroup in $($SCRIPT_DIR/run_unit_group.sh --list | { grep -v FLAKY || true; }); do
-    ci_restore_tar_from_github_actions_artifacts coverage_and_deps_unittest_${testgroup} || true
+  for testgroup in $(yq e ".jobs.${job_name}.strategy.matrix.include.[] | select(.no_coverage != true) | .group" "$GITHUB_WORKSPACE/.github/workflows/pulsar-ci.yaml"); do
+    ci_restore_tar_from_github_actions_artifacts coverage_and_deps_${test_type}_${testgroup} || true
   done
   )
 }
+
+
 
 # creates an aggregated jacoco xml report for all projects that contain a target/jacoco.exec file
 #
