@@ -473,6 +473,42 @@ ci_create_test_coverage_report() {
   echo "::endgroup::"
 }
 
+# creates a jacoco xml report of the jacoco exec files produced in docker containers which have /tmp/jacocoDir mounted as /jacocoDir
+# this is used to calculate test coverage for the apache/pulsar code that is run inside the containers in integration tests
+# and system tests
+ci_create_inttest_coverage_report() {
+  echo "::group::Create int test coverage in containers report"
+  if [[ -n "$(find /tmp/jacocoDir -name "*.exec" -print -quit)" ]]; then
+    cd "$GITHUB_WORKSPACE"
+    local jacoco_xml_file=tests/integration/target/site/jacoco/jacoco_inttests.xml
+    echo "Creating coverage report to $jacoco_xml_file"
+    local jacoco_version=$(mvn help:evaluate -Dexpression=jacoco-maven-plugin.version -Dscan=false -q -DforceStdout)
+    set -x
+    mkdir -p $(dirname $jacoco_xml_file)
+    # install jacococli.jar command line tool
+    if [ ! -f /tmp/jacocoDir/jacococli.jar ]; then
+      curl -sL -o /tmp/jacocoDir/jacococli.jar "https://repo1.maven.org/maven2/org/jacoco/org.jacoco.cli/${jacoco_version}/org.jacoco.cli-${jacoco_version}-nodeps.jar"
+    fi
+    # extract the Pulsar jar files from the docker image that was used to run the tests in the docker containers
+    # the class files used to produce the jacoco exec files are needed in the xml report generation
+    if [ ! -d /tmp/jacocoDir/pulsar_lib ]; then
+      mkdir /tmp/jacocoDir/pulsar_lib
+      docker run --rm -u "$UID:${GID:-"$(id -g)"}" -v /tmp/jacocoDir/pulsar_lib:/pulsar_lib:rw ${PULSAR_TEST_IMAGE_NAME:-apachepulsar/java-test-image:latest} bash -c "cp -p /pulsar/lib/org.apache.pulsar-* /pulsar_lib"
+      # remove jar file that causes duplicate classes issue
+      rm /tmp/jacocoDir/pulsar_lib/org.apache.pulsar-bouncy-castle*
+    fi
+    # produce jacoco XML coverage report from the exec files and using the extracted jar files
+    java -jar /tmp/jacocoDir/jacococli.jar report /tmp/jacocoDir/*.exec \
+      --classfiles /tmp/jacocoDir/pulsar_lib --encoding UTF-8 --name "Pulsar Integration Tests - coverage in containers" \
+      $(find -path "*/src/main/java" -printf "--sourcefiles %P ") \
+      --xml $jacoco_xml_file
+    set +x
+  else
+    echo "No /tmp/jacocoDir/*.exec files to process"
+  fi
+  echo "::endgroup::"
+}
+
 if [ -z "$1" ]; then
   echo "usage: $0 [ci_tool_function_name]"
   echo "Available ci tool functions:"
