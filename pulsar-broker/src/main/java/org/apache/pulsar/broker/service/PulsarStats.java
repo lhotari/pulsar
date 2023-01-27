@@ -59,8 +59,8 @@ public class PulsarStats implements Closeable {
     private final ReentrantReadWriteLock bufferLock = new ReentrantReadWriteLock();
 
     public PulsarStats(PulsarService pulsar) {
-        this.topicStatsBuf = Unpooled.buffer(16 * 1024);
-        this.tempTopicStatsBuf = Unpooled.buffer(16 * 1024);
+        this.topicStatsBuf = Unpooled.buffer(16 * 1024).retain();
+        this.tempTopicStatsBuf = Unpooled.buffer(16 * 1024).retain();
 
         this.nsStats = new NamespaceStats(pulsar.getConfig().getStatsUpdateFrequencyInSecs());
         this.clusterReplicationMetrics = new ClusterReplicationMetrics(pulsar.getConfiguration().getClusterName(),
