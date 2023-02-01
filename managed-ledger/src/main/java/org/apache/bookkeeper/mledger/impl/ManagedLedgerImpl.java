@@ -1949,7 +1949,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     void invalidateReadHandle(long ledgerId) {
         CompletableFuture<ReadHandle> rhf = ledgerCache.remove(ledgerId);
         if (rhf != null) {
-            rhf.thenAccept(ReadHandle::closeAsync)
+            rhf.thenCompose(ReadHandle::closeAsync)
                     .exceptionally(ex -> {
                         log.warn("[{}] Failed to close a Ledger ReadHandle:", name, ex);
                         return null;

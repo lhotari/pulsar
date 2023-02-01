@@ -625,7 +625,7 @@ public abstract class AdminResource extends PulsarWebResource {
                     }
                     replicatedClusters.forEach(cluster -> {
                         pulsar().getPulsarResources().getClusterResources().getClusterAsync(cluster)
-                                .thenAccept(clusterDataOp ->
+                                .thenCompose(clusterDataOp ->
                                         ((TopicsImpl) pulsar().getBrokerService()
                                                 .getClusterPulsarAdmin(cluster, clusterDataOp).topics())
                                                 .createPartitionedTopicAsync(
