@@ -155,15 +155,15 @@ public class BucketDelayedDeliveryTracker extends AbstractDelayedDeliveryTracker
         }
 
         try {
-            FutureUtil.waitForAll(futures).whenComplete((__, ex) -> {
-                toBeDeletedBucketMap.forEach((k, immutableBucket) -> {
-                    immutableBuckets.asMapOfRanges().remove(k);
-                    immutableBucket.asyncDeleteBucketSnapshot();
-                });
-            }).get(AsyncOperationTimeoutSeconds, TimeUnit.SECONDS);
+            FutureUtil.waitForAll(futures).get(AsyncOperationTimeoutSeconds, TimeUnit.SECONDS);
         } catch (InterruptedException | ExecutionException | TimeoutException e) {
             throw new RuntimeException(e);
         }
+
+        toBeDeletedBucketMap.forEach((k, immutableBucket) -> {
+            immutableBuckets.asMapOfRanges().remove(k);
+            immutableBucket.asyncDeleteBucketSnapshot();
+        });
 
         MutableLong numberDelayedMessages = new MutableLong(0);
         immutableBuckets.asMapOfRanges().values().forEach(bucket -> {
