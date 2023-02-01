@@ -78,6 +78,7 @@ public class PendingAckHandleImpl extends PendingAckHandleState implements Pendi
      *     If the position is batch position and it exits the map, will do operation `and` for this
      *     two positions bit set.
      */
+    // TODO: there seems to be a lot of thread safety issues with individualAckOfTransaction
     private LinkedMap<TxnID, HashMap<PositionImpl, PositionImpl>> individualAckOfTransaction;
 
     /**
