@@ -2020,9 +2020,8 @@ public class ConsumerImpl<T> extends ConsumerBase<T> implements ConnectionHandle
                                         log.warn("[{}] [{}] [{}] Failed to acknowledge the message {} of the original"
                                                         + " topic but send to the DLQ successfully.",
                                                 topicName, subscription, consumerName, finalMessageId, ex);
-                                    } else {
-                                        result.complete(true);
                                     }
+                                    result.complete(true);
                                 });
                             }).exceptionally(ex -> {
                                 if (ex instanceof PulsarClientException.ProducerQueueIsFullError) {
