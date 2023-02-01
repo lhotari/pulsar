@@ -318,6 +318,8 @@ public class BucketDelayedDeliveryTracker extends AbstractDelayedDeliveryTracker
             CompletableFuture<List<DelayedMessageIndexBucketSnapshotFormat.SnapshotSegment>> futureB =
                     bucketB.getRemainSnapshotSegment();
             return futureA.thenCombine(futureB, CombinedSegmentDelayedIndexQueue::wrap)
+                    // TODO: the following thenAccept should be executed with a executor since
+                    // this could block the BookKeeper client thread which executes the callback
                     .thenAccept(combinedDelayedIndexQueue -> {
                         Pair<ImmutableBucket, DelayedIndex> immutableBucketDelayedIndexPair =
                                 lastMutableBucket.createImmutableBucketAndAsyncPersistent(
@@ -398,6 +400,7 @@ public class BucketDelayedDeliveryTracker extends AbstractDelayedDeliveryTracker
                 // All message of current snapshot segment are scheduled, load next snapshot segment
                 // TODO make it asynchronous and not blocking this process
                 try {
+                    // TODO: run thenAccept on a separate executor
                     bucket.asyncLoadNextBucketSnapshotEntry().thenAccept(indexList -> {
                         if (CollectionUtils.isEmpty(indexList)) {
                             immutableBuckets.remove(Range.closed(bucket.startLedgerId, bucket.endLedgerId));
