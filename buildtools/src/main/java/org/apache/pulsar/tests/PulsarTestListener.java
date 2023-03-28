@@ -18,7 +18,13 @@
  */
 package org.apache.pulsar.tests;
 
+import java.lang.management.ManagementFactory;
 import java.util.Arrays;
+import javax.management.InstanceNotFoundException;
+import javax.management.MBeanServer;
+import javax.management.MBeanServerInvocationHandler;
+import javax.management.MalformedObjectNameException;
+import javax.management.ObjectName;
 import org.testng.ITestContext;
 import org.testng.ITestListener;
 import org.testng.ITestResult;
@@ -72,5 +78,33 @@ public class PulsarTestListener implements ITestListener {
 
     @Override
     public void onFinish(ITestContext context) {
+        // dump jacoco coverage data to file using the Jacoco JMX interface
+        triggerJacocoDump();
+    }
+
+    private static void triggerJacocoDump() {
+        ObjectName jacocoObjectName = null;
+        try {
+            jacocoObjectName = new ObjectName("org.jacoco:type=Runtime");
+        } catch (MalformedObjectNameException e) {
+            // this won't happen since the ObjectName is static and valid
+            throw new RuntimeException(e);
+        }
+        final MBeanServer platformMBeanServer = ManagementFactory.getPlatformMBeanServer();
+        try {
+            platformMBeanServer.getObjectInstance(jacocoObjectName);
+        } catch (InstanceNotFoundException e) {
+            // jacoco jmx is not enabled
+            return;
+        }
+        System.out.println("Dumping Jacoco coverage data to file...");
+        JacocoProxy jacocoProxy = MBeanServerInvocationHandler.newProxyInstance(platformMBeanServer, jacocoObjectName,
+                JacocoProxy.class, false);
+        jacocoProxy.dump(true);
+        System.out.println("Completed.");
+    }
+
+    public interface JacocoProxy {
+        void dump(boolean reset);
     }
 }
