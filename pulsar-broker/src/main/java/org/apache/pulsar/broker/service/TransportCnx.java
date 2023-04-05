@@ -79,5 +79,12 @@ public interface TransportCnx {
 
     String clientSourceAddress();
 
-    CompletableFuture<Void> checkIfConnectionIsDead();
+    /***
+     * Check if the connection is still alive
+     * by actively sending a Ping message to the client.
+     *
+     * @return a completable future where the result is true if the connection is alive, false otherwise. The result
+     * is null if the connection liveness check is disabled.
+     */
+    CompletableFuture<Boolean> checkConnectionLiveness();
 }

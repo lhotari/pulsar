@@ -136,7 +136,7 @@ public class HashRangeExclusiveStickyKeyConsumerSelector implements StickyKeyCon
         }
         Consumer conflictingConsumer = findConflictingConsumer(ranges);
         if (conflictingConsumer != null) {
-            return conflictingConsumer.cnx().checkIfConnectionIsDead();
+            return conflictingConsumer.cnx().checkConnectionLiveness().thenRun(() -> {});
         } else {
             return CompletableFuture.completedFuture(null);
         }

@@ -348,7 +348,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
 
         // complete possible pending connection check future
         if (connectionCheckInProgress != null && !connectionCheckInProgress.isDone()) {
-            connectionCheckInProgress.complete(null);
+            connectionCheckInProgress.complete(false);
         }
     }
 
@@ -3096,16 +3096,16 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         }
     }
 
-    CompletableFuture<Void> connectionCheckInProgress;
+    CompletableFuture<Boolean> connectionCheckInProgress;
 
     @Override
-    public CompletableFuture<Void> checkIfConnectionIsDead() {
+    public CompletableFuture<Boolean> checkConnectionLiveness() {
         if (connectionLivenessCheckTimeoutMillis > 0) {
             return NettyFutureUtil.toCompletableFuture(ctx.executor().submit(() -> {
                 if (connectionCheckInProgress != null) {
                     return connectionCheckInProgress;
                 } else {
-                    final CompletableFuture<Void> finalConnectionCheckInProgress = new CompletableFuture<>();
+                    final CompletableFuture<Boolean> finalConnectionCheckInProgress = new CompletableFuture<>();
                     connectionCheckInProgress = finalConnectionCheckInProgress;
                     ctx.executor().schedule(() -> {
                         if (finalConnectionCheckInProgress == connectionCheckInProgress
@@ -3120,7 +3120,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             })).thenCompose(java.util.function.Function.identity());
         } else {
             // check is disabled
-            return CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture((Boolean) null);
         }
     }
 
@@ -3128,7 +3128,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
     protected void messageReceived() {
         super.messageReceived();
         if (connectionCheckInProgress != null && !connectionCheckInProgress.isDone()) {
-            connectionCheckInProgress.complete(null);
+            connectionCheckInProgress.complete(true);
             connectionCheckInProgress = null;
         }
     }
