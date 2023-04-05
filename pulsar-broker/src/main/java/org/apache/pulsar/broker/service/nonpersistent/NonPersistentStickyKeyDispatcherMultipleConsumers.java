@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.service.BrokerServiceException;
@@ -39,6 +40,7 @@ import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
 import org.apache.pulsar.common.api.proto.KeySharedMeta;
 import org.apache.pulsar.common.api.proto.KeySharedMode;
 import org.apache.pulsar.common.protocol.Commands;
+import org.apache.pulsar.common.util.FutureUtil;
 
 public class NonPersistentStickyKeyDispatcherMultipleConsumers extends NonPersistentDispatcherMultipleConsumers {
 
@@ -83,15 +85,19 @@ public class NonPersistentStickyKeyDispatcherMultipleConsumers extends NonPersis
     }
 
     @Override
-    public synchronized void addConsumer(Consumer consumer) throws BrokerServiceException {
-        super.addConsumer(consumer);
-        try {
-            selector.addConsumer(consumer);
-        } catch (BrokerServiceException e) {
-            consumerSet.removeAll(consumer);
-            consumerList.remove(consumer);
-            throw e;
-        }
+    public synchronized CompletableFuture<Void> addConsumer(Consumer consumer) {
+        return super.addConsumer(consumer).thenCompose(__ ->
+                selector.addConsumer(consumer).handle((value, ex) -> {
+                    if (ex != null) {
+                        synchronized (NonPersistentStickyKeyDispatcherMultipleConsumers.this) {
+                            consumerSet.removeAll(consumer);
+                            consumerList.remove(consumer);
+                        }
+                        throw FutureUtil.wrapToCompletionException(ex);
+                    } else {
+                        return value;
+                    }
+                }));
     }
 
     @Override

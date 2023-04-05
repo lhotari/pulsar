@@ -21,6 +21,7 @@ package org.apache.pulsar.broker.service;
 import io.netty.handler.codec.haproxy.HAProxyMessage;
 import io.netty.util.concurrent.Promise;
 import java.net.SocketAddress;
+import java.util.concurrent.CompletableFuture;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
 
 public interface TransportCnx {
@@ -78,4 +79,5 @@ public interface TransportCnx {
 
     String clientSourceAddress();
 
+    CompletableFuture<Void> checkIfConnectionIsDead();
 }

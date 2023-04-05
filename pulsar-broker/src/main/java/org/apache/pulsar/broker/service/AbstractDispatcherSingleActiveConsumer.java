@@ -31,6 +31,7 @@ import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.service.BrokerServiceException.ConsumerBusyException;
 import org.apache.pulsar.broker.service.BrokerServiceException.ServerMetadataException;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
+import org.apache.pulsar.common.util.FutureUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -136,20 +137,20 @@ public abstract class AbstractDispatcherSingleActiveConsumer extends AbstractBas
         }
     }
 
-    public synchronized void addConsumer(Consumer consumer) throws BrokerServiceException {
+    public synchronized CompletableFuture<Void> addConsumer(Consumer consumer) {
         if (IS_CLOSED_UPDATER.get(this) == TRUE) {
             log.warn("[{}] Dispatcher is already closed. Closing consumer {}", this.topicName, consumer);
             consumer.disconnect();
         }
 
         if (subscriptionType == SubType.Exclusive && !consumers.isEmpty()) {
-            throw new ConsumerBusyException("Exclusive consumer is already connected");
+            return FutureUtil.failedFuture(new ConsumerBusyException("Exclusive consumer is already connected"));
         }
 
         if (subscriptionType == SubType.Failover && isConsumersExceededOnSubscription()) {
             log.warn("[{}] Attempting to add consumer to subscription which reached max consumers limit",
                     this.topicName);
-            throw new ConsumerBusyException("Subscription reached max consumers limit");
+            return FutureUtil.failedFuture(new ConsumerBusyException("Subscription reached max consumers limit"));
         }
 
         if (subscriptionType == SubType.Exclusive
@@ -181,6 +182,7 @@ public abstract class AbstractDispatcherSingleActiveConsumer extends AbstractBas
             }
         }
 
+        return CompletableFuture.completedFuture(null);
     }
 
     public synchronized void removeConsumer(Consumer consumer) throws BrokerServiceException {

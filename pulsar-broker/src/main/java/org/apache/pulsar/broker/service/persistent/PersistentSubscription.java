@@ -291,12 +291,7 @@ public class PersistentSubscription extends AbstractSubscription implements Subs
                     }
                 }
 
-                try {
-                    dispatcher.addConsumer(consumer);
-                    return CompletableFuture.completedFuture(null);
-                } catch (BrokerServiceException brokerServiceException) {
-                    return FutureUtil.failedFuture(brokerServiceException);
-                }
+                return dispatcher.addConsumer(consumer);
             }
         });
     }

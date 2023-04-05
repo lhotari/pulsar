@@ -31,7 +31,7 @@ import org.apache.pulsar.common.stats.Rate;
 
 public interface NonPersistentDispatcher extends Dispatcher {
 
-    void addConsumer(Consumer consumer) throws BrokerServiceException;
+    CompletableFuture<Void> addConsumer(Consumer consumer);
 
     void removeConsumer(Consumer consumer) throws BrokerServiceException;
 
