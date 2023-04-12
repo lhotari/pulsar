@@ -28,6 +28,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import org.apache.pulsar.client.api.Range;
 import org.apache.pulsar.common.api.proto.IntRange;
@@ -193,6 +194,9 @@ public class HashRangeExclusiveStickyKeyConsumerSelectorTest {
     public void testSingleRangeConflict() throws ExecutionException, InterruptedException {
         HashRangeExclusiveStickyKeyConsumerSelector selector = new HashRangeExclusiveStickyKeyConsumerSelector(10);
         Consumer consumer1 = mock(Consumer.class);
+        TransportCnx transportCnx = mock(TransportCnx.class);
+        when(consumer1.cnx()).thenReturn(transportCnx);
+        when(transportCnx.checkConnectionLiveness()).thenReturn(CompletableFuture.completedFuture(null));
         KeySharedMeta keySharedMeta1 = new KeySharedMeta()
                 .setKeySharedMode(KeySharedMode.STICKY);
         keySharedMeta1.addHashRange().setStart(2).setEnd(5);
@@ -233,6 +237,9 @@ public class HashRangeExclusiveStickyKeyConsumerSelectorTest {
     public void testMultipleRangeConflict() throws ExecutionException, InterruptedException {
         HashRangeExclusiveStickyKeyConsumerSelector selector = new HashRangeExclusiveStickyKeyConsumerSelector(10);
         Consumer consumer1 = mock(Consumer.class);
+        TransportCnx transportCnx = mock(TransportCnx.class);
+        when(consumer1.cnx()).thenReturn(transportCnx);
+        when(transportCnx.checkConnectionLiveness()).thenReturn(CompletableFuture.completedFuture(null));
         KeySharedMeta keySharedMeta1 = new KeySharedMeta()
                 .setKeySharedMode(KeySharedMode.STICKY);
         keySharedMeta1.addHashRange().setStart(2).setEnd(5);
