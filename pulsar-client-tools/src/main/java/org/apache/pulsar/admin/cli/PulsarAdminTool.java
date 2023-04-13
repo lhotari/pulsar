@@ -25,7 +25,6 @@ import com.beust.jcommander.Parameter;
 import com.google.common.annotations.VisibleForTesting;
 import java.io.FileInputStream;
 import java.lang.reflect.InvocationTargetException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -48,7 +47,7 @@ public class PulsarAdminTool {
 
     private static int lastExitCode = Integer.MIN_VALUE;
 
-    protected List<CustomCommandFactory> customCommandFactories = new ArrayList();
+    protected final List<CustomCommandFactory> customCommandFactories;
     protected Map<String, Class<?>> commandMap;
     protected JCommander jcommander;
     protected RootParams rootParams;
@@ -100,6 +99,7 @@ public class PulsarAdminTool {
 
     public PulsarAdminTool(Properties properties) throws Exception {
         this.properties = properties;
+        customCommandFactories = CustomCommandFactoryProvider.createCustomCommandFactories(properties);
         rootParams = new RootParams();
         // fallback to previous-version serviceUrl property to maintain backward-compatibility
         initRootParamsFromProperties(properties);
@@ -157,7 +157,6 @@ public class PulsarAdminTool {
                     return properties;
                 }
             };
-            loadCustomCommandFactories();
 
             for (CustomCommandFactory factory : customCommandFactories) {
                 List<CustomCommandGroup> customCommandGroups = factory.commandGroups(context);
@@ -178,11 +177,6 @@ public class PulsarAdminTool {
             exit(1);
         }
     }
-
-    private void loadCustomCommandFactories() throws Exception {
-        customCommandFactories = CustomCommandFactoryProvider.createCustomCommandFactories(properties);
-    }
-
 
     private void addCommand(Map.Entry<String, Class<?>> c, Supplier<PulsarAdmin> admin) throws Exception {
         // To remain backwards compatibility for "source" and "sink" commands

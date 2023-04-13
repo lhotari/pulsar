@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -78,7 +78,7 @@ public class AuthorizationServiceTest {
                 {"fail.proxy", "fail.client", Boolean.FALSE},
 
                 // Not proxy with original principal
-                {"pass.not-proxy", "pass.client", Boolean.TRUE},
+                {"pass.not-proxy", "pass.client", Boolean.FALSE}, // non proxy role can't pass original role
                 {"pass.not-proxy", "fail.client", Boolean.FALSE},
                 {"fail.not-proxy", "pass.client", Boolean.FALSE},
                 {"fail.not-proxy", "fail.client", Boolean.FALSE},

@@ -46,7 +46,10 @@ import static org.testng.Assert.fail;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.util.HashSet;
 import org.apache.distributedlog.DistributedLogConfiguration;
+import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.common.configuration.PulsarConfigurationLoader;
 
 public class WorkerUtilsTest {
 
@@ -117,5 +120,16 @@ public class WorkerUtilsTest {
         // Verify the outcome.
         assertEquals(dlogConf.getString("bkc.testKey"), "fakeValue",
                 "The bookkeeper client config mapping should apply.");
+    }
+
+    @Test
+    public void testProxyRolesInWorkerConfigMapToServiceConfiguration() throws Exception {
+        URL yamlUrl = getClass().getClassLoader().getResource("test_worker_config.yml");
+        WorkerConfig wc = WorkerConfig.load(yamlUrl.toURI().getPath());
+        ServiceConfiguration conf = PulsarConfigurationLoader.convertFrom(wc);
+        HashSet<String> proxyRoles = new HashSet<>();
+        proxyRoles.add("proxyA");
+        proxyRoles.add("proxyB");
+        assertEquals(conf.getProxyRoles(), proxyRoles);
     }
 }

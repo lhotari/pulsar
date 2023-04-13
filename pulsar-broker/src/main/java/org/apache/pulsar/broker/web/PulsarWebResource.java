@@ -55,6 +55,7 @@ import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationDataHttps;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
+import org.apache.pulsar.broker.authentication.AuthenticationParameters;
 import org.apache.pulsar.broker.authorization.AuthorizationService;
 import org.apache.pulsar.broker.namespace.LookupOptions;
 import org.apache.pulsar.broker.namespace.NamespaceService;
@@ -141,6 +142,14 @@ public abstract class PulsarWebResource {
         return PolicyPath.splitPath(source, slice);
     }
 
+    public AuthenticationParameters authParams() {
+        return AuthenticationParameters.builder()
+                .originalPrincipal(originalPrincipal())
+                .clientRole(clientAppId())
+                .clientAuthenticationDataSource(clientAuthData())
+                .build();
+    }
+
     /**
      * Gets a caller id (IP + role).
      *
@@ -195,7 +204,7 @@ public abstract class PulsarWebResource {
         String originalPrincipal = originalPrincipal();
         validateOriginalPrincipal(appId, originalPrincipal);
 
-        if (pulsar.getConfiguration().getProxyRoles().contains(appId) || StringUtils.isNotBlank(originalPrincipal())) {
+        if (pulsar.getConfiguration().getProxyRoles().contains(appId)) {
             BrokerService brokerService = pulsar.getBrokerService();
             return brokerService.getAuthorizationService().isSuperUser(appId, clientAuthData())
                     .thenCompose(proxyAuthorizationSuccess -> {
@@ -315,8 +324,7 @@ public abstract class PulsarWebResource {
                             throw new RestException(Status.FORBIDDEN, "Need to authenticate to perform the request");
                         }
                         validateOriginalPrincipal(clientAppId, originalPrincipal);
-                        if (pulsar.getConfiguration().getProxyRoles().contains(clientAppId)
-                                || StringUtils.isNotBlank(originalPrincipal)) {
+                        if (pulsar.getConfiguration().getProxyRoles().contains(clientAppId)) {
                             AuthorizationService authorizationService =
                                     pulsar.getBrokerService().getAuthorizationService();
                             return authorizationService.isTenantAdmin(tenant, clientAppId, tenantInfo,

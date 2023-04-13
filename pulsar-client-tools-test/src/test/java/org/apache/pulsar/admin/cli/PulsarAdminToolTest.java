@@ -27,7 +27,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -40,11 +42,11 @@ import java.io.PrintStream;
 import java.lang.reflect.Field;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
@@ -52,6 +54,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.pulsar.admin.cli.extensions.CustomCommandFactory;
 import org.apache.pulsar.admin.cli.utils.SchemaExtractor;
 import org.apache.pulsar.client.admin.Bookies;
 import org.apache.pulsar.client.admin.BrokerStats;
@@ -2213,6 +2216,32 @@ public class PulsarAdminToolTest {
         assertTrue(logs.contains("-bf=false")); // boolean flag, not passed = false
         assertTrue(logs.contains("main=null"));
 
+    }
+
+    @Test
+    public void customCommandsFactoryImmutable() throws Exception {
+        File narFile = new File(PulsarAdminTool.class.getClassLoader()
+                .getResource("cliextensions/customCommands-nar.nar").getFile());
+        log.info("NAR FILE is {}", narFile);
+
+        PulsarAdminBuilder builder = mock(PulsarAdminBuilder.class);
+        PulsarAdmin admin = mock(PulsarAdmin.class);
+        when(builder.build()).thenReturn(admin);
+        Topics topics = mock(Topics.class);
+        when(admin.topics()).thenReturn(topics);
+        TopicStats topicStats = mock(TopicStats.class);
+        when(topics.getStats(anyString())).thenReturn(topicStats);
+        when(topicStats.toString()).thenReturn("MOCK-TOPIC-STATS");
+
+        Properties properties = new Properties();
+        properties.put("webServiceUrl", "http://localhost:2181");
+        properties.put("cliExtensionsDirectory", narFile.getParentFile().getAbsolutePath());
+        properties.put("customCommandFactories", "dummy");
+        PulsarAdminTool tool = new PulsarAdminTool(properties);
+        List<CustomCommandFactory> customCommandFactories = tool.customCommandFactories;
+        assertNotNull(customCommandFactories);
+        tool.run(split("-h"));
+        assertSame(tool.customCommandFactories, customCommandFactories);
     }
 
     private static String runCustomCommand(String[] args) throws Exception {

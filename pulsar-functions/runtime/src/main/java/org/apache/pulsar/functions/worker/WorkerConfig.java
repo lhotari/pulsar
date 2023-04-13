@@ -527,7 +527,13 @@ public class WorkerConfig implements Serializable, PulsarConfiguration {
         category = CATEGORY_WORKER_SECURITY,
         doc = "Role names that are treated as `super-user`, meaning they will be able to access any admin-api"
     )
-    private Set<String> superUserRoles = Sets.newTreeSet();
+    private Set<String> superUserRoles = new TreeSet<>();
+
+    @FieldContext(
+            category = CATEGORY_WORKER_SECURITY,
+            doc = "Role names that are treated as `proxy roles`. These are the only roles that can supply the "
+                    + "originalPrincipal.")
+    private Set<String> proxyRoles = new TreeSet<>();
 
     private Properties properties = new Properties();
 
