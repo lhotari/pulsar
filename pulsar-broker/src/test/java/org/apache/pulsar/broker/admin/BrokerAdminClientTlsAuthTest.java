@@ -51,10 +51,15 @@ public class BrokerAdminClientTlsAuthTest extends MockedPulsarServiceBaseTest {
     @BeforeMethod
     @Override
     public void setup() throws Exception {
+        super.internalSetup();
+    }
+
+    @Override
+    protected void doInitConf() throws Exception {
+        super.doInitConf();
         conf.setBrokerServicePortTls(Optional.of(0));
         conf.setWebServicePortTls(Optional.of(0));
         buildConf(conf);
-        super.internalSetup();
     }
 
     private void buildConf(ServiceConfiguration conf) {

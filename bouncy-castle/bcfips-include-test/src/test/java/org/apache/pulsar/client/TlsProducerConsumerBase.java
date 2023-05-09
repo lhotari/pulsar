@@ -47,11 +47,7 @@ public class TlsProducerConsumerBase extends ProducerConsumerBase {
     @BeforeMethod(alwaysRun = true)
     @Override
     protected void setup() throws Exception {
-        // TLS configuration for Broker
-        internalSetUpForBroker();
-
-        // Start Broker
-        super.init();
+        super.internalSetup();
     }
 
     @AfterMethod(alwaysRun = true)
@@ -60,7 +56,9 @@ public class TlsProducerConsumerBase extends ProducerConsumerBase {
         super.internalCleanup();
     }
 
-    protected void internalSetUpForBroker() throws Exception {
+    @Override
+    protected void doInitConf() throws Exception {
+        super.doInitConf();
         conf.setBrokerServicePortTls(Optional.of(0));
         conf.setWebServicePortTls(Optional.of(0));
         conf.setTlsCertificateFilePath(TLS_SERVER_CERT_FILE_PATH);
@@ -97,13 +95,9 @@ public class TlsProducerConsumerBase extends ProducerConsumerBase {
         authParams.put("tlsCertFile", TLS_CLIENT_CERT_FILE_PATH);
         authParams.put("tlsKeyFile", TLS_CLIENT_KEY_FILE_PATH);
 
-        if (admin != null) {
-            admin.close();
-        }
-
-        admin = spy(PulsarAdmin.builder().serviceHttpUrl(brokerUrlTls.toString())
+        replacePulsarAdmin(spy(PulsarAdmin.builder().serviceHttpUrl(brokerUrlTls.toString())
                 .tlsTrustCertsFilePath(TLS_TRUST_CERT_FILE_PATH).allowTlsInsecureConnection(false)
-                .authentication(AuthenticationTls.class.getName(), authParams).build());
+                .authentication(AuthenticationTls.class.getName(), authParams));
         admin.clusters().createCluster(clusterName, ClusterData.builder()
                 .serviceUrl(brokerUrl.toString())
                 .serviceUrlTls(brokerUrlTls.toString())

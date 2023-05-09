@@ -118,16 +118,12 @@ public class KeyStoreTlsProducerConsumerTestWithoutAuthTest extends ProducerCons
         authParams.put(AuthenticationKeyStoreTls.KEYSTORE_PATH, CLIENT_KEYSTORE_FILE_PATH);
         authParams.put(AuthenticationKeyStoreTls.KEYSTORE_PW, CLIENT_KEYSTORE_PW);
 
-        if (admin != null) {
-            admin.close();
-        }
-
-        admin = spy(PulsarAdmin.builder().serviceHttpUrl(brokerUrlTls.toString())
+        replacePulsarAdmin(PulsarAdmin.builder().serviceHttpUrl(brokerUrlTls.toString())
                 .useKeyStoreTls(true)
                 .tlsTrustStorePath(BROKER_TRUSTSTORE_FILE_PATH)
                 .tlsTrustStorePassword(BROKER_TRUSTSTORE_PW)
                 .allowTlsInsecureConnection(true)
-                .authentication(AuthenticationKeyStoreTls.class.getName(), authParams).build());
+                .authentication(AuthenticationKeyStoreTls.class.getName(), authParams));
         admin.clusters().createCluster(clusterName, ClusterData.builder()
                 .serviceUrl(brokerUrl.toString())
                 .serviceUrlTls(brokerUrlTls.toString())

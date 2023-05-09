@@ -65,8 +65,11 @@ public class AdminApiTransactionMultiBrokerTest extends TransactionTestBase {
 
         for (int i = 0; map.containsValue(getPulsarServiceList().get(i).getBrokerServiceUrl()); i++) {
             if (!map.containsValue(getPulsarServiceList().get(i + 1).getBrokerServiceUrl()))
-                localAdmin = spy(createNewPulsarAdmin(PulsarAdmin.builder()
-                        .serviceHttpUrl(pulsarServiceList.get(i + 1).getWebServiceAddress())));
+                if (localAdmin != null) {
+                    localAdmin.close();
+                }
+                localAdmin = createNewPulsarAdmin(PulsarAdmin.builder()
+                        .serviceHttpUrl(pulsarServiceList.get(i + 1).getWebServiceAddress()));
         }
         if (pulsarClient != null) {
             pulsarClient.shutdown();

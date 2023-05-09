@@ -208,6 +208,22 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
         return pulsarClient;
     }
 
+    protected PulsarAdmin replacePulsarAdmin(PulsarAdminBuilder adminBuilder) throws PulsarClientException {
+        if (admin != null) {
+            admin.close();
+            if (MockUtil.isMock(admin)) {
+                Mockito.reset(admin);
+            }
+            admin = null;
+        }
+        admin = createNewPulsarAdmin(adminBuilder);
+        return admin;
+    }
+
+    protected PulsarAdmin createNewPulsarAdmin(PulsarAdminBuilder adminBuilder) throws PulsarClientException {
+        return spyWithoutRecordingInvocations(adminBuilder.build());
+    }
+
     protected final void internalSetupForStatsTest() throws Exception {
         init();
         String lookupUrl = brokerUrl.toString();
@@ -221,10 +237,8 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
         this.conf.setBrokerShutdownTimeoutMs(0L);
         this.conf.setLoadBalancerOverrideBrokerNicSpeedGbps(Optional.of(1.0d));
         this.conf.setBrokerServicePort(Optional.of(0));
-        this.conf.setBrokerServicePortTls(Optional.of(0));
         this.conf.setAdvertisedAddress("localhost");
         this.conf.setWebServicePort(Optional.of(0));
-        this.conf.setWebServicePortTls(Optional.of(0));
         this.conf.setNumExecutorThreadPoolSize(5);
         this.conf.setExposeBundlesMetricsInPrometheus(true);
     }
@@ -330,7 +344,7 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
                 ? brokerUrl.toString()
                 : brokerUrlTls.toString());
         customizeNewPulsarAdminBuilder(pulsarAdminBuilder);
-        admin = spyWithoutRecordingInvocations(pulsarAdminBuilder.build());
+        admin = createNewPulsarAdmin(pulsarAdminBuilder);
     }
 
     /**
@@ -464,9 +478,9 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
         configuration.setBrokerShutdownTimeoutMs(0L);
         configuration.setLoadBalancerOverrideBrokerNicSpeedGbps(Optional.of(1.0d));
         configuration.setBrokerServicePort(Optional.of(0));
-        configuration.setBrokerServicePortTls(Optional.of(0));
+        configuration.setBrokerServicePortTls(Optional.empty());
         configuration.setWebServicePort(Optional.of(0));
-        configuration.setWebServicePortTls(Optional.of(0));
+        configuration.setWebServicePortTls(Optional.empty());
         configuration.setBookkeeperClientExposeStatsToPrometheus(true);
         configuration.setNumExecutorThreadPoolSize(5);
         configuration.setBrokerMaxConnections(0);

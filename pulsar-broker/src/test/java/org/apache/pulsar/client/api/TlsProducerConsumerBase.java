@@ -97,13 +97,9 @@ public abstract class TlsProducerConsumerBase extends ProducerConsumerBase {
         authParams.put("tlsCertFile", TLS_CLIENT_CERT_FILE_PATH);
         authParams.put("tlsKeyFile", TLS_CLIENT_KEY_FILE_PATH);
 
-        if (admin != null) {
-            admin.close();
-        }
-
-        admin = spy(PulsarAdmin.builder().serviceHttpUrl(brokerUrlTls.toString())
+        replacePulsarAdmin(PulsarAdmin.builder().serviceHttpUrl(brokerUrlTls.toString())
                 .tlsTrustCertsFilePath(TLS_TRUST_CERT_FILE_PATH).allowTlsInsecureConnection(false)
-                .authentication(AuthenticationTls.class.getName(), authParams).build());
+                .authentication(AuthenticationTls.class.getName(), authParams));
         admin.clusters().createCluster(clusterName,
                 ClusterData.builder()
                         .serviceUrl(brokerUrl.toString())

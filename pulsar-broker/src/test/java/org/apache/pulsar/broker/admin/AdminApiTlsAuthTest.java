@@ -68,6 +68,15 @@ public class AdminApiTlsAuthTest extends MockedPulsarServiceBaseTest {
     @BeforeMethod
     @Override
     public void setup() throws Exception {
+        super.internalSetup();
+
+        PulsarAdmin admin = buildAdminClient("admin");
+        admin.clusters().createCluster("test", ClusterData.builder().serviceUrl(pulsar.getWebServiceAddress()).build());
+        admin.close();
+    }
+
+    protected void doInitConf() throws Exception {
+        super.doInitConf();
         conf.setLoadBalancerEnabled(true);
         conf.setBrokerServicePortTls(Optional.of(0));
         conf.setWebServicePortTls(Optional.of(0));
@@ -87,12 +96,6 @@ public class AdminApiTlsAuthTest extends MockedPulsarServiceBaseTest {
         conf.setBrokerClientTrustCertsFilePath(CA_CERT_FILE_PATH);
         conf.setBrokerClientTlsEnabled(true);
         conf.setNumExecutorThreadPoolSize(5);
-
-        super.internalSetup();
-
-        PulsarAdmin admin = buildAdminClient("admin");
-        admin.clusters().createCluster("test", ClusterData.builder().serviceUrl(pulsar.getWebServiceAddress()).build());
-        admin.close();
     }
 
     @AfterMethod(alwaysRun = true)

@@ -79,6 +79,12 @@ public class AuthenticatedProducerConsumerTest extends ProducerConsumerBase {
     @BeforeMethod
     @Override
     protected void setup() throws Exception {
+        doInitConf();
+        super.internalSetup();
+    }
+
+    @Override
+    protected void doInitConf() {
         if (methodName.equals("testAnonymousSyncProducerAndConsumer")) {
             conf.setAnonymousUserRole("anonymousUser");
         }
@@ -121,13 +127,11 @@ public class AuthenticatedProducerConsumerTest extends ProducerConsumerBase {
 
         conf.setClusterName("test");
         conf.setNumExecutorThreadPoolSize(5);
-        super.init();
     }
 
     protected final void internalSetup(Authentication auth) throws Exception {
-        admin = spy(PulsarAdmin.builder().serviceHttpUrl(brokerUrlTls.toString())
-                .tlsTrustCertsFilePath(TLS_TRUST_CERT_FILE_PATH).allowTlsInsecureConnection(true).authentication(auth)
-                .build());
+        replacePulsarAdmin(PulsarAdmin.builder().serviceHttpUrl(brokerUrlTls.toString())
+                .tlsTrustCertsFilePath(TLS_TRUST_CERT_FILE_PATH).allowTlsInsecureConnection(true).authentication(auth));
         String lookupUrl;
         // For http basic authentication test
         if (methodName.equals("testBasicCryptSyncProducerAndConsumer")) {
@@ -263,8 +267,7 @@ public class AuthenticatedProducerConsumerTest extends ProducerConsumerBase {
                 new TenantInfoImpl(Sets.newHashSet("anonymousUser"), Sets.newHashSet("test")));
 
         // make a PulsarAdmin instance as "anonymousUser" for http request
-        admin.close();
-        admin = spy(PulsarAdmin.builder().serviceHttpUrl(brokerUrl.toString()).build());
+        replacePulsarAdmin(PulsarAdmin.builder().serviceHttpUrl(brokerUrl.toString()));
         admin.namespaces().createNamespace("my-property/my-ns", Sets.newHashSet("test"));
         admin.topics().grantPermission("persistent://my-property/my-ns/my-topic", "anonymousUser",
                 EnumSet.allOf(AuthAction.class));
