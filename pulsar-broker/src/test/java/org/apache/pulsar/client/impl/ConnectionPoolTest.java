@@ -154,7 +154,7 @@ public class ConnectionPoolTest extends MockedPulsarServiceBaseTest {
     @Test
     public void testSetProxyToTargetBrokerAddress() throws Exception {
         ClientConfigurationData conf = new ClientConfigurationData();
-        conf.setConnectionsPerBroker(5);
+        conf.setConnectionsPerBroker(1);
 
 
         EventLoopGroup eventLoop =
@@ -184,11 +184,11 @@ public class ConnectionPoolTest extends MockedPulsarServiceBaseTest {
                 }
                 List<InetSocketAddress> result = new ArrayList<>();
                 if (isProxy) {
-                    result.add(new InetSocketAddress("localhost", brokerPort));
-                    result.add(InetSocketAddress.createUnresolved("proxy", brokerPort));
+                    result.add(new InetSocketAddress("127.0.0.101", brokerPort));
+                    result.add(new InetSocketAddress("127.0.0.102", brokerPort));
                 } else {
-                    result.add(new InetSocketAddress("127.0.0.1", brokerPort));
-                    result.add(InetSocketAddress.createUnresolved("broker", brokerPort));
+                    result.add(new InetSocketAddress("127.0.0.103", brokerPort));
+                    result.add(new InetSocketAddress("127.0.0.104", brokerPort));
                 }
                 promise.setSuccess(result);
             }
@@ -203,14 +203,12 @@ public class ConnectionPoolTest extends MockedPulsarServiceBaseTest {
                 InetSocketAddress.createUnresolved("proxy", 9999)).get();
         Assert.assertEquals(cnx.remoteHostName, "proxy");
         Assert.assertNull(cnx.proxyToTargetBrokerAddress);
-        cnx.close();
 
         cnx = pool.getConnection(
                 InetSocketAddress.createUnresolved("broker", 9999),
                 InetSocketAddress.createUnresolved("proxy", 9999)).get();
         Assert.assertEquals(cnx.remoteHostName, "proxy");
         Assert.assertEquals(cnx.proxyToTargetBrokerAddress, "broker:9999");
-        cnx.close();
 
 
         cnx = pool.getConnection(
@@ -218,8 +216,6 @@ public class ConnectionPoolTest extends MockedPulsarServiceBaseTest {
                 InetSocketAddress.createUnresolved("broker", 9999)).get();
         Assert.assertEquals(cnx.remoteHostName, "broker");
         Assert.assertNull(cnx.proxyToTargetBrokerAddress);
-        cnx.close();
-
 
         pool.closeAllConnections();
         pool.close();
