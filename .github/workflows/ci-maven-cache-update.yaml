@@ -61,11 +61,17 @@ jobs:
           - name: all modules
             runs-on: ubuntu-20.04
             cache_name: 'm2-dependencies-all'
-            mvn_arguments: ''
+            mvn_arguments: '-Pmain -DintegrationTests'
+
+          - name: all modules for docker build
+            runs-on: ubuntu-20.04
+            cache_name: 'm2-dependencies-docker-all'
+            mvn_arguments: '-Pmain -DintegrationTests -DnarPluginPhase=package'
 
           - name: all modules - macos
             runs-on: macos-11
             cache_name: 'm2-dependencies-all'
+            mvn_arguments: '-Pmain'
 
           - name: core-modules
             runs-on: ubuntu-20.04
