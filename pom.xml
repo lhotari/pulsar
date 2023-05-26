@@ -2344,6 +2344,7 @@ flexible messaging model and an intuitive client API.</description>
         <shadePluginPhase>none</shadePluginPhase>
         <narPluginPhase>none</narPluginPhase>
         <skipDocker>true</skipDocker>
+        <checkstyle.skip>true</checkstyle.skip>
       </properties>
       <build>
         <plugins>
