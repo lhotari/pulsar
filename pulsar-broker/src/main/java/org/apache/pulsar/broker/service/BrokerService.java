@@ -67,6 +67,7 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import javax.ws.rs.core.Response;
 import lombok.AccessLevel;
@@ -1522,20 +1523,27 @@ public class BrokerService implements Closeable {
 
         checkTopicNsOwnership(topic)
                 .thenRun(() -> {
-                    final Semaphore topicLoadSemaphore = topicLoadRequestSemaphore.get();
+                    if (!topicFuture.isDone()) {
+                        if (pulsar().isRunning()) {
+                            final Semaphore topicLoadSemaphore = topicLoadRequestSemaphore.get();
 
-                    if (topicLoadSemaphore.tryAcquire()) {
-                        checkOwnershipAndCreatePersistentTopic(topic, createIfMissing, topicFuture, properties);
-                        topicFuture.handle((persistentTopic, ex) -> {
-                            // release permit and process pending topic
-                            topicLoadSemaphore.release();
-                            createPendingLoadTopic();
-                            return null;
-                        });
-                    } else {
-                        pendingTopicLoadingQueue.add(new TopicLoadingContext(topic, topicFuture, properties));
-                        if (log.isDebugEnabled()) {
-                            log.debug("topic-loading for {} added into pending queue", topic);
+                            if (topicLoadSemaphore.tryAcquire()) {
+                                checkOwnershipAndCreatePersistentTopic(topic, createIfMissing, topicFuture, properties);
+                                topicFuture.handle((persistentTopic, ex) -> {
+                                    // release permit and process pending topic
+                                    topicLoadSemaphore.release();
+                                    createPendingLoadTopic();
+                                    return null;
+                                });
+                            } else {
+                                pendingTopicLoadingQueue.add(new TopicLoadingContext(topic, topicFuture, properties));
+                                if (log.isDebugEnabled()) {
+                                    log.debug("topic-loading for {} added into pending queue", topic);
+                                }
+                            }
+                        } else {
+                            topicFuture.completeExceptionally(new NotAllowedException(
+                                    "Broker is shutting down"));
                         }
                     }
                 }).exceptionally(ex -> {
@@ -1579,22 +1587,24 @@ public class BrokerService implements Closeable {
         pulsar.getNamespaceService().isServiceUnitActiveAsync(topicName)
                 .thenAccept(isActive -> {
                     if (isActive) {
-                        CompletableFuture<Map<String, String>> propertiesFuture;
-                        if (properties == null) {
-                            //Read properties from storage when loading topic.
-                            propertiesFuture = fetchTopicPropertiesAsync(topicName);
-                        } else {
-                            propertiesFuture = CompletableFuture.completedFuture(properties);
+                        if (!topicFuture.isDone()) {
+                            CompletableFuture<Map<String, String>> propertiesFuture;
+                            if (properties == null) {
+                                //Read properties from storage when loading topic.
+                                propertiesFuture = fetchTopicPropertiesAsync(topicName);
+                            } else {
+                                propertiesFuture = CompletableFuture.completedFuture(properties);
+                            }
+                            propertiesFuture.thenAccept(finalProperties ->
+                                    //TODO add topicName in properties?
+                                    createPersistentTopic(topic, createIfMissing, topicFuture, finalProperties)
+                            ).exceptionally(throwable -> {
+                                log.warn("[{}] Read topic property failed", topic, throwable);
+                                pulsar.getExecutor().execute(() -> topics.remove(topic, topicFuture));
+                                topicFuture.completeExceptionally(throwable);
+                                return null;
+                            });
                         }
-                        propertiesFuture.thenAccept(finalProperties ->
-                                //TODO add topicName in properties?
-                                createPersistentTopic(topic, createIfMissing, topicFuture, finalProperties)
-                        ).exceptionally(throwable -> {
-                            log.warn("[{}] Read topic property failed", topic, throwable);
-                            pulsar.getExecutor().execute(() -> topics.remove(topic, topicFuture));
-                            topicFuture.completeExceptionally(throwable);
-                            return null;
-                        });
                     } else {
                         // namespace is being unloaded
                         String msg = String.format("Namespace is being unloaded, cannot add topic %s", topic);
@@ -1619,6 +1629,10 @@ public class BrokerService implements Closeable {
     private void createPersistentTopic(final String topic, boolean createIfMissing,
                                        CompletableFuture<Optional<Topic>> topicFuture,
                                        Map<String, String> properties) {
+        if (topicFuture.isDone()) {
+            return;
+        }
+
         TopicName topicName = TopicName.get(topic);
         final long topicCreateTimeMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime());
 
@@ -1718,7 +1732,8 @@ public class BrokerService implements Closeable {
                                                         }, executor());
                                             } else {
                                                 addTopicToStatsMaps(topicName, persistentTopic);
-                                                topicFuture.complete(Optional.of(persistentTopic));
+                                                pulsar().getExecutor().submit(() -> topicFuture.complete(
+                                                        Optional.of(persistentTopic)));
                                             }
                                         })
                                         .exceptionally((ex) -> {
@@ -1748,7 +1763,7 @@ public class BrokerService implements Closeable {
                             if (!createIfMissing && exception instanceof ManagedLedgerNotFoundException) {
                                 // We were just trying to load a topic and the topic doesn't exist
                                 loadFuture.completeExceptionally(exception);
-                                topicFuture.complete(Optional.empty());
+                                pulsar().getExecutor().submit(() -> topicFuture.complete(Optional.empty()));
                             } else {
                                 log.warn("Failed to create topic {}", topic, exception);
                                 pulsar.getExecutor().execute(() -> topics.remove(topic, topicFuture));
@@ -2193,9 +2208,20 @@ public class BrokerService implements Closeable {
             if (serviceUnit.includes(topicName)) {
                 // Topic needs to be unloaded
                 log.info("[{}] Unloading topic", topicName);
-                closeFutures.add(topicFuture
-                        .thenCompose(t -> t.isPresent() ? t.get().close(closeWithoutWaitingClientDisconnect)
-                                : CompletableFuture.completedFuture(null)));
+                if (!topicFuture.isDone()) {
+                    String msg = "Namespace is being unloaded, cannot add topic " + name;
+                    topicFuture.completeExceptionally(new ServiceUnitNotReadyException(msg));
+                }
+                closeFutures.add(topicFuture.handle((topic, throwable) -> {
+                    CompletableFuture<Void> returnFuture;
+                    if (throwable != null) {
+                        returnFuture = CompletableFuture.completedFuture(null);
+                    } else {
+                        returnFuture = topic.isPresent() ? topic.get().close(closeWithoutWaitingClientDisconnect) :
+                                CompletableFuture.completedFuture(null);
+                    }
+                    return returnFuture;
+                }).thenComposeAsync(Function.identity()));
             }
         });
         if (getPulsar().getConfig().isTransactionCoordinatorEnabled()
@@ -3009,13 +3035,25 @@ public class BrokerService implements Closeable {
      * permit if it was successful to acquire it.
      */
     private void createPendingLoadTopic() {
+        if (!pulsar().isRunning()) {
+            log.warn("Pulsar is not running, skip create pending topic");
+            pendingTopicLoadingQueue.forEach(topicLoadingContext -> topicLoadingContext.getTopicFuture()
+                    .completeExceptionally(new NotAllowedException("Broker is not running")));
+            return;
+        }
+
         TopicLoadingContext pendingTopic = pendingTopicLoadingQueue.poll();
         if (pendingTopic == null) {
             return;
         }
 
+        if (pendingTopic.getTopicFuture().isDone()) {
+            createPendingLoadTopic();
+            return;
+        }
+
         final String topic = pendingTopic.getTopic();
-        checkTopicNsOwnership(topic).thenRun(() -> {
+        checkTopicNsOwnership(topic).thenRunAsync(() -> {
             CompletableFuture<Optional<Topic>> pendingFuture = pendingTopic.getTopicFuture();
             final Semaphore topicLoadSemaphore = topicLoadRequestSemaphore.get();
             final boolean acquiredPermit = topicLoadSemaphore.tryAcquire();
@@ -3028,7 +3066,7 @@ public class BrokerService implements Closeable {
                 createPendingLoadTopic();
                 return null;
             });
-        }).exceptionally(e -> {
+        }, pulsar().getExecutor()).exceptionally(e -> {
             log.error("Failed to create pending topic {}", topic, e);
             pendingTopic.getTopicFuture()
                     .completeExceptionally((e instanceof RuntimeException && e.getCause() != null) ? e.getCause() : e);
