@@ -125,11 +125,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-m2-dependencies-core-modules-
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: 17
+          java-version: 21
 
       - name: Check source code license headers
         run: mvn -B -T 8 -ntp initialize apache-rat:check license:check
@@ -231,11 +231,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-m2-dependencies-core-modules-
 
-      - name: Set up JDK ${{ matrix.jdk || '17' }}
+      - name: Set up JDK ${{ matrix.jdk || '21' }}
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: ${{ matrix.jdk || '17' }}
+          java-version: ${{ matrix.jdk || '21' }}
 
       - name: Install gh-actions-artifact-client.js
         uses: apache/pulsar-test-infra/gh-actions-artifact-client/dist@master
@@ -335,11 +335,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-m2-dependencies-core-modules-
 
-      - name: Set up JDK ${{ matrix.jdk || '17' }}
+      - name: Set up JDK ${{ matrix.jdk || '21' }}
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: ${{ matrix.jdk || '17' }}
+          java-version: ${{ matrix.jdk || '21' }}
 
       - name: Install gh-actions-artifact-client.js
         uses: apache/pulsar-test-infra/gh-actions-artifact-client/dist@master
@@ -415,11 +415,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-m2-dependencies-core-modules-
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: 17
+          java-version: 21
 
       - name: Install gh-actions-artifact-client.js
         uses: apache/pulsar-test-infra/gh-actions-artifact-client/dist@master
@@ -495,6 +495,12 @@ jobs:
 
           - name: Shade on Java 17
             group: SHADE_RUN
+            runtime_jdk: 17
+            setup: ./build/run_integration_group.sh SHADE_BUILD
+            no_coverage: true
+
+          - name: Shade on Java 21
+            group: SHADE_RUN
             setup: ./build/run_integration_group.sh SHADE_BUILD
             no_coverage: true
 
@@ -530,11 +536,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-m2-dependencies-core-modules-
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: 17
+          java-version: 21
 
       - name: Install gh-actions-artifact-client.js
         uses: apache/pulsar-test-infra/gh-actions-artifact-client/dist@master
@@ -646,11 +652,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-m2-dependencies-core-modules-
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: 17
+          java-version: 21
 
       - name: Install gh-actions-artifact-client.js
         uses: apache/pulsar-test-infra/gh-actions-artifact-client/dist@master
@@ -761,11 +767,11 @@ jobs:
             ${{ runner.os }}-m2-dependencies-core-modules-${{ hashFiles('**/pom.xml') }}
             ${{ runner.os }}-m2-dependencies-core-modules-
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: 17
+          java-version: 21
 
       - name: Install gh-actions-artifact-client.js
         uses: apache/pulsar-test-infra/gh-actions-artifact-client/dist@master
@@ -899,11 +905,11 @@ jobs:
             ${{ runner.os }}-m2-dependencies-core-modules-${{ hashFiles('**/pom.xml') }}
             ${{ runner.os }}-m2-dependencies-core-modules-
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: 17
+          java-version: 21
 
       - name: Install gh-actions-artifact-client.js
         uses: apache/pulsar-test-infra/gh-actions-artifact-client/dist@master
@@ -1010,11 +1016,11 @@ jobs:
             ${{ runner.os }}-m2-dependencies-core-modules-${{ hashFiles('**/pom.xml') }}
             ${{ runner.os }}-m2-dependencies-core-modules-
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: 17
+          java-version: 21
 
       - name: Install gh-actions-artifact-client.js
         uses: apache/pulsar-test-infra/gh-actions-artifact-client/dist@master
@@ -1112,11 +1118,11 @@ jobs:
             ${{ runner.os }}-m2-dependencies-core-modules-${{ hashFiles('**/pom.xml') }}
             ${{ runner.os }}-m2-dependencies-core-modules-
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: 17
+          java-version: 21
 
       - name: Install gh-actions-artifact-client.js
         uses: apache/pulsar-test-infra/gh-actions-artifact-client/dist@master
@@ -1230,11 +1236,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-m2-dependencies-all-
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: 17
+          java-version: 21
 
       - name: build package
         run: mvn -B clean package -DskipTests -T 1C -ntp
@@ -1272,11 +1278,11 @@ jobs:
           key: ${{ runner.os }}-m2-dependencies-core-modules-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             ${{ runner.os }}-m2-dependencies-core-modules-
-      - name: Set up JDK ${{ matrix.jdk || '17' }}
+      - name: Set up JDK ${{ matrix.jdk || '21' }}
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
-          java-version: ${{ matrix.jdk || '17' }}
+          java-version: ${{ matrix.jdk || '21' }}
 
       - name: Clean Disk
         uses: ./.github/actions/clean-disk
