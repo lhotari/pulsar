@@ -27,6 +27,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.api.ClientBuilder;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.PulsarClientException;
@@ -50,6 +51,7 @@ import org.awaitility.Awaitility;
  *   called after the message to send out has been added to the pending messages in the client.
  *
  */
+@Slf4j
 public class PulsarTestClient extends PulsarClientImpl {
     private volatile int overrideRemoteEndpointProtocolVersion;
     private volatile boolean rejectNewConnections;
@@ -216,5 +218,17 @@ public class PulsarTestClient extends PulsarClientImpl {
      */
     public void dropOpSendMessages() {
         this.dropOpSendMessages = true;
+    }
+
+    @Override
+    public CompletableFuture<Void> closeAsync() {
+        return super.closeAsync().whenComplete((__, t) -> {
+            try {
+                getCnxPool().close();
+            } catch (Exception e) {
+                log.warn("Error closing connection pool", e);
+            }
+            eventLoopGroup.shutdownGracefully();
+        });
     }
 }
