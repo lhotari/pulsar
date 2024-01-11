@@ -28,6 +28,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -394,6 +395,36 @@ public final class FieldParser {
      */
     public static Boolean stringToBoolean(String value) {
         return Boolean.valueOf(value);
+    }
+
+
+    /**
+     * Converts String to Duration.
+     *
+     * @param value
+     *            The String to be converted.
+     * @return The converted Duration value.
+     */
+    public static Duration stringToDuration(String value) {
+        String trimmed = trim(value);
+        if (trimmed.startsWith("P")) {
+            // ISO-8601 duration format
+            return Duration.parse(trimmed);
+        } else {
+            // assume it's a number of milliseconds
+            return Duration.ofMillis(Long.parseLong(trimmed));
+        }
+    }
+
+    /**
+     * Converts Duration to String.
+     *
+     * @param value
+     *            The Duration to be converted.
+     * @return The converted String value.
+     */
+    public static String durationToString(Duration value) {
+        return value.toString();
     }
 
     // implement more converter methods here.
