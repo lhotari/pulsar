@@ -42,6 +42,7 @@ import org.apache.pulsar.client.api.ClientBuilder;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.ConsumerBuilder;
 import org.apache.pulsar.client.api.MessageListener;
+import org.apache.pulsar.client.api.Messages;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionInitialPosition;
@@ -56,6 +57,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 @Command(name = "consume", description = "Test pulsar consumer performance.")
 public class PerformanceConsumer extends PerformanceTopicListArguments{
@@ -155,6 +159,9 @@ public class PerformanceConsumer extends PerformanceTopicListArguments{
 
     @Option(names = {"--batch-index-ack" }, description = "Enable or disable the batch index acknowledgment")
     public boolean batchIndexAck = false;
+
+    @Option(names = {"--test-reactor" }, description = "Test batch receive by reactor")
+    public boolean isReactor = false;
 
     @Option(names = { "-pm", "--pool-messages" }, description = "Use the pooled message", arity = "1")
     private boolean poolMessages = true;
@@ -378,6 +385,9 @@ public class PerformanceConsumer extends PerformanceTopicListArguments{
         if (this.maxPendingChunkedMessage > 0) {
             consumerBuilder.maxPendingChunkedMessage(this.maxPendingChunkedMessage);
         }
+        if (!this.isReactor) {
+            consumerBuilder.messageListener(listener);
+        }
         if (this.expireTimeOfIncompleteChunkedMessageMs > 0) {
             consumerBuilder.expireTimeOfIncompleteChunkedMessage(this.expireTimeOfIncompleteChunkedMessageMs,
                     TimeUnit.MILLISECONDS);
@@ -401,7 +411,56 @@ public class PerformanceConsumer extends PerformanceTopicListArguments{
             }
         }
         for (Future<Consumer<ByteBuffer>> future : futures) {
-            future.get();
+            Consumer<ByteBuffer> consumer = future.get();
+            if (isReactor) {
+                Flux<Messages<?>> messagesFlux = Flux.create(sink -> {
+                    sink.onRequest(l -> {
+                        if (testTime > 0) {
+                            if (System.nanoTime() > testEndTime) {
+                                log.info("------------------- DONE -----------------------");
+                                PerfClientUtils.exit(0);
+                                sink.complete();
+                            }
+                        }
+                        consumer.batchReceiveAsync().thenAccept(sink::next);
+                    });
+                });
+                messagesFlux.flatMapSequential(messages  -> {
+                    if (qRecorder != null) {
+                        qRecorder.recordValue(((ConsumerBase<?>) consumer).getTotalIncomingMessages());
+                    }
+                    log.info("[DEBUG] batch receive {}", messages.size());
+                    return Flux.fromIterable(messages).parallel()
+                            .runOn(Schedulers.boundedElastic()).flatMap(msg -> {
+                        long latencyMillis = System.currentTimeMillis() - msg.getPublishTime();
+                        if (latencyMillis >= 0) {
+                            if (latencyMillis >= MAX_LATENCY) {
+                                latencyMillis = MAX_LATENCY;
+                            }
+                            recorder.recordValue(latencyMillis);
+                            cumulativeRecorder.recordValue(latencyMillis);
+                        }
+
+                        messagesReceived.increment();
+                        bytesReceived.add(msg.size());
+
+                        totalMessagesReceived.increment();
+                        totalBytesReceived.add(msg.size());
+
+                        return Mono.fromCompletionStage(() -> consumer.acknowledgeAsync(msg)).doOnSuccess(v -> {
+                            totalMessageAck.increment();
+                            messageAck.increment();
+                        }).doOnError(throwable -> {
+                            log.error("Ack message {} failed with exception", msg, throwable);
+                            totalMessageAckFailed.increment();
+                        }).doOnTerminate(() -> {
+                            if (poolMessages) {
+                                msg.release();
+                            }
+                        });
+                    }).then();
+                }, 1).subscribe();
+            }
         }
         log.info("Start receiving from {} consumers per subscription on {} topics", this.numConsumers,
                 this.numTopics);
