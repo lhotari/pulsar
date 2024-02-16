@@ -40,16 +40,17 @@ import org.apache.pulsar.policies.data.loadbalancer.AdvertisedListener;
 import org.testng.annotations.Test;
 
 /**
- * Unit test {@link RedirectManager}.
+ * Unit test {@link RedirectManagerForLoadManagerMigration}.
  */
-public class RedirectManagerTest {
+public class RedirectManagerForLoadManagerMigrationTest {
 
     @Test
-    public void testFindRedirectLookupResultAsync() throws ExecutionException, InterruptedException {
+    public void testRedirectIfLoadBalancerOnBrokerIsNotExpected() throws ExecutionException, InterruptedException {
         PulsarService pulsar = mock(PulsarService.class);
         ServiceConfiguration configuration = new ServiceConfiguration();
         when(pulsar.getConfiguration()).thenReturn(configuration);
-        RedirectManager redirectManager = spy(new RedirectManager(pulsar, null));
+        RedirectManagerForLoadManagerMigration
+                redirectManagerForLoadManagerMigration = spy(new RedirectManagerForLoadManagerMigration(pulsar, null));
 
         configuration.setLoadManagerClassName(ModularLoadManagerImpl.class.getName());
         configuration.setLoadBalancerDebugModeEnabled(true);
@@ -60,10 +61,11 @@ public class RedirectManagerTest {
                     put("broker-1", getLookupData("broker-1", null, 10));
                     put("broker-2", getLookupData("broker-2", ModularLoadManagerImpl.class.getName(), 1));
                 }}
-        )).when(redirectManager).getAvailableBrokerLookupDataAsync();
+        )).when(redirectManagerForLoadManagerMigration).getAvailableBrokerLookupDataAsync();
 
         // Should redirect to broker-1, since broker-1 has the latest load manager, even though the class name is null.
-        Optional<LookupResult> lookupResult = redirectManager.findRedirectLookupResultAsync().get();
+        Optional<LookupResult> lookupResult =
+                redirectManagerForLoadManagerMigration.redirectIfLoadBalancerOnBrokerIsNotExpected(null).get();
         assertTrue(lookupResult.isPresent());
         assertTrue(lookupResult.get().getLookupData().getBrokerUrl().contains("broker-1"));
 
@@ -73,9 +75,9 @@ public class RedirectManagerTest {
                     put("broker-1", getLookupData("broker-1", ExtensibleLoadManagerImpl.class.getName(), 10));
                     put("broker-2", getLookupData("broker-2", ModularLoadManagerImpl.class.getName(), 1));
                 }}
-        )).when(redirectManager).getAvailableBrokerLookupDataAsync();
+        )).when(redirectManagerForLoadManagerMigration).getAvailableBrokerLookupDataAsync();
 
-        lookupResult = redirectManager.findRedirectLookupResultAsync().get();
+        lookupResult = redirectManagerForLoadManagerMigration.redirectIfLoadBalancerOnBrokerIsNotExpected(null).get();
         assertTrue(lookupResult.isPresent());
         assertTrue(lookupResult.get().getLookupData().getBrokerUrl().contains("broker-1"));
 
@@ -86,14 +88,15 @@ public class RedirectManagerTest {
                     put("broker-1", getLookupData("broker-1", ExtensibleLoadManagerImpl.class.getName(), 10));
                     put("broker-2", getLookupData("broker-2", ModularLoadManagerImpl.class.getName(), 100));
                 }}
-        )).when(redirectManager).getAvailableBrokerLookupDataAsync();
+        )).when(redirectManagerForLoadManagerMigration).getAvailableBrokerLookupDataAsync();
 
-        lookupResult = redirectManager.findRedirectLookupResultAsync().get();
+        lookupResult = redirectManagerForLoadManagerMigration.redirectIfLoadBalancerOnBrokerIsNotExpected(null).get();
         assertFalse(lookupResult.isPresent());
     }
 
 
     public BrokerLookupData getLookupData(String broker, String loadManagerClassName, long startTimeStamp) {
+        String brokerId = "broker:8080";
         String webServiceUrl = "http://" + broker + ":8080";
         String webServiceUrlTls = "https://" + broker + ":8081";
         String pulsarServiceUrl = "pulsar://" + broker + ":6650";
@@ -102,7 +105,7 @@ public class RedirectManagerTest {
         Map<String, String> protocols = new HashMap<>(){{
             put("kafka", "9092");
         }};
-        return new BrokerLookupData(
+        return new BrokerLookupData(brokerId,
                 webServiceUrl, webServiceUrlTls, pulsarServiceUrl,
                 pulsarServiceUrlTls, advertisedListeners, protocols, true, true,
                 loadManagerClassName, startTimeStamp, "3.0.0", Collections.emptyMap());

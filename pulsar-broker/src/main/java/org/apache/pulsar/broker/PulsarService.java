@@ -58,6 +58,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -137,6 +138,7 @@ import org.apache.pulsar.broker.transaction.pendingack.impl.MLPendingAckStorePro
 import org.apache.pulsar.broker.validator.MultipleListenerValidator;
 import org.apache.pulsar.broker.validator.TransactionBatchedWriteValidator;
 import org.apache.pulsar.broker.web.RestException;
+import org.apache.pulsar.broker.web.RestProducerContext;
 import org.apache.pulsar.broker.web.WebService;
 import org.apache.pulsar.broker.web.plugin.servlet.AdditionalServlet;
 import org.apache.pulsar.broker.web.plugin.servlet.AdditionalServletWithClassLoader;
@@ -289,6 +291,8 @@ public class PulsarService implements AutoCloseable, ShutdownService {
 
     private BrokerInterceptor brokerInterceptor;
     private AdditionalServlets brokerAdditionalServlets;
+    @Getter
+    private final RestProducerContext restProducerContext = new RestProducerContext();
 
     // packages management service
     private PackagesManagement packagesManagement = null;
@@ -923,6 +927,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             managedLedgerStorage = newManagedLedgerStorage();
 
             this.brokerService = newBrokerService(this);
+            this.brokerService.addTopicEventListener(restProducerContext);
 
             // Start load management service (even if load balancing is disabled)
             this.loadManager.set(LoadManager.create(this));
@@ -1531,6 +1536,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             List<CompletableFuture<Optional<Topic>>> persistentTopics = new ArrayList<>();
             long topicLoadStart = System.nanoTime();
 
+            AtomicInteger failedCount = new AtomicInteger(0);
             for (String topic : getNamespaceService().getListOfPersistentTopics(nsName)
                     .get(config.getMetadataStoreOperationTimeoutSeconds(), TimeUnit.SECONDS)) {
                 try {
@@ -1538,7 +1544,10 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                     if (bundle.includes(topicName) && !isTransactionInternalName(topicName)) {
                         CompletableFuture<Optional<Topic>> future = brokerService.getTopicIfExists(topic);
                         if (future != null) {
-                            persistentTopics.add(future);
+                            persistentTopics.add(future.exceptionally(e -> {
+                                failedCount.incrementAndGet();
+                                return Optional.empty();
+                            }));
                         }
                     }
                 } catch (Throwable t) {
@@ -1555,6 +1564,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                             .count();
                     log.info()
                             .attr("numTopicsLoaded", numTopicsLoaded)
+                            .attr("failedCount", failedCount.get())
                             .attr("bundle", bundle)
                             .attr("timeTakenSeconds", topicLoadTimeSeconds)
                             .log("Loaded topics on bundle");

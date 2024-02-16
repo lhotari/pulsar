@@ -3034,6 +3034,15 @@ public class ServiceConfiguration implements PulsarConfiguration {
     )
     private String loadManagerClassName = "org.apache.pulsar.broker.loadbalance.impl.ModularLoadManagerImpl";
 
+    @FieldContext(
+            dynamic = true,
+            category = CATEGORY_LOAD_BALANCER,
+            doc = "When load manager migration is enabled, the broker will redirect requests to another broker if the "
+                    + "load manager on the current broker is not using the load manager of the latest service "
+                    + "lookup data available in the metadata store."
+    )
+    private boolean loadManagerMigrationEnabled = false;
+
     @FieldContext(category = CATEGORY_LOAD_BALANCER, doc = "Name of topic bundle assignment strategy to use")
     private String topicBundleAssignmentStrategy =
             "org.apache.pulsar.common.naming.ConsistentHashingTopicBundleAssigner";

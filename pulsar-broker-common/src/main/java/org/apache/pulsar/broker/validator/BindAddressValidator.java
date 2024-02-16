@@ -22,9 +22,13 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.ServiceConfigurationUtils;
@@ -48,8 +52,7 @@ public class BindAddressValidator {
         List<BindAddress> addresses = migrateBindAddresses(config);
 
         // parse the list of additional bind addresses
-        Arrays
-                .stream(StringUtils.split(StringUtils.defaultString(config.getBindAddresses()), ","))
+        Arrays.stream(StringUtils.split(StringUtils.defaultString(config.getBindAddresses()), ","))
                 .map(s -> {
                     Matcher m = BIND_ADDRESSES_PATTERN.matcher(s);
                     if (!m.matches()) {
@@ -65,7 +68,16 @@ public class BindAddressValidator {
             addresses.removeIf(a -> !schemes.contains(a.getAddress().getScheme()));
         }
 
-        return addresses;
+        // remove duplicates so that a bind address migrated from legacy configuration properties is not duplicated
+        Map<URI, BindAddress> uniqueBindAddresses =
+                addresses.stream().collect(Collectors.toMap(BindAddress::getAddress, Function.identity(), (a, b) -> {
+                    if (StringUtils.isNotBlank(a.getListenerName()) && StringUtils.isBlank(b.getListenerName())) {
+                        return a;
+                    }
+                    return b;
+                }, LinkedHashMap::new));
+
+        return new ArrayList<>(uniqueBindAddresses.values());
     }
 
     /**
@@ -73,25 +85,22 @@ public class BindAddressValidator {
      */
     private static List<BindAddress> migrateBindAddresses(ServiceConfiguration config) {
         List<BindAddress> addresses = new ArrayList<>(2);
+        String bindAddress = config.getBindAddress();
         if (config.getBrokerServicePort().isPresent()) {
-            addresses.add(new BindAddress(null, URI.create(
-                    ServiceConfigurationUtils.brokerUrl(config.getBindAddress(),
-                            config.getBrokerServicePort().get()))));
+            addresses.add(new BindAddress(null,
+                    URI.create(ServiceConfigurationUtils.brokerUrl(bindAddress, config.getBrokerServicePort().get()))));
         }
         if (config.getBrokerServicePortTls().isPresent()) {
             addresses.add(new BindAddress(null, URI.create(
-                    ServiceConfigurationUtils.brokerUrlTls(config.getBindAddress(),
-                            config.getBrokerServicePortTls().get()))));
+                    ServiceConfigurationUtils.brokerUrlTls(bindAddress, config.getBrokerServicePortTls().get()))));
         }
         if (config.getWebServicePort().isPresent()) {
             addresses.add(new BindAddress(null, URI.create(
-                    ServiceConfigurationUtils.webServiceUrl(config.getBindAddress(),
-                            config.getWebServicePort().get()))));
+                    ServiceConfigurationUtils.webServiceUrl(bindAddress, config.getWebServicePort().get()))));
         }
         if (config.getWebServicePortTls().isPresent()) {
             addresses.add(new BindAddress(null, URI.create(
-                    ServiceConfigurationUtils.webServiceUrlTls(config.getBindAddress(),
-                            config.getWebServicePortTls().get()))));
+                    ServiceConfigurationUtils.webServiceUrlTls(bindAddress, config.getWebServicePortTls().get()))));
         }
         return addresses;
     }
