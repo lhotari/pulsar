@@ -21,7 +21,7 @@ package org.apache.pulsar.broker.service;
 import com.google.common.collect.Lists;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -65,7 +65,15 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
                     if (v == null) {
                         return Lists.newArrayList(consumer);
                     } else {
-                        if (!v.contains(consumer)) {
+                        boolean contains = false;
+                        // use identity comparison to avoid equals() override logic
+                        for (Consumer c : v) {
+                            if (c == consumer) {
+                                contains = true;
+                                break;
+                            }
+                        }
+                        if (!contains) {
                             v.add(consumer);
                             v.sort(Comparator.comparing(Consumer::consumerName, String::compareTo));
                         }
@@ -95,7 +103,7 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
                     if (v == null) {
                         return null;
                     } else {
-                        v.removeIf(c -> c.equals(consumer));
+                        v.removeIf(c -> c == consumer);
                         if (v.isEmpty()) {
                             v = null;
                         }
@@ -132,7 +140,7 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
 
     @Override
     public Map<Consumer, List<Range>> getConsumerKeyHashRanges() {
-        Map<Consumer, List<Range>> result = new LinkedHashMap<>();
+        Map<Consumer, List<Range>> result = new IdentityHashMap<>();
         rwLock.readLock().lock();
         try {
             int start = 0;

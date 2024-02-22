@@ -19,7 +19,7 @@
 package org.apache.pulsar.broker.service;
 
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -60,7 +60,7 @@ public class HashRangeAutoSplitStickyKeyConsumerSelector implements StickyKeyCon
     private final int rangeSize;
 
     private final ConcurrentSkipListMap<Integer, Consumer> rangeMap;
-    private final Map<Consumer, Integer> consumerRange;
+    private final IdentityHashMap<Consumer, Integer> consumerRange;
 
     public HashRangeAutoSplitStickyKeyConsumerSelector() {
         this(DEFAULT_RANGE_SIZE);
@@ -74,7 +74,7 @@ public class HashRangeAutoSplitStickyKeyConsumerSelector implements StickyKeyCon
             throw new IllegalArgumentException("range size must be nth power with 2");
         }
         this.rangeMap = new ConcurrentSkipListMap<>();
-        this.consumerRange = new HashMap<>();
+        this.consumerRange = new IdentityHashMap<>();
         this.rangeSize = rangeSize;
     }
 
@@ -120,7 +120,7 @@ public class HashRangeAutoSplitStickyKeyConsumerSelector implements StickyKeyCon
 
     @Override
     public Map<Consumer, List<Range>> getConsumerKeyHashRanges() {
-        Map<Consumer, List<Range>> result = new HashMap<>();
+        Map<Consumer, List<Range>> result = new IdentityHashMap<>();
         int start = 0;
         for (Map.Entry<Integer, Consumer> entry: rangeMap.entrySet()) {
             result.computeIfAbsent(entry.getValue(), key -> new ArrayList<>())

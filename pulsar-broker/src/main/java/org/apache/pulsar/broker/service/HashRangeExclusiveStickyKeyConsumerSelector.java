@@ -20,7 +20,7 @@ package org.apache.pulsar.broker.service;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -79,18 +79,18 @@ public class HashRangeExclusiveStickyKeyConsumerSelector implements StickyKeyCon
 
     @Override
     public void removeConsumer(Consumer consumer) {
-        rangeMap.entrySet().removeIf(entry -> entry.getValue().equals(consumer));
+        rangeMap.entrySet().removeIf(entry -> entry == consumer);
     }
 
     @Override
     public Map<Consumer, List<Range>> getConsumerKeyHashRanges() {
-        Map<Consumer, List<Range>> result = new HashMap<>();
+        Map<Consumer, List<Range>> result = new IdentityHashMap<>();
         Map.Entry<Integer, Consumer> prev = null;
         for (Map.Entry<Integer, Consumer> entry: rangeMap.entrySet()) {
             if (prev == null) {
                 prev = entry;
             } else {
-                if (prev.getValue().equals(entry.getValue())) {
+                if (prev.getValue() == entry.getValue()) {
                     result.computeIfAbsent(entry.getValue(), key -> new ArrayList<>())
                             .add(Range.of(prev.getKey(), entry.getKey()));
                 }
@@ -108,7 +108,7 @@ public class HashRangeExclusiveStickyKeyConsumerSelector implements StickyKeyCon
             Map.Entry<Integer, Consumer> floorEntry = rangeMap.floorEntry(slot);
             Consumer ceilingConsumer = ceilingEntry != null ? ceilingEntry.getValue() : null;
             Consumer floorConsumer = floorEntry != null ? floorEntry.getValue() : null;
-            if (floorConsumer != null && floorConsumer.equals(ceilingConsumer)) {
+            if (floorConsumer != null && floorConsumer == ceilingConsumer) {
                 return ceilingConsumer;
             } else {
                 return null;
@@ -155,7 +155,7 @@ public class HashRangeExclusiveStickyKeyConsumerSelector implements StickyKeyCon
                 return ceilingEntry.getValue();
             }
 
-            if (ceilingEntry != null && floorEntry != null && ceilingEntry.getValue().equals(floorEntry.getValue())) {
+            if (ceilingEntry != null && floorEntry != null && ceilingEntry.getValue() == floorEntry.getValue()) {
                 KeySharedMeta keySharedMeta = ceilingEntry.getValue().getKeySharedMeta();
                 for (IntRange range : keySharedMeta.getHashRangesList()) {
                     int start = Math.max(intRange.getStart(), range.getStart());
