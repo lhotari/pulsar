@@ -1120,6 +1120,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             if (log.isDebugEnabled()) {
                 log.debug("[{}] Cursor was already created {}", name, cachedCursor);
             }
+            cachedCursor.setActive();
             return cachedCursor;
         }
 
