@@ -25,7 +25,11 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.servlet.AsyncContext;
+import javax.servlet.AsyncEvent;
+import javax.servlet.AsyncListener;
 import javax.servlet.ServletException;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServlet;
@@ -60,7 +64,9 @@ public class PrometheusMetricsServlet extends HttpServlet {
     protected void doGet(HttpServletRequest request, HttpServletResponse response) {
         AsyncContext context = request.startAsync();
         context.setTimeout(metricsServletTimeoutMs);
-        executor.execute(() -> {
+        AtomicBoolean taskStarted = new AtomicBoolean(false);
+        Future<?> future = executor.submit(() -> {
+            taskStarted.set(true);
             long start = System.currentTimeMillis();
             HttpServletResponse res = (HttpServletResponse) context.getResponse();
             try {
@@ -92,6 +98,38 @@ public class PrometheusMetricsServlet extends HttpServlet {
                 }
             }
         });
+        context.addListener(new AsyncListener() {
+            @Override
+            public void onComplete(AsyncEvent asyncEvent) throws IOException {
+                if (!taskStarted.get()) {
+                    future.cancel(false);
+                }
+            }
+
+            @Override
+            public void onTimeout(AsyncEvent asyncEvent) throws IOException {
+                if (!taskStarted.get()) {
+                    future.cancel(false);
+                }
+                log.warn("Prometheus metrics request timed out");
+                HttpServletResponse res = (HttpServletResponse) context.getResponse();
+                res.setStatus(HTTP_STATUS_INTERNAL_SERVER_ERROR_500);
+                context.complete();
+            }
+
+            @Override
+            public void onError(AsyncEvent asyncEvent) throws IOException {
+                if (!taskStarted.get()) {
+                    future.cancel(false);
+                }
+            }
+
+            @Override
+            public void onStartAsync(AsyncEvent asyncEvent) throws IOException {
+
+            }
+        });
+
     }
 
     protected void generateMetrics(String cluster, ServletOutputStream outputStream) throws IOException {
