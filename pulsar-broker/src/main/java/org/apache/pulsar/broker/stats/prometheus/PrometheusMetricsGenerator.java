@@ -21,6 +21,7 @@ package org.apache.pulsar.broker.stats.prometheus;
 import static org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsGeneratorUtils.generateSystemMetrics;
 import static org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsGeneratorUtils.getTypeStr;
 import static org.apache.pulsar.common.stats.JvmMetrics.getJvmDirectMemoryUsed;
+import com.google.common.util.concurrent.MoreExecutors;
 import io.netty.buffer.ByteBuf;
 import io.prometheus.client.Collector;
 import io.prometheus.client.CollectorRegistry;
@@ -39,6 +40,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -335,7 +337,7 @@ public class PrometheusMetricsGenerator {
 
     public void generate(OutputStream out,
                                       List<PrometheusRawMetricsProvider> metricsProviders) throws IOException {
-        MetricsBuffer metricsBuffer = renderToBuffer(metricsProviders);
+        MetricsBuffer metricsBuffer = renderToBuffer(MoreExecutors.directExecutor(), metricsProviders);
         try {
             ByteBuf buffer = null;
             try {
@@ -365,7 +367,7 @@ public class PrometheusMetricsGenerator {
         }
     }
 
-    public MetricsBuffer renderToBuffer(List<PrometheusRawMetricsProvider> metricsProviders) {
+    public MetricsBuffer renderToBuffer(Executor executor, List<PrometheusRawMetricsProvider> metricsProviders) {
         boolean cacheMetricsResponse = pulsar.getConfiguration().isMetricsBufferResponse();
         long currentTimeSlot = cacheMetricsResponse ? calculateCurrentTimeSlot() : 0;
         MetricsBuffer currentMetricsBuffer = metricsBuffer;
@@ -379,11 +381,13 @@ public class PrometheusMetricsGenerator {
                     currentMetricsBuffer.release();
                 }
                 CompletableFuture<ByteBuf> bufferFuture = newMetricsBuffer.getBufferFuture();
-                try {
-                    bufferFuture.complete(generate0(metricsProviders));
-                } catch (Exception e) {
-                    bufferFuture.completeExceptionally(e);
-                }
+                executor.execute(() -> {
+                    try {
+                        bufferFuture.complete(generate0(metricsProviders));
+                    } catch (Exception e) {
+                        bufferFuture.completeExceptionally(e);
+                    }
+                });
                 currentMetricsBuffer = newMetricsBuffer;
             } else {
                 currentMetricsBuffer = metricsBuffer;

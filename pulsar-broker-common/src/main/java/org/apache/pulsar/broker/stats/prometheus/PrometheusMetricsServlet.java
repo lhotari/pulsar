@@ -45,16 +45,22 @@ public class PrometheusMetricsServlet extends HttpServlet {
     protected final String cluster;
     protected List<PrometheusRawMetricsProvider> metricsProviders;
 
-    private ExecutorService executor = null;
+    protected ExecutorService executor = null;
+    protected final int executorMaxThreads;
 
     public PrometheusMetricsServlet(long metricsServletTimeoutMs, String cluster) {
+        this(metricsServletTimeoutMs, cluster, 1);
+    }
+
+    public PrometheusMetricsServlet(long metricsServletTimeoutMs, String cluster, int executorMaxThreads) {
         this.metricsServletTimeoutMs = metricsServletTimeoutMs;
         this.cluster = cluster;
+        this.executorMaxThreads = executorMaxThreads;
     }
 
     @Override
     public void init() throws ServletException {
-        executor = Executors.newSingleThreadScheduledExecutor(new DefaultThreadFactory("prometheus-stats"));
+        executor = Executors.newScheduledThreadPool(executorMaxThreads, new DefaultThreadFactory("prometheus-stats"));
     }
 
     @Override

@@ -32,15 +32,16 @@ import org.eclipse.jetty.server.HttpOutput;
 
 @Slf4j
 public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
-
     private static final long serialVersionUID = 1L;
+    private static final int EXECUTOR_MAX_THREADS = 4;
 
     private final PrometheusMetricsGenerator prometheusMetricsGenerator;
 
     public PulsarPrometheusMetricsServlet(PulsarService pulsar, boolean includeTopicMetrics,
                                           boolean includeConsumerMetrics, boolean includeProducerMetrics,
                                           boolean splitTopicAndPartitionLabel) {
-        super(pulsar.getConfiguration().getMetricsServletTimeoutMs(), pulsar.getConfiguration().getClusterName());
+        super(pulsar.getConfiguration().getMetricsServletTimeoutMs(), pulsar.getConfiguration().getClusterName(),
+                EXECUTOR_MAX_THREADS);
         prometheusMetricsGenerator =
                 new PrometheusMetricsGenerator(pulsar, includeTopicMetrics, includeConsumerMetrics,
                         includeProducerMetrics, splitTopicAndPartitionLabel);
@@ -77,8 +78,8 @@ public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
             }
         });
         PrometheusMetricsGenerator.MetricsBuffer metricsBuffer =
-                prometheusMetricsGenerator.renderToBuffer(metricsProviders);
-        metricsBuffer.getBufferFuture().whenComplete((buffer, ex) -> {
+                prometheusMetricsGenerator.renderToBuffer(executor, metricsProviders);
+        metricsBuffer.getBufferFuture().whenComplete((buffer, ex) -> executor.execute(() -> {
             try {
                 if (skipWritingResponse.get()) {
                     log.warn("Response has timed or failed, skip writing metrics.");
@@ -114,6 +115,6 @@ public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
                 metricsBuffer.release();
                 context.complete();
             }
-        });
+        }));
     }
 }
