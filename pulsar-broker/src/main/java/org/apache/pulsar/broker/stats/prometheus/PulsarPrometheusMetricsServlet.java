@@ -19,7 +19,7 @@
 package org.apache.pulsar.broker.stats.prometheus;
 
 import java.io.IOException;
-import javax.servlet.ServletOutputStream;
+import javax.servlet.http.HttpServletResponse;
 import org.apache.pulsar.broker.PulsarService;
 
 public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
@@ -38,7 +38,9 @@ public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
     }
 
     @Override
-    protected void generateMetrics(String cluster, ServletOutputStream outputStream) throws IOException {
-        prometheusMetricsGenerator.generate(outputStream, metricsProviders);
+    protected void generateMetricsSynchronously(HttpServletResponse res) throws IOException {
+        res.setStatus(HTTP_STATUS_OK_200);
+        res.setContentType("text/plain;charset=utf-8");
+        prometheusMetricsGenerator.generate(res.getOutputStream(), metricsProviders);
     }
 }
