@@ -19,9 +19,18 @@
 package org.apache.pulsar.broker.stats.prometheus;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicBoolean;
+import javax.servlet.AsyncContext;
+import javax.servlet.AsyncEvent;
+import javax.servlet.AsyncListener;
+import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.broker.PulsarService;
+import org.eclipse.jetty.server.HttpOutput;
 
+@Slf4j
 public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
 
     private static final long serialVersionUID = 1L;
@@ -37,10 +46,74 @@ public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
                         includeProducerMetrics, splitTopicAndPartitionLabel);
     }
 
-    @Override
-    protected void generateMetricsSynchronously(HttpServletResponse res) throws IOException {
-        res.setStatus(HTTP_STATUS_OK_200);
-        res.setContentType("text/plain;charset=utf-8");
-        prometheusMetricsGenerator.generate(res.getOutputStream(), metricsProviders);
+
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) {
+        AsyncContext context = request.startAsync();
+        context.setTimeout(metricsServletTimeoutMs);
+        AtomicBoolean skipWritingResponse = new AtomicBoolean(false);
+        context.addListener(new AsyncListener() {
+            @Override
+            public void onComplete(AsyncEvent event) throws IOException {
+            }
+
+            @Override
+            public void onTimeout(AsyncEvent event) throws IOException {
+                log.warn("Prometheus metrics request timed out");
+                skipWritingResponse.set(true);
+                HttpServletResponse res = (HttpServletResponse) context.getResponse();
+                if (!res.isCommitted()) {
+                    res.setStatus(HTTP_STATUS_INTERNAL_SERVER_ERROR_500);
+                }
+                context.complete();
+            }
+
+            @Override
+            public void onError(AsyncEvent event) throws IOException {
+                skipWritingResponse.set(true);
+            }
+
+            @Override
+            public void onStartAsync(AsyncEvent event) throws IOException {
+            }
+        });
+        PrometheusMetricsGenerator.MetricsBuffer metricsBuffer =
+                prometheusMetricsGenerator.renderToBuffer(metricsProviders);
+        metricsBuffer.getBufferFuture().whenComplete((buffer, ex) -> {
+            try {
+                if (skipWritingResponse.get()) {
+                    log.warn("Response has timed or failed, skip writing metrics.");
+                    return;
+                }
+                if (response.isCommitted()) {
+                    log.warn("Response is already committed, cannot write metrics");
+                    return;
+                }
+                if (ex != null) {
+                    log.error("Failed to generate metrics", ex);
+                    response.setStatus(HTTP_STATUS_INTERNAL_SERVER_ERROR_500);
+                    return;
+                }
+                if (buffer == null) {
+                    log.error("Failed to generate metrics, buffer is null");
+                    response.setStatus(HTTP_STATUS_INTERNAL_SERVER_ERROR_500);
+                } else {
+                    response.setStatus(HTTP_STATUS_OK_200);
+                    response.setContentType("text/plain;charset=utf-8");
+                    if (response instanceof HttpOutput) {
+                        HttpOutput output = (HttpOutput) response;
+                        for (ByteBuffer nioBuffer : buffer.nioBuffers()) {
+                            output.write(nioBuffer);
+                        }
+                    } else {
+                        buffer.readBytes(response.getOutputStream(), buffer.readableBytes());
+                    }
+                }
+            } catch (IOException e) {
+                log.error("Failed to write metrics to response", e);
+            } finally {
+                metricsBuffer.release();
+                context.complete();
+            }
+        });
     }
 }

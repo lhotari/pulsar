@@ -22,7 +22,9 @@ import static org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsGenerat
 import static org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsGeneratorUtils.getTypeStr;
 import static org.apache.pulsar.common.stats.JvmMetrics.getJvmDirectMemoryUsed;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.UnpooledByteBufAllocator;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.buffer.CompositeByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
 import io.prometheus.client.Collector;
 import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.Gauge;
@@ -42,6 +44,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.stats.NullStatsProvider;
@@ -51,6 +54,7 @@ import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.stats.metrics.ManagedCursorMetrics;
 import org.apache.pulsar.broker.stats.metrics.ManagedLedgerCacheMetrics;
 import org.apache.pulsar.broker.stats.metrics.ManagedLedgerMetrics;
+import org.apache.pulsar.common.allocator.PulsarByteBufAllocator;
 import org.apache.pulsar.common.stats.Metrics;
 import org.apache.pulsar.common.util.DirectMemoryUtils;
 import org.apache.pulsar.common.util.SimpleTextOutputStream;
@@ -64,7 +68,8 @@ import org.eclipse.jetty.server.HttpOutput;
  */
 @Slf4j
 public class PrometheusMetricsGenerator {
-    private static final int MAX_COMPONENTS = 64;
+    private static final int DEFAULT_INITIAL_BUFFER_SIZE = 1024 * 1024 * 1024; // 1MB
+    private static final int MINIMUM_FOR_MAX_COMPONENTS = 64;
 
     static {
         DefaultExports.initialize();
@@ -100,21 +105,43 @@ public class PrometheusMetricsGenerator {
             AtomicReferenceFieldUpdater.newUpdater(PrometheusMetricsGenerator.class, MetricsBuffer.class,
                     "metricsBuffer");
 
-    private static class MetricsBuffer {
+    public static class MetricsBuffer {
         private final CompletableFuture<ByteBuf> bufferFuture;
-        private final long createTimestamp;
+        private final long createTimeslot;
+        private final AtomicInteger refCnt = new AtomicInteger(1);
 
-        MetricsBuffer() {
+        MetricsBuffer(long timeslot) {
             bufferFuture = new CompletableFuture<>();
-            createTimestamp = System.currentTimeMillis();
+            createTimeslot = timeslot;
         }
 
-        CompletableFuture<ByteBuf> getBufferFuture() {
+        public CompletableFuture<ByteBuf> getBufferFuture() {
             return bufferFuture;
         }
 
-        long getCreateTimestamp() {
-            return createTimestamp;
+        long getCreateTimeslot() {
+            return createTimeslot;
+        }
+
+        /**
+         * Retain the buffer. This is allowed, only when the buffer is not already released.
+         *
+         * @return true if the buffer is retained successfully, false otherwise.
+         */
+        boolean retain() {
+            return refCnt.updateAndGet(x -> x > 0 ? x + 1 : x) > 0;
+        }
+
+        /**
+         * Release the buffer.
+         */
+        public void release() {
+            int newValue = refCnt.decrementAndGet();
+            if (newValue == 0) {
+                if (bufferFuture.isDone() && !bufferFuture.isCompletedExceptionally()) {
+                    bufferFuture.getNow(null).release();
+                }
+            }
         }
     }
 
@@ -123,6 +150,8 @@ public class PrometheusMetricsGenerator {
     private final boolean includeConsumerMetrics;
     private final boolean includeProducerMetrics;
     private final boolean splitTopicAndPartitionIndexLabel;
+
+    private volatile int initialBufferSize = DEFAULT_INITIAL_BUFFER_SIZE;
 
     public PrometheusMetricsGenerator(PulsarService pulsar, boolean includeTopicMetrics,
                                       boolean includeConsumerMetrics, boolean includeProducerMetrics,
@@ -134,10 +163,8 @@ public class PrometheusMetricsGenerator {
         this.splitTopicAndPartitionIndexLabel = splitTopicAndPartitionIndexLabel;
     }
 
-    private ByteBuf generate0(List<PrometheusRawMetricsProvider> metricsProviders) throws IOException {
-        //Use unpooled buffers here to avoid direct buffer usage increasing.
-        //when write out 200MB data, MAX_COMPONENTS = 64 needn't mem_copy. see: CompositeByteBuf#consolidateIfNeeded()
-        ByteBuf buf = UnpooledByteBufAllocator.DEFAULT.compositeDirectBuffer(MAX_COMPONENTS);
+    private ByteBuf generate0(List<PrometheusRawMetricsProvider> metricsProviders) {
+        ByteBuf buf = allocateMultipartCompositeDirectBuffer();
         boolean exceptionHappens = false;
         //Used in namespace/topic and transaction aggregators as share metric names
         PrometheusMetricStreams metricStreams = new PrometheusMetricStreams();
@@ -179,8 +206,32 @@ public class PrometheusMetricsGenerator {
             //if exception happens, release buffer
             if (exceptionHappens) {
                 buf.release();
+            } else {
+                // for the next time, the initial buffer size will be suggested by the last buffer size
+                initialBufferSize = Math.max(DEFAULT_INITIAL_BUFFER_SIZE, buf.readableBytes());
             }
         }
+    }
+
+    private ByteBuf allocateMultipartCompositeDirectBuffer() {
+        // use composite buffer with pre-allocated buffers to ensure that the pooled allocator can be used
+        // for allocating the buffers
+        ByteBufAllocator byteBufAllocator = PulsarByteBufAllocator.DEFAULT;
+        long chunkSize;
+        if (byteBufAllocator instanceof PooledByteBufAllocator) {
+            PooledByteBufAllocator pooledByteBufAllocator = (PooledByteBufAllocator) byteBufAllocator;
+            chunkSize = Math.max(pooledByteBufAllocator.metric().chunkSize(), DEFAULT_INITIAL_BUFFER_SIZE);
+        } else {
+            chunkSize = DEFAULT_INITIAL_BUFFER_SIZE;
+        }
+        CompositeByteBuf buf = byteBufAllocator.compositeDirectBuffer(
+                Math.max(MINIMUM_FOR_MAX_COMPONENTS, (int) (initialBufferSize / chunkSize) + 1));
+        int totalLen = 0;
+        while (totalLen < initialBufferSize) {
+            totalLen += chunkSize;
+            buf.addComponent(false, byteBufAllocator.directBuffer((int) chunkSize));
+        }
+        return buf;
     }
 
     private static void generateBrokerBasicMetrics(PulsarService pulsar, SimpleTextOutputStream stream) {
@@ -282,22 +333,23 @@ public class PrometheusMetricsGenerator {
         }
     }
 
-    public synchronized void generate(OutputStream out,
+    public void generate(OutputStream out,
                                       List<PrometheusRawMetricsProvider> metricsProviders) throws IOException {
-        boolean cacheMetricsResponse = pulsar.getConfiguration().isMetricsBufferResponse();
-        ByteBuf buffer = null;
+        MetricsBuffer metricsBuffer = renderToBuffer(metricsProviders);
         try {
-            buffer = renderToBuffer(metricsProviders, cacheMetricsResponse).get(pulsar.getConfiguration().getMetricsServletTimeoutMs(), TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException(e);
-        } catch (ExecutionException | TimeoutException e) {
-            throw new IOException(e);
-        }
-        if (buffer == null) {
-            return;
-        }
-        try {
+            ByteBuf buffer = null;
+            try {
+                buffer = metricsBuffer.getBufferFuture()
+                        .get(pulsar.getConfiguration().getMetricsServletTimeoutMs(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException(e);
+            } catch (ExecutionException | TimeoutException e) {
+                throw new IOException(e);
+            }
+            if (buffer == null) {
+                return;
+            }
             if (out instanceof HttpOutput) {
                 HttpOutput output = (HttpOutput) out;
                 //no mem_copy and memory allocations here
@@ -306,46 +358,49 @@ public class PrometheusMetricsGenerator {
                     output.write(buffer0);
                 }
             } else {
-                //read data from buffer and write it to output stream, with no more heap buffer(byte[]) allocation.
-                //not modify buffer readIndex/writeIndex here.
-                int readIndex = buffer.readerIndex();
-                int readableBytes = buffer.readableBytes();
-                for (int i = 0; i < readableBytes; i++) {
-                    out.write(buffer.getByte(readIndex + i));
-                }
+                buffer.readBytes(out, buffer.readableBytes());
             }
         } finally {
-            if (!cacheMetricsResponse && buffer.refCnt() > 0) {
-                buffer.release();
-                log.debug("Metrics buffer released.");
-            }
+            metricsBuffer.release();
         }
     }
 
-    public CompletableFuture<ByteBuf> renderToBuffer(List<PrometheusRawMetricsProvider> metricsProviders,
-                                                     boolean cacheMetricsResponse) throws IOException {
-        long cacheTimeoutMillis = cacheMetricsResponse
-                ? TimeUnit.SECONDS.toMillis(Math.max(1, pulsar.getConfiguration().getManagedLedgerStatsPeriodSeconds()))
-                : TimeUnit.SECONDS.toMillis(1);
+    public MetricsBuffer renderToBuffer(List<PrometheusRawMetricsProvider> metricsProviders) {
+        boolean cacheMetricsResponse = pulsar.getConfiguration().isMetricsBufferResponse();
+        long currentTimeSlot = cacheMetricsResponse ? calculateCurrentTimeSlot() : 0;
         MetricsBuffer currentMetricsBuffer = metricsBuffer;
-        if (currentMetricsBuffer == null
-                || System.currentTimeMillis() > currentMetricsBuffer.getCreateTimestamp() + cacheTimeoutMillis) {
-            MetricsBuffer newMetricsBuffer = new MetricsBuffer();
+        if (currentMetricsBuffer == null || !currentMetricsBuffer.retain()
+                || (currentMetricsBuffer.getBufferFuture().isDone()
+                && (currentMetricsBuffer.getCreateTimeslot() == 0
+                || currentTimeSlot > currentMetricsBuffer.getCreateTimeslot()))) {
+            MetricsBuffer newMetricsBuffer = new MetricsBuffer(currentTimeSlot);
             if (metricsBufferFieldUpdater.compareAndSet(this, currentMetricsBuffer, newMetricsBuffer)) {
                 if (currentMetricsBuffer != null) {
-                    if (!currentMetricsBuffer.getBufferFuture().isDone()) {
-                        currentMetricsBuffer.getBufferFuture()
-                                .completeExceptionally(new IOException("Metrics buffer expired"));
-                    } else if (!currentMetricsBuffer.getBufferFuture().isCompletedExceptionally()) {
-                        currentMetricsBuffer.getBufferFuture().getNow(null).release();
-                    }
+                    currentMetricsBuffer.release();
                 }
-                newMetricsBuffer.getBufferFuture().complete(generate0(metricsProviders));
+                CompletableFuture<ByteBuf> bufferFuture = newMetricsBuffer.getBufferFuture();
+                try {
+                    bufferFuture.complete(generate0(metricsProviders));
+                } catch (Exception e) {
+                    bufferFuture.completeExceptionally(e);
+                }
                 currentMetricsBuffer = newMetricsBuffer;
             } else {
                 currentMetricsBuffer = metricsBuffer;
             }
         }
-        return currentMetricsBuffer.getBufferFuture();
+        return currentMetricsBuffer;
+    }
+
+    /**
+     * Calculate the current time slot based on the current time.
+     * This is to ensure that cached metrics are refreshed consistently at a fixed interval regardless of the request
+     * time.
+     */
+    private long calculateCurrentTimeSlot() {
+        long cacheTimeoutMillis =
+                TimeUnit.SECONDS.toMillis(Math.max(1, pulsar.getConfiguration().getManagedLedgerStatsPeriodSeconds()));
+        long now = System.currentTimeMillis();
+        return now / cacheTimeoutMillis;
     }
 }

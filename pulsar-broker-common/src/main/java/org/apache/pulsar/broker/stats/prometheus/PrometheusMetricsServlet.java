@@ -41,9 +41,8 @@ public class PrometheusMetricsServlet extends HttpServlet {
     private static final long serialVersionUID = 1L;
     static final int HTTP_STATUS_OK_200 = 200;
     static final int HTTP_STATUS_INTERNAL_SERVER_ERROR_500 = 500;
-
-    private final long metricsServletTimeoutMs;
-    private final String cluster;
+    protected final long metricsServletTimeoutMs;
+    protected final String cluster;
     protected List<PrometheusRawMetricsProvider> metricsProviders;
 
     private ExecutorService executor = null;
@@ -103,7 +102,7 @@ public class PrometheusMetricsServlet extends HttpServlet {
 
     }
 
-    protected void handleAsyncMetricsRequest(AsyncContext context) {
+    private void handleAsyncMetricsRequest(AsyncContext context) {
         long start = System.currentTimeMillis();
         try {
             generateMetricsSynchronously((HttpServletResponse) context.getRequest());
@@ -136,7 +135,7 @@ public class PrometheusMetricsServlet extends HttpServlet {
         }
     }
 
-    protected void generateMetricsSynchronously(HttpServletResponse res) throws IOException {
+    private void generateMetricsSynchronously(HttpServletResponse res) throws IOException {
         res.setStatus(HTTP_STATUS_OK_200);
         res.setContentType("text/plain;charset=utf-8");
         PrometheusMetricsGeneratorUtils.generate(cluster, res.getOutputStream(), metricsProviders);
