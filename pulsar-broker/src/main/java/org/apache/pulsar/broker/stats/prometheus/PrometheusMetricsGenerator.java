@@ -22,9 +22,6 @@ import static org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsGenerat
 import static org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsGeneratorUtils.getTypeStr;
 import static org.apache.pulsar.common.stats.JvmMetrics.getJvmDirectMemoryUsed;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufAllocator;
-import io.netty.buffer.CompositeByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
 import io.prometheus.client.Collector;
 import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.Gauge;
@@ -214,6 +211,8 @@ public class PrometheusMetricsGenerator {
     }
 
     private ByteBuf allocateMultipartCompositeDirectBuffer() {
+        return PulsarByteBufAllocator.DEFAULT.compositeDirectBuffer(MINIMUM_FOR_MAX_COMPONENTS);
+        /*
         // use composite buffer with pre-allocated buffers to ensure that the pooled allocator can be used
         // for allocating the buffers
         ByteBufAllocator byteBufAllocator = PulsarByteBufAllocator.DEFAULT;
@@ -232,6 +231,7 @@ public class PrometheusMetricsGenerator {
             buf.addComponent(false, byteBufAllocator.directBuffer((int) chunkSize));
         }
         return buf;
+         */
     }
 
     private static void generateBrokerBasicMetrics(PulsarService pulsar, SimpleTextOutputStream stream) {
