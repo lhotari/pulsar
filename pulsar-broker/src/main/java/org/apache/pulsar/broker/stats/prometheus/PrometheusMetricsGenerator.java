@@ -261,9 +261,39 @@ public class PrometheusMetricsGenerator {
 
     public synchronized void generate(OutputStream out,
                                       List<PrometheusRawMetricsProvider> metricsProviders) throws IOException {
-        ByteBuf buffer;
         boolean cacheMetricsResponse = pulsar.getConfiguration().isMetricsBufferResponse();
+        ByteBuf buffer = renderToBuffer(metricsProviders, cacheMetricsResponse);
+        if (buffer == null) {
+            return;
+        }
+        try {
+            if (out instanceof HttpOutput) {
+                HttpOutput output = (HttpOutput) out;
+                //no mem_copy and memory allocations here
+                ByteBuffer[] buffers = buffer.nioBuffers();
+                for (ByteBuffer buffer0 : buffers) {
+                    output.write(buffer0);
+                }
+            } else {
+                //read data from buffer and write it to output stream, with no more heap buffer(byte[]) allocation.
+                //not modify buffer readIndex/writeIndex here.
+                int readIndex = buffer.readerIndex();
+                int readableBytes = buffer.readableBytes();
+                for (int i = 0; i < readableBytes; i++) {
+                    out.write(buffer.getByte(readIndex + i));
+                }
+            }
+        } finally {
+            if (!cacheMetricsResponse && buffer.refCnt() > 0) {
+                buffer.release();
+                log.debug("Metrics buffer released.");
+            }
+        }
+    }
 
+    public ByteBuf renderToBuffer(List<PrometheusRawMetricsProvider> metricsProviders,
+                                  boolean cacheMetricsResponse) throws IOException {
+        ByteBuf buffer;
         if (!cacheMetricsResponse) {
             buffer = generate0(metricsProviders);
         } else {
@@ -290,34 +320,11 @@ public class PrometheusMetricsGenerator {
             });
 
             if (null == window || null == window.value()) {
-                return;
+                return null;
             }
             buffer = window.value();
             log.debug("Current window start {}, current cached buf size {}", window.start(), buffer.readableBytes());
         }
-
-        try {
-            if (out instanceof HttpOutput) {
-                HttpOutput output = (HttpOutput) out;
-                //no mem_copy and memory allocations here
-                ByteBuffer[] buffers = buffer.nioBuffers();
-                for (ByteBuffer buffer0 : buffers) {
-                    output.write(buffer0);
-                }
-            } else {
-                //read data from buffer and write it to output stream, with no more heap buffer(byte[]) allocation.
-                //not modify buffer readIndex/writeIndex here.
-                int readIndex = buffer.readerIndex();
-                int readableBytes = buffer.readableBytes();
-                for (int i = 0; i < readableBytes; i++) {
-                    out.write(buffer.getByte(readIndex + i));
-                }
-            }
-        } finally {
-            if (!cacheMetricsResponse && buffer.refCnt() > 0) {
-                buffer.release();
-                log.debug("Metrics buffer released.");
-            }
-        }
+        return buffer;
     }
 }
