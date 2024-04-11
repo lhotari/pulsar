@@ -38,18 +38,19 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.stats.NullStatsProvider;
 import org.apache.bookkeeper.stats.StatsProvider;
 import org.apache.pulsar.PulsarVersion;
 import org.apache.pulsar.broker.PulsarService;
-import org.apache.pulsar.broker.stats.TimeWindow;
-import org.apache.pulsar.broker.stats.WindowWrap;
 import org.apache.pulsar.broker.stats.metrics.ManagedCursorMetrics;
 import org.apache.pulsar.broker.stats.metrics.ManagedLedgerCacheMetrics;
 import org.apache.pulsar.broker.stats.metrics.ManagedLedgerMetrics;
-import org.apache.pulsar.common.allocator.PulsarByteBufAllocator;
 import org.apache.pulsar.common.stats.Metrics;
 import org.apache.pulsar.common.util.DirectMemoryUtils;
 import org.apache.pulsar.common.util.SimpleTextOutputStream;
@@ -63,7 +64,6 @@ import org.eclipse.jetty.server.HttpOutput;
  */
 @Slf4j
 public class PrometheusMetricsGenerator {
-    private static volatile TimeWindow<ByteBuf> timeWindow;
     private static final int MAX_COMPONENTS = 64;
 
     static {
@@ -93,6 +93,29 @@ public class PrometheusMetricsGenerator {
                     }
                 }, PulsarVersion.getVersion(), PulsarVersion.getGitSha())
                 .register(CollectorRegistry.defaultRegistry);
+    }
+
+    private volatile MetricsBuffer metricsBuffer;
+    private static AtomicReferenceFieldUpdater<PrometheusMetricsGenerator, MetricsBuffer> metricsBufferFieldUpdater =
+            AtomicReferenceFieldUpdater.newUpdater(PrometheusMetricsGenerator.class, MetricsBuffer.class,
+                    "metricsBuffer");
+
+    private static class MetricsBuffer {
+        private final CompletableFuture<ByteBuf> bufferFuture;
+        private final long createTimestamp;
+
+        MetricsBuffer() {
+            bufferFuture = new CompletableFuture<>();
+            createTimestamp = System.currentTimeMillis();
+        }
+
+        CompletableFuture<ByteBuf> getBufferFuture() {
+            return bufferFuture;
+        }
+
+        long getCreateTimestamp() {
+            return createTimestamp;
+        }
     }
 
     private final PulsarService pulsar;
@@ -262,7 +285,15 @@ public class PrometheusMetricsGenerator {
     public synchronized void generate(OutputStream out,
                                       List<PrometheusRawMetricsProvider> metricsProviders) throws IOException {
         boolean cacheMetricsResponse = pulsar.getConfiguration().isMetricsBufferResponse();
-        ByteBuf buffer = renderToBuffer(metricsProviders, cacheMetricsResponse);
+        ByteBuf buffer = null;
+        try {
+            buffer = renderToBuffer(metricsProviders, cacheMetricsResponse).get(pulsar.getConfiguration().getMetricsServletTimeoutMs(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException(e);
+        } catch (ExecutionException | TimeoutException e) {
+            throw new IOException(e);
+        }
         if (buffer == null) {
             return;
         }
@@ -291,40 +322,30 @@ public class PrometheusMetricsGenerator {
         }
     }
 
-    public ByteBuf renderToBuffer(List<PrometheusRawMetricsProvider> metricsProviders,
-                                  boolean cacheMetricsResponse) throws IOException {
-        ByteBuf buffer;
-        if (!cacheMetricsResponse) {
-            buffer = generate0(metricsProviders);
-        } else {
-            if (null == timeWindow) {
-                int period = pulsar.getConfiguration().getManagedLedgerStatsPeriodSeconds();
-                timeWindow = new TimeWindow<>(1, (int) TimeUnit.SECONDS.toMillis(period));
-            }
-            WindowWrap<ByteBuf> window = timeWindow.current(oldBuf -> {
-                // release expired buffer, in case of memory leak
-                if (oldBuf != null && oldBuf.refCnt() > 0) {
-                    oldBuf.release();
-                    log.debug("Cached metrics buffer released");
+    public CompletableFuture<ByteBuf> renderToBuffer(List<PrometheusRawMetricsProvider> metricsProviders,
+                                                     boolean cacheMetricsResponse) throws IOException {
+        long cacheTimeoutMillis = cacheMetricsResponse
+                ? TimeUnit.SECONDS.toMillis(Math.max(1, pulsar.getConfiguration().getManagedLedgerStatsPeriodSeconds()))
+                : TimeUnit.SECONDS.toMillis(1);
+        MetricsBuffer currentMetricsBuffer = metricsBuffer;
+        if (currentMetricsBuffer == null
+                || System.currentTimeMillis() > currentMetricsBuffer.getCreateTimestamp() + cacheTimeoutMillis) {
+            MetricsBuffer newMetricsBuffer = new MetricsBuffer();
+            if (metricsBufferFieldUpdater.compareAndSet(this, currentMetricsBuffer, newMetricsBuffer)) {
+                if (currentMetricsBuffer != null) {
+                    if (!currentMetricsBuffer.getBufferFuture().isDone()) {
+                        currentMetricsBuffer.getBufferFuture()
+                                .completeExceptionally(new IOException("Metrics buffer expired"));
+                    } else if (!currentMetricsBuffer.getBufferFuture().isCompletedExceptionally()) {
+                        currentMetricsBuffer.getBufferFuture().getNow(null).release();
+                    }
                 }
-
-                try {
-                    ByteBuf buf = generate0(metricsProviders);
-                    log.debug("Generated metrics buffer size {}", buf.readableBytes());
-                    return buf;
-                } catch (IOException e) {
-                    log.error("Generate metrics failed", e);
-                    //return empty buffer if exception happens
-                    return PulsarByteBufAllocator.DEFAULT.heapBuffer(0);
-                }
-            });
-
-            if (null == window || null == window.value()) {
-                return null;
+                newMetricsBuffer.getBufferFuture().complete(generate0(metricsProviders));
+                currentMetricsBuffer = newMetricsBuffer;
+            } else {
+                currentMetricsBuffer = metricsBuffer;
             }
-            buffer = window.value();
-            log.debug("Current window start {}, current cached buf size {}", window.start(), buffer.readableBytes());
         }
-        return buffer;
+        return currentMetricsBuffer.getBufferFuture();
     }
 }
