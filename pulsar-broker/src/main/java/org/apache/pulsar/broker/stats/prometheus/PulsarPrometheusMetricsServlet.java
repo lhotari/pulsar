@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import javax.servlet.AsyncContext;
 import javax.servlet.AsyncEvent;
 import javax.servlet.AsyncListener;
+import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -100,13 +101,14 @@ public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
                 } else {
                     response.setStatus(HTTP_STATUS_OK_200);
                     response.setContentType("text/plain;charset=utf-8");
-                    if (response instanceof HttpOutput) {
-                        HttpOutput output = (HttpOutput) response;
+                    ServletOutputStream outputStream = response.getOutputStream();
+                    if (outputStream instanceof HttpOutput) {
+                        HttpOutput output = (HttpOutput) outputStream;
                         for (ByteBuffer nioBuffer : buffer.nioBuffers()) {
                             output.write(nioBuffer);
                         }
                     } else {
-                        buffer.readBytes(response.getOutputStream(), buffer.readableBytes());
+                        buffer.readBytes(outputStream, buffer.readableBytes());
                     }
                 }
             } catch (IOException e) {
