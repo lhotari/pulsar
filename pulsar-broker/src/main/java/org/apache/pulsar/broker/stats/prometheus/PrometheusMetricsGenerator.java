@@ -95,87 +95,23 @@ public class PrometheusMetricsGenerator {
                 .register(CollectorRegistry.defaultRegistry);
     }
 
-    public static void generate(PulsarService pulsar, boolean includeTopicMetrics, boolean includeConsumerMetrics,
-                                boolean includeProducerMetrics, OutputStream out) throws IOException {
-        generate(pulsar, includeTopicMetrics, includeConsumerMetrics, includeProducerMetrics, false, out, null);
+    private final PulsarService pulsar;
+    private final boolean includeTopicMetrics;
+    private final boolean includeConsumerMetrics;
+    private final boolean includeProducerMetrics;
+    private final boolean splitTopicAndPartitionIndexLabel;
+
+    public PrometheusMetricsGenerator(PulsarService pulsar, boolean includeTopicMetrics,
+                                      boolean includeConsumerMetrics, boolean includeProducerMetrics,
+                                      boolean splitTopicAndPartitionIndexLabel) {
+        this.pulsar = pulsar;
+        this.includeTopicMetrics = includeTopicMetrics;
+        this.includeConsumerMetrics = includeConsumerMetrics;
+        this.includeProducerMetrics = includeProducerMetrics;
+        this.splitTopicAndPartitionIndexLabel = splitTopicAndPartitionIndexLabel;
     }
 
-    public static void generate(PulsarService pulsar, boolean includeTopicMetrics, boolean includeConsumerMetrics,
-                                boolean includeProducerMetrics, boolean splitTopicAndPartitionIndexLabel,
-                                OutputStream out) throws IOException {
-        generate(pulsar, includeTopicMetrics, includeConsumerMetrics, includeProducerMetrics,
-                splitTopicAndPartitionIndexLabel, out, null);
-    }
-
-    public static synchronized void generate(PulsarService pulsar, boolean includeTopicMetrics,
-                                             boolean includeConsumerMetrics, boolean includeProducerMetrics,
-                                             boolean splitTopicAndPartitionIndexLabel, OutputStream out,
-                                             List<PrometheusRawMetricsProvider> metricsProviders) throws IOException {
-        ByteBuf buffer;
-        boolean exposeBufferMetrics = pulsar.getConfiguration().isMetricsBufferResponse();
-
-        if (!exposeBufferMetrics) {
-            buffer = generate0(pulsar, includeTopicMetrics, includeConsumerMetrics, includeProducerMetrics,
-                    splitTopicAndPartitionIndexLabel, metricsProviders);
-        } else {
-            if (null == timeWindow) {
-                int period = pulsar.getConfiguration().getManagedLedgerStatsPeriodSeconds();
-                timeWindow = new TimeWindow<>(1, (int) TimeUnit.SECONDS.toMillis(period));
-            }
-            WindowWrap<ByteBuf> window = timeWindow.current(oldBuf -> {
-                // release expired buffer, in case of memory leak
-                if (oldBuf != null && oldBuf.refCnt() > 0) {
-                    oldBuf.release();
-                    log.debug("Cached metrics buffer released");
-                }
-
-                try {
-                    ByteBuf buf = generate0(pulsar, includeTopicMetrics, includeConsumerMetrics, includeProducerMetrics,
-                            splitTopicAndPartitionIndexLabel, metricsProviders);
-                    log.debug("Generated metrics buffer size {}", buf.readableBytes());
-                    return buf;
-                } catch (IOException e) {
-                    log.error("Generate metrics failed", e);
-                    //return empty buffer if exception happens
-                    return PulsarByteBufAllocator.DEFAULT.heapBuffer(0);
-                }
-            });
-
-            if (null == window || null == window.value()) {
-                return;
-            }
-            buffer = window.value();
-            log.debug("Current window start {}, current cached buf size {}", window.start(), buffer.readableBytes());
-        }
-
-        try {
-            if (out instanceof HttpOutput) {
-                HttpOutput output = (HttpOutput) out;
-                //no mem_copy and memory allocations here
-                ByteBuffer[] buffers = buffer.nioBuffers();
-                for (ByteBuffer buffer0 : buffers) {
-                    output.write(buffer0);
-                }
-            } else {
-                //read data from buffer and write it to output stream, with no more heap buffer(byte[]) allocation.
-                //not modify buffer readIndex/writeIndex here.
-                int readIndex = buffer.readerIndex();
-                int readableBytes = buffer.readableBytes();
-                for (int i = 0; i < readableBytes; i++) {
-                    out.write(buffer.getByte(readIndex + i));
-                }
-            }
-        } finally {
-            if (!exposeBufferMetrics && buffer.refCnt() > 0) {
-                buffer.release();
-                log.debug("Metrics buffer released.");
-            }
-        }
-    }
-
-    private static ByteBuf generate0(PulsarService pulsar, boolean includeTopicMetrics, boolean includeConsumerMetrics,
-                                     boolean includeProducerMetrics, boolean splitTopicAndPartitionIndexLabel,
-                                     List<PrometheusRawMetricsProvider> metricsProviders) throws IOException {
+    private ByteBuf generate0(List<PrometheusRawMetricsProvider> metricsProviders) throws IOException {
         //Use unpooled buffers here to avoid direct buffer usage increasing.
         //when write out 200MB data, MAX_COMPONENTS = 64 needn't mem_copy. see: CompositeByteBuf#consolidateIfNeeded()
         ByteBuf buf = UnpooledByteBufAllocator.DEFAULT.compositeDirectBuffer(MAX_COMPONENTS);
@@ -320,6 +256,68 @@ public class PrometheusMetricsGenerator {
             stream.write(writer.toString());
         } catch (IOException e) {
             // nop
+        }
+    }
+
+    public synchronized void generate(OutputStream out,
+                                      List<PrometheusRawMetricsProvider> metricsProviders) throws IOException {
+        ByteBuf buffer;
+        boolean exposeBufferMetrics = pulsar.getConfiguration().isMetricsBufferResponse();
+
+        if (!exposeBufferMetrics) {
+            buffer = generate0(metricsProviders);
+        } else {
+            if (null == timeWindow) {
+                int period = pulsar.getConfiguration().getManagedLedgerStatsPeriodSeconds();
+                timeWindow = new TimeWindow<>(1, (int) TimeUnit.SECONDS.toMillis(period));
+            }
+            WindowWrap<ByteBuf> window = timeWindow.current(oldBuf -> {
+                // release expired buffer, in case of memory leak
+                if (oldBuf != null && oldBuf.refCnt() > 0) {
+                    oldBuf.release();
+                    log.debug("Cached metrics buffer released");
+                }
+
+                try {
+                    ByteBuf buf = generate0(metricsProviders);
+                    log.debug("Generated metrics buffer size {}", buf.readableBytes());
+                    return buf;
+                } catch (IOException e) {
+                    log.error("Generate metrics failed", e);
+                    //return empty buffer if exception happens
+                    return PulsarByteBufAllocator.DEFAULT.heapBuffer(0);
+                }
+            });
+
+            if (null == window || null == window.value()) {
+                return;
+            }
+            buffer = window.value();
+            log.debug("Current window start {}, current cached buf size {}", window.start(), buffer.readableBytes());
+        }
+
+        try {
+            if (out instanceof HttpOutput) {
+                HttpOutput output = (HttpOutput) out;
+                //no mem_copy and memory allocations here
+                ByteBuffer[] buffers = buffer.nioBuffers();
+                for (ByteBuffer buffer0 : buffers) {
+                    output.write(buffer0);
+                }
+            } else {
+                //read data from buffer and write it to output stream, with no more heap buffer(byte[]) allocation.
+                //not modify buffer readIndex/writeIndex here.
+                int readIndex = buffer.readerIndex();
+                int readableBytes = buffer.readableBytes();
+                for (int i = 0; i < readableBytes; i++) {
+                    out.write(buffer.getByte(readIndex + i));
+                }
+            }
+        } finally {
+            if (!exposeBufferMetrics && buffer.refCnt() > 0) {
+                buffer.release();
+                log.debug("Metrics buffer released.");
+            }
         }
     }
 }

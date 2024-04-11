@@ -26,26 +26,19 @@ public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
 
     private static final long serialVersionUID = 1L;
 
-    private final PulsarService pulsar;
-    private final boolean shouldExportTopicMetrics;
-    private final boolean shouldExportConsumerMetrics;
-    private final boolean shouldExportProducerMetrics;
-    private final boolean splitTopicAndPartitionLabel;
+    private final PrometheusMetricsGenerator prometheusMetricsGenerator;
 
     public PulsarPrometheusMetricsServlet(PulsarService pulsar, boolean includeTopicMetrics,
-                                          boolean includeConsumerMetrics, boolean shouldExportProducerMetrics,
+                                          boolean includeConsumerMetrics, boolean includeProducerMetrics,
                                           boolean splitTopicAndPartitionLabel) {
         super(pulsar.getConfiguration().getMetricsServletTimeoutMs(), pulsar.getConfiguration().getClusterName());
-        this.pulsar = pulsar;
-        this.shouldExportTopicMetrics = includeTopicMetrics;
-        this.shouldExportConsumerMetrics = includeConsumerMetrics;
-        this.shouldExportProducerMetrics = shouldExportProducerMetrics;
-        this.splitTopicAndPartitionLabel = splitTopicAndPartitionLabel;
+        prometheusMetricsGenerator =
+                new PrometheusMetricsGenerator(pulsar, includeTopicMetrics, includeConsumerMetrics,
+                        includeProducerMetrics, splitTopicAndPartitionLabel);
     }
 
     @Override
     protected void generateMetrics(String cluster, ServletOutputStream outputStream) throws IOException {
-        PrometheusMetricsGenerator.generate(pulsar, shouldExportTopicMetrics, shouldExportConsumerMetrics,
-                shouldExportProducerMetrics, splitTopicAndPartitionLabel, outputStream, metricsProviders);
+        prometheusMetricsGenerator.generate(outputStream, metricsProviders);
     }
 }
