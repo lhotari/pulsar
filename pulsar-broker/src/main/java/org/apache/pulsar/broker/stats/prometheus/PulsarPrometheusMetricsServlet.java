@@ -50,6 +50,12 @@ public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
     }
 
 
+    @Override
+    public void destroy() {
+        super.destroy();
+        prometheusMetricsGenerator.close();
+    }
+
     protected void doGet(HttpServletRequest request, HttpServletResponse response) {
         AsyncContext context = request.startAsync();
         context.setTimeout(metricsServletTimeoutMs);

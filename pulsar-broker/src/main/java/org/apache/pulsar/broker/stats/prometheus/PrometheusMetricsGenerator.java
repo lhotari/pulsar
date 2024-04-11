@@ -66,7 +66,7 @@ import org.eclipse.jetty.server.HttpOutput;
  * href="https://prometheus.io/docs/instrumenting/exposition_formats/">Exposition Formats</a>
  */
 @Slf4j
-public class PrometheusMetricsGenerator {
+public class PrometheusMetricsGenerator implements AutoCloseable {
     private static final int DEFAULT_INITIAL_BUFFER_SIZE = 1024 * 1024 * 1024; // 1MB
     private static final int MINIMUM_FOR_MAX_COMPONENTS = 64;
 
@@ -107,7 +107,7 @@ public class PrometheusMetricsGenerator {
     public static class MetricsBuffer {
         private final CompletableFuture<ByteBuf> bufferFuture;
         private final long createTimeslot;
-        private final AtomicInteger refCnt = new AtomicInteger(1);
+        private final AtomicInteger refCnt = new AtomicInteger(2);
 
         MetricsBuffer(long timeslot) {
             bufferFuture = new CompletableFuture<>();
@@ -137,9 +137,11 @@ public class PrometheusMetricsGenerator {
         public void release() {
             int newValue = refCnt.decrementAndGet();
             if (newValue == 0) {
-                if (bufferFuture.isDone() && !bufferFuture.isCompletedExceptionally()) {
-                    bufferFuture.getNow(null).release();
-                }
+                bufferFuture.whenComplete((byteBuf, throwable) -> {
+                    if (byteBuf != null) {
+                        byteBuf.release();
+                    }
+                });
             }
         }
     }
@@ -369,31 +371,43 @@ public class PrometheusMetricsGenerator {
 
     public MetricsBuffer renderToBuffer(Executor executor, List<PrometheusRawMetricsProvider> metricsProviders) {
         boolean cacheMetricsResponse = pulsar.getConfiguration().isMetricsBufferResponse();
-        long currentTimeSlot = cacheMetricsResponse ? calculateCurrentTimeSlot() : 0;
-        MetricsBuffer currentMetricsBuffer = metricsBuffer;
-        if (currentMetricsBuffer == null || !currentMetricsBuffer.retain()
-                || (currentMetricsBuffer.getBufferFuture().isDone()
-                && (currentMetricsBuffer.getCreateTimeslot() == 0
-                || currentTimeSlot > currentMetricsBuffer.getCreateTimeslot()))) {
-            MetricsBuffer newMetricsBuffer = new MetricsBuffer(currentTimeSlot);
-            if (metricsBufferFieldUpdater.compareAndSet(this, currentMetricsBuffer, newMetricsBuffer)) {
-                if (currentMetricsBuffer != null) {
-                    currentMetricsBuffer.release();
-                }
-                CompletableFuture<ByteBuf> bufferFuture = newMetricsBuffer.getBufferFuture();
-                executor.execute(() -> {
-                    try {
-                        bufferFuture.complete(generate0(metricsProviders));
-                    } catch (Exception e) {
-                        bufferFuture.completeExceptionally(e);
+        while (!Thread.currentThread().isInterrupted()) {
+            long currentTimeSlot = cacheMetricsResponse ? calculateCurrentTimeSlot() : 0;
+            MetricsBuffer currentMetricsBuffer = metricsBuffer;
+            if (currentMetricsBuffer == null || currentMetricsBuffer.getBufferFuture().isCompletedExceptionally()
+                    || (currentMetricsBuffer.getBufferFuture().isDone()
+                    && (currentMetricsBuffer.getCreateTimeslot() == 0
+                    || currentTimeSlot > currentMetricsBuffer.getCreateTimeslot()))) {
+                MetricsBuffer newMetricsBuffer = new MetricsBuffer(currentTimeSlot);
+                if (metricsBufferFieldUpdater.compareAndSet(this, currentMetricsBuffer, newMetricsBuffer)) {
+                    if (currentMetricsBuffer != null) {
+                        currentMetricsBuffer.release();
                     }
-                });
-                currentMetricsBuffer = newMetricsBuffer;
-            } else {
-                currentMetricsBuffer = metricsBuffer;
+                    CompletableFuture<ByteBuf> bufferFuture = newMetricsBuffer.getBufferFuture();
+                    executor.execute(() -> {
+                        try {
+                            bufferFuture.complete(generate0(metricsProviders));
+                        } catch (Exception e) {
+                            bufferFuture.completeExceptionally(e);
+                        }
+                    });
+                    // no need to retain before returning since the new buffer starts with refCnt 2
+                    return newMetricsBuffer;
+                } else {
+                    currentMetricsBuffer = metricsBuffer;
+                    if (currentMetricsBuffer == null) {
+                        // close has been called, return null
+                        return null;
+                    }
+                }
+            }
+            // retain the buffer before returning
+            // if the buffer is already released, retaining won't succeed, retry in that case
+            if (currentMetricsBuffer.retain()) {
+                return currentMetricsBuffer;
             }
         }
-        return currentMetricsBuffer;
+        return null;
     }
 
     /**
@@ -406,5 +420,13 @@ public class PrometheusMetricsGenerator {
                 TimeUnit.SECONDS.toMillis(Math.max(1, pulsar.getConfiguration().getManagedLedgerStatsPeriodSeconds()));
         long now = System.currentTimeMillis();
         return now / cacheTimeoutMillis;
+    }
+
+    @Override
+    public void close() {
+        MetricsBuffer buffer = metricsBufferFieldUpdater.getAndSet(this, null);
+        if (buffer != null) {
+            buffer.release();
+        }
     }
 }
