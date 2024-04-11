@@ -84,7 +84,9 @@ public class PrometheusMetricsServlet extends HttpServlet {
                 } else {
                     log.error("Failed to generate prometheus stats, {} ms elapsed", time, e);
                 }
-                res.setStatus(HTTP_STATUS_INTERNAL_SERVER_ERROR_500);
+                if (!res.isCommitted()) {
+                    res.setStatus(HTTP_STATUS_INTERNAL_SERVER_ERROR_500);
+                }
             } finally {
                 long end = System.currentTimeMillis();
                 long time = end - start;
