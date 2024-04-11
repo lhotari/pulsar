@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.stats.prometheus;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -111,6 +112,8 @@ public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
                         buffer.readBytes(outputStream, buffer.readableBytes());
                     }
                 }
+            } catch (EOFException e) {
+                log.error("Failed to write metrics to response due to EOFException");
             } catch (IOException e) {
                 log.error("Failed to write metrics to response", e);
             } finally {
