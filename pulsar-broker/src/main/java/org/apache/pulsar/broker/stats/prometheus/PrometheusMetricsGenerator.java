@@ -262,9 +262,9 @@ public class PrometheusMetricsGenerator {
     public synchronized void generate(OutputStream out,
                                       List<PrometheusRawMetricsProvider> metricsProviders) throws IOException {
         ByteBuf buffer;
-        boolean exposeBufferMetrics = pulsar.getConfiguration().isMetricsBufferResponse();
+        boolean cacheMetricsResponse = pulsar.getConfiguration().isMetricsBufferResponse();
 
-        if (!exposeBufferMetrics) {
+        if (!cacheMetricsResponse) {
             buffer = generate0(metricsProviders);
         } else {
             if (null == timeWindow) {
@@ -314,7 +314,7 @@ public class PrometheusMetricsGenerator {
                 }
             }
         } finally {
-            if (!exposeBufferMetrics && buffer.refCnt() > 0) {
+            if (!cacheMetricsResponse && buffer.refCnt() > 0) {
                 buffer.release();
                 log.debug("Metrics buffer released.");
             }
