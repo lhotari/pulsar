@@ -36,6 +36,7 @@ import java.io.OutputStream;
 import java.io.StringWriter;
 import java.io.Writer;
 import java.nio.ByteBuffer;
+import java.time.Clock;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -70,7 +71,7 @@ import org.eclipse.jetty.server.HttpOutput;
  */
 @Slf4j
 public class PrometheusMetricsGenerator implements AutoCloseable {
-    private static final int DEFAULT_INITIAL_BUFFER_SIZE = 1024 * 1024 * 1024; // 1MB
+    private static final int DEFAULT_INITIAL_BUFFER_SIZE = 1024 * 1024; // 1MB
     private static final int MINIMUM_FOR_MAX_COMPONENTS = 64;
 
     static {
@@ -154,17 +155,19 @@ public class PrometheusMetricsGenerator implements AutoCloseable {
     private final boolean includeConsumerMetrics;
     private final boolean includeProducerMetrics;
     private final boolean splitTopicAndPartitionIndexLabel;
+    private final Clock clock;
 
     private volatile int initialBufferSize = DEFAULT_INITIAL_BUFFER_SIZE;
 
     public PrometheusMetricsGenerator(PulsarService pulsar, boolean includeTopicMetrics,
                                       boolean includeConsumerMetrics, boolean includeProducerMetrics,
-                                      boolean splitTopicAndPartitionIndexLabel) {
+                                      boolean splitTopicAndPartitionIndexLabel, Clock clock) {
         this.pulsar = pulsar;
         this.includeTopicMetrics = includeTopicMetrics;
         this.includeConsumerMetrics = includeConsumerMetrics;
         this.includeProducerMetrics = includeProducerMetrics;
         this.splitTopicAndPartitionIndexLabel = splitTopicAndPartitionIndexLabel;
+        this.clock = clock;
     }
 
     private ByteBuf generate0(List<PrometheusRawMetricsProvider> metricsProviders) {
@@ -362,7 +365,10 @@ public class PrometheusMetricsGenerator implements AutoCloseable {
                     output.write(buffer0);
                 }
             } else {
-                buffer.readBytes(out, buffer.readableBytes());
+                int length = buffer.readableBytes();
+                if (length > 0) {
+                    buffer.duplicate().readBytes(out, length);
+                }
             }
         } finally {
             metricsBuffer.release();
@@ -418,7 +424,7 @@ public class PrometheusMetricsGenerator implements AutoCloseable {
     private long calculateCurrentTimeSlot() {
         long cacheTimeoutMillis =
                 TimeUnit.SECONDS.toMillis(Math.max(1, pulsar.getConfiguration().getManagedLedgerStatsPeriodSeconds()));
-        long now = System.currentTimeMillis();
+        long now = clock.millis();
         return now / cacheTimeoutMillis;
     }
 

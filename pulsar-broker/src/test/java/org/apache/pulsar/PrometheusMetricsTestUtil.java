@@ -20,6 +20,7 @@ package org.apache.pulsar;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.time.Clock;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsGenerator;
 
@@ -27,13 +28,14 @@ public class PrometheusMetricsTestUtil {
 
     public static void generate(PulsarService pulsar, boolean includeTopicMetrics, boolean includeConsumerMetrics,
                                 boolean includeProducerMetrics, OutputStream out) throws IOException {
-        new PrometheusMetricsGenerator(pulsar, includeTopicMetrics, includeConsumerMetrics, includeProducerMetrics, false).generate(out, null);
+        new PrometheusMetricsGenerator(pulsar, includeTopicMetrics, includeConsumerMetrics, includeProducerMetrics,
+                false, Clock.systemUTC()).generate(out, null);
     }
 
     public static void generate(PulsarService pulsar, boolean includeTopicMetrics, boolean includeConsumerMetrics,
                                 boolean includeProducerMetrics, boolean splitTopicAndPartitionIndexLabel,
                                 OutputStream out) throws IOException {
         new PrometheusMetricsGenerator(pulsar, includeTopicMetrics, includeConsumerMetrics, includeProducerMetrics,
-                splitTopicAndPartitionIndexLabel).generate(out, null);
+                splitTopicAndPartitionIndexLabel, Clock.systemUTC()).generate(out, null);
     }
 }

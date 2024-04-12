@@ -21,6 +21,7 @@ package org.apache.pulsar.broker.stats.prometheus;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.time.Clock;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.servlet.AsyncContext;
 import javax.servlet.AsyncEvent;
@@ -46,7 +47,7 @@ public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
                 EXECUTOR_MAX_THREADS);
         prometheusMetricsGenerator =
                 new PrometheusMetricsGenerator(pulsar, includeTopicMetrics, includeConsumerMetrics,
-                        includeProducerMetrics, splitTopicAndPartitionLabel);
+                        includeProducerMetrics, splitTopicAndPartitionLabel, Clock.systemUTC());
     }
 
 
@@ -115,7 +116,10 @@ public class PulsarPrometheusMetricsServlet extends PrometheusMetricsServlet {
                             output.write(nioBuffer);
                         }
                     } else {
-                        buffer.readBytes(outputStream, buffer.readableBytes());
+                        int length = buffer.readableBytes();
+                        if (length > 0) {
+                            buffer.duplicate().readBytes(outputStream, length);
+                        }
                     }
                 }
             } catch (EOFException e) {
