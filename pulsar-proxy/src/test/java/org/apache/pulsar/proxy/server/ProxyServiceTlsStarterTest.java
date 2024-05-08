@@ -18,6 +18,15 @@
  */
 package org.apache.pulsar.proxy.server;
 
+import static org.apache.pulsar.proxy.server.ProxyServiceStarterTest.ARGS;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
+import java.net.URI;
+import java.nio.ByteBuffer;
+import java.util.Base64;
+import java.util.Optional;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import lombok.Cleanup;
 import org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest;
 import org.apache.pulsar.client.api.Producer;
@@ -25,26 +34,16 @@ import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.websocket.data.ProducerMessage;
 import org.eclipse.jetty.client.HttpClient;
+import org.eclipse.jetty.ee8.websocket.api.Session;
+import org.eclipse.jetty.ee8.websocket.api.WebSocketAdapter;
+import org.eclipse.jetty.ee8.websocket.api.WebSocketPingPongListener;
+import org.eclipse.jetty.ee8.websocket.api.annotations.WebSocket;
 import org.eclipse.jetty.util.BufferUtil;
-import org.eclipse.jetty.websocket.api.Session;
-import org.eclipse.jetty.websocket.api.WebSocketAdapter;
-import org.eclipse.jetty.websocket.api.WebSocketPingPongListener;
-import org.eclipse.jetty.websocket.api.annotations.WebSocket;
+import org.eclipse.jetty.websocket.api.Callback;
 import org.eclipse.jetty.websocket.client.WebSocketClient;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
-
-import java.net.URI;
-import java.nio.ByteBuffer;
-import java.util.Base64;
-import java.util.Optional;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.Future;
-
-import static org.apache.pulsar.proxy.server.ProxyServiceStarterTest.ARGS;
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertTrue;
 
 public class ProxyServiceTlsStarterTest extends MockedPulsarServiceBaseTest {
     private ProxyServiceStarter serviceStarter;
@@ -114,7 +113,8 @@ public class ProxyServiceTlsStarterTest extends MockedPulsarServiceBaseTest {
         producerWebSocketClient.start();
         MyWebSocket producerSocket = new MyWebSocket();
         String produceUri = "ws://localhost:" + webPort + "/ws/producer/persistent/sample/test/local/websocket-topic";
-        Future<Session> producerSession = producerWebSocketClient.connect(producerSocket, URI.create(produceUri));
+        CompletableFuture<org.eclipse.jetty.websocket.api.Session>
+                producerSession = producerWebSocketClient.connect(producerSocket, URI.create(produceUri));
 
         ProducerMessage produceRequest = new ProducerMessage();
         produceRequest.setContext("context");
@@ -127,11 +127,14 @@ public class ProxyServiceTlsStarterTest extends MockedPulsarServiceBaseTest {
         consumerWebSocketClient.start();
         MyWebSocket consumerSocket = new MyWebSocket();
         String consumeUri = "ws://localhost:" + webPort + "/ws/consumer/persistent/sample/test/local/websocket-topic/my-sub";
-        Future<Session> consumerSession = consumerWebSocketClient.connect(consumerSocket, URI.create(consumeUri));
-        consumerSession.get().getRemote().sendPing(ByteBuffer.wrap("ping".getBytes()));
-        producerSession.get().getRemote().sendString(ObjectMapperFactory.getMapper().writer().writeValueAsString(produceRequest));
+        CompletableFuture<org.eclipse.jetty.websocket.api.Session>
+                consumerSession = consumerWebSocketClient.connect(consumerSocket, URI.create(consumeUri));
+        consumerSession.get().sendPing(ByteBuffer.wrap("ping".getBytes()), Callback.NOOP);
+        producerSession.get()
+                .sendText(ObjectMapperFactory.getMapper().writer().writeValueAsString(produceRequest), Callback.NOOP);
         assertTrue(consumerSocket.getResponse().contains("ping"));
-        ProducerMessage message = ObjectMapperFactory.getMapper().reader().readValue(consumerSocket.getResponse(), ProducerMessage.class);
+        ProducerMessage message =
+                ObjectMapperFactory.getMapper().reader().readValue(consumerSocket.getResponse(), ProducerMessage.class);
         assertEquals(new String(Base64.getDecoder().decode(message.getPayload())), "my payload");
     }
 

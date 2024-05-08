@@ -27,14 +27,14 @@
   </parent>
   <artifactId>pulsar-io-hdfs3</artifactId>
   <name>Pulsar IO :: Hdfs3</name>
-  
+
   <dependencies>
      <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-core</artifactId>
       <version>${project.version}</version>
     </dependency>
-    
+
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
@@ -49,29 +49,11 @@
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-collections4</artifactId>
     </dependency>
-    
+
   	<dependency>
-  		<groupId>org.apache.hadoop</groupId>
-  		<artifactId>hadoop-client</artifactId>
-  		<version>${hadoop3.version}</version>
-        <exclusions>
-          <exclusion>
-            <groupId>jakarta.activation</groupId>
-            <artifactId>jakarta.activation-api</artifactId>
-          </exclusion>
-          <exclusion>
-            <groupId>log4j</groupId>
-            <artifactId>log4j</artifactId>
-          </exclusion>
-          <exclusion>
-            <groupId>org.slf4j</groupId>
-            <artifactId>*</artifactId>
-          </exclusion>
-          <exclusion>
-            <groupId>org.apache.avro</groupId>
-            <artifactId>avro</artifactId>
-          </exclusion>
-        </exclusions>
+  		<groupId>${project.groupId}</groupId>
+  		<artifactId>hadoop-hdfs-client-shaded</artifactId>
+  		<version>${project.version}</version>
   	</dependency>
 
     <dependency>
@@ -80,7 +62,7 @@
     </dependency>
 
   </dependencies>
-  
+
   <build>
     <plugins>
       <plugin>

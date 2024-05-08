@@ -18,6 +18,11 @@
  */
 package org.apache.pulsar.proxy.server;
 
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.spy;
+import java.util.HashSet;
+import java.util.Optional;
+import java.util.Set;
 import lombok.Cleanup;
 import org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest;
 import org.apache.pulsar.broker.authentication.AuthenticationProviderTls;
@@ -30,17 +35,10 @@ import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.metadata.impl.ZKMetadataStore;
 import org.apache.pulsar.policies.data.loadbalancer.LoadManagerReport;
 import org.apache.pulsar.policies.data.loadbalancer.LoadReport;
-import org.eclipse.jetty.servlet.ServletHolder;
+import org.eclipse.jetty.ee8.servlet.ServletHolder;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
-
-import java.util.HashSet;
-import java.util.Optional;
-import java.util.Set;
-
-import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.spy;
 
 public class AdminProxyHandlerKeystoreTLSTest extends MockedPulsarServiceBaseTest {
 

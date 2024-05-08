@@ -51,7 +51,7 @@ public class JettySslContextFactoryTest {
         @Cleanup("stop")
         Server server = new Server();
         List<ServerConnector> connectors = new ArrayList<>();
-        SslContextFactory factory = JettySslContextFactory.createServerSslContext(
+        SslContextFactory.Server factory = JettySslContextFactory.createServerSslContext(
                 null,
                 false,
                 Resources.getResource("ssl/my-ca/ca.pem").getPath(),
@@ -85,7 +85,7 @@ public class JettySslContextFactoryTest {
         @Cleanup("stop")
         Server server = new Server();
         List<ServerConnector> connectors = new ArrayList<>();
-        SslContextFactory factory = JettySslContextFactory.createServerSslContext(
+        SslContextFactory.Server factory = JettySslContextFactory.createServerSslContext(
                 null,
                 false,
                 Resources.getResource("ssl/my-ca/ca.pem").getPath(),
@@ -123,7 +123,7 @@ public class JettySslContextFactoryTest {
         @Cleanup("stop")
         Server server = new Server();
         List<ServerConnector> connectors = new ArrayList<>();
-        SslContextFactory factory = JettySslContextFactory.createServerSslContext(
+        SslContextFactory.Server factory = JettySslContextFactory.createServerSslContext(
                 null,
                 false,
                 Resources.getResource("ssl/my-ca/ca.pem").getPath(),

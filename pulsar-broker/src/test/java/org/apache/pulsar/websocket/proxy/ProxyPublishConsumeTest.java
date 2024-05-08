@@ -68,7 +68,7 @@ import org.apache.pulsar.websocket.stats.ProxyTopicStat.ConsumerStats;
 import org.apache.pulsar.websocket.stats.ProxyTopicStat.ProducerStats;
 import org.awaitility.Awaitility;
 import org.eclipse.jetty.websocket.api.Session;
-import org.eclipse.jetty.websocket.api.UpgradeException;
+import org.eclipse.jetty.websocket.api.exceptions.UpgradeException;
 import org.eclipse.jetty.websocket.client.ClientUpgradeRequest;
 import org.eclipse.jetty.websocket.client.WebSocketClient;
 import org.glassfish.jersey.client.ClientConfig;

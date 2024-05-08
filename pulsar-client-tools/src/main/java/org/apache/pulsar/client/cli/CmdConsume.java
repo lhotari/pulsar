@@ -38,6 +38,7 @@ import org.apache.pulsar.client.api.SubscriptionInitialPosition;
 import org.apache.pulsar.client.api.SubscriptionMode;
 import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.common.naming.TopicName;
+import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.websocket.client.ClientUpgradeRequest;
 import org.eclipse.jetty.websocket.client.WebSocketClient;
@@ -247,7 +248,10 @@ public class CmdConsume extends AbstractCmdConsume {
 
         URI consumerUri = URI.create(getWebSocketConsumeUri(topic));
 
-        WebSocketClient consumeClient = new WebSocketClient(new SslContextFactory(true));
+        HttpClient httpClient = new HttpClient();
+        httpClient.setSslContextFactory(new SslContextFactory.Client(true));
+        WebSocketClient consumeClient = new WebSocketClient(httpClient);
+        consumeClient.setMaxTextMessageSize(64 * 1024);
         ClientUpgradeRequest consumeRequest = new ClientUpgradeRequest();
         try {
             if (authentication != null) {
@@ -309,6 +313,17 @@ public class CmdConsume extends AbstractCmdConsume {
             LOG.info("{} messages successfully consumed", numMessagesConsumed);
         }
 
+
+        try {
+            consumeClient.stop();
+        } catch (Exception e) {
+            LOG.error("Failed to stop websocket-client", e);
+        }
+        try {
+            httpClient.stop();
+        } catch (Exception e) {
+            LOG.error("Failed to stop http-client", e);
+        }
         return returnCode;
     }
 

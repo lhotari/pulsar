@@ -33,6 +33,7 @@
         <metrics.version>4.1.11</metrics.version>
         <grpc.version>1.37.0</grpc.version>
         <netty.version>4.1.100.Final</netty.version>
+        <jetty9.version>9.4.54.v20240208</jetty9.version>
     </properties>
 
     <artifactId>pulsar-io-alluxio</artifactId>
@@ -113,6 +114,13 @@
                 <groupId>io.dropwizard.metrics</groupId>
                 <artifactId>metrics-jvm</artifactId>
                 <version>${metrics.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-bom</artifactId>
+                <version>${jetty9.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>

@@ -150,7 +150,7 @@ flexible messaging model and an intuitive client API.</description>
     <curator.version>5.1.0</curator.version>
     <netty.version>4.1.111.Final</netty.version>
     <netty-iouring.version>0.0.24.Final</netty-iouring.version>
-    <jetty.version>9.4.54.v20240208</jetty.version>
+    <jetty.version>12.0.10</jetty.version>
     <conscrypt.version>2.5.2</conscrypt.version>
     <jersey.version>2.41</jersey.version>
     <athenz.version>1.10.50</athenz.version>
@@ -197,7 +197,6 @@ flexible messaging model and an intuitive client API.</description>
     <clickhouse-jdbc.version>0.4.6</clickhouse-jdbc.version>
     <mariadb-jdbc.version>2.7.5</mariadb-jdbc.version>
     <openmldb-jdbc.version>0.4.4-hotfix1</openmldb-jdbc.version>
-    <hdfs-offload-version3>3.3.5</hdfs-offload-version3>
     <json-smart.version>2.4.10</json-smart.version>
     <opensearch.version>1.2.4</opensearch.version>
     <elasticsearch-java.version>8.12.1</elasticsearch-java.version>
@@ -208,9 +207,9 @@ flexible messaging model and an intuitive client API.</description>
     <wildfly-elytron.version>1.15.16.Final</wildfly-elytron.version>
     <jsonwebtoken.version>0.11.1</jsonwebtoken.version>
     <opencensus.version>0.28.0</opencensus.version>
-    <hadoop2.version>2.10.2</hadoop2.version>
-    <hadoop3.version>3.3.5</hadoop3.version>
-    <hbase.version>2.4.16</hbase.version>
+    <hadoop3.version>3.4.0</hadoop3.version>
+    <hdfs-offload-version3>${hadoop3.version}</hdfs-offload-version3>
+    <hbase.version>2.5.8</hbase.version>
     <guava.version>32.1.2-jre</guava.version>
     <jcip.version>1.0</jcip.version>
     <prometheus-jmx.version>0.16.1</prometheus-jmx.version>
@@ -238,7 +237,7 @@ flexible messaging model and an intuitive client API.</description>
     <jakarta.activation.version>1.2.2</jakarta.activation.version>
     <jakarta.xml.bind.version>2.3.3</jakarta.xml.bind.version>
     <jakarta.validation.version>2.0.2</jakarta.validation.version>
-    <jna.version>5.12.1</jna.version>
+    <jna.version>5.14.0</jna.version>
     <kubernetesclient.version>18.0.0</kubernetesclient.version>
     <jose4j.version>0.9.4</jose4j.version>
     <okhttp3.version>4.9.3</okhttp3.version>
@@ -328,6 +327,45 @@ flexible messaging model and an intuitive client API.</description>
 
   <dependencyManagement>
     <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-bom</artifactId>
+        <version>${slf4j.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <dependency>
+        <groupId>org.apache.logging.log4j</groupId>
+        <artifactId>log4j-bom</artifactId>
+        <version>${log4j2.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <dependency>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-bom</artifactId>
+        <version>${netty.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <dependency>
+        <groupId>io.grpc</groupId>
+        <artifactId>grpc-bom</artifactId>
+        <version>${grpc.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
 
       <dependency>
         <groupId>org.jline</groupId>
@@ -479,16 +517,12 @@ flexible messaging model and an intuitive client API.</description>
             <artifactId>*</artifactId>
           </exclusion>
           <exclusion>
-            <artifactId>log4j-slf4j-impl</artifactId>
             <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>*</artifactId>
           </exclusion>
           <exclusion>
-            <artifactId>slf4j-log4j12</artifactId>
             <groupId>org.slf4j</groupId>
-          </exclusion>
-          <exclusion>
-            <artifactId>log4j</artifactId>
-            <groupId>log4j</groupId>
+            <artifactId>*</artifactId>
           </exclusion>
           <exclusion>
             <groupId>org.jboss.netty</groupId>
@@ -650,7 +684,7 @@ flexible messaging model and an intuitive client API.</description>
         <version>${bookkeeper.version}</version>
         <exclusions>
           <exclusion>
-            <artifactId>slf4j-log4j12</artifactId>
+            <artifactId>*</artifactId>
             <groupId>org.slf4j</groupId>
           </exclusion>
         </exclusions>
@@ -660,6 +694,12 @@ flexible messaging model and an intuitive client API.</description>
         <groupId>org.apache.bookkeeper.stats</groupId>
         <artifactId>prometheus-metrics-provider</artifactId>
         <version>${bookkeeper.version}</version>
+        <exclusions>
+          <exclusion>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-servlet</artifactId>
+          </exclusion>
+        </exclusions>
       </dependency>
 
       <dependency>
@@ -681,18 +721,6 @@ flexible messaging model and an intuitive client API.</description>
       </dependency>
 
       <dependency>
-        <groupId>org.eclipse.jetty</groupId>
-        <artifactId>jetty-server</artifactId>
-        <version>${jetty.version}</version>
-      </dependency>
-
-      <dependency>
-        <groupId>org.eclipse.jetty</groupId>
-        <artifactId>jetty-alpn-conscrypt-server</artifactId>
-        <version>${jetty.version}</version>
-      </dependency>
-
-      <dependency>
         <groupId>org.conscrypt</groupId>
         <artifactId>conscrypt-openjdk-uber</artifactId>
         <version>${conscrypt.version}</version>
@@ -707,9 +735,9 @@ flexible messaging model and an intuitive client API.</description>
       </dependency>
 
       <dependency>
-        <groupId>io.netty</groupId>
-        <artifactId>netty-bom</artifactId>
-        <version>${netty.version}</version>
+        <groupId>org.eclipse.jetty.ee8</groupId>
+        <artifactId>jetty-ee8</artifactId>
+        <version>${jetty.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -798,55 +826,17 @@ flexible messaging model and an intuitive client API.</description>
       </dependency>
 
       <dependency>
-        <groupId>org.slf4j</groupId>
-        <artifactId>slf4j-bom</artifactId>
-        <version>${slf4j.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
-
-      <dependency>
-        <groupId>org.apache.logging.log4j</groupId>
-        <artifactId>log4j-bom</artifactId>
-        <version>${log4j2.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
-
-      <dependency>
         <groupId>commons-codec</groupId>
         <artifactId>commons-codec</artifactId>
         <version>${commons-codec.version}</version>
       </dependency>
 
       <dependency>
-        <groupId>org.glassfish.jersey.core</groupId>
-        <artifactId>jersey-server</artifactId>
+        <groupId>org.glassfish.jersey</groupId>
+        <artifactId>jersey-bom</artifactId>
         <version>${jersey.version}</version>
-      </dependency>
-
-      <dependency>
-        <groupId>org.glassfish.jersey.core</groupId>
-        <artifactId>jersey-client</artifactId>
-        <version>${jersey.version}</version>
-      </dependency>
-
-      <dependency>
-        <groupId>org.glassfish.jersey.inject</groupId>
-        <artifactId>jersey-hk2</artifactId>
-        <version>${jersey.version}</version>
-      </dependency>
-
-      <dependency>
-        <groupId>org.glassfish.jersey.containers</groupId>
-        <artifactId>jersey-container-servlet-core</artifactId>
-        <version>${jersey.version}</version>
-      </dependency>
-
-      <dependency>
-        <groupId>org.glassfish.jersey.containers</groupId>
-        <artifactId>jersey-container-servlet</artifactId>
-        <version>${jersey.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
       </dependency>
 
       <dependency>
@@ -868,14 +858,18 @@ flexible messaging model and an intuitive client API.</description>
       </dependency>
 
       <dependency>
-        <groupId>org.glassfish.jersey.media</groupId>
-        <artifactId>jersey-media-multipart</artifactId>
-        <version>${jersey.version}</version>
-      </dependency>
-
-      <dependency>
         <groupId>net.java.dev.jna</groupId>
         <artifactId>jna</artifactId>
+        <version>${jna.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>net.java.dev.jna</groupId>
+        <artifactId>jna-platform</artifactId>
+        <version>${jna.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>net.java.dev.jna</groupId>
+        <artifactId>jna-platform-jpms</artifactId>
         <version>${jna.version}</version>
       </dependency>
 
@@ -901,13 +895,6 @@ flexible messaging model and an intuitive client API.</description>
         <version>${docker-java.version}</version>
       </dependency>
 
-      <dependency>
-        <groupId>com.fasterxml.jackson</groupId>
-        <artifactId>jackson-bom</artifactId>
-        <version>${jackson.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
 
       <dependency>
         <groupId>org.codehaus.jettison</groupId>
@@ -1038,12 +1025,6 @@ flexible messaging model and an intuitive client API.</description>
 
       <dependency>
         <groupId>io.prometheus</groupId>
-        <artifactId>simpleclient_jetty</artifactId>
-        <version>${prometheus.version}</version>
-      </dependency>
-
-      <dependency>
-        <groupId>io.prometheus</groupId>
         <artifactId>simpleclient_caffeine</artifactId>
         <version>${prometheus.version}</version>
       </dependency>
@@ -1165,14 +1146,6 @@ flexible messaging model and an intuitive client API.</description>
         <groupId>org.zeroturnaround</groupId>
         <artifactId>zt-zip</artifactId>
         <version>${zt-zip.version}</version>
-      </dependency>
-
-      <dependency>
-        <groupId>io.grpc</groupId>
-        <artifactId>grpc-bom</artifactId>
-        <version>${grpc.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
       </dependency>
 
       <dependency>
@@ -1654,11 +1627,7 @@ flexible messaging model and an intuitive client API.</description>
         </exclusion>
         <exclusion>
           <groupId>org.slf4j</groupId>
-          <artifactId>slf4j-log4j12</artifactId>
-        </exclusion>
-        <exclusion>
-          <artifactId>log4j</artifactId>
-          <groupId>log4j</groupId>
+          <artifactId>*</artifactId>
         </exclusion>
         <exclusion>
           <groupId>com.fasterxml.jackson.core</groupId>
@@ -1669,8 +1638,8 @@ flexible messaging model and an intuitive client API.</description>
           <artifactId>*</artifactId>
         </exclusion>
         <exclusion>
-          <artifactId>log4j-slf4j-impl</artifactId>
           <groupId>org.apache.logging.log4j</groupId>
+          <artifactId>*</artifactId>
         </exclusion>
       </exclusions>
     </dependency>
@@ -2442,6 +2411,7 @@ flexible messaging model and an intuitive client API.</description>
         <module>pulsar-metadata</module>
         <module>jetcd-core-shaded</module>
         <module>jclouds-shaded</module>
+        <module>hadoop-hdfs-client-shaded</module>
 
         <!-- package management releated modules (begin) -->
         <module>pulsar-package-management</module>
