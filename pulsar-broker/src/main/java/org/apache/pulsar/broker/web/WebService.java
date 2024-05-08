@@ -19,7 +19,6 @@
 package org.apache.pulsar.broker.web;
 
 import io.prometheus.client.CollectorRegistry;
-import io.prometheus.client.jetty.JettyStatisticsCollector;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
@@ -30,7 +29,14 @@ import lombok.Getter;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.jetty.metrics.JettyStatisticsCollector;
 import org.apache.pulsar.jetty.tls.JettySslContextFactory;
+import org.eclipse.jetty.ee8.nested.ContextHandler;
+import org.eclipse.jetty.ee8.nested.ResourceHandler;
+import org.eclipse.jetty.ee8.servlet.FilterHolder;
+import org.eclipse.jetty.ee8.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee8.servlet.ServletHolder;
+import org.eclipse.jetty.ee8.servlets.QoSFilter;
 import org.eclipse.jetty.server.ConnectionFactory;
 import org.eclipse.jetty.server.ConnectionLimit;
 import org.eclipse.jetty.server.ForwardedRequestCustomizer;
@@ -43,18 +49,10 @@ import org.eclipse.jetty.server.SecureRequestCustomizer;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.SslConnectionFactory;
-import org.eclipse.jetty.server.handler.ContextHandler;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
 import org.eclipse.jetty.server.handler.DefaultHandler;
-import org.eclipse.jetty.server.handler.HandlerCollection;
-import org.eclipse.jetty.server.handler.RequestLogHandler;
-import org.eclipse.jetty.server.handler.ResourceHandler;
 import org.eclipse.jetty.server.handler.StatisticsHandler;
-import org.eclipse.jetty.servlet.FilterHolder;
-import org.eclipse.jetty.servlet.ServletContextHandler;
-import org.eclipse.jetty.servlet.ServletHolder;
-import org.eclipse.jetty.servlets.QoSFilter;
-import org.eclipse.jetty.util.resource.Resource;
+import org.eclipse.jetty.util.resource.ResourceFactory;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.glassfish.jersey.media.multipart.MultiPartFeature;
 import org.glassfish.jersey.server.ResourceConfig;
@@ -131,7 +129,7 @@ public class WebService implements AutoCloseable {
         Optional<Integer> tlsPort = config.getWebServicePortTls();
         if (tlsPort.isPresent()) {
             try {
-                SslContextFactory sslCtxFactory;
+                SslContextFactory.Server sslCtxFactory;
                 if (config.isTlsEnabledWithKeyStore()) {
                     sslCtxFactory = JettySslContextFactory.createServerSslContextWithKeystore(
                             config.getWebServiceTlsProvider(),
@@ -293,39 +291,37 @@ public class WebService implements AutoCloseable {
         }
         filterInitializer.addFilters(servletContextHandler, requiresAuthentication);
 
-        handlers.add(servletContextHandler);
+        handlers.add(servletContextHandler.get());
     }
 
     public void addStaticResources(String basePath, String resourcePath) {
         ContextHandler capHandler = new ContextHandler();
         capHandler.setContextPath(basePath);
         ResourceHandler resHandler = new ResourceHandler();
-        resHandler.setBaseResource(Resource.newClassPathResource(resourcePath));
+        ResourceFactory resourceFactory = ResourceFactory.root();
+        resHandler.setBaseResource(resourceFactory.newClassLoaderResource(resourcePath, true));
         resHandler.setEtags(true);
         resHandler.setCacheControl(WebService.HANDLER_CACHE_CONTROL);
         capHandler.setHandler(resHandler);
-        handlers.add(capHandler);
+        handlers.add(capHandler.get());
     }
 
     public void start() throws PulsarServerException {
         try {
-            RequestLogHandler requestLogHandler = new RequestLogHandler();
             boolean showDetailedAddresses = pulsar.getConfiguration().getWebServiceLogDetailedAddresses() != null
                     ? pulsar.getConfiguration().getWebServiceLogDetailedAddresses() :
                     (pulsar.getConfiguration().isWebServiceHaProxyProtocolEnabled()
                             || pulsar.getConfiguration().isWebServiceTrustXForwardedFor());
             RequestLog requestLogger = JettyRequestLogFactory.createRequestLogger(showDetailedAddresses, server);
-            requestLogHandler.setRequestLog(requestLogger);
-            handlers.add(0, new ContextHandlerCollection());
-            handlers.add(requestLogHandler);
+            server.setRequestLog(requestLogger);
 
             ContextHandlerCollection contexts = new ContextHandlerCollection();
-            contexts.setHandlers(handlers.toArray(new Handler[handlers.size()]));
+            contexts.setHandlers(handlers);
 
             Handler handlerForContexts = GzipHandlerUtil.wrapWithGzipHandler(contexts,
                     pulsar.getConfig().getHttpServerGzipCompressionExcludedPaths());
-            HandlerCollection handlerCollection = new HandlerCollection();
-            handlerCollection.setHandlers(new Handler[] {handlerForContexts, new DefaultHandler(), requestLogHandler});
+            Handler.Collection  handlerCollection = new Handler.Sequence();
+            handlerCollection.setHandlers(handlerForContexts, new DefaultHandler());
 
             // Metrics handler
             StatisticsHandler stats = new StatisticsHandler();

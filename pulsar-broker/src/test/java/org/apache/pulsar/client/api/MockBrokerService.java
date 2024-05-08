@@ -20,25 +20,22 @@ package org.apache.pulsar.client.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
-
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.concurrent.ThreadFactory;
 import java.util.regex.Pattern;
-
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-
 import org.apache.pulsar.client.api.MockBrokerServiceHooks.CommandAckHook;
 import org.apache.pulsar.client.api.MockBrokerServiceHooks.CommandCloseConsumerHook;
 import org.apache.pulsar.client.api.MockBrokerServiceHooks.CommandCloseProducerHook;
@@ -72,9 +69,10 @@ import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.PulsarDecoder;
 import org.apache.pulsar.common.protocol.schema.SchemaVersion;
 import org.apache.pulsar.common.util.netty.EventLoopUtil;
-import org.eclipse.jetty.server.Request;
+import org.eclipse.jetty.ee8.nested.AbstractHandler;
+import org.eclipse.jetty.ee8.nested.ContextHandler;
+import org.eclipse.jetty.ee8.nested.Request;
 import org.eclipse.jetty.server.Server;
-import org.eclipse.jetty.server.handler.AbstractHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -84,7 +82,7 @@ import org.slf4j.LoggerFactory;
 public class MockBrokerService {
     private LookupData lookupData;
 
-    private class genericResponseHandler extends AbstractHandler {
+    private class GenericResponseHandler extends AbstractHandler {
         private final ObjectMapper objectMapper = new ObjectMapper();
         private final String lookupURI = "/lookup/v2/destination/persistent";
         private final String partitionMetadataURI = "/admin/persistent";
@@ -96,7 +94,7 @@ public class MockBrokerService {
         private final Pattern multiPartPattern = Pattern.compile(".*/multi-part-.*");
 
         @Override
-        public void handle(String s, Request baseRequest, HttpServletRequest request, HttpServletResponse response)
+        public void handle(String target, Request baseRequest, HttpServletRequest request, HttpServletResponse response)
                 throws IOException, ServletException {
             String responseString;
             log.info("Received HTTP request {}", baseRequest.getRequestURI());
@@ -296,7 +294,7 @@ public class MockBrokerService {
 
     public MockBrokerService() {
         server = new Server(0);
-        server.setHandler(new genericResponseHandler());
+        server.setHandler(new ContextHandler("/", new GenericResponseHandler()));
     }
 
     public void start() {
@@ -339,7 +337,7 @@ public class MockBrokerService {
                 @Override
                 public void initChannel(SocketChannel ch) throws Exception {
                     ch.pipeline().addLast("frameDecoder", new LengthFieldBasedFrameDecoder(MaxMessageSize, 0, 4, 0, 4));
-                    ch.pipeline().addLast("handler", new MockServerCnx());
+                    ch.pipeline().addLast("handler", (ChannelHandler) new MockServerCnx());
                 }
             });
             // Bind and start to accept incoming connections.

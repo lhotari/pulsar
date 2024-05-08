@@ -31,6 +31,22 @@
     <artifactId>pulsar-io-flume</artifactId>
     <name>Pulsar IO :: Flume</name>
 
+    <properties>
+        <jetty9.version>9.4.54.v20240208</jetty9.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-bom</artifactId>
+                <version>${jetty9.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
         <dependency>
             <groupId>${project.groupId}</groupId>

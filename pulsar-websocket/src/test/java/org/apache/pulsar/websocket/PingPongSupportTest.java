@@ -18,35 +18,36 @@
  */
 package org.apache.pulsar.websocket;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.testng.Assert.assertTrue;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.Future;
 import javax.servlet.http.HttpServletRequest;
+import javax.websocket.WebSocketContainer;
 import lombok.Cleanup;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
 import org.apache.pulsar.broker.web.WebExecutorThreadPool;
 import org.eclipse.jetty.client.HttpClient;
+import org.eclipse.jetty.ee8.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee8.servlet.ServletHolder;
+import org.eclipse.jetty.ee8.websocket.api.Session;
+import org.eclipse.jetty.ee8.websocket.api.WebSocketAdapter;
+import org.eclipse.jetty.ee8.websocket.api.WebSocketPingPongListener;
+import org.eclipse.jetty.ee8.websocket.api.annotations.WebSocket;
+import org.eclipse.jetty.ee8.websocket.javax.client.JavaxWebSocketClientContainerProvider;
+import org.eclipse.jetty.ee8.websocket.server.JettyServerUpgradeResponse;
+import org.eclipse.jetty.ee8.websocket.server.JettyWebSocketServlet;
+import org.eclipse.jetty.ee8.websocket.server.JettyWebSocketServletFactory;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
-import org.eclipse.jetty.servlet.ServletContextHandler;
-import org.eclipse.jetty.servlet.ServletHolder;
 import org.eclipse.jetty.util.BufferUtil;
-import org.eclipse.jetty.websocket.api.Session;
-import org.eclipse.jetty.websocket.api.WebSocketAdapter;
-import org.eclipse.jetty.websocket.api.WebSocketPingPongListener;
-import org.eclipse.jetty.websocket.api.annotations.WebSocket;
-import org.eclipse.jetty.websocket.client.WebSocketClient;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-import static org.testng.Assert.assertTrue;
-import org.eclipse.jetty.websocket.servlet.ServletUpgradeResponse;
-import org.eclipse.jetty.websocket.servlet.WebSocketServlet;
-import org.eclipse.jetty.websocket.servlet.WebSocketServletFactory;
+import org.eclipse.jetty.util.component.LifeCycle;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
@@ -112,18 +113,19 @@ public class PingPongSupportTest {
     public void testPingPong(String endpoint) throws Exception {
         @Cleanup("stop")
         HttpClient httpClient = new HttpClient();
-        WebSocketClient webSocketClient = new WebSocketClient(httpClient);
-        webSocketClient.start();
+        WebSocketContainer container = JavaxWebSocketClientContainerProvider.getContainer(httpClient);
+        @Cleanup("stop")
+        LifeCycle lifeCycle = (LifeCycle) container;
         MyWebSocket myWebSocket = new MyWebSocket();
         String webSocketUri = "ws://localhost:8080/ws/v2/" + endpoint + "/persistent/my-property/my-ns/my-topic";
-        Future<Session> sessionFuture = webSocketClient.connect(myWebSocket, URI.create(webSocketUri));
-        sessionFuture.get().getRemote().sendPing(ByteBuffer.wrap("test".getBytes()));
+        javax.websocket.Session session = container.connectToServer(myWebSocket, URI.create(webSocketUri));
+        session.getBasicRemote().sendPing(ByteBuffer.wrap("test".getBytes()));
         assertTrue(myWebSocket.getResponse().contains("test"));
     }
 
     public static class GenericWebSocketHandler extends AbstractWebSocketHandler {
 
-        public GenericWebSocketHandler(WebSocketService service, HttpServletRequest request, ServletUpgradeResponse response) {
+        public GenericWebSocketHandler(WebSocketService service, HttpServletRequest request, JettyServerUpgradeResponse response) {
             super(service, request, response);
         }
 
@@ -138,7 +140,7 @@ public class PingPongSupportTest {
         }
     }
 
-    public static class GenericWebSocketServlet extends WebSocketServlet {
+    public static class GenericWebSocketServlet extends JettyWebSocketServlet {
 
         private static final long serialVersionUID = 1L;
         private final WebSocketService service;
@@ -148,7 +150,7 @@ public class PingPongSupportTest {
         }
 
         @Override
-        public void configure(WebSocketServletFactory factory) {
+        public void configure(JettyWebSocketServletFactory factory) {
             factory.setCreator((request, response) ->
                     new GenericWebSocketHandler(service, request.getHttpServletRequest(), response));
         }

@@ -39,6 +39,7 @@ import org.apache.pulsar.client.api.ReaderBuilder;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.impl.MessageIdImpl;
 import org.apache.pulsar.common.naming.TopicName;
+import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.websocket.client.ClientUpgradeRequest;
 import org.eclipse.jetty.websocket.client.WebSocketClient;
@@ -231,7 +232,9 @@ public class CmdRead extends AbstractCmdConsume {
 
         URI readerUri = URI.create(getWebSocketReadUri(topic));
 
-        WebSocketClient readClient = new WebSocketClient(new SslContextFactory(true));
+        HttpClient httpClient = new HttpClient();
+        httpClient.setSslContextFactory(new SslContextFactory.Client(true));
+        WebSocketClient readClient = new WebSocketClient(httpClient);
         ClientUpgradeRequest readRequest = new ClientUpgradeRequest();
         try {
             if (authentication != null) {
@@ -291,6 +294,17 @@ public class CmdRead extends AbstractCmdConsume {
             returnCode = -1;
         } finally {
             LOG.info("{} messages successfully read", numMessagesRead);
+        }
+
+        try {
+            readClient.stop();
+        } catch (Exception e) {
+            LOG.error("Failed to stop websocket-client", e);
+        }
+        try {
+            httpClient.stop();
+        } catch (Exception e) {
+            LOG.error("Failed to stop http-client", e);
         }
 
         return returnCode;

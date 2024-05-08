@@ -252,7 +252,7 @@ public class CounterBrokerInterceptor implements BrokerInterceptor {
         }
         if (response instanceof Response) {
             Response res = (Response) response;
-            responseList.add(new ResponseEvent(res.getHttpChannel().getRequest().getRequestURI(), res.getStatus()));
+            responseList.add(new ResponseEvent(res.getRequest().getHttpURI().asString(), res.getStatus()));
         }
     }
 

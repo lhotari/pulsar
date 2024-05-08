@@ -19,7 +19,6 @@
 package org.apache.pulsar.proxy.server;
 
 import static org.apache.pulsar.proxy.server.AdminProxyHandler.INIT_PARAM_REQUEST_BUFFER_SIZE;
-import io.prometheus.client.jetty.JettyStatisticsCollector;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
@@ -36,7 +35,12 @@ import org.apache.pulsar.broker.web.JettyRequestLogFactory;
 import org.apache.pulsar.broker.web.JsonMapperProvider;
 import org.apache.pulsar.broker.web.RateLimitingFilter;
 import org.apache.pulsar.broker.web.WebExecutorThreadPool;
+import org.apache.pulsar.jetty.metrics.JettyStatisticsCollector;
 import org.apache.pulsar.jetty.tls.JettySslContextFactory;
+import org.eclipse.jetty.ee8.servlet.FilterHolder;
+import org.eclipse.jetty.ee8.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee8.servlet.ServletHolder;
+import org.eclipse.jetty.ee8.servlets.QoSFilter;
 import org.eclipse.jetty.server.ConnectionFactory;
 import org.eclipse.jetty.server.ConnectionLimit;
 import org.eclipse.jetty.server.Connector;
@@ -51,13 +55,7 @@ import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.SslConnectionFactory;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
 import org.eclipse.jetty.server.handler.DefaultHandler;
-import org.eclipse.jetty.server.handler.HandlerCollection;
-import org.eclipse.jetty.server.handler.RequestLogHandler;
 import org.eclipse.jetty.server.handler.StatisticsHandler;
-import org.eclipse.jetty.servlet.FilterHolder;
-import org.eclipse.jetty.servlet.ServletContextHandler;
-import org.eclipse.jetty.servlet.ServletHolder;
-import org.eclipse.jetty.servlets.QoSFilter;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.glassfish.jersey.servlet.ServletContainer;
@@ -119,7 +117,7 @@ public class WebServer {
         }
         if (config.getWebServicePortTls().isPresent()) {
             try {
-                SslContextFactory sslCtxFactory;
+                SslContextFactory.Server sslCtxFactory;
                 if (config.isTlsEnabledWithKeyStore()) {
                     sslCtxFactory = JettySslContextFactory.createServerSslContextWithKeystore(
                             config.getWebServiceTlsProvider(),
@@ -212,21 +210,23 @@ public class WebServer {
         }
     }
 
-    public void addServlet(String basePath, ServletHolder servletHolder) {
-        addServlet(basePath, servletHolder, Collections.emptyList());
+    public ServletContextHandler addServlet(String basePath, ServletHolder servletHolder) {
+        return addServlet(basePath, servletHolder, Collections.emptyList());
     }
 
-    public void addServlet(String basePath, ServletHolder servletHolder, List<Pair<String, Object>> attributes) {
-        addServlet(basePath, servletHolder, attributes, true);
+    public ServletContextHandler addServlet(String basePath, ServletHolder servletHolder,
+                                            List<Pair<String, Object>> attributes) {
+        return addServlet(basePath, servletHolder, attributes, true);
     }
 
-    public void addServlet(String basePath, ServletHolder servletHolder,
+    public ServletContextHandler addServlet(String basePath, ServletHolder servletHolder,
                            List<Pair<String, Object>> attributes, boolean requireAuthentication) {
-        addServlet(basePath, servletHolder, attributes, requireAuthentication, true);
+        return addServlet(basePath, servletHolder, attributes, requireAuthentication, true);
     }
 
-    private void addServlet(String basePath, ServletHolder servletHolder,
-            List<Pair<String, Object>> attributes, boolean requireAuthentication, boolean checkForExistingPaths) {
+    private ServletContextHandler addServlet(String basePath, ServletHolder servletHolder,
+                                             List<Pair<String, Object>> attributes, boolean requireAuthentication,
+                                             boolean checkForExistingPaths) {
         popularServletParams(servletHolder, config);
 
         if (checkForExistingPaths) {
@@ -248,7 +248,9 @@ public class WebServer {
 
         filterInitializer.addFilters(context, requireAuthentication);
 
-        handlers.add(context);
+        handlers.add(context.get());
+
+        return context;
     }
 
     private static void popularServletParams(ServletHolder servletHolder, ProxyConfiguration config) {
@@ -305,19 +307,16 @@ public class WebServer {
     }
 
     public void start() throws Exception {
-        RequestLogHandler requestLogHandler = new RequestLogHandler();
         boolean showDetailedAddresses = config.getWebServiceLogDetailedAddresses() != null
                 ? config.getWebServiceLogDetailedAddresses() :
                 (config.isWebServiceHaProxyProtocolEnabled() || config.isWebServiceTrustXForwardedFor());
-        requestLogHandler.setRequestLog(JettyRequestLogFactory.createRequestLogger(showDetailedAddresses, server));
-        handlers.add(0, new ContextHandlerCollection());
-        handlers.add(requestLogHandler);
+        server.setRequestLog(JettyRequestLogFactory.createRequestLogger(showDetailedAddresses, server));
 
         ContextHandlerCollection contexts = new ContextHandlerCollection();
-        contexts.setHandlers(handlers.toArray(new Handler[handlers.size()]));
+        contexts.setHandlers(handlers);
 
-        HandlerCollection handlerCollection = new HandlerCollection();
-        handlerCollection.setHandlers(new Handler[] { contexts, new DefaultHandler(), requestLogHandler });
+        Handler.Collection handlerCollection = new Handler.Sequence();
+        handlerCollection.setHandlers(contexts, new DefaultHandler());
 
         // Metrics handler
         StatisticsHandler stats = new StatisticsHandler();

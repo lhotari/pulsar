@@ -63,14 +63,15 @@ public class JettySslContextFactory {
                 requireTrustedClientCertOnConnect, ciphers, protocols);
     }
 
-    public static SslContextFactory createServerSslContext(String sslProviderString, boolean tlsAllowInsecureConnection,
-                                                           String tlsTrustCertsFilePath,
-                                                           String tlsCertificateFilePath,
-                                                           String tlsKeyFilePath,
-                                                           boolean tlsRequireTrustedClientCertOnConnect,
-                                                           Set<String> ciphers,
-                                                           Set<String> protocols,
-                                                           long certRefreshInSec) {
+    public static SslContextFactory.Server createServerSslContext(String sslProviderString,
+                                                                  boolean tlsAllowInsecureConnection,
+                                                                  String tlsTrustCertsFilePath,
+                                                                  String tlsCertificateFilePath,
+                                                                  String tlsKeyFilePath,
+                                                                  boolean tlsRequireTrustedClientCertOnConnect,
+                                                                  Set<String> ciphers,
+                                                                  Set<String> protocols,
+                                                                  long certRefreshInSec) {
         DefaultSslContextBuilder sslCtxRefresher =
                 new DefaultSslContextBuilder(tlsAllowInsecureConnection, tlsTrustCertsFilePath, tlsCertificateFilePath,
                         tlsKeyFilePath, tlsRequireTrustedClientCertOnConnect, certRefreshInSec, sslProviderString);

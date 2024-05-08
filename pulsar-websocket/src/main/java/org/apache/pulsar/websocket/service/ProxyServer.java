@@ -35,6 +35,11 @@ import org.apache.pulsar.broker.web.JsonMapperProvider;
 import org.apache.pulsar.broker.web.WebExecutorThreadPool;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.jetty.tls.JettySslContextFactory;
+import org.eclipse.jetty.ee8.servlet.FilterHolder;
+import org.eclipse.jetty.ee8.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee8.servlet.ServletHolder;
+import org.eclipse.jetty.ee8.servlets.QoSFilter;
+import org.eclipse.jetty.ee8.websocket.server.config.JettyWebSocketServletContainerInitializer;
 import org.eclipse.jetty.server.ConnectionFactory;
 import org.eclipse.jetty.server.ConnectionLimit;
 import org.eclipse.jetty.server.ForwardedRequestCustomizer;
@@ -47,13 +52,6 @@ import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.SslConnectionFactory;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
-import org.eclipse.jetty.server.handler.DefaultHandler;
-import org.eclipse.jetty.server.handler.HandlerCollection;
-import org.eclipse.jetty.server.handler.RequestLogHandler;
-import org.eclipse.jetty.servlet.FilterHolder;
-import org.eclipse.jetty.servlet.ServletContextHandler;
-import org.eclipse.jetty.servlet.ServletHolder;
-import org.eclipse.jetty.servlets.QoSFilter;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.glassfish.jersey.servlet.ServletContainer;
@@ -102,7 +100,7 @@ public class ProxyServer {
         // TLS enabled connector
         if (config.getWebServicePortTls().isPresent()) {
             try {
-                SslContextFactory sslCtxFactory;
+                SslContextFactory.Server sslCtxFactory;
                 if (config.isTlsEnabledWithKeyStore()) {
                     sslCtxFactory = JettySslContextFactory.createServerSslContextWithKeystore(
                             config.getTlsProvider(),
@@ -170,7 +168,8 @@ public class ProxyServer {
         context.setContextPath(basePath);
         context.addServlet(servletHolder, MATCH_ALL);
         addQosFilterIfNeeded(context);
-        handlers.add(context);
+        JettyWebSocketServletContainerInitializer.configure(context, null);
+        handlers.add(context.get());
     }
 
     public void addRestResource(String basePath, String attribute, Object attributeValue, Class<?> resourceClass) {
@@ -184,7 +183,7 @@ public class ProxyServer {
         context.addServlet(servletHolder, MATCH_ALL);
         context.setAttribute(attribute, attributeValue);
         addQosFilterIfNeeded(context);
-        handlers.add(context);
+        handlers.add(context.get());
     }
 
     private void addQosFilterIfNeeded(ServletContextHandler context) {
@@ -198,20 +197,14 @@ public class ProxyServer {
         log.info("Starting web socket proxy at port {}", Arrays.stream(server.getConnectors())
                 .map(ServerConnector.class::cast).map(ServerConnector::getPort).map(Object::toString)
                 .collect(Collectors.joining(",")));
-        RequestLogHandler requestLogHandler = new RequestLogHandler();
         boolean showDetailedAddresses = conf.getWebServiceLogDetailedAddresses() != null
                 ? conf.getWebServiceLogDetailedAddresses() :
                 (conf.isWebServiceHaProxyProtocolEnabled() || conf.isWebServiceTrustXForwardedFor());
-        requestLogHandler.setRequestLog(JettyRequestLogFactory.createRequestLogger(showDetailedAddresses, server));
-        handlers.add(0, new ContextHandlerCollection());
-        handlers.add(requestLogHandler);
+        server.setRequestLog(JettyRequestLogFactory.createRequestLogger(showDetailedAddresses, server));
 
         ContextHandlerCollection contexts = new ContextHandlerCollection();
-        contexts.setHandlers(handlers.toArray(new Handler[handlers.size()]));
-
-        HandlerCollection handlerCollection = new HandlerCollection();
-        handlerCollection.setHandlers(new Handler[] { contexts, new DefaultHandler(), requestLogHandler });
-        server.setHandler(handlerCollection);
+        contexts.setHandlers(handlers);
+        server.setHandler(contexts);
 
         try {
             server.start();
