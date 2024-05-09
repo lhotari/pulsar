@@ -61,16 +61,7 @@ import org.HdrHistogram.Recorder;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.PulsarAdminBuilder;
 import org.apache.pulsar.client.admin.PulsarAdminException;
-import org.apache.pulsar.client.api.ClientBuilder;
-import org.apache.pulsar.client.api.CompressionType;
-import org.apache.pulsar.client.api.MessageRoutingMode;
-import org.apache.pulsar.client.api.Producer;
-import org.apache.pulsar.client.api.ProducerAccessMode;
-import org.apache.pulsar.client.api.ProducerBuilder;
-import org.apache.pulsar.client.api.PulsarClient;
-import org.apache.pulsar.client.api.PulsarClientException;
-import org.apache.pulsar.client.api.SizeUnit;
-import org.apache.pulsar.client.api.TypedMessageBuilder;
+import org.apache.pulsar.client.api.*;
 import org.apache.pulsar.client.api.transaction.Transaction;
 import org.apache.pulsar.common.partition.PartitionedTopicMetadata;
 import org.apache.pulsar.testclient.utils.PaddingDecimalFormat;
@@ -229,6 +220,14 @@ public class PerformanceProducer {
                         + " nanoseconds.")
         public boolean formatPayload = false;
 
+        @Parameter(names = { "-bp", "--big-payload" },
+                description = "Percentage of big payload message")
+        public int bigPayload = 10;
+
+        @Parameter(names = { "-kb", "--key-based" },
+                description = "key based")
+        public boolean keyBased = false;
+        
         @Parameter(names = {"-fc", "--format-class"}, description = "Custom Formatter class name")
         public String formatterClass = "org.apache.pulsar.testclient.DefaultMessageFormatter";
 
@@ -279,6 +278,7 @@ public class PerformanceProducer {
 
         // Read payload data from file if needed
         final byte[] payloadBytes = new byte[arguments.msgSize];
+        final byte[] bigPayloadBytes = new byte[arguments.msgSize * 10];
         Random random = new Random(0);
         List<byte[]> payloadByteList = new ArrayList<>();
         if (arguments.payloadFilename != null) {
@@ -302,6 +302,9 @@ public class PerformanceProducer {
         } else {
             for (int i = 0; i < payloadBytes.length; ++i) {
                 payloadBytes[i] = (byte) (random.nextInt(26) + 65);
+            }
+            for (int i = 0; i < bigPayloadBytes.length; ++i) {
+                bigPayloadBytes[i] = (byte) (random.nextInt(26) + 65);
             }
         }
 
@@ -355,6 +358,7 @@ public class PerformanceProducer {
                     msgRatePerThread,
                     payloadByteList,
                     payloadBytes,
+                    bigPayloadBytes,
                     doneLatch
                 );
             });
@@ -504,7 +508,9 @@ public class PerformanceProducer {
                                     int msgRate,
                                     List<byte[]> payloadByteList,
                                     byte[] payloadBytes,
+                                    byte[] bigPayloadBytes,
                                     CountDownLatch doneLatch) {
+        Random random = new Random(0);
         PulsarClient client = null;
         boolean produceEnough = false;
         try {
@@ -541,6 +547,9 @@ public class PerformanceProducer {
                     if (arguments.chunkingAllowed) {
                         prodBuilder.enableChunking(true);
                         prodBuilder.enableBatching(false);
+                    }
+                    if (arguments.keyBased) {
+                        prodBuilder.batcherBuilder(BatcherBuilder.KEY_BASED);
                     }
                     futures.add(prodBuilder.createAsync());
                 }
@@ -611,7 +620,11 @@ public class PerformanceProducer {
                                     ThreadLocalRandom.current().nextInt(payloadByteList.size()));
                         }
                     } else {
-                        payloadData = payloadBytes;
+                        if (random.nextInt(100) < arguments.bigPayload) {
+                            payloadData = bigPayloadBytes;
+                        } else {
+                            payloadData = payloadBytes;
+                        }
                     }
                     TypedMessageBuilder<byte[]> messageBuilder;
                     if (arguments.isEnableTransaction) {
