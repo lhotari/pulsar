@@ -53,7 +53,7 @@ public final class EntryImpl extends AbstractCASReferenceCounted implements Entr
         entry.ledgerId = ledgerEntry.getLedgerId();
         entry.entryId = ledgerEntry.getEntryId();
         entry.data = ledgerEntry.getEntryBuffer();
-        entry.data.retain();
+        entry.data.retainedDuplicate();
         entry.setRefCnt(1);
         return entry;
     }
