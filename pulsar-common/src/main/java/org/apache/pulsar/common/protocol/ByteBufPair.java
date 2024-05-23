@@ -122,16 +122,27 @@ public final class ByteBufPair extends AbstractReferenceCounted {
                 // Write each buffer individually on the socket. The retain() here is needed to preserve the fact that
                 // ByteBuf are automatically released after a write. If the ByteBufPair ref count is increased and it
                 // gets written multiple times, the individual buffers refcount should be reflected as well.
-                // .asReadOnly() is needed to prevent SslHandler from modifying the input buffers.
+                // read-only ByteBuf is needed to prevent SslHandler from modifying the input buffers.
                 try {
-                    ctx.write(b.getFirst().asReadOnly().retain(), ctx.voidPromise());
-                    ctx.write(b.getSecond().asReadOnly().retain(), promise);
+                    ctx.write(asReadOnlyRetainedByteBuf(b.getFirst()), ctx.voidPromise());
+                    ctx.write(asReadOnlyRetainedByteBuf(b.getSecond()), promise);
                 } finally {
                     ReferenceCountUtil.safeRelease(b);
                 }
             } else {
                 ctx.write(msg, promise);
             }
+        }
+
+        private ByteBuf asReadOnlyRetainedByteBuf(ByteBuf buf) {
+            // no need to create the wrapper if the buffer is empty
+            if (buf.readableBytes() == 0) {
+                return Unpooled.EMPTY_BUFFER;
+            }
+            // wrap in read-only ByteBuf using custom implementation ReadOnlyDuplicatedByteBuf
+            // that overcomes the limitations of Netty's ReadOnlyByteBuf, and it's compatibility
+            // with Netty's SslHandler.
+            return new ReadOnlyDuplicatedByteBuf(buf).retain();
         }
     }
 }
