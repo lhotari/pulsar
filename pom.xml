@@ -470,7 +470,7 @@ flexible messaging model and an intuitive client API.</description>
           <!-- exclude all netty dependencies, use whatever pulsar is using -->
           <exclusion>
             <groupId>io.netty</groupId>
-            <artifactId>netty-*</artifactId>
+            <artifactId>*</artifactId>
           </exclusion>
         </exclusions>
       </dependency>
@@ -1526,6 +1526,10 @@ flexible messaging model and an intuitive client API.</description>
         </exclusion>
         <exclusion>
           <groupId>org.apache.zookeeper</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>io.netty</groupId>
           <artifactId>*</artifactId>
         </exclusion>
       </exclusions>
