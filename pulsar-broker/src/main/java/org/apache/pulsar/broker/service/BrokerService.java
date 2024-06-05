@@ -3338,7 +3338,7 @@ public class BrokerService implements Closeable {
         } else if (blockedDispatcherOnHighUnackedMsgs.get() && unAckedMessages < maxUnackedMessages / 2) {
             // unblock broker-dispatching if received enough acked messages back
             if (blockedDispatcherOnHighUnackedMsgs.compareAndSet(true, false)) {
-                unblockDispatchersOnUnAckMessages(blockedDispatchers.values());
+                unblockDispatchersOnUnAckMessages(blockedDispatchers.values(), true);
             }
         }
 
@@ -3376,13 +3376,17 @@ public class BrokerService implements Closeable {
      * Unblocks the dispatchers and removes it from the {@link #blockedDispatchers} list.
      *
      * @param dispatcherList
+     * @param allowReadMore
      */
-    public void unblockDispatchersOnUnAckMessages(List<PersistentDispatcherMultipleConsumers> dispatcherList) {
+    public void unblockDispatchersOnUnAckMessages(List<PersistentDispatcherMultipleConsumers> dispatcherList,
+                                                  boolean allowReadMore) {
         lock.writeLock().lock();
         try {
             dispatcherList.forEach(dispatcher -> {
                 dispatcher.unBlockDispatcherOnUnackedMsgs();
-                executor().execute(() -> dispatcher.readMoreEntries());
+                if (allowReadMore) {
+                    executor().execute(() -> dispatcher.readMoreEntries());
+                }
                 log.info("[{}] Dispatcher is unblocked", dispatcher.getName());
                 blockedDispatchers.remove(dispatcher);
             });

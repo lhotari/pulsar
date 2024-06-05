@@ -390,7 +390,7 @@ public class Consumer {
                             + " for consumerId: {}; avgMessagesPerEntry is {}",
                    topicName, subscription, ackedCount, totalMessages, consumerId, avgMessagesPerEntry.get());
         }
-        incrementUnackedMessages(unackedMessages);
+        addAndGetUnAckedMsgs(this, unackedMessages);
         Future<Void> writeAndFlushPromise =
                 cnx.getCommandSender().sendMessagesToConsumer(consumerId, topicName, subscription, partitionIdx,
                         entries, batchSizes, batchIndexesAcks, redeliveryTracker, epoch);
@@ -410,14 +410,6 @@ public class Consumer {
             }
         });
         return writeAndFlushPromise;
-    }
-
-    private void incrementUnackedMessages(int unackedMessages) {
-        if (Subscription.isIndividualAckMode(subType)
-                && addAndGetUnAckedMsgs(this, unackedMessages) >= getMaxUnackedMessages()
-                && getMaxUnackedMessages() > 0) {
-            blockedConsumerOnUnackedMsgs = true;
-        }
     }
 
     public boolean isWritable() {
@@ -793,10 +785,6 @@ public class Consumer {
         checkArgument(additionalNumberOfMessages > 0);
         this.lastConsumedFlowTimestamp = System.currentTimeMillis();
 
-        // block shared consumer when unacked-messages reaches limit
-        if (shouldBlockConsumerOnUnackMsgs() && unackedMessages >= getMaxUnackedMessages()) {
-            blockedConsumerOnUnackedMsgs = true;
-        }
         int oldPermits;
         if (!blockedConsumerOnUnackedMsgs) {
             oldPermits = MESSAGE_PERMITS_UPDATER.getAndAdd(this, additionalNumberOfMessages);
@@ -878,16 +866,6 @@ public class Consumer {
             }
         }
         return false;
-    }
-    /**
-     * Checks if consumer-blocking on unAckedMessages is allowed for below conditions:<br/>
-     * a. consumer must have Shared-subscription<br/>
-     * b. {@link this#getMaxUnackedMessages()} value > 0
-     *
-     * @return
-     */
-    private boolean shouldBlockConsumerOnUnackMsgs() {
-        return Subscription.isIndividualAckMode(subType) && getMaxUnackedMessages() > 0;
     }
 
     public void updateRates() {
@@ -1044,15 +1022,6 @@ public class Consumer {
             if (log.isDebugEnabled()) {
                 log.debug("[{}-{}] consumer {} received ack {}", topicName, subscription, consumerId, position);
             }
-            // unblock consumer-throttling when limit check is disabled or receives half of maxUnackedMessages =>
-            // consumer can start again consuming messages
-            int unAckedMsgs = UNACKED_MESSAGES_UPDATER.get(ackOwnedConsumer);
-            if ((((unAckedMsgs <= getMaxUnackedMessages() / 2) && ackOwnedConsumer.blockedConsumerOnUnackedMsgs)
-                    && ackOwnedConsumer.shouldBlockConsumerOnUnackMsgs())
-                    || !shouldBlockConsumerOnUnackMsgs()) {
-                ackOwnedConsumer.blockedConsumerOnUnackedMsgs = false;
-                flowConsumerBlockedPermits(ackOwnedConsumer);
-            }
             return true;
         }
         return false;
@@ -1068,7 +1037,7 @@ public class Consumer {
 
     public void redeliverUnacknowledgedMessages(long consumerEpoch) {
         // cleanup unackedMessage bucket and redeliver those unack-msgs again
-        clearUnAckedMsgs();
+        UNACKED_MESSAGES_UPDATER.set(this, 0);
         blockedConsumerOnUnackedMsgs = false;
         if (log.isDebugEnabled()) {
             log.debug("[{}-{}] consumer {} received redelivery", topicName, subscription, consumerId);
@@ -1143,21 +1112,30 @@ public class Consumer {
     }
 
     private int addAndGetUnAckedMsgs(Consumer consumer, int ackedMessages) {
-        int unackedMsgs = 0;
-        if (isPersistentTopic && Subscription.isIndividualAckMode(subType)) {
-            subscription.addUnAckedMessages(ackedMessages);
-            unackedMsgs = UNACKED_MESSAGES_UPDATER.addAndGet(consumer, ackedMessages);
+        if (!isPersistentTopic || !Subscription.isIndividualAckMode(subType)) {
+            return 0;
+        }
+        subscription.addUnAckedMessages(ackedMessages);
+        int unackedMsgs = UNACKED_MESSAGES_UPDATER.addAndGet(consumer, ackedMessages);
+        int maxUnackedMessages = getMaxUnackedMessages();
+        if (maxUnackedMessages > 0) {
+            if (ackedMessages < 0) {
+                if (unackedMsgs <= maxUnackedMessages / 2 && blockedConsumerOnUnackedMsgs) {
+                    blockedConsumerOnUnackedMsgs = false;
+                    flowConsumerBlockedPermits(this);
+                }
+            } else if (ackedMessages > 0) {
+                // block shared consumer when unacked-messages reaches limit
+                if (unackedMsgs >= getMaxUnackedMessages()) {
+                    blockedConsumerOnUnackedMsgs = true;
+                }
+            }
         }
         if (unackedMsgs < 0 && System.currentTimeMillis() - negativeUnackedMsgsTimestamp >= 10_000) {
             negativeUnackedMsgsTimestamp = System.currentTimeMillis();
             log.warn("unackedMsgs is : {}, ackedMessages : {}, consumer : {}", unackedMsgs, ackedMessages, consumer);
         }
         return unackedMsgs;
-    }
-
-    private void clearUnAckedMsgs() {
-        int unaAckedMsgs = UNACKED_MESSAGES_UPDATER.getAndSet(this, 0);
-        subscription.addUnAckedMessages(-unaAckedMsgs);
     }
 
     public boolean isPreciseDispatcherFlowControl() {
