@@ -95,5 +95,5 @@ pulsar-client/src/test/java/org/apache/pulsar/client/avro/generated
 
 test-reports/
 
-# Gradle Enterprise
-.mvn/.gradle-enterprise/
+# Gradle Develocity
+.mvn/.develocity/
