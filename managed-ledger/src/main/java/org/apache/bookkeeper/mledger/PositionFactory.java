@@ -16,19 +16,22 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.bookkeeper.mledger.impl;
+package org.apache.bookkeeper.mledger;
 
-import static org.testng.Assert.assertNull;
-import org.testng.annotations.Test;
+import org.apache.bookkeeper.mledger.impl.ImmutablePositionImpl;
 
-public class PositionImplRecyclableTest {
+public final class PositionFactory {
+    public static final Position EARLIEST = create(-1, -1);
+    public static final Position LATEST = create(Long.MAX_VALUE, Long.MAX_VALUE);
 
-    @Test
-    void shouldNotCarryStateInAckSetWhenRecycled() {
-        PositionImplRecyclable position = PositionImplRecyclable.create();
-        position.ackSet = new long[]{1L, 2L, 3L};
-        position.recycle();
-        PositionImplRecyclable position2 = PositionImplRecyclable.create();
-        assertNull(position2.ackSet);
+    private PositionFactory() {
+    }
+
+    public static Position create(long ledgerId, long entryId) {
+        return new ImmutablePositionImpl(ledgerId, entryId);
+    }
+
+    public static Position create(Position other) {
+        return new ImmutablePositionImpl(other);
     }
 }

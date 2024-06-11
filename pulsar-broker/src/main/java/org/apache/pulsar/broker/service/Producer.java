@@ -646,6 +646,19 @@ public class Producer {
             }
             recyclerHandle.recycle(this);
         }
+
+        @Override
+        public int compareTo(Position that) {
+            if (this.ledgerId != that.getLedgerId()) {
+                return (this.ledgerId < that.getLedgerId() ? -1 : 1);
+            }
+
+            if (this.entryId != that.getEntryId()) {
+                return (this.entryId < that.getEntryId() ? -1 : 1);
+            }
+
+            return 0;
+        }
     }
 
     public Topic getTopic() {

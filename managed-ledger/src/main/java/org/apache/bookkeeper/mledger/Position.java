@@ -18,6 +18,7 @@
  */
 package org.apache.bookkeeper.mledger;
 
+import java.util.Optional;
 import org.apache.bookkeeper.common.annotation.InterfaceAudience;
 import org.apache.bookkeeper.common.annotation.InterfaceStability;
 
@@ -26,16 +27,75 @@ import org.apache.bookkeeper.common.annotation.InterfaceStability;
  */
 @InterfaceAudience.LimitedPrivate
 @InterfaceStability.Stable
-public interface Position {
+public interface Position extends Comparable<Position> {
     /**
      * Get the position of the entry next to this one. The returned position might point to a non-existing, or not-yet
      * existing entry
      *
      * @return the position of the next logical entry
      */
-    Position getNext();
+    default Position getNext() {
+        if (getEntryId() < 0) {
+            return PositionFactory.create(getLedgerId(), 0);
+        } else {
+            return PositionFactory.create(getLedgerId(), getEntryId() + 1);
+        }
+    }
+
+    /**
+     * Position after moving entryNum messages,
+     * if entryNum < 1, then return the current position.
+     * */
+    default Position getPositionAfterEntries(int entryNum) {
+        if (entryNum < 1) {
+            return this;
+        }
+        if (getEntryId() < 0) {
+            return PositionFactory.create(getLedgerId(), entryNum - 1);
+        } else {
+            return PositionFactory.create(getLedgerId(), getEntryId() + entryNum);
+        }
+    }
 
     long getLedgerId();
 
     long getEntryId();
+
+    default int compareTo(Position that) {
+        if (getLedgerId() != that.getLedgerId()) {
+            return (getLedgerId() < that.getLedgerId() ? -1 : 1);
+        }
+
+        if (getEntryId() != that.getEntryId()) {
+            return (getEntryId() < that.getEntryId() ? -1 : 1);
+        }
+
+        return 0;
+    }
+
+    default int compareTo(long ledgerId, long entryId) {
+        if (getLedgerId() != ledgerId) {
+            return (getLedgerId() < ledgerId ? -1 : 1);
+        }
+
+        if (getEntryId() != entryId) {
+            return (getEntryId() < entryId ? -1 : 1);
+        }
+
+        return 0;
+    }
+
+    default int hashCodeForPosition() {
+        int result = Long.hashCode(getLedgerId());
+        result = 31 * result + Long.hashCode(getEntryId());
+        return result;
+    }
+
+    default boolean hasExtension(Class<?> extensionClass) {
+        return getExtension(extensionClass).isPresent();
+    }
+
+    default <T> Optional<T> getExtension(Class<T> extensionClass) {
+        return Optional.empty();
+    }
 }
