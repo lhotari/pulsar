@@ -269,7 +269,7 @@ flexible messaging model and an intuitive client API.</description>
     <failsafe.version>3.3.2</failsafe.version>
 
     <!-- test dependencies -->
-    <testcontainers.version>1.18.3</testcontainers.version>
+    <testcontainers.version>1.19.8</testcontainers.version>
     <hamcrest.version>2.2</hamcrest.version>
     <restassured.version>5.4.0</restassured.version>
 
