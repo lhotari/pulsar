@@ -18,13 +18,14 @@ Build pulsar-metadata module
 mvn -pl pulsar-metadata -am install -DskipTests -Dspotbugs.skip=true -Dcheckstyle.skip=true 
 ```
 
-Reproduce exception `io.grpc.StatusRuntimeException: INTERNAL: Encountered end-of-stream mid-frame`
+Reproduce exception `io.grpc.StatusRuntimeException: INTERNAL: Encountered end-of-stream mid-frame`. 
+[Example logs for this test case](grpc_netty_4.1.111_end-of-stream_mid-frame_log.txt).
 
 ```shell
 mvn -pl pulsar-metadata -DredirectTestOutputToFile=false -DtestRetryCount=0 test -Dtest=MetadataStoreTest#getChildrenTest
 ```
 
-Reproduce hang
+Reproduce hang. [Examples logs for this test case](grpc_netty_4.1.111_test_hangs_log.txt).
 
 ```shell
 mvn -pl pulsar-metadata -DredirectTestOutputToFile=false -DtestRetryCount=0 test -Dtest=MetadataStoreTest#testConcurrentPutGetOneKey
