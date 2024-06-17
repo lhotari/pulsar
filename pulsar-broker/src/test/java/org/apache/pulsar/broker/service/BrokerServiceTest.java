@@ -93,6 +93,7 @@ import org.apache.pulsar.client.admin.PulsarAdminException;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.ClientBuilder;
 import org.apache.pulsar.client.api.Consumer;
+import org.apache.pulsar.client.api.ConsumerBuilder;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.ProducerBuilder;
@@ -104,6 +105,7 @@ import org.apache.pulsar.client.api.SubscriptionMode;
 import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.client.impl.ClientCnx;
 import org.apache.pulsar.client.impl.ConnectionPool;
+import org.apache.pulsar.client.impl.ConsumerImpl;
 import org.apache.pulsar.client.impl.PulsarServiceNameResolver;
 import org.apache.pulsar.client.impl.auth.AuthenticationTls;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
@@ -115,6 +117,7 @@ import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.SystemTopicNames;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.BundlesData;
+import org.apache.pulsar.common.policies.data.ConsumerStats;
 import org.apache.pulsar.common.policies.data.LocalPolicies;
 import org.apache.pulsar.common.policies.data.OffloadPolicies;
 import org.apache.pulsar.common.policies.data.OffloadPoliciesImpl;
@@ -133,6 +136,7 @@ import org.mockito.Mockito;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 @Slf4j
@@ -1900,5 +1904,261 @@ public class BrokerServiceTest extends BrokerTestBase {
             Assert.assertEquals(managedLedgerConfig.getLedgerOffloader(), NullLedgerOffloader.INSTANCE);
         }
     }
+
+    @DataProvider(name = "max_unacked_data")
+    public static Object[][] max_unacked_data() {
+        return new Object[][] {{1, 1}, {1, 2}, {1, 5}, {2, 2}, {2, 3}, {4, 4}, {4, 8}, {10, 20}};
+    }
+
+    @Test(dataProvider = "max_unacked_data")
+    public void testConsumerDoesntGetBlocked(int maxUnackedMsgPerConsumer, int maxUnackedMsgPerSubscription)
+            throws Exception {
+        doTestThatConsumerDoesntGetBlocked("testConsumerDoesntGetBlocked",
+                maxUnackedMsgPerConsumer, maxUnackedMsgPerSubscription, consumerBuilder -> {
+                    consumerBuilder.isAckReceiptEnabled(true)
+                            .receiverQueueSize(0);
+                });
+    }
+
+    @Test(dataProvider = "max_unacked_data")
+    public void testConsumerDoesntGetBlockedWhenReceiverQueueSizeIsSet(int maxUnackedMessagesPerConsumer,
+                                                                  int maxUnackedMessagesPerSubscription)
+            throws Exception {
+        doTestThatConsumerDoesntGetBlocked("testConsumerDoesntGetBlockedWhenReceiverQueueSize",
+                maxUnackedMessagesPerConsumer, maxUnackedMessagesPerSubscription, consumerBuilder -> {
+                    consumerBuilder.subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
+                            .receiverQueueSize(1);
+                });
+    }
+
+    private void doTestThatConsumerDoesntGetBlocked(String testName, int maxUnackedMessagesPerConsumer,
+                                                    int maxUnackedMessagesPerSubscription,
+                                                    java.util.function.Consumer<ConsumerBuilder<byte[]>> consumerBuilderCustomizer)
+            throws PulsarAdminException, PulsarClientException, InterruptedException {
+        final String ns =
+                "prop/%s-%d-%d".formatted(testName, maxUnackedMessagesPerConsumer,
+                        maxUnackedMessagesPerSubscription);
+
+        admin.namespaces().createNamespace(ns, 2);
+        admin.namespaces().setMaxUnackedMessagesPerConsumer(ns, maxUnackedMessagesPerConsumer);
+        admin.namespaces().setMaxUnackedMessagesPerSubscription(ns, maxUnackedMessagesPerSubscription);
+
+        final String topicName = "persistent://" + ns + "/test-topic";
+
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer()
+                .topic(topicName)
+                .create();
+
+        String subscriptionName = "sub1";
+
+        ConsumerBuilder<byte[]> consumerBuilder = pulsarClient.newConsumer()
+                .topic(topicName)
+                .subscriptionName(subscriptionName)
+                .acknowledgmentGroupTime(0, TimeUnit.SECONDS)
+                .subscriptionType(SubscriptionType.Shared);
+        consumerBuilderCustomizer.accept(consumerBuilder);
+        @Cleanup
+        Consumer<byte[]> consumer = consumerBuilder.subscribe();
+
+        int numberOfMessages = maxUnackedMessagesPerSubscription * 5;
+
+        // Supervisor whether all the work has been done.
+        CountDownLatch supervisor = new CountDownLatch(numberOfMessages);
+
+        // producer
+        for (int i = 0; i < numberOfMessages; i++) {
+            producer.send((("message " + i).getBytes(StandardCharsets.UTF_8)));
+        }
+
+        // consumer
+        @Cleanup("interrupt")
+        Thread consumerThread = new Thread(() -> {
+            try {
+                while (!Thread.currentThread().isInterrupted()) {
+                    Message<byte[]> message = consumer.receive();
+                    if (message == null) {
+                        break;
+                    }
+                    consumer.acknowledge(message);
+                    supervisor.countDown();
+                }
+            } catch (PulsarClientException e) {
+                log.error("Consumer failed", e);
+                throw new RuntimeException(e);
+            }
+        });
+        consumerThread.start();
+
+
+        // Wait until all messages are sent and later processed.
+        if (!supervisor.await(10, TimeUnit.SECONDS)) {
+            fail("The test is failed because of latch.await timeout.");
+        }
+
+        Awaitility.await()
+                .untilAsserted(() -> {
+                    SubscriptionStats subscriptionStats =
+                            admin.topics().getStats(topicName).getSubscriptions().get(subscriptionName);
+                    ConsumerStats consumerStats = subscriptionStats.getConsumers().get(0);
+
+                    int currentReceiverQueueSize = ((ConsumerImpl<byte[]>) consumer).getCurrentReceiverQueueSize();
+                    int numMessagesInQueue = ((ConsumerImpl<byte[]>) consumer).numMessagesInQueue();
+
+                    long subscriptionUnackedMessages = subscriptionStats.getUnackedMessages();
+                    int consumerUnackedMessages = consumerStats.getUnackedMessages();
+
+                    boolean blockedSubscriptionOnUnackedMsgs = subscriptionStats.isBlockedSubscriptionOnUnackedMsgs();
+                    boolean blockedConsumerOnUnackedMsgs = consumerStats.isBlockedConsumerOnUnackedMsgs();
+
+                    log.info("----");
+                    log.info("subscriptionStats: {}", subscriptionStats);
+                    log.info("currentReceiverQueueSize: {}", currentReceiverQueueSize);
+                    log.info("numMessagesInQueue: {}", numMessagesInQueue);
+                    log.info("subscriptionUnackedMessages: {}", subscriptionUnackedMessages);
+                    log.info("consumerUnackedMessages: {}", consumerUnackedMessages);
+                    log.info("blockedSubscriptionOnUnackedMsgs: {}", blockedSubscriptionOnUnackedMsgs);
+                    log.info("blockedConsumerOnUnackedMsgs: {}", blockedConsumerOnUnackedMsgs);
+                    log.info("----");
+
+                    assertEquals(numMessagesInQueue, 0, "numMessagesInQueue");
+                    assertEquals(subscriptionUnackedMessages, 0, "subscriptionUnackedMessages");
+                    assertEquals(consumerUnackedMessages, 0, "consumerUnackedMessages");
+                    assertFalse(blockedSubscriptionOnUnackedMsgs, "blockedSubscriptionOnUnackedMsgs");
+                    assertFalse(blockedConsumerOnUnackedMsgs, "blockedConsumerOnUnackedMsgs");
+                });
+    }
+
+    @Test(dataProvider = "max_unacked_data")
+    public void testConsumerDoesntGetBlockedMultipleConsumers(int maxUnackedMessagesPerConsumer,
+                                                              int maxUnackedMessagesPerSubscription)
+            throws Exception {
+        final String ns =
+                "prop/ns-test-%d-%d".formatted(maxUnackedMessagesPerConsumer, maxUnackedMessagesPerSubscription);
+
+        admin.namespaces().createNamespace(ns, 2);
+        admin.namespaces().setMaxUnackedMessagesPerConsumer(ns, maxUnackedMessagesPerConsumer);
+        admin.namespaces().setMaxUnackedMessagesPerSubscription(ns, maxUnackedMessagesPerSubscription);
+
+        final String topicName = "persistent://" + ns + "/test-22657-3";
+
+        Producer<byte[]> producer = pulsarClient.newProducer()
+                .topic(topicName)
+                .create();
+
+        String subscriptionName = "sub1";
+
+        // numbersOfConsumers = each consumer can have their own max unack
+        int numbersOfConsumers = maxUnackedMessagesPerSubscription / maxUnackedMessagesPerConsumer;
+
+        List<Consumer<byte[]>> consumers = new ArrayList<>();
+        for (int i = 0; i < numbersOfConsumers; i++) {
+            Consumer<byte[]> consumer = pulsarClient.newConsumer()
+                    .topic(topicName)
+                    .subscriptionName(subscriptionName)
+                    .acknowledgmentGroupTime(0, TimeUnit.SECONDS)
+                    .subscriptionType(SubscriptionType.Shared)
+                    .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
+                    .receiverQueueSize(1)
+                    .subscribe();
+            consumers.add(consumer);
+        }
+
+        int numberOfMessages = maxUnackedMessagesPerSubscription * 5;
+        CountDownLatch supervisor = new CountDownLatch(numberOfMessages * 2);
+
+        // producer
+        for (int i = 0; i < numberOfMessages; i++) {
+            producer.sendAsync((("message " + i).getBytes(StandardCharsets.UTF_8)))
+                    .whenCompleteAsync((messageId, throwable) -> {
+                                if (throwable == null) {
+                                    supervisor.countDown();
+                                }
+                            }
+                    );
+        }
+
+        List<Thread> consumerThreads = new ArrayList<>();
+
+        // consumers
+        for (int i = 0; i < consumers.size(); i++) {
+            int finalI = i;
+            Consumer<byte[]> consumer = consumers.get(i);
+            for (int k = 0; k < maxUnackedMessagesPerConsumer; k++) {
+                Thread consumerThread = new Thread(() -> {
+                    try {
+                        while (!Thread.currentThread().isInterrupted()) {
+                            Message<byte[]> message = consumer.receive(1, TimeUnit.SECONDS);
+                            if (message == null) {
+                                break;
+                            }
+
+                            consumer.acknowledge(message);
+                            supervisor.countDown();
+                        }
+                    } catch (PulsarClientException e) {
+                        log.error("Consumer {} failed", finalI, e);
+                        throw new RuntimeException(e);
+                    }
+                });
+                consumerThread.start();
+                consumerThreads.add(consumerThread);
+            }
+        }
+
+        @Cleanup
+        AutoCloseable consumerThreadCleaner = () -> {
+            for (Thread consumerThread : consumerThreads) {
+                consumerThread.interrupt();
+                consumerThread.join();
+            }
+        };
+
+        // Wait until all messages are sent and later processed.
+        if (!supervisor.await(10, TimeUnit.SECONDS)) {
+            fail("The test is failed because of latch.await timeout.");
+        }
+
+        Awaitility.await()
+                .atMost(1, TimeUnit.SECONDS)
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .untilAsserted(() -> {
+                    SubscriptionStats subscriptionStats =
+                            admin.topics().getStats(topicName).getSubscriptions().get(subscriptionName);
+                    ConsumerStats consumerStats = subscriptionStats.getConsumers().get(0);
+
+                    StringBuilder currentReceiverQueueSize = new StringBuilder();
+                    StringBuilder numMessagesInQueue = new StringBuilder();
+                    for (Consumer<byte[]> consumer : consumers) {
+                        currentReceiverQueueSize.append(((ConsumerImpl<byte[]>) consumer).getCurrentReceiverQueueSize())
+                                .append("/");
+                        numMessagesInQueue.append(((ConsumerImpl<byte[]>) consumer).numMessagesInQueue()).append("/");
+                    }
+                    currentReceiverQueueSize.deleteCharAt(currentReceiverQueueSize.length() - 1);
+                    numMessagesInQueue.deleteCharAt(numMessagesInQueue.length() - 1);
+
+                    long subscriptionUnackedMessages = subscriptionStats.getUnackedMessages();
+                    int consumerUnackedMessages = consumerStats.getUnackedMessages();
+
+                    boolean blockedSubscriptionOnUnackedMsgs = subscriptionStats.isBlockedSubscriptionOnUnackedMsgs();
+                    boolean blockedConsumerOnUnackedMsgs = consumerStats.isBlockedConsumerOnUnackedMsgs();
+
+                    log.info("----");
+                    log.info("subscriptionStats: {}", subscriptionStats);
+                    log.info("currentReceiverQueueSize: {}", currentReceiverQueueSize);
+                    log.info("numMessagesInQueue: {}", numMessagesInQueue);
+                    log.info("subscriptionUnackedMessages: {}", subscriptionUnackedMessages);
+                    log.info("consumerUnackedMessages: {}", consumerUnackedMessages);
+                    log.info("blockedSubscriptionOnUnackedMsgs: {}", blockedSubscriptionOnUnackedMsgs);
+                    log.info("blockedConsumerOnUnackedMsgs: {}", blockedConsumerOnUnackedMsgs);
+                    log.info("----");
+
+                    assertEquals(subscriptionUnackedMessages, 0, "subscriptionUnackedMessages");
+                    assertEquals(consumerUnackedMessages, 0, "consumerUnackedMessages");
+                    assertFalse(blockedSubscriptionOnUnackedMsgs, "blockedSubscriptionOnUnackedMsgs");
+                    assertFalse(blockedConsumerOnUnackedMsgs, "blockedConsumerOnUnackedMsgs");
+                });
+    }
+
 }
 

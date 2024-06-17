@@ -19,7 +19,6 @@
 package org.apache.pulsar.broker.service.persistent;
 
 import static org.apache.pulsar.broker.service.persistent.PersistentTopic.MESSAGE_RATE_BACKOFF_MS;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Range;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -1005,6 +1004,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
 
     @Override
     public synchronized void redeliverUnacknowledgedMessages(Consumer consumer, long consumerEpoch) {
+        doAddUnAckedMessages(-totalUnackedMessages, false);
         consumer.getPendingAcks().forEach((ledgerId, entryId, batchSize, stickyKeyHash) -> {
             if (addMessageToReplay(ledgerId, entryId, stickyKeyHash)) {
                 redeliveryTracker.incrementAndGetRedeliveryCount((PositionImpl.get(ledgerId, entryId)));
@@ -1019,6 +1019,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
 
     @Override
     public synchronized void redeliverUnacknowledgedMessages(Consumer consumer, List<PositionImpl> positions) {
+        doAddUnAckedMessages(-totalUnackedMessages, false);
         positions.forEach(position -> {
             // TODO: We want to pass a sticky key hash as a third argument to guarantee the order of the messages
             // on Key_Shared subscription, but it's difficult to get the sticky key here
@@ -1034,12 +1035,18 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
 
     @Override
     public void addUnAckedMessages(int numberOfMessages) {
+        doAddUnAckedMessages(numberOfMessages, true);
+    }
+
+    private void doAddUnAckedMessages(int numberOfMessages, boolean allowReadMore) {
         int maxUnackedMessages = topic.getMaxUnackedMessagesOnSubscription();
         // don't block dispatching if maxUnackedMessages = 0
         if (maxUnackedMessages <= 0 && blockedDispatcherOnUnackedMsgs == TRUE
                 && BLOCKED_DISPATCHER_ON_UNACKMSG_UPDATER.compareAndSet(this, TRUE, FALSE)) {
             log.info("[{}] Dispatcher is unblocked, since maxUnackedMessagesPerSubscription=0", name);
-            readMoreEntriesAsync();
+            if (allowReadMore) {
+                readMoreEntriesAsync();
+            }
         }
 
         int unAckedMessages = TOTAL_UNACKED_MESSAGES_UPDATER.addAndGet(this, numberOfMessages);
@@ -1055,14 +1062,16 @@ public class PersistentDispatcherMultipleConsumers extends AbstractDispatcherMul
             if (totalUnackedMessages < (topic.getBrokerService().maxUnackedMsgsPerDispatcher / 2)) {
                 if (BLOCKED_DISPATCHER_ON_UNACKMSG_UPDATER.compareAndSet(this, TRUE, FALSE)) {
                     // it removes dispatcher from blocked list and unblocks dispatcher by scheduling read
-                    topic.getBrokerService().unblockDispatchersOnUnAckMessages(Lists.newArrayList(this));
+                    topic.getBrokerService().unblockDispatchersOnUnAckMessages(List.of(this), allowReadMore);
                 }
             }
-        } else if (blockedDispatcherOnUnackedMsgs == TRUE && unAckedMessages < maxUnackedMessages / 2) {
+        } else if (blockedDispatcherOnUnackedMsgs == TRUE && unAckedMessages <= maxUnackedMessages / 2) {
             // unblock dispatcher if it acks back enough messages
             if (BLOCKED_DISPATCHER_ON_UNACKMSG_UPDATER.compareAndSet(this, TRUE, FALSE)) {
                 log.debug("[{}] Dispatcher is unblocked", name);
-                readMoreEntriesAsync();
+                if (allowReadMore) {
+                    readMoreEntriesAsync();
+                }
             }
         }
         // increment broker-level count
