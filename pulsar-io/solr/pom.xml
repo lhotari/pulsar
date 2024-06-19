@@ -30,10 +30,23 @@
 
     <properties>
         <solr.version>8.11.3</solr.version>
+        <jetty9.version>9.4.54.v20240208</jetty9.version>
     </properties>
 
     <artifactId>pulsar-io-solr</artifactId>
     <name>Pulsar IO :: Solr</name>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-bom</artifactId>
+                <version>${jetty9.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>

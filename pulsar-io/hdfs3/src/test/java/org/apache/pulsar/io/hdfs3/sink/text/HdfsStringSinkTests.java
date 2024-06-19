@@ -18,8 +18,7 @@
  */
 package org.apache.pulsar.io.hdfs3.sink.text;
 
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
+import static org.testng.Assert.assertEquals;
 import org.apache.pulsar.io.hdfs3.sink.AbstractHdfsSinkTest;
 import org.testng.SkipException;
 import org.testng.annotations.Test;
@@ -39,7 +38,7 @@ public class HdfsStringSinkTests extends AbstractHdfsSinkTest<String, String> {
         sink.open(map, mockSinkContext);
         send(5000);
         sink.close();
-        verify(mockRecord, times(5000)).ack();
+        assertEquals(ackCounter.get(), 5000);
     }
 
     @Test
@@ -53,7 +52,7 @@ public class HdfsStringSinkTests extends AbstractHdfsSinkTest<String, String> {
             send(2000);
         }
         sink.close();
-        verify(mockRecord, times(2000 * 5)).ack();
+        assertEquals(ackCounter.get(),2000 * 5);
     }
 
     @Test
@@ -86,7 +85,7 @@ public class HdfsStringSinkTests extends AbstractHdfsSinkTest<String, String> {
         sink.open(map, mockSinkContext);
         send(5000);
         sink.close();
-        verify(mockRecord, times(5000)).ack();
+        assertEquals(ackCounter.get(), 5000);
     }
 
     @Test
@@ -98,7 +97,7 @@ public class HdfsStringSinkTests extends AbstractHdfsSinkTest<String, String> {
         sink.open(map, mockSinkContext);
         send(50000);
         sink.close();
-        verify(mockRecord, times(50000)).ack();
+        assertEquals(ackCounter.get(), 50000);
     }
 
     @Test
@@ -113,6 +112,6 @@ public class HdfsStringSinkTests extends AbstractHdfsSinkTest<String, String> {
         sink.open(map, mockSinkContext);
         send(50000);
         sink.close();
-        verify(mockRecord, times(50000)).ack();
+        assertEquals(ackCounter.get(), 50000);
     }
 }

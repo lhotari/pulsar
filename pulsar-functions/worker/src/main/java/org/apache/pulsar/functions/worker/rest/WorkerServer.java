@@ -18,7 +18,6 @@
  */
 package org.apache.pulsar.functions.worker.rest;
 
-import io.prometheus.client.jetty.JettyStatisticsCollector;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
@@ -34,7 +33,12 @@ import org.apache.pulsar.functions.worker.WorkerConfig;
 import org.apache.pulsar.functions.worker.WorkerService;
 import org.apache.pulsar.functions.worker.rest.api.v2.WorkerApiV2Resource;
 import org.apache.pulsar.functions.worker.rest.api.v2.WorkerStatsApiV2Resource;
+import org.apache.pulsar.jetty.metrics.JettyStatisticsCollector;
 import org.apache.pulsar.jetty.tls.JettySslContextFactory;
+import org.eclipse.jetty.ee8.servlet.FilterHolder;
+import org.eclipse.jetty.ee8.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee8.servlet.ServletHolder;
+import org.eclipse.jetty.ee8.servlets.QoSFilter;
 import org.eclipse.jetty.server.ConnectionFactory;
 import org.eclipse.jetty.server.ConnectionLimit;
 import org.eclipse.jetty.server.ForwardedRequestCustomizer;
@@ -48,13 +52,7 @@ import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.SslConnectionFactory;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
 import org.eclipse.jetty.server.handler.DefaultHandler;
-import org.eclipse.jetty.server.handler.HandlerCollection;
-import org.eclipse.jetty.server.handler.RequestLogHandler;
 import org.eclipse.jetty.server.handler.StatisticsHandler;
-import org.eclipse.jetty.servlet.FilterHolder;
-import org.eclipse.jetty.servlet.ServletContextHandler;
-import org.eclipse.jetty.servlet.ServletHolder;
-import org.eclipse.jetty.servlets.QoSFilter;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.glassfish.jersey.servlet.ServletContainer;
@@ -116,28 +114,26 @@ public class WorkerServer {
 
         List<Handler> handlers = new ArrayList<>(4);
         handlers.add(newServletContextHandler("/admin",
-            new ResourceConfig(Resources.getApiV2Resources()), workerService, filterInitializer));
+            new ResourceConfig(Resources.getApiV2Resources()), workerService, filterInitializer).get());
         handlers.add(newServletContextHandler("/admin/v2",
-            new ResourceConfig(Resources.getApiV2Resources()), workerService, filterInitializer));
+            new ResourceConfig(Resources.getApiV2Resources()), workerService, filterInitializer).get());
         handlers.add(newServletContextHandler("/admin/v3",
-            new ResourceConfig(Resources.getApiV3Resources()), workerService, filterInitializer));
+            new ResourceConfig(Resources.getApiV3Resources()), workerService, filterInitializer).get());
         // don't require auth for metrics or config routes
         handlers.add(newServletContextHandler("/",
             new ResourceConfig(Resources.getRootResources()), workerService,
-            workerConfig.isAuthenticateMetricsEndpoint(), filterInitializer));
+            workerConfig.isAuthenticateMetricsEndpoint(), filterInitializer).get());
 
-        RequestLogHandler requestLogHandler = new RequestLogHandler();
         boolean showDetailedAddresses = workerConfig.getWebServiceLogDetailedAddresses() != null
                 ? workerConfig.getWebServiceLogDetailedAddresses() :
                 (workerConfig.isWebServiceHaProxyProtocolEnabled() || workerConfig.isWebServiceTrustXForwardedFor());
-        requestLogHandler.setRequestLog(JettyRequestLogFactory.createRequestLogger(showDetailedAddresses, server));
-        handlers.add(0, new ContextHandlerCollection());
-        handlers.add(requestLogHandler);
+        server.setRequestLog(JettyRequestLogFactory.createRequestLogger(showDetailedAddresses, server));
+
 
         ContextHandlerCollection contexts = new ContextHandlerCollection();
-        contexts.setHandlers(handlers.toArray(new Handler[handlers.size()]));
-        HandlerCollection handlerCollection = new HandlerCollection();
-        handlerCollection.setHandlers(new Handler[]{contexts, new DefaultHandler(), requestLogHandler});
+        contexts.setHandlers(handlers);
+        Handler.Collection handlerCollection = new Handler.Sequence();
+        handlerCollection.setHandlers(contexts, new DefaultHandler());
 
         // Metrics handler
         StatisticsHandler stats = new StatisticsHandler();
@@ -147,13 +143,13 @@ public class WorkerServer {
         } catch (IllegalArgumentException e) {
             // Already registered. Eg: in unit tests
         }
-        handlers.add(stats);
+
         server.setHandler(stats);
 
         if (this.workerConfig.getTlsEnabled()) {
             log.info("Configuring https server on port={}", this.workerConfig.getWorkerPortTls());
             try {
-                SslContextFactory sslCtxFactory;
+                SslContextFactory.Server sslCtxFactory;
                 if (workerConfig.isTlsEnabledWithKeyStore()) {
                     sslCtxFactory = JettySslContextFactory.createServerSslContextWithKeystore(
                             workerConfig.getTlsProvider(),
@@ -241,9 +237,9 @@ public class WorkerServer {
     }
 
     static ServletContextHandler newServletContextHandler(String contextPath,
-                                                                 ResourceConfig config,
-                                                                 WorkerService workerService,
-                                                                 FilterInitializer filterInitializer) {
+                                                          ResourceConfig config,
+                                                          WorkerService workerService,
+                                                          FilterInitializer filterInitializer) {
         return newServletContextHandler(contextPath, config, workerService, true, filterInitializer);
     }
 

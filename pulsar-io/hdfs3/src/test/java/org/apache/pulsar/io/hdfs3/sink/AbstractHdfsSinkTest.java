@@ -18,17 +18,20 @@
  */
 package org.apache.pulsar.io.hdfs3.sink;
 
-import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SinkContext;
 import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
+import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 
 /**
@@ -37,14 +40,16 @@ import org.testng.annotations.BeforeMethod;
  */
 public abstract class AbstractHdfsSinkTest<K, V> {
 
-    @Mock
+    @Mock(stubOnly = true)
     protected SinkContext mockSinkContext;
 
-    @Mock
+    @Mock(stubOnly = true)
     protected Record<V> mockRecord;
 
     protected Map<String, Object> map;
     protected HdfsAbstractSink<K, V> sink;
+    protected AutoCloseable mockCloseable;
+    protected AtomicInteger ackCounter = new AtomicInteger(0);
 
     @SuppressWarnings("unchecked")
     @BeforeMethod(alwaysRun = true)
@@ -55,9 +60,8 @@ public abstract class AbstractHdfsSinkTest<K, V> {
         map.put("directory", "/tmp/testing");
         map.put("filenamePrefix", "prefix");
 
-        mockSinkContext = mock(SinkContext.class);
+        mockCloseable =  MockitoAnnotations.openMocks(this);
 
-        mockRecord = mock(Record.class);
         when(mockRecord.getRecordSequence()).thenAnswer(new Answer<Optional<Long>>() {
             long sequenceCounter = 0;
 
@@ -82,7 +86,22 @@ public abstract class AbstractHdfsSinkTest<K, V> {
             }
         });
 
+
+        ackCounter.set(0);
+        doAnswer(invocation -> {
+            ackCounter.incrementAndGet();
+            return null;
+        }).when(mockRecord).ack();
+
         createSink();
+    }
+
+    @AfterMethod(alwaysRun = true)
+    public final void cleanup() throws Exception {
+        if (mockCloseable != null) {
+            mockCloseable.close();
+            mockCloseable = null;
+        }
     }
 
     protected abstract void createSink();

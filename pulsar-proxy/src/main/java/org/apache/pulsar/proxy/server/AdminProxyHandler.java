@@ -19,16 +19,12 @@
 package org.apache.pulsar.proxy.server;
 
 import static org.apache.commons.lang3.StringUtils.isBlank;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
-import java.nio.ByteBuffer;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executor;
@@ -47,15 +43,14 @@ import org.apache.pulsar.common.util.SecurityUtility;
 import org.apache.pulsar.common.util.keystoretls.KeyStoreSSLContext;
 import org.apache.pulsar.policies.data.loadbalancer.ServiceLookupData;
 import org.eclipse.jetty.client.HttpClient;
-import org.eclipse.jetty.client.HttpRequest;
 import org.eclipse.jetty.client.ProtocolHandlers;
 import org.eclipse.jetty.client.RedirectProtocolHandler;
-import org.eclipse.jetty.client.api.ContentProvider;
-import org.eclipse.jetty.client.api.Request;
-import org.eclipse.jetty.client.http.HttpClientTransportOverHTTP;
+import org.eclipse.jetty.client.Request;
+import org.eclipse.jetty.client.transport.HttpClientTransportOverHTTP;
+import org.eclipse.jetty.ee8.proxy.ProxyServlet;
+import org.eclipse.jetty.http.HttpCookieStore;
+import org.eclipse.jetty.http.HttpField;
 import org.eclipse.jetty.http.HttpHeader;
-import org.eclipse.jetty.proxy.ProxyServlet;
-import org.eclipse.jetty.util.HttpCookieStore;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.slf4j.Logger;
@@ -110,7 +105,7 @@ class AdminProxyHandler extends ProxyServlet {
         client.setFollowRedirects(true);
 
         // Must not store cookies, otherwise cookies of different clients will mix.
-        client.setCookieStore(new HttpCookieStore.Empty());
+        client.setHttpCookieStore(new HttpCookieStore.Empty());
 
         Executor executor;
         String value = config.getInitParameter("maxThreads");
@@ -175,45 +170,15 @@ class AdminProxyHandler extends ProxyServlet {
 
     // This class allows the request body to be replayed, the default implementation
     // does not
-    protected class ReplayableProxyContentProvider extends ProxyInputStreamContentProvider {
+    protected class ReplayableProxyContentProvider extends ProxyInputStreamRequestContent {
         static final int MIN_REPLAY_BODY_BUFFER_SIZE = 64;
-        private boolean bodyBufferAvailable = false;
-        private boolean bodyBufferMaxSizeReached = false;
-        private final ByteArrayOutputStream bodyBuffer;
         private final long httpInputMaxReplayBufferSize;
 
         protected ReplayableProxyContentProvider(HttpServletRequest request, HttpServletResponse response,
                                                  Request proxyRequest, InputStream input,
                                                  int httpInputMaxReplayBufferSize) {
             super(request, response, proxyRequest, input);
-            bodyBuffer = new ByteArrayOutputStream(
-                    Math.min(Math.max(request.getContentLength(), MIN_REPLAY_BODY_BUFFER_SIZE),
-                            httpInputMaxReplayBufferSize));
             this.httpInputMaxReplayBufferSize = httpInputMaxReplayBufferSize;
-        }
-
-        @Override
-        public Iterator<ByteBuffer> iterator() {
-            if (bodyBufferAvailable) {
-                return Collections.singleton(ByteBuffer.wrap(bodyBuffer.toByteArray())).iterator();
-            } else {
-                bodyBufferAvailable = true;
-                return super.iterator();
-            }
-        }
-
-        @Override
-        protected ByteBuffer onRead(byte[] buffer, int offset, int length) {
-            if (!bodyBufferMaxSizeReached) {
-                if (bodyBuffer.size() + length < httpInputMaxReplayBufferSize) {
-                    bodyBuffer.write(buffer, offset, length);
-                } else {
-                    bodyBufferMaxSizeReached = true;
-                    bodyBufferAvailable = false;
-                    bodyBuffer.reset();
-                }
-            }
-            return super.onRead(buffer, offset, length);
         }
     }
 
@@ -221,11 +186,12 @@ class AdminProxyHandler extends ProxyServlet {
         private static final int NUMBER_OF_SELECTOR_THREADS = 1;
 
         public JettyHttpClient() {
-            super(new HttpClientTransportOverHTTP(NUMBER_OF_SELECTOR_THREADS), null);
+            super(new HttpClientTransportOverHTTP(NUMBER_OF_SELECTOR_THREADS));
         }
 
-        public JettyHttpClient(SslContextFactory sslContextFactory) {
-            super(new HttpClientTransportOverHTTP(NUMBER_OF_SELECTOR_THREADS), sslContextFactory);
+        public JettyHttpClient(SslContextFactory.Client sslContextFactory) {
+            super(new HttpClientTransportOverHTTP(NUMBER_OF_SELECTOR_THREADS));
+            setSslContextFactory(sslContextFactory);
         }
 
         /**
@@ -233,20 +199,20 @@ class AdminProxyHandler extends ProxyServlet {
          * from brokers.
          */
         @Override
-        protected Request copyRequest(HttpRequest oldRequest, URI newURI) {
+        protected Request copyRequest(Request oldRequest, URI newURI) {
             String authorization = oldRequest.getHeaders().get(HttpHeader.AUTHORIZATION);
             Request newRequest = super.copyRequest(oldRequest, newURI);
             if (authorization != null) {
-                newRequest.header(HttpHeader.AUTHORIZATION, authorization);
+                newRequest.headers(
+                        mutable -> mutable.ensureField(new HttpField(HttpHeader.AUTHORIZATION, authorization)));
             }
-
             return newRequest;
         }
 
     }
 
     @Override
-    protected ContentProvider proxyRequestContent(HttpServletRequest request,
+    protected Request.Content proxyRequestContent(HttpServletRequest request,
                                                   HttpServletResponse response, Request proxyRequest)
             throws IOException {
         return new ReplayableProxyContentProvider(request, response, proxyRequest, request.getInputStream(),
@@ -303,7 +269,7 @@ class AdminProxyHandler extends ProxyServlet {
                         }
                     }
 
-                    SslContextFactory contextFactory = new SslContextFactory.Client();
+                    SslContextFactory.Client contextFactory = new SslContextFactory.Client();
                     contextFactory.setSslContext(sslCtx);
                     if (!config.isTlsHostnameVerificationEnabled()) {
                         contextFactory.setEndpointIdentificationAlgorithm(null);
@@ -389,7 +355,7 @@ class AdminProxyHandler extends ProxyServlet {
         super.addProxyHeaders(clientRequest, proxyRequest);
         String user = (String) clientRequest.getAttribute(AuthenticationFilter.AuthenticatedRoleAttributeName);
         if (user != null) {
-            proxyRequest.header(ORIGINAL_PRINCIPAL_HEADER, user);
+            proxyRequest.headers(mutable -> mutable.ensureField(new HttpField(ORIGINAL_PRINCIPAL_HEADER, user)));
         }
     }
 }

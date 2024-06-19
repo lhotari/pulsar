@@ -62,8 +62,8 @@ import org.apache.pulsar.websocket.data.ProducerAck;
 import org.apache.pulsar.websocket.data.ProducerMessage;
 import org.apache.pulsar.websocket.service.WSSDummyMessageCryptoImpl;
 import org.apache.pulsar.websocket.stats.StatsBuckets;
-import org.eclipse.jetty.websocket.api.WriteCallback;
-import org.eclipse.jetty.websocket.servlet.ServletUpgradeResponse;
+import org.eclipse.jetty.ee8.websocket.api.WriteCallback;
+import org.eclipse.jetty.ee8.websocket.server.JettyServerUpgradeResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -94,7 +94,7 @@ public class ProducerHandler extends AbstractWebSocketHandler {
     private final ObjectReader producerMessageReader =
             ObjectMapperFactory.getMapper().reader().forType(ProducerMessage.class);
 
-    public ProducerHandler(WebSocketService service, HttpServletRequest request, ServletUpgradeResponse response) {
+    public ProducerHandler(WebSocketService service, HttpServletRequest request, JettyServerUpgradeResponse response) {
         super(service, request, response);
         this.numMsgsSent = new LongAdder();
         this.numBytesSent = new LongAdder();
@@ -159,7 +159,7 @@ public class ProducerHandler extends AbstractWebSocketHandler {
     public void onWebSocketText(String message) {
         if (log.isDebugEnabled()) {
             log.debug("[{}] Received new message from producer {} ", producer.getTopic(),
-                    getRemote().getInetSocketAddress().toString());
+                    getRemote().getRemoteAddress().toString());
         }
         ProducerMessage sendRequest;
         byte[] rawPayload = null;
@@ -251,7 +251,7 @@ public class ProducerHandler extends AbstractWebSocketHandler {
         builder.sendAsync().thenAccept(msgId -> {
             if (log.isDebugEnabled()) {
                 log.debug("[{}] Success fully write the message to broker with returned message ID {} from producer {}",
-                        producer.getTopic(), msgId, getRemote().getInetSocketAddress().toString());
+                        producer.getTopic(), msgId, getRemote().getRemoteAddress().toString());
             }
             updateSentMsgStats(msgSize, TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - now));
             if (isConnected()) {
@@ -260,7 +260,7 @@ public class ProducerHandler extends AbstractWebSocketHandler {
             }
         }).exceptionally(exception -> {
             log.warn("[{}] Error occurred while producer handler was sending msg from {}", producer.getTopic(),
-                    getRemote().getInetSocketAddress().toString(), exception);
+                    getRemote().getRemoteAddress().toString(), exception);
             numMsgsFailed.increment();
             sendAckResponse(
                     new ProducerAck(UnknownError, exception.getMessage(), null, sendRequest.context));
@@ -327,7 +327,7 @@ public class ProducerHandler extends AbstractWebSocketHandler {
                 public void writeSuccess() {
                     if (log.isDebugEnabled()) {
                         log.debug("[{}] Ack was sent successfully to {}", producer.getTopic(),
-                                getRemote().getInetSocketAddress().toString());
+                                getRemote().getRemoteAddress().toString());
                     }
                 }
             });

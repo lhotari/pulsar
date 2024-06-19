@@ -54,6 +54,7 @@ import org.apache.pulsar.testclient.IMessageFormatter;
 import org.apache.pulsar.testclient.PerfClientUtils;
 import org.apache.pulsar.testclient.PositiveNumberParameterConvert;
 import org.apache.pulsar.testclient.utils.PaddingDecimalFormat;
+import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.websocket.client.ClientUpgradeRequest;
 import org.eclipse.jetty.websocket.client.WebSocketClient;
@@ -239,11 +240,13 @@ public class PerformanceClient extends CmdBase {
         String restPath = TopicName.get(topicName).getRestPath();
         String produceBaseEndPoint = TopicName.get(topicName).isV2()
                 ? this.proxyURL + "ws/v2/producer/" + restPath : this.proxyURL + "ws/producer/" + restPath;
+        HttpClient httpClient = new HttpClient();
+        httpClient.setSslContextFactory(new SslContextFactory.Client(true));
         for (int i = 0; i < this.numTopics; i++) {
             String topic = this.numTopics > 1 ? produceBaseEndPoint + i : produceBaseEndPoint;
             URI produceUri = URI.create(topic);
 
-            WebSocketClient produceClient = new WebSocketClient(new SslContextFactory(true));
+            WebSocketClient produceClient = new WebSocketClient(httpClient);
             ClientUpgradeRequest produceRequest = new ClientUpgradeRequest();
 
             if (StringUtils.isNotBlank(this.authPluginClassName) && StringUtils.isNotBlank(this.authParams)) {

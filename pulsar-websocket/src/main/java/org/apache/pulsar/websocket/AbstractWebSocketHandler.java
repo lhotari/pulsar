@@ -56,9 +56,9 @@ import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.util.Codec;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.websocket.data.ConsumerCommand;
-import org.eclipse.jetty.websocket.api.Session;
-import org.eclipse.jetty.websocket.api.WebSocketAdapter;
-import org.eclipse.jetty.websocket.servlet.ServletUpgradeResponse;
+import org.eclipse.jetty.ee8.websocket.api.Session;
+import org.eclipse.jetty.ee8.websocket.api.WebSocketAdapter;
+import org.eclipse.jetty.ee8.websocket.server.JettyServerUpgradeResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -77,7 +77,7 @@ public abstract class AbstractWebSocketHandler extends WebSocketAdapter implemen
 
     public AbstractWebSocketHandler(WebSocketService service,
                                     HttpServletRequest request,
-                                    ServletUpgradeResponse response) {
+                                    JettyServerUpgradeResponse response) {
         this.service = service;
         this.request = new WebSocketHttpServletRequestWrapper(request);
 
@@ -88,7 +88,7 @@ public abstract class AbstractWebSocketHandler extends WebSocketAdapter implemen
         extractTopicName(request);
     }
 
-    protected boolean checkAuth(ServletUpgradeResponse response) {
+    protected boolean checkAuth(JettyServerUpgradeResponse response) {
         String authRole = "<none>";
         String authMethodName = request.getHeader(PULSAR_AUTH_METHOD_NAME);
         AuthenticationState authenticationState = null;

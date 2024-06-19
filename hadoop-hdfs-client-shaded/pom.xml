@@ -1,0 +1,191 @@
+<?xml version="1.0"?>
+<!--
+
+    Licensed to the Apache Software Foundation (ASF) under one
+    or more contributor license agreements.  See the NOTICE file
+    distributed with this work for additional information
+    regarding copyright ownership.  The ASF licenses this file
+    to you under the Apache License, Version 2.0 (the
+    "License"); you may not use this file except in compliance
+    with the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing,
+    software distributed under the License is distributed on an
+    "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+    KIND, either express or implied.  See the License for the
+    specific language governing permissions and limitations
+    under the License.
+
+-->
+<project
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd"
+    xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.apache.pulsar</groupId>
+    <artifactId>pulsar</artifactId>
+    <version>3.4.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>hadoop-hdfs-client-shaded</artifactId>
+  <name>Apache Pulsar :: Hadoop HDFS client shaded</name>
+
+  <properties>
+    <jetty9.version>9.4.54.v20240208</jetty9.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-common</artifactId>
+      <version>${hadoop3.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>log4j</groupId>
+          <artifactId>log4j</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>ch.qos.reload4j</groupId>
+          <artifactId>reload4j</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.slf4j</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-hdfs-client</artifactId>
+      <version>${hadoop3.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.apache.avro</groupId>
+          <artifactId>avro</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.mortbay.jetty</groupId>
+          <artifactId>jetty</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>com.sun.jersey</groupId>
+          <artifactId>jersey-core</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>com.sun.jersey</groupId>
+          <artifactId>jersey-server</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>javax.servlet</groupId>
+          <artifactId>servlet-api</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+  </dependencies>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.eclipse.jetty</groupId>
+        <artifactId>jetty-bom</artifactId>
+        <version>${jetty9.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <executions>
+          <execution>
+            <phase>${shadePluginPhase}</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <createDependencyReducedPom>true</createDependencyReducedPom>
+              <promoteTransitiveDependencies>true</promoteTransitiveDependencies>
+              <minimizeJar>false</minimizeJar>
+
+              <artifactSet>
+                <includes>
+                  <include>org.apache.hadoop:*</include>
+                  <include>org.eclipse.jetty:*</include>
+                  <include>org.eclipse.jetty.websocket:*</include>
+                  <include>com.sun.jersey:*</include>
+                  <include>javax.ws.rs:*</include>
+                  <include>com.github.pjfanning:jersey-json</include>
+                  <include>org.codehaus.jettison:jettison</include>
+                  <include>com.sun.xml.bind:*</include>
+                  <include>javax.xml.bind:*</include>
+                  <include>jakarta.activation:jakarta.activation-api</include>
+                  <include>javax.activation:javax.activation-api</include>
+                  <include>com.github.stephenc.jcip:jcip-annotations</include>
+                </includes>
+              </artifactSet>
+
+              <relocations>
+                <relocation>
+                  <pattern>org.eclipse.jetty</pattern>
+                  <shadedPattern>org.apache.pulsar.hadoop.shade.org.eclipse.jetty</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.sun.jersey</pattern>
+                  <shadedPattern>org.apache.pulsar.hadoop.shade.com.sun.jersey</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.sun.xml.bind</pattern>
+                  <shadedPattern>org.apache.pulsar.hadoop.shade.com.sun.xml.bind</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>javax.ws.rs</pattern>
+                  <shadedPattern>org.apache.pulsar.hadoop.shade.javax.ws.rs</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>javax.xml.bind</pattern>
+                  <shadedPattern>org.apache.pulsar.hadoop.shade.javax.xml.bind</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>jakarta.activation</pattern>
+                  <shadedPattern>org.apache.pulsar.hadoop.shade.jakarta.activation</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>jersey</pattern>
+                  <shadedPattern>org.apache.pulsar.hadoop.shade.jersey</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.github.pjfanning</pattern>
+                  <shadedPattern>org.apache.pulsar.hadoop.shade.com.github.pjfanning</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.codehaus.jettison</pattern>
+                  <shadedPattern>org.apache.pulsar.hadoop.shade.org.codehaus.jettison</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>net.jcip</pattern>
+                  <shadedPattern>org.apache.pulsar.hadoop.shade.net.jcip</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>javax.enterprise.inject</pattern>
+                  <shadedPattern>org.apache.pulsar.hadoop.shade.javax.enterprise.inject</shadedPattern>
+                </relocation>
+              </relocations>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.PluginXmlResourceTransformer"/>
+              </transformers>
+              <filters>
+            </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
