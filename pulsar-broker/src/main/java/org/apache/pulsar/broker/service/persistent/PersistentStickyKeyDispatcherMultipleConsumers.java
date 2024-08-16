@@ -423,24 +423,6 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         // acquire message-dispatch permits for already delivered messages
         acquirePermitsForDeliveredMessages(topic, cursor, totalEntries, totalMessagesSent, totalBytesSent);
 
-        if (totalMessagesSent == 0 && (recentlyJoinedConsumers == null || recentlyJoinedConsumers.isEmpty())) {
-            // This means, that all the messages we've just read cannot be dispatched right now.
-            // This condition can only happen when:
-            //  1. We have consumers ready to accept messages (otherwise the would not haven been triggered)
-            //  2. All keys in the current set of messages are routing to consumers that are currently busy
-            //
-            // The solution here is to move on and read next batch of messages which might hopefully contain
-            // also keys meant for other consumers.
-            //
-            // We do it unless that are "recently joined consumers". In that case, we would be looking
-            // ahead in the stream while the new consumers are not ready to accept the new messages,
-            // therefore would be most likely only increase the distance between read-position and mark-delete
-            // position.
-            isDispatcherStuckOnReplays = true;
-            return true;
-        }  else if (currentThreadKeyNumber == 0) {
-            return true;
-        }
         return false;
     }
 
