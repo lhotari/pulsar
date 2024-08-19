@@ -21,7 +21,6 @@ package org.apache.pulsar.broker.service.persistent;
 import com.google.common.annotations.VisibleForTesting;
 import io.netty.util.concurrent.FastThreadLocal;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -68,7 +67,6 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
     private final boolean allowOutOfOrderDelivery;
     private final StickyKeyConsumerSelector selector;
 
-    private boolean isDispatcherStuckOnReplays = false;
     private final KeySharedMode keySharedMode;
 
     /**
@@ -436,7 +434,6 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             // ahead in the stream while the new consumers are not ready to accept the new messages,
             // therefore would be most likely only increase the distance between read-position and mark-delete
             // position.
-            isDispatcherStuckOnReplays = true;
             return true;
         }  else if (currentThreadKeyNumber == 0) {
             return true;
@@ -548,19 +545,6 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             lastSentPosition = mdp;
         }
         return lastSentPosition;
-    }
-
-    @Override
-    protected synchronized NavigableSet<Position> getMessagesToReplayNow(int maxMessagesToRead) {
-        if (isDispatcherStuckOnReplays) {
-            // If we're stuck on replay, we want to move forward reading on the topic (until the overall max-unacked
-            // messages kicks in), instead of keep replaying the same old messages, since the consumer that these
-            // messages are routing to might be busy at the moment
-            this.isDispatcherStuckOnReplays = false;
-            return Collections.emptyNavigableSet();
-        } else {
-            return super.getMessagesToReplayNow(maxMessagesToRead);
-        }
     }
 
     private int getAvailablePermits(Consumer c) {
