@@ -62,6 +62,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -104,6 +105,7 @@ import org.apache.pulsar.client.api.SubscriptionMode;
 import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.client.impl.ClientCnx;
 import org.apache.pulsar.client.impl.ConnectionPool;
+import org.apache.pulsar.client.impl.ConsumerImpl;
 import org.apache.pulsar.client.impl.PulsarServiceNameResolver;
 import org.apache.pulsar.client.impl.auth.AuthenticationTls;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
@@ -115,6 +117,7 @@ import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.SystemTopicNames;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.BundlesData;
+import org.apache.pulsar.common.policies.data.ConsumerStats;
 import org.apache.pulsar.common.policies.data.LocalPolicies;
 import org.apache.pulsar.common.policies.data.OffloadPolicies;
 import org.apache.pulsar.common.policies.data.OffloadPoliciesImpl;
@@ -133,6 +136,7 @@ import org.mockito.Mockito;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 @Slf4j
@@ -1899,6 +1903,409 @@ public class BrokerServiceTest extends BrokerTestBase {
             managedLedgerConfig = brokerService.getManagedLedgerConfig(TopicName.get(eventTopicName)).join();
             Assert.assertEquals(managedLedgerConfig.getLedgerOffloader(), NullLedgerOffloader.INSTANCE);
         }
+    }
+
+    /*
+        v3.0.1: ok
+        v3.0.2: fails
+        branch-3.0 (2da571e): fails
+     */
+    @Test
+    public void test22657_1() throws Exception {
+        final String ns = "prop/ns-test";
+
+        admin.namespaces().createNamespace(ns, 2);
+        admin.namespaces().setMaxUnackedMessagesPerConsumer(ns, 1);
+        admin.namespaces().setMaxUnackedMessagesPerSubscription(ns, 2);
+
+        final String topicName = "persistent://prop/ns-test/test-22657-1";
+
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer()
+                .topic(topicName)
+                .create();
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        @Cleanup
+        Consumer<byte[]> consumer = pulsarClient.newConsumer()
+                .topic(topicName)
+                .subscriptionName("sub-1-1")
+                .acknowledgmentGroupTime(0, TimeUnit.SECONDS)
+                .subscriptionType(SubscriptionType.Shared)
+                .isAckReceiptEnabled(true)
+                .receiverQueueSize(0)
+                .subscribe();
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        producer.send("1".getBytes(StandardCharsets.UTF_8));
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        producer.send("2".getBytes(StandardCharsets.UTF_8));
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        Message<byte[]> message1 = consumer.receive();
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        consumer.acknowledge(message1);
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        SubscriptionStats subscriptionStats = admin.topics().getStats(topicName).getSubscriptions().get("sub-1-1");
+
+        log.info("SubscriptionStats: {}", subscriptionStats);
+
+        assertEquals(subscriptionStats.getUnackedMessages(), 0);
+        assertFalse(subscriptionStats.isBlockedSubscriptionOnUnackedMsgs());
+        assertFalse(subscriptionStats.getConsumers().get(0).isBlockedConsumerOnUnackedMsgs());
+    }
+
+    @DataProvider(name = "max_unacked_data")
+    public static Object[][] max_unacked_data() {
+        return new Object[][]{{1, 1}, {1, 2}, {1, 5}, {2, 2}, {2, 3}, {4, 4}, {4, 8}, {10, 20}};
+    }
+
+    /*
+        v3.0.1: fails when [maxUnackedMsgPerConsumer=1,maxUnackedMsgPerSubscription=1], other variants ok
+        v3.0.2: fails when [maxUnackedMsgPerConsumer=1,maxUnackedMsgPerSubscription=any value], other variants ok
+        branch-3.0 (2da571e): fails when [maxUnackedMsgPerConsumer=1,maxUnackedMsgPerSubscription=any value], other variants ok
+     */
+    @Test(dataProvider = "max_unacked_data")
+    public void test22657_1_parameterized(int maxUnackedMsgPerConsumer, int maxUnackedMsgPerSubscription) throws Exception {
+        final String ns = "prop/ns-test-%d-%d".formatted(maxUnackedMsgPerConsumer, maxUnackedMsgPerSubscription);
+
+        admin.namespaces().createNamespace(ns, 2);
+        admin.namespaces().setMaxUnackedMessagesPerConsumer(ns, maxUnackedMsgPerConsumer);
+        admin.namespaces().setMaxUnackedMessagesPerSubscription(ns, maxUnackedMsgPerSubscription);
+
+        final String topicName = "persistent://" + ns + "/test-22657-1";
+
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer()
+                .topic(topicName)
+                .create();
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        @Cleanup
+        Consumer<byte[]> consumer = pulsarClient.newConsumer()
+                .topic(topicName)
+                .subscriptionName("sub-1-1")
+                .acknowledgmentGroupTime(0, TimeUnit.SECONDS)
+                .subscriptionType(SubscriptionType.Shared)
+                .isAckReceiptEnabled(true)
+                .receiverQueueSize(0)
+                .subscribe();
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        int msgs = Math.max(maxUnackedMsgPerConsumer, maxUnackedMsgPerSubscription) + 1;
+        for (int i = 0; i < msgs; i++) {
+            producer.send((("message " + i).getBytes(StandardCharsets.UTF_8)));
+            Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+        }
+
+        List<Message<byte[]>> messages = new ArrayList<>();
+        for (int i = 0; i < maxUnackedMsgPerConsumer; i++) {
+            messages.add(consumer.receive());
+            Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+        }
+        for (int i = 0; i < maxUnackedMsgPerConsumer; i++) {
+            consumer.acknowledge(messages.get(i));
+            Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+        }
+
+        SubscriptionStats subscriptionStats = admin.topics().getStats(topicName).getSubscriptions().get("sub-1-1");
+
+        log.info("SubscriptionStats: {}", subscriptionStats);
+
+        assertEquals(subscriptionStats.getUnackedMessages(), 0);
+        assertFalse(subscriptionStats.isBlockedSubscriptionOnUnackedMsgs());
+        assertEquals(subscriptionStats.getConsumers().get(0).getUnackedMessages(), 0);
+        assertFalse(subscriptionStats.getConsumers().get(0).isBlockedConsumerOnUnackedMsgs());
+    }
+
+    /*
+        v3.0.1: ok
+        v3.0.2: fails (timeout on message2Future.get)
+        branch-3.0 (2da571e): fails (timeout on message2Future.get)
+     */
+    @Test
+    public void test22657_2() throws Exception {
+        final String ns = "prop/ns-test";
+
+        admin.namespaces().createNamespace(ns, 2);
+        admin.namespaces().setMaxUnackedMessagesPerConsumer(ns, 1);
+        admin.namespaces().setMaxUnackedMessagesPerSubscription(ns, 2);
+
+        final String topicName = "persistent://prop/ns-test/test-22657-2";
+
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer()
+                .topic(topicName)
+                .create();
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        @Cleanup
+        Consumer<byte[]> consumer = pulsarClient.newConsumer()
+                .topic(topicName)
+                .subscriptionName("sub-2-1")
+                .acknowledgmentGroupTime(0, TimeUnit.SECONDS)
+                .subscriptionType(SubscriptionType.Shared)
+                .isAckReceiptEnabled(true)
+                .receiverQueueSize(0)
+                .subscribe();
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        producer.send("1".getBytes(StandardCharsets.UTF_8));
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        producer.send("2".getBytes(StandardCharsets.UTF_8));
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        Message<byte[]> message1 = consumer.receive();
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        consumer.acknowledge(message1);
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        Future<Message<byte[]>> message2Future = consumer.receiveAsync();
+        Message<byte[]> message2 = message2Future.get(1, TimeUnit.SECONDS);
+
+        consumer.acknowledge(message2);
+        Thread.sleep(ASYNC_EVENT_COMPLETION_WAIT);
+
+        SubscriptionStats subscriptionStats = admin.topics().getStats(topicName).getSubscriptions().get("sub-2-1");
+
+        log.info("SubscriptionStats: {}", subscriptionStats);
+
+        assertEquals(subscriptionStats.getUnackedMessages(), 0);
+        assertFalse(subscriptionStats.isBlockedSubscriptionOnUnackedMsgs());
+        assertFalse(subscriptionStats.getConsumers().get(0).isBlockedConsumerOnUnackedMsgs());
+    }
+
+    /*
+        v3.0.1: fails when [maxUnackedMsgPerConsumer=1,maxUnackedMsgPerSubscription=1], other variants ok
+        v3.0.2: fails
+        branch-3.0 (2da571e): fails
+     */
+    @Test(dataProvider = "max_unacked_data")
+    public void test22657_3(int maxUnackedMessagesPerConsumer, int maxUnackedMessagesPerSubscription) throws Exception {
+        final String ns = "prop/ns-test-%d-%d".formatted(maxUnackedMessagesPerConsumer, maxUnackedMessagesPerSubscription);
+
+        admin.namespaces().createNamespace(ns, 2);
+        admin.namespaces().setMaxUnackedMessagesPerConsumer(ns, maxUnackedMessagesPerConsumer);
+        admin.namespaces().setMaxUnackedMessagesPerSubscription(ns, maxUnackedMessagesPerSubscription);
+
+        final String topicName = "persistent://" + ns + "/test-22657-3";
+
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer()
+                .topic(topicName)
+                .create();
+
+        String subscriptionName = "sub1";
+
+        @Cleanup
+        Consumer<byte[]> consumer = pulsarClient.newConsumer()
+                .topic(topicName)
+                .subscriptionName(subscriptionName)
+                .acknowledgmentGroupTime(0, TimeUnit.SECONDS)
+                .subscriptionType(SubscriptionType.Shared)
+                .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
+                .receiverQueueSize(1)
+                .subscribe();
+
+        int numberOfMessages = maxUnackedMessagesPerSubscription * 5;
+
+        // Supervisor whether all the work has been done.
+        CountDownLatch supervisor = new CountDownLatch(numberOfMessages * 2);
+
+        // producer
+        for (int i = 0; i < numberOfMessages; i++) {
+            producer.sendAsync((("message " + i).getBytes(StandardCharsets.UTF_8)))
+                    .whenCompleteAsync((messageId, throwable) -> {
+                                if (throwable == null) {
+                                    supervisor.countDown();
+                                }
+                            }
+                    );
+        }
+
+        // consumer
+        new Thread(() -> {
+            try {
+                while (true) {
+                    Message<byte[]> message = consumer.receive(1, TimeUnit.SECONDS);
+                    if (message == null) {
+                        break;
+                    }
+
+                    consumer.acknowledge(message);
+                    supervisor.countDown();
+                }
+            } catch (PulsarClientException e) {
+                log.error("Consumer failed", e);
+                throw new RuntimeException(e);
+            }
+        }).start();
+
+
+        // Wait until all messages are sent and later processed.
+        if (!supervisor.await(10, TimeUnit.SECONDS)) {
+            fail("The test is failed because of latch.await timeout.");
+        }
+
+        // Maybe something is still happening asynchronously? Maybe some time is needed to obtain the correct state?
+        Awaitility.await()
+                .atMost(1, TimeUnit.SECONDS)
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .untilAsserted(() -> {
+                    SubscriptionStats subscriptionStats = admin.topics().getStats(topicName).getSubscriptions().get(subscriptionName);
+                    ConsumerStats consumerStats = subscriptionStats.getConsumers().get(0);
+
+                    int currentReceiverQueueSize = ((ConsumerImpl<byte[]>) consumer).getCurrentReceiverQueueSize();
+                    int numMessagesInQueue = ((ConsumerImpl<byte[]>) consumer).numMessagesInQueue();
+
+                    long subscriptionUnackedMessages = subscriptionStats.getUnackedMessages();
+                    int consumerUnackedMessages = consumerStats.getUnackedMessages();
+
+                    boolean blockedSubscriptionOnUnackedMsgs = subscriptionStats.isBlockedSubscriptionOnUnackedMsgs();
+                    boolean blockedConsumerOnUnackedMsgs = consumerStats.isBlockedConsumerOnUnackedMsgs();
+
+                    log.info("----");
+                    log.info("subscriptionStats: {}", subscriptionStats);
+                    log.info("currentReceiverQueueSize: {}", currentReceiverQueueSize);
+                    log.info("numMessagesInQueue: {}", numMessagesInQueue);
+                    log.info("subscriptionUnackedMessages: {}", subscriptionUnackedMessages);
+                    log.info("consumerUnackedMessages: {}", consumerUnackedMessages);
+                    log.info("blockedSubscriptionOnUnackedMsgs: {}", blockedSubscriptionOnUnackedMsgs);
+                    log.info("blockedConsumerOnUnackedMsgs: {}", blockedConsumerOnUnackedMsgs);
+                    log.info("----");
+
+                    assertEquals(numMessagesInQueue, 0, "numMessagesInQueue");
+                    assertEquals(subscriptionUnackedMessages, 0, "subscriptionUnackedMessages");
+                    assertEquals(consumerUnackedMessages, 0, "consumerUnackedMessages");
+                    assertFalse(blockedSubscriptionOnUnackedMsgs, "blockedSubscriptionOnUnackedMsgs");
+                    assertFalse(blockedConsumerOnUnackedMsgs, "blockedConsumerOnUnackedMsgs");
+                });
+    }
+
+    /*
+        v3.0.1: fails when [maxUnackedMsgPerConsumer=1,maxUnackedMsgPerSubscription=1], other variants ok
+        v3.0.2: fails
+        branch-3.0 (2da571e): fails
+     */
+    @Test(dataProvider = "max_unacked_data")
+    public void test22657_3_moreconsumers(int maxUnackedMessagesPerConsumer, int maxUnackedMessagesPerSubscription) throws Exception {
+        final String ns = "prop/ns-test-%d-%d".formatted(maxUnackedMessagesPerConsumer, maxUnackedMessagesPerSubscription);
+
+        admin.namespaces().createNamespace(ns, 2);
+        admin.namespaces().setMaxUnackedMessagesPerConsumer(ns, maxUnackedMessagesPerConsumer);
+        admin.namespaces().setMaxUnackedMessagesPerSubscription(ns, maxUnackedMessagesPerSubscription);
+
+        final String topicName = "persistent://" + ns + "/test-22657-3";
+
+        Producer<byte[]> producer = pulsarClient.newProducer()
+                .topic(topicName)
+                .create();
+
+        String subscriptionName = "sub1";
+
+        // numbersOfConsumers = each consumer can have their own max unack
+        int numbersOfConsumers = maxUnackedMessagesPerSubscription / maxUnackedMessagesPerConsumer;
+
+        List<Consumer<byte[]>> consumers = new ArrayList<>();
+        for (int i = 0; i < numbersOfConsumers; i++) {
+            Consumer<byte[]> consumer = pulsarClient.newConsumer()
+                    .topic(topicName)
+                    .subscriptionName(subscriptionName)
+                    .acknowledgmentGroupTime(0, TimeUnit.SECONDS)
+                    .subscriptionType(SubscriptionType.Shared)
+                    .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
+                    .receiverQueueSize(1)
+                    .subscribe();
+            consumers.add(consumer);
+        }
+
+        int numberOfMessages = maxUnackedMessagesPerSubscription * 5;
+        CountDownLatch supervisor = new CountDownLatch(numberOfMessages * 2);
+
+        // producer
+        for (int i = 0; i < numberOfMessages; i++) {
+            producer.sendAsync((("message " + i).getBytes(StandardCharsets.UTF_8)))
+                    .whenCompleteAsync((messageId, throwable) -> {
+                                if (throwable == null) {
+                                    supervisor.countDown();
+                                }
+                            }
+                    );
+        }
+
+        // consumers
+        for (int i = 0; i < consumers.size(); i++) {
+            int finalI = i;
+            Consumer<byte[]> consumer = consumers.get(i);
+            for (int k = 0; k < maxUnackedMessagesPerConsumer; k++) {
+                new Thread(() -> {
+                    try {
+                        while (true) {
+                            Message<byte[]> message = consumer.receive(1, TimeUnit.SECONDS);
+                            if (message == null) {
+                                break;
+                            }
+
+                            consumer.acknowledge(message);
+                            supervisor.countDown();
+                        }
+                    } catch (PulsarClientException e) {
+                        log.error("Consumer {} failed", finalI, e);
+                        throw new RuntimeException(e);
+                    }
+                }).start();
+            }
+        }
+
+        // Wait until all messages are sent and later processed.
+        if (!supervisor.await(10, TimeUnit.SECONDS)) {
+            fail("The test is failed because of latch.await timeout.");
+        }
+
+        // Maybe something is still happening asynchronously? Maybe some time is needed to obtain the correct state?
+        // Therefore, awaitility "blob" instead of standard assertions, at least for now.
+        Awaitility.await()
+                .atMost(1, TimeUnit.SECONDS)
+                .pollDelay(100, TimeUnit.MILLISECONDS)
+                .untilAsserted(() -> {
+                    SubscriptionStats subscriptionStats = admin.topics().getStats(topicName).getSubscriptions().get(subscriptionName);
+                    ConsumerStats consumerStats = subscriptionStats.getConsumers().get(0);
+
+                    StringBuilder currentReceiverQueueSize = new StringBuilder();
+                    StringBuilder numMessagesInQueue = new StringBuilder();
+                    for (Consumer<byte[]> consumer : consumers) {
+                        currentReceiverQueueSize.append(((ConsumerImpl<byte[]>) consumer).getCurrentReceiverQueueSize()).append("/");
+                        numMessagesInQueue.append(((ConsumerImpl<byte[]>) consumer).numMessagesInQueue()).append("/");
+                    }
+                    currentReceiverQueueSize.deleteCharAt(currentReceiverQueueSize.length() - 1);
+                    numMessagesInQueue.deleteCharAt(numMessagesInQueue.length() - 1);
+
+                    long subscriptionUnackedMessages = subscriptionStats.getUnackedMessages();
+                    int consumerUnackedMessages = consumerStats.getUnackedMessages();
+
+                    boolean blockedSubscriptionOnUnackedMsgs = subscriptionStats.isBlockedSubscriptionOnUnackedMsgs();
+                    boolean blockedConsumerOnUnackedMsgs = consumerStats.isBlockedConsumerOnUnackedMsgs();
+
+                    log.info("----");
+                    log.info("subscriptionStats: {}", subscriptionStats);
+                    log.info("currentReceiverQueueSize: {}", currentReceiverQueueSize);
+                    log.info("numMessagesInQueue: {}", numMessagesInQueue);
+                    log.info("subscriptionUnackedMessages: {}", subscriptionUnackedMessages);
+                    log.info("consumerUnackedMessages: {}", consumerUnackedMessages);
+                    log.info("blockedSubscriptionOnUnackedMsgs: {}", blockedSubscriptionOnUnackedMsgs);
+                    log.info("blockedConsumerOnUnackedMsgs: {}", blockedConsumerOnUnackedMsgs);
+                    log.info("----");
+
+                    assertEquals(subscriptionUnackedMessages, 0, "subscriptionUnackedMessages");
+                    assertEquals(consumerUnackedMessages, 0, "consumerUnackedMessages");
+                    assertFalse(blockedSubscriptionOnUnackedMsgs, "blockedSubscriptionOnUnackedMsgs");
+                    assertFalse(blockedConsumerOnUnackedMsgs, "blockedConsumerOnUnackedMsgs");
+                });
     }
 }
 
