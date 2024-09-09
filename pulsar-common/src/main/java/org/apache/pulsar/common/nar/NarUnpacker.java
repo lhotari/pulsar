@@ -96,9 +96,6 @@ public class NarUnpacker {
                     if (!narExtractionTempDirectory.mkdir()) {
                         throw new IOException("Cannot create " + narExtractionTempDirectory);
                     }
-                    if (!narWorkingDirectory.mkdir()) {
-                        throw new IOException("Cannot create " + narWorkingDirectory);
-                    }
                     try {
                         log.info("Extracting {} to {}", nar, narExtractionTempDirectory);
                         if (extractCallback != null) {
@@ -106,17 +103,12 @@ public class NarUnpacker {
                         }
                         unpack(nar, narExtractionTempDirectory);
                     } catch (IOException e) {
-                        log.error("There was a problem extracting the nar file. Deleting {} and {} to clean up state.",
-                                narExtractionTempDirectory, narWorkingDirectory, e);
+                        log.error("There was a problem extracting the nar file. Deleting {} to clean up state.",
+                                narExtractionTempDirectory, e);
                         try {
                             FileUtils.deleteFile(narExtractionTempDirectory, true);
                         } catch (IOException e2) {
                             log.error("Failed to delete temporary directory {}", narExtractionTempDirectory, e2);
-                        }
-                        try {
-                            FileUtils.deleteFile(narWorkingDirectory, true);
-                        } catch (IOException e2) {
-                            log.error("Failed to delete working directory {}", narWorkingDirectory, e2);
                         }
                         throw e;
                     }
