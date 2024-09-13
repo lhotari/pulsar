@@ -19,7 +19,6 @@
 package org.apache.pulsar.client.api;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.apache.pulsar.broker.BrokerTestUtil.receiveMessages;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
@@ -34,7 +33,6 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -56,8 +54,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import lombok.Cleanup;
@@ -2313,6 +2311,7 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         String topic = "testOrderingAfterReconnects-" + UUID.randomUUID();
         int numberOfKeys = 1000;
         long pauseTime = 100L;
+        int totalMessages = 2000;
 
         @Cleanup
         Producer<Integer> producer = createProducer(topic, false);
@@ -2328,7 +2327,10 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
 
         Set<Integer> remainingMessageValues = new HashSet<>();
         Map<String, Pair<Position, String>> keyPositions = new HashMap<>();
-        BiFunction<Consumer<Integer>, Message<Integer>, Boolean> messageHandler = (consumer, msg) -> {
+        AtomicBoolean outOfOrderFailure = new AtomicBoolean(false);
+        AtomicBoolean duplicateMessageFailure = new AtomicBoolean(false);
+        CountDownLatch messagesReceived = new CountDownLatch(totalMessages);
+        MessageListener<Integer> messageHandler = (consumer, msg) -> {
             synchronized (this) {
                 consumer.acknowledgeAsync(msg);
                 String key = msg.getKey();
@@ -2338,11 +2340,14 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 if (prevPair != null && prevPair.getLeft().compareTo(currentPosition) > 0) {
                     log.error("key: {} value: {} prev: {}/{} current: {}/{}", key, msg.getValue(), prevPair.getLeft(),
                             prevPair.getRight(), currentPosition, consumer.getConsumerName());
-                    fail("out of order");
+                    outOfOrderFailure.set(true);
                 }
                 keyPositions.put(key, Pair.of(currentPosition, consumer.getConsumerName()));
-                assertTrue(remainingMessageValues.remove(msg.getValue()), "Duplicate message: " + msg.getValue());
-                return true;
+                if (!remainingMessageValues.remove(msg.getValue())) {
+                    log.error("key: {} value: {} is duplicate", key, msg.getValue());
+                    duplicateMessageFailure.set(true);
+                }
+                messagesReceived.countDown();
             }
         };
 
@@ -2424,6 +2429,8 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 .subscriptionName(subscriptionName)
                 .subscriptionType(SubscriptionType.Key_Shared)
                 .receiverQueueSize(10)
+                .messageListener(messageHandler)
+                .startPaused(true)
                 .subscribe();
         // close and reconnect c1
         c1.close();
@@ -2434,6 +2441,7 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 .subscriptionName(subscriptionName)
                 .subscriptionType(SubscriptionType.Key_Shared)
                 .receiverQueueSize(10)
+                .messageListener(messageHandler)
                 .subscribe();
         // close and reconnect c3
         c3.close();
@@ -2444,7 +2452,11 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 .subscriptionName(subscriptionName)
                 .subscriptionType(SubscriptionType.Key_Shared)
                 .receiverQueueSize(10)
+                .messageListener(messageHandler)
                 .subscribe();
+
+        Thread.sleep(pauseTime);
+        c2.resume();
 
         System.out.println("readPosition: " + sub.getCursor().getReadPosition() + " numberOfMessagesInReplay: "
                 + dispatcher.getNumberOfMessagesInReplay());
@@ -2463,12 +2475,13 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         }
 
         // consume the messages
-        receiveMessages(messageHandler, Duration.ofSeconds(2), c1, c2, c3);
-
+        messagesReceived.await(30, TimeUnit.SECONDS);
         try {
             assertEquals(remainingMessageValues, Collections.emptySet());
         } finally {
             logTopicStats(topic);
         }
+        assertFalse(outOfOrderFailure.get(), "Out of order messages found");
+        assertFalse(duplicateMessageFailure.get(), "Duplicate messages found");
     }
 }
