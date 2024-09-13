@@ -18,6 +18,8 @@
  */
 package org.apache.pulsar.client.api;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.apache.pulsar.broker.BrokerTestUtil.receiveMessages;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
@@ -32,6 +34,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -54,6 +57,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import lombok.Cleanup;
@@ -61,6 +65,7 @@ import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.broker.BrokerTestUtil;
 import org.apache.pulsar.broker.service.StickyKeyConsumerSelector;
 import org.apache.pulsar.broker.service.Topic;
@@ -2301,5 +2306,169 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         consumer4.close();
         producer.close();
         admin.topics().delete(topic, false);
+    }
+
+    @Test(invocationCount = 50)
+    public void testOrderingAfterReconnects() throws Exception {
+        String topic = "testOrderingAfterReconnects-" + UUID.randomUUID();
+        int numberOfKeys = 1000;
+        long pauseTime = 100L;
+
+        @Cleanup
+        Producer<Integer> producer = createProducer(topic, false);
+
+        // create a consumer and close it to create a subscription
+        String subscriptionName = "key_shared";
+        pulsarClient.newConsumer(Schema.INT32)
+                .topic(topic)
+                .subscriptionName(subscriptionName)
+                .subscriptionType(SubscriptionType.Key_Shared)
+                .subscribe()
+                .close();
+
+        Set<Integer> remainingMessageValues = new HashSet<>();
+        Map<String, Pair<Position, String>> keyPositions = new HashMap<>();
+        BiFunction<Consumer<Integer>, Message<Integer>, Boolean> messageHandler = (consumer, msg) -> {
+            synchronized (this) {
+                consumer.acknowledgeAsync(msg);
+                String key = msg.getKey();
+                MessageIdAdv msgId = (MessageIdAdv) msg.getMessageId();
+                Position currentPosition = PositionFactory.create(msgId.getLedgerId(), msgId.getEntryId());
+                Pair<Position, String> prevPair = keyPositions.get(key);
+                if (prevPair != null && prevPair.getLeft().compareTo(currentPosition) > 0) {
+                    log.error("key: {} value: {} prev: {}/{} current: {}/{}", key, msg.getValue(), prevPair.getLeft(),
+                            prevPair.getRight(), currentPosition, consumer.getConsumerName());
+                    fail("out of order");
+                }
+                keyPositions.put(key, Pair.of(currentPosition, consumer.getConsumerName()));
+                assertTrue(remainingMessageValues.remove(msg.getValue()), "Duplicate message: " + msg.getValue());
+                return true;
+            }
+        };
+
+        // Adding a new consumer.
+        @Cleanup
+        Consumer<Integer> c1 = pulsarClient.newConsumer(Schema.INT32)
+                .topic(topic)
+                .consumerName("c1")
+                .subscriptionName(subscriptionName)
+                .subscriptionType(SubscriptionType.Key_Shared)
+                .receiverQueueSize(10)
+                .startPaused(true) // start paused
+                .subscribe();
+
+        @Cleanup
+        Consumer<Integer> c2 = pulsarClient.newConsumer(Schema.INT32)
+                .topic(topic)
+                .consumerName("c2")
+                .subscriptionName(subscriptionName)
+                .subscriptionType(SubscriptionType.Key_Shared)
+                .receiverQueueSize(500) // use large receiver queue size
+                .subscribe();
+
+        @Cleanup
+        Consumer<Integer> c3 = pulsarClient.newConsumer(Schema.INT32)
+                .topic(topic)
+                .consumerName("c3")
+                .subscriptionName(subscriptionName)
+                .subscriptionType(SubscriptionType.Key_Shared)
+                .receiverQueueSize(10)
+                .startPaused(true) // start paused
+                .subscribe();
+
+        Topic t = pulsar.getBrokerService().getTopicIfExists(topic).get().get();
+        PersistentSubscription sub = (PersistentSubscription) t.getSubscription(subscriptionName);
+        PersistentStickyKeyDispatcherMultipleConsumers dispatcher =
+                (PersistentStickyKeyDispatcherMultipleConsumers) sub.getDispatcher();
+        StickyKeyConsumerSelector selector = dispatcher.getSelector();
+
+        // find keys that will be assigned to c2
+        List<String> keysForC2 = new ArrayList<>();
+        for (int i = 0; i < numberOfKeys; i++) {
+            String key = String.valueOf(i);
+            byte[] keyBytes = key.getBytes(UTF_8);
+            int hash = StickyKeyConsumerSelector.makeStickyKeyHash(keyBytes);
+            if (selector.select(hash).consumerName().equals("c2")) {
+                keysForC2.add(key);
+            }
+        }
+
+        // produce messages with keys that all get assigned to c2
+        for (int i = 0; i < 1000; i++) {
+            String key = keysForC2.get(random.nextInt(keysForC2.size()));
+            //log.info("Producing message with key: {} value: {}", key, i);
+            producer.newMessage()
+                    .key(key)
+                    .value(i)
+                    .send();
+            remainingMessageValues.add(i);
+        }
+
+        Thread.sleep(pauseTime);
+
+        System.out.println("readPosition: " + sub.getCursor().getReadPosition() + " numberOfMessagesInReplay: "
+                + dispatcher.getNumberOfMessagesInReplay());
+
+        Thread.sleep(pauseTime);
+        // close c2
+        c2.close();
+        Thread.sleep(pauseTime);
+        // resume c1 and c3
+        c1.resume();
+        c3.resume();
+        Thread.sleep(pauseTime);
+        // reconnect c2
+        c2 = pulsarClient.newConsumer(Schema.INT32)
+                .topic(topic)
+                .consumerName("c2")
+                .subscriptionName(subscriptionName)
+                .subscriptionType(SubscriptionType.Key_Shared)
+                .receiverQueueSize(10)
+                .subscribe();
+        // close and reconnect c1
+        c1.close();
+        Thread.sleep(pauseTime);
+        c1 = pulsarClient.newConsumer(Schema.INT32)
+                .topic(topic)
+                .consumerName("c1")
+                .subscriptionName(subscriptionName)
+                .subscriptionType(SubscriptionType.Key_Shared)
+                .receiverQueueSize(10)
+                .subscribe();
+        // close and reconnect c3
+        c3.close();
+        Thread.sleep(pauseTime);
+        c3 = pulsarClient.newConsumer(Schema.INT32)
+                .topic(topic)
+                .consumerName("c3")
+                .subscriptionName(subscriptionName)
+                .subscriptionType(SubscriptionType.Key_Shared)
+                .receiverQueueSize(10)
+                .subscribe();
+
+        System.out.println("readPosition: " + sub.getCursor().getReadPosition() + " numberOfMessagesInReplay: "
+                + dispatcher.getNumberOfMessagesInReplay());
+
+        logTopicStats(topic);
+
+        // produce more messages
+        for (int i = 1000; i < 2000; i++) {
+            String key = String.valueOf(random.nextInt(numberOfKeys));
+            //log.info("Producing message with key: {} value: {}", key, i);
+            producer.newMessage()
+                    .key(key)
+                    .value(i)
+                    .send();
+            remainingMessageValues.add(i);
+        }
+
+        // consume the messages
+        receiveMessages(messageHandler, Duration.ofSeconds(2), c1, c2, c3);
+
+        try {
+            assertEquals(remainingMessageValues, Collections.emptySet());
+        } finally {
+            logTopicStats(topic);
+        }
     }
 }
