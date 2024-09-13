@@ -1945,14 +1945,6 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         CountDownLatch messagesReceived = new CountDownLatch(totalMessages);
         MessageListener<Integer> messageHandler = (consumer, msg) -> {
             synchronized (this) {
-                // sleep for a random time with probability
-                if (random.nextInt(100) < 15) {
-                    try {
-                        Thread.sleep(random.nextInt(50) + 1);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
                 consumer.acknowledgeAsync(msg);
                 String key = msg.getKey();
                 MessageIdAdv msgId = (MessageIdAdv) msg.getMessageId();
@@ -2051,7 +2043,6 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 .subscriptionType(SubscriptionType.Key_Shared)
                 .receiverQueueSize(10)
                 .messageListener(messageHandler)
-                .startPaused(true)
                 .subscribe();
         // close and reconnect c1
         c1.close();
@@ -2063,7 +2054,6 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 .subscriptionType(SubscriptionType.Key_Shared)
                 .receiverQueueSize(10)
                 .messageListener(messageHandler)
-                .startPaused(true)
                 .subscribe();
         // close and reconnect c3
         c3.close();
@@ -2075,7 +2065,6 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 .subscriptionType(SubscriptionType.Key_Shared)
                 .receiverQueueSize(10)
                 .messageListener(messageHandler)
-                .startPaused(true)
                 .subscribe();
 
         System.out.println("readPosition: " + sub.getCursor().getReadPosition() + " numberOfMessagesInReplay: "
@@ -2095,9 +2084,6 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         }
 
         // consume the messages
-        c1.resume();
-        c2.resume();
-        c3.resume();
         messagesReceived.await(30, TimeUnit.SECONDS);
         try {
             assertEquals(remainingMessageValues, Collections.emptySet());
