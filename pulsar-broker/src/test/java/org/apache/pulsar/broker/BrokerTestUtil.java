@@ -174,7 +174,7 @@ public class BrokerTestUtil {
         CompletableFuture<Message<T>> receiveFuture = consumer.receiveAsync();
         return receiveFuture
                 .orTimeout(quietTimeout.toMillis(), TimeUnit.MILLISECONDS)
-                .handle((msg, t) -> {
+                .handleAsync((msg, t) -> {
                     if (t != null) {
                         if (t instanceof TimeoutException) {
                             // cancel the receive future so that Pulsar client can clean up the resources
@@ -185,7 +185,7 @@ public class BrokerTestUtil {
                         }
                     }
                     return messageHandler.apply(consumer, msg);
-                }).thenComposeAsync(receiveMore -> {
+                }, SINGLE_THREADED_EXECUTOR).thenComposeAsync(receiveMore -> {
                     if (receiveMore) {
                         return receiveMessagesAsync(consumer, quietTimeout, messageHandler);
                     } else {
