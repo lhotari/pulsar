@@ -50,7 +50,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 import lombok.Cleanup;
@@ -1937,7 +1939,9 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
 
         Set<Integer> remainingMessageValues = new HashSet<>();
         Map<String, Pair<PositionImpl, String>> keyPositions = new HashMap<>();
-        BiFunction<Consumer<Integer>, Message<Integer>, Boolean> messageHandler = (consumer, msg) -> {
+        AtomicBoolean outOfOrderFailure = new AtomicBoolean(false);
+        AtomicBoolean duplicateMessageFailure = new AtomicBoolean(false);
+        MessageListener<Integer> messageHandler = (consumer, msg) -> {
             synchronized (this) {
                 consumer.acknowledgeAsync(msg);
                 String key = msg.getKey();
@@ -1947,11 +1951,13 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 if (prevPair != null && prevPair.getLeft().compareTo(currentPosition) > 0) {
                     log.error("key: {} value: {} prev: {}/{} current: {}/{}", key, msg.getValue(), prevPair.getLeft(),
                             prevPair.getRight(), currentPosition, consumer.getConsumerName());
-                    fail("out of order");
+                    outOfOrderFailure.set(true);
                 }
                 keyPositions.put(key, Pair.of(currentPosition, consumer.getConsumerName()));
-                assertTrue(remainingMessageValues.remove(msg.getValue()), "Duplicate message: " + msg.getValue());
-                return true;
+                if (!remainingMessageValues.remove(msg.getValue())) {
+                    log.error("key: {} value: {} is duplicate", key, msg.getValue());
+                    duplicateMessageFailure.set(true);
+                }
             }
         };
 
@@ -2033,6 +2039,8 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 .subscriptionName(subscriptionName)
                 .subscriptionType(SubscriptionType.Key_Shared)
                 .receiverQueueSize(10)
+                .messageListener(messageHandler)
+                .startPaused(true)
                 .subscribe();
         // close and reconnect c1
         c1.close();
@@ -2043,6 +2051,8 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 .subscriptionName(subscriptionName)
                 .subscriptionType(SubscriptionType.Key_Shared)
                 .receiverQueueSize(10)
+                .messageListener(messageHandler)
+                .startPaused(true)
                 .subscribe();
         // close and reconnect c3
         c3.close();
@@ -2053,6 +2063,8 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 .subscriptionName(subscriptionName)
                 .subscriptionType(SubscriptionType.Key_Shared)
                 .receiverQueueSize(10)
+                .messageListener(messageHandler)
+                .startPaused(true)
                 .subscribe();
 
         System.out.println("readPosition: " + sub.getCursor().getReadPosition() + " numberOfMessagesInReplay: "
@@ -2072,38 +2084,20 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         }
 
         // consume the messages
-        receiveMessagesInThreads(messageHandler, Duration.ofSeconds(2), c1, c2, c3);
-
+        c1.resume();
+        c2.resume();
+        c3.resume();
+        Awaitility.await().untilAsserted(() -> {
+            synchronized (this) {
+                assertEquals(remainingMessageValues, Collections.emptySet());
+            }
+        });
         try {
             assertEquals(remainingMessageValues, Collections.emptySet());
         } finally {
             logTopicStats(topic);
         }
-    }
-
-    static <T> void receiveMessagesInThreads(BiFunction<Consumer<T>, Message<T>, Boolean> messageHandler,
-                                    final Duration quietTimeout,
-                                    Consumer<T>... consumers) {
-        FutureUtil.waitForAll(Arrays.stream(consumers).sequential().map(consumer -> {
-            return CompletableFuture.runAsync(() -> {
-                try {
-                    while (!Thread.currentThread().isInterrupted()) {
-                        Message<T> msg = consumer.receive((int) quietTimeout.toMillis(), TimeUnit.MILLISECONDS);
-                        if (msg != null) {
-                            if (!messageHandler.apply(consumer, msg)) {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                } catch (PulsarClientException e) {
-                    throw new RuntimeException(e);
-                }
-            }, runnable -> {
-                Thread thread = new Thread(runnable, "Consumer-" + consumer.getConsumerName());
-                thread.start();
-            });
-        }).toList()).join();
+        assertFalse(outOfOrderFailure.get(), "Out of order messages found");
+        assertFalse(duplicateMessageFailure.get(), "Duplicate messages found");
     }
 }
