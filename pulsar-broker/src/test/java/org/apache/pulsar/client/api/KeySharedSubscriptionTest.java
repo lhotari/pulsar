@@ -19,7 +19,6 @@
 package org.apache.pulsar.client.api;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.apache.pulsar.broker.BrokerTestUtil.receiveMessages;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
@@ -71,6 +70,7 @@ import org.apache.pulsar.common.api.proto.KeySharedMode;
 import org.apache.pulsar.common.naming.TopicDomain;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.schema.KeyValue;
+import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.Murmur3_32Hash;
 import org.awaitility.Awaitility;
 import org.mockito.Mockito;
@@ -2072,12 +2072,38 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         }
 
         // consume the messages
-        receiveMessages(messageHandler, Duration.ofSeconds(2), c1, c2, c3);
+        receiveMessagesInThreads(messageHandler, Duration.ofSeconds(2), c1, c2, c3);
 
         try {
             assertEquals(remainingMessageValues, Collections.emptySet());
         } finally {
             logTopicStats(topic);
         }
+    }
+
+    static <T> void receiveMessagesInThreads(BiFunction<Consumer<T>, Message<T>, Boolean> messageHandler,
+                                    final Duration quietTimeout,
+                                    Consumer<T>... consumers) {
+        FutureUtil.waitForAll(Arrays.stream(consumers).sequential().map(consumer -> {
+            return CompletableFuture.runAsync(() -> {
+                try {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        Message<T> msg = consumer.receive((int) quietTimeout.toMillis(), TimeUnit.MILLISECONDS);
+                        if (msg != null) {
+                            if (!messageHandler.apply(consumer, msg)) {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                } catch (PulsarClientException e) {
+                    throw new RuntimeException(e);
+                }
+            }, runnable -> {
+                Thread thread = new Thread(runnable, "Consumer-" + consumer.getConsumerName());
+                thread.start();
+            });
+        }).toList()).join();
     }
 }
