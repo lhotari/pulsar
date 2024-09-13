@@ -2430,7 +2430,6 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 .subscriptionType(SubscriptionType.Key_Shared)
                 .receiverQueueSize(10)
                 .messageListener(messageHandler)
-                .startPaused(true)
                 .subscribe();
         // close and reconnect c1
         c1.close();
@@ -2456,7 +2455,6 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                 .subscribe();
 
         Thread.sleep(pauseTime);
-        c2.resume();
 
         System.out.println("readPosition: " + sub.getCursor().getReadPosition() + " numberOfMessagesInReplay: "
                 + dispatcher.getNumberOfMessagesInReplay());
