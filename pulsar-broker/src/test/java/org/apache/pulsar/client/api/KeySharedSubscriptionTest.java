@@ -1924,6 +1924,7 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         String topic = "testOrderingAfterReconnects-" + UUID.randomUUID();
         int numberOfKeys = 1000;
         long pauseTime = 100L;
+        int totalMessages = 2000;
 
         @Cleanup
         Producer<Integer> producer = createProducer(topic, false);
@@ -1941,8 +1942,17 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         Map<String, Pair<PositionImpl, String>> keyPositions = new HashMap<>();
         AtomicBoolean outOfOrderFailure = new AtomicBoolean(false);
         AtomicBoolean duplicateMessageFailure = new AtomicBoolean(false);
+        CountDownLatch messagesReceived = new CountDownLatch(totalMessages);
         MessageListener<Integer> messageHandler = (consumer, msg) -> {
             synchronized (this) {
+                // sleep for a random time with probability
+                if (random.nextInt(100) < 15) {
+                    try {
+                        Thread.sleep(random.nextInt(50) + 1);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
                 consumer.acknowledgeAsync(msg);
                 String key = msg.getKey();
                 MessageIdAdv msgId = (MessageIdAdv) msg.getMessageId();
@@ -1958,6 +1968,7 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
                     log.error("key: {} value: {} is duplicate", key, msg.getValue());
                     duplicateMessageFailure.set(true);
                 }
+                messagesReceived.countDown();
             }
         };
 
@@ -2087,11 +2098,7 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         c1.resume();
         c2.resume();
         c3.resume();
-        Awaitility.await().untilAsserted(() -> {
-            synchronized (this) {
-                assertEquals(remainingMessageValues, Collections.emptySet());
-            }
-        });
+        messagesReceived.await(30, TimeUnit.SECONDS);
         try {
             assertEquals(remainingMessageValues, Collections.emptySet());
         } finally {
