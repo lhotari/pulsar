@@ -1352,7 +1352,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             messagesAvailableNow.forEach(p -> redeliveryMessages.add(p.getLedgerId(), p.getEntryId()));
         }
         if (!redeliveryMessages.isEmpty()) {
-            int cappedMaxMessagesToRead = cursor.applyMaxSizeCap(maxMessagesToRead, bytesToRead);
+            int cappedMaxMessagesToRead = maxMessagesToRead; // cursor.applyMaxSizeCap(maxMessagesToRead, bytesToRead);
             if (cappedMaxMessagesToRead < maxMessagesToRead && log.isDebugEnabled()) {
                 log.debug("[{}] Capped max messages to read from redelivery list to {} (max was {})",
                         name, cappedMaxMessagesToRead, maxMessagesToRead);
