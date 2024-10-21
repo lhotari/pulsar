@@ -19,23 +19,32 @@
 package org.apache.pulsar.broker.service.persistent;
 
 import com.carrotsearch.hppc.ObjectSet;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.Cleanup;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl;
+import org.apache.commons.lang3.RandomUtils;
 import org.apache.pulsar.broker.BrokerTestUtil;
 import org.apache.pulsar.broker.service.Dispatcher;
 import org.apache.pulsar.broker.service.Subscription;
 import org.apache.pulsar.client.api.Consumer;
+import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.ProducerConsumerBase;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionType;
+import org.awaitility.Awaitility;
 import org.awaitility.reflect.WhiteboxImpl;
+import org.jetbrains.annotations.NotNull;
 import org.mockito.Mockito;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
@@ -51,6 +60,13 @@ public class PersistentDispatcherMultipleConsumersTest extends ProducerConsumerB
     protected void setup() throws Exception {
         super.internalSetup();
         super.producerBaseSetup();
+    }
+
+    @Override
+    protected void doInitConf() throws Exception {
+        super.doInitConf();
+        conf.setManagedLedgerMaxReadsInFlightSizeInMB(10);
+        conf.setManagedLedgerCacheSizeMB(1);
     }
 
     @AfterClass(alwaysRun = true)
@@ -168,5 +184,62 @@ public class PersistentDispatcherMultipleConsumersTest extends ProducerConsumerB
 
         // Verify: the topic can be deleted successfully.
         admin.topics().delete(topicName, false);
+    }
+
+    @Test(timeOut = 30 * 1000)
+    public void testManagedLedgerMaxReadsInFlightSizeInMBForRedeliveries() throws Exception {
+        final String topicName = BrokerTestUtil.newUniqueName(
+                "persistent://public/default/testManagedLedgerMaxReadsInFlightSizeInMBForRedeliveries");
+        final String subscription = "sub";
+
+        // Create two consumers on a shared subscription
+        @Cleanup
+        Consumer<byte[]> consumer1 = pulsarClient.newConsumer()
+                .topic(topicName)
+                .subscriptionName(subscription)
+                .subscriptionType(SubscriptionType.Shared)
+                .receiverQueueSize(10000)
+                .subscribe();
+
+        @Cleanup
+        Consumer<byte[]> consumer2 = pulsarClient.newConsumer()
+                .topic(topicName)
+                .subscriptionName(subscription)
+                .subscriptionType(SubscriptionType.Shared)
+                .startPaused(true)
+                .receiverQueueSize(10000)
+                .subscribe();
+
+        // Produce about 20MB of messages
+        @Cleanup
+        Producer<byte[]> producer =
+                pulsarClient.newProducer().enableBatching(false).topic(topicName).create();
+        int numberOfMessages = 200;
+        byte[] payload = RandomUtils.nextBytes(1025 * 1024); // 1025kB
+        for (int i = 0; i < numberOfMessages; i++) {
+            producer.send(payload);
+        }
+
+        // Consume messages with consumer1 but don't ack
+        for (int i = 0; i < numberOfMessages; i++) {
+            consumer1.receive();
+        }
+
+        // Close consumer1 and resume consumer2
+        consumer1.close();
+
+        Executor executor = CompletableFuture.delayedExecutor(4, TimeUnit.SECONDS);
+        pulsarTestContext.getMockBookKeeper().setReadHandleInterceptor((firstEntry, lastEntry, entries) -> {
+            return CompletableFuture.supplyAsync(() -> entries, executor);
+        });
+
+        consumer2.resume();
+
+        // Verify that consumer2 can receive the messages
+        for (int i = 0; i < 100; i++) {
+            Message<byte[]> msg = consumer2.receive(5, TimeUnit.SECONDS);
+            Assert.assertNotNull(msg, "Consumer2 should receive the message");
+            consumer2.acknowledge(msg);
+        }
     }
 }
