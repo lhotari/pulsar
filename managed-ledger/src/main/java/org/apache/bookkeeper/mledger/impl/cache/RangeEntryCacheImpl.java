@@ -30,6 +30,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 import org.apache.bookkeeper.client.api.BKException;
 import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.client.api.ReadHandle;
@@ -58,6 +59,7 @@ public class RangeEntryCacheImpl implements EntryCache {
      * Overhead per-entry to take into account the envelope.
      */
     private static final long BOOKKEEPER_READ_OVERHEAD_PER_ENTRY = 64;
+    private static final int DEFAULT_ESTIMATED_ENTRY_SIZE = 10 * 1024;
 
     private final RangeEntryCacheManagerImpl manager;
     final ManagedLedgerImpl ml;
@@ -66,11 +68,12 @@ public class RangeEntryCacheImpl implements EntryCache {
     private final boolean copyEntries;
     private final PendingReadsManager pendingReadsManager;
 
-    private volatile long estimatedEntrySize = 10 * 1024;
-
     private final long readEntryTimeoutMillis;
 
     private static final double MB = 1024 * 1024;
+
+    private final LongAdder totalAddedEntriesSize = new LongAdder();
+    private final LongAdder totalAddedEntriesCount = new LongAdder();
 
     public RangeEntryCacheImpl(RangeEntryCacheManagerImpl manager, ManagedLedgerImpl ml, boolean copyEntries) {
         this.manager = manager;
@@ -150,6 +153,8 @@ public class RangeEntryCacheImpl implements EntryCache {
         EntryImpl cacheEntry = EntryImpl.create(position, cachedData);
         cachedData.release();
         if (entries.put(position, cacheEntry)) {
+            totalAddedEntriesSize.add(entry.getLength());
+            totalAddedEntriesCount.increment();
             manager.entryAdded(entry.getLength());
             return true;
         } else {
@@ -360,8 +365,14 @@ public class RangeEntryCacheImpl implements EntryCache {
         if (pendingReadsLimiter.isDisabled()) {
             return originalCallback;
         }
-        long estimatedReadSize = (1 + lastEntry - firstEntry)
-                * (estimatedEntrySize + BOOKKEEPER_READ_OVERHEAD_PER_ENTRY);
+
+        long estimatedEntrySize = getEstimatedEntrySize();
+        long numberOfEntries = 1 + lastEntry - firstEntry;
+        long estimatedReadSize = numberOfEntries * estimatedEntrySize;
+        if (log.isDebugEnabled()) {
+            log.debug("Estimated read size: {} bytes for {} entries with {} estimated entry size", estimatedReadSize,
+                    numberOfEntries, estimatedEntrySize);
+        }
         final AsyncCallbacks.ReadEntriesCallback callback;
         InflightReadsLimiter.Handle newHandle = pendingReadsLimiter.acquire(estimatedReadSize, handle);
         if (!newHandle.success) {
@@ -372,7 +383,7 @@ public class RangeEntryCacheImpl implements EntryCache {
                         + lh.getId()
                         + ", " + getName()
                         + ", estimated read size " + estimatedReadSize + " bytes"
-                        + " for " + (1 + lastEntry - firstEntry)
+                        + " for " + numberOfEntries
                         + " entries (check managedLedgerMaxReadsInFlightSizeInMB)";
                 log.error(message);
                 pendingReadsLimiter.release(newHandle);
@@ -391,9 +402,6 @@ public class RangeEntryCacheImpl implements EntryCache {
                 @Override
                 public void readEntriesComplete(List<Entry> entries, Object ctx) {
                     if (!entries.isEmpty()) {
-                        long size = entries.get(0).getLength();
-                        estimatedEntrySize = size;
-
                         AtomicInteger remainingCount = new AtomicInteger(entries.size());
                         for (Entry entry : entries) {
                             ((EntryImpl) entry).onDeallocate(() -> {
@@ -416,6 +424,20 @@ public class RangeEntryCacheImpl implements EntryCache {
             };
         }
         return callback;
+    }
+
+    private long getEstimatedEntrySize() {
+        long estimatedEntrySize = getAvgEntrySize();
+        if (estimatedEntrySize == 0) {
+            estimatedEntrySize = DEFAULT_ESTIMATED_ENTRY_SIZE;
+        }
+        return estimatedEntrySize + BOOKKEEPER_READ_OVERHEAD_PER_ENTRY;
+    }
+
+    private long getAvgEntrySize() {
+        long totalAddedEntriesCount = this.totalAddedEntriesCount.sum();
+        long totalAddedEntriesSize = this.totalAddedEntriesSize.sum();
+        return totalAddedEntriesCount != 0 ? totalAddedEntriesSize / totalAddedEntriesCount : 0;
     }
 
     /**
