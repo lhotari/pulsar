@@ -3714,15 +3714,15 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
 
         double avgEntrySize = ledger.getStats().getEntrySizeAverage();
-        if (!Double.isFinite(avgEntrySize)) {
-            // We don't have yet any stats on the topic entries. Let's try to use the cursor avg size stats
-            avgEntrySize = (double) entriesReadSize / (double) entriesReadCount;
-        }
-
-        if (!Double.isFinite(avgEntrySize)) {
-            // If we still don't have any information, it means this is the first time we attempt reading
-            // and there are no writes. Let's start with 1 to avoid any overflow and start the avg stats
-            return 1;
+        if (Double.isInfinite(avgEntrySize)) {
+            if (entriesReadCount != 0) {
+                // We don't have yet any stats on the topic entries. Let's try to use the cursor avg size stats
+                avgEntrySize = (double) entriesReadSize / (double) entriesReadCount;
+            } else {
+                // If we still don't have any information, it means this is the first time we attempt reading
+                // and there are no writes. Let's start with 1 to avoid any overflow and start the avg stats
+                return 1;
+            }
         }
 
         int maxEntriesBasedOnSize = (int) (maxSizeBytes / avgEntrySize);

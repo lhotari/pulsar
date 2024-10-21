@@ -97,7 +97,7 @@ public class StatsBuckets {
     }
 
     public double getAvg() {
-        return sum / (double) count;
+        return count != 0 ? sum / (double) count : Double.POSITIVE_INFINITY;
     }
 
     public void addAll(StatsBuckets other) {
