@@ -384,7 +384,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             }
 
             Set<Position> messagesToReplayNow =
-                    canReplayMessages() ? getMessagesToReplayNow(messagesToRead) : Collections.emptySet();
+                    canReplayMessages() ? getMessagesToReplayNow(messagesToRead, bytesToRead) : Collections.emptySet();
             if (!messagesToReplayNow.isEmpty()) {
                 if (log.isDebugEnabled()) {
                     log.debug("[{}] Schedule replay of {} messages for {} consumers", name,
@@ -1344,7 +1344,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         }
     }
 
-    protected synchronized NavigableSet<Position> getMessagesToReplayNow(int maxMessagesToRead) {
+    protected synchronized NavigableSet<Position> getMessagesToReplayNow(int maxMessagesToRead, long bytesToRead) {
         if (delayedDeliveryTracker.isPresent() && delayedDeliveryTracker.get().hasMessageAvailable()) {
             delayedDeliveryTracker.get().resetTickTime(topic.getDelayedDeliveryTickTimeMillis());
             NavigableSet<Position> messagesAvailableNow =
@@ -1352,7 +1352,12 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             messagesAvailableNow.forEach(p -> redeliveryMessages.add(p.getLedgerId(), p.getEntryId()));
         }
         if (!redeliveryMessages.isEmpty()) {
-            return redeliveryMessages.getMessagesToReplayNow(maxMessagesToRead, createFilterForReplay());
+            int cappedMaxMessagesToRead = cursor.applyMaxSizeCap(maxMessagesToRead, bytesToRead);
+            if (cappedMaxMessagesToRead < maxMessagesToRead && log.isDebugEnabled()) {
+                log.debug("[{}] Capped max messages to read from redelivery list to {} (max was {})",
+                        name, cappedMaxMessagesToRead, maxMessagesToRead);
+            }
+            return redeliveryMessages.getMessagesToReplayNow(cappedMaxMessagesToRead, createFilterForReplay());
         } else {
             return Collections.emptyNavigableSet();
         }
