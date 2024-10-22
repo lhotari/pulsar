@@ -119,49 +119,60 @@ public class InflightReadsLimiter implements AutoCloseable {
             // feature is disabled
             return DISABLED;
         }
-        synchronized (this) {
-            try {
-                if (current == null) {
-                    if (remainingBytes == 0) {
-                        return new Handle(0, false, 1, System.currentTimeMillis());
-                    }
-                    if (remainingBytes >= permits) {
-                        remainingBytes -= permits;
-                        return new Handle(permits, true, 1, System.currentTimeMillis());
-                    } else {
-                        long possible = remainingBytes;
-                        remainingBytes = 0;
-                        return new Handle(possible, false, 1, System.currentTimeMillis());
-                    }
-                } else {
-                    if (current.trials >= 4 && current.acquiredPermits > 0) {
-                        remainingBytes += current.acquiredPermits;
-                        return new Handle(0, false, 1, current.creationTime);
-                    }
-                    if (remainingBytes == 0) {
-                        return new Handle(current.acquiredPermits, false, current.trials + 1,
-                                current.creationTime);
-                    }
-                    long needed = permits - current.acquiredPermits;
-                    if (remainingBytes >= needed) {
-                        remainingBytes -= needed;
-                        return new Handle(permits, true, current.trials + 1, current.creationTime);
-                    } else {
-                        long possible = remainingBytes;
-                        remainingBytes = 0;
-                        return new Handle(current.acquiredPermits + possible, false,
-                                current.trials + 1, current.creationTime);
-                    }
+        Handle handle = internalHandle(permits, current);
+        if (log.isDebugEnabled()) {
+            log.debug("acquire success: {}, permits: {}, trials: {}, creationTime: {}, remainingBytes:{}",
+                    handle.success, handle.acquiredPermits, handle.trials, handle.creationTime, getRemainingBytes());
+        }
+        return handle;
+    }
+
+    private synchronized Handle internalHandle(long permits, Handle current) {
+        try {
+            if (current == null) {
+                if (remainingBytes == 0) {
+                    return new Handle(0, false, 1, System.currentTimeMillis());
                 }
-            } finally {
-                updateMetrics();
+                if (remainingBytes >= permits) {
+                    remainingBytes -= permits;
+                    return new Handle(permits, true, 1, System.currentTimeMillis());
+                } else {
+                    long possible = remainingBytes;
+                    remainingBytes = 0;
+                    return new Handle(possible, false, 1, System.currentTimeMillis());
+                }
+            } else {
+                if (current.trials >= 4 && current.acquiredPermits > 0) {
+                    remainingBytes += current.acquiredPermits;
+                    return new Handle(0, false, 1, current.creationTime);
+                }
+                if (remainingBytes == 0) {
+                    return new Handle(current.acquiredPermits, false, current.trials + 1,
+                            current.creationTime);
+                }
+                long needed = permits - current.acquiredPermits;
+                if (remainingBytes >= needed) {
+                    remainingBytes -= needed;
+                    return new Handle(permits, true, current.trials + 1, current.creationTime);
+                } else {
+                    long possible = remainingBytes;
+                    remainingBytes = 0;
+                    return new Handle(current.acquiredPermits + possible, false,
+                            current.trials + 1, current.creationTime);
+                }
             }
+        } finally {
+            updateMetrics();
         }
     }
 
     void release(Handle handle) {
         if (handle == DISABLED) {
             return;
+        }
+        if (log.isDebugEnabled()) {
+            log.debug("release permits: {}, creationTime: {}, remainingBytes:{}", handle.acquiredPermits,
+                    handle.creationTime, getRemainingBytes());
         }
         synchronized (this) {
             remainingBytes += handle.acquiredPermits;
