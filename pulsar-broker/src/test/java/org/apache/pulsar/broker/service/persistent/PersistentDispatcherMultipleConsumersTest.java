@@ -226,6 +226,7 @@ public class PersistentDispatcherMultipleConsumersTest extends ProducerConsumerB
 
         Executor executor = CompletableFuture.delayedExecutor(4, TimeUnit.SECONDS);
         pulsarTestContext.getMockBookKeeper().setReadHandleInterceptor((firstEntry, lastEntry, entries) -> {
+            log.info("intercepted read entries: firstEntry={}, lastEntry={}", firstEntry, lastEntry);
             return CompletableFuture.supplyAsync(() -> entries, executor);
         });
 
