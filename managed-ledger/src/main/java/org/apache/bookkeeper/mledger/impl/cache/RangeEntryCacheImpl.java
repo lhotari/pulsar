@@ -26,7 +26,7 @@ import com.google.common.collect.Lists;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
 import java.util.Collection;
-import java.util.Iterator;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -60,6 +60,7 @@ public class RangeEntryCacheImpl implements EntryCache {
      */
     private static final long BOOKKEEPER_READ_OVERHEAD_PER_ENTRY = 64;
     private static final int DEFAULT_ESTIMATED_ENTRY_SIZE = 10 * 1024;
+    private static final boolean DEFAULT_CACHE_INDIVIDUAL_READ_ENTRY = false;
 
     private final RangeEntryCacheManagerImpl manager;
     final ManagedLedgerImpl ml;
@@ -231,7 +232,22 @@ public class RangeEntryCacheImpl implements EntryCache {
     public void asyncReadEntry(ReadHandle lh, Position position, final ReadEntryCallback callback,
             final Object ctx) {
         try {
-            asyncReadEntry0(lh, position, callback, ctx);
+            asyncReadEntry0WithLimits(lh, position, position, 1, DEFAULT_CACHE_INDIVIDUAL_READ_ENTRY,
+                    new ReadEntriesCallback() {
+                @Override
+                public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                    if (entries.isEmpty()) {
+                        callback.readEntryFailed(new ManagedLedgerException("Could not read given position"), ctx);
+                    } else {
+                        callback.readEntryComplete(entries.get(0), ctx);
+                    }
+                }
+
+                @Override
+                public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                    callback.readEntryFailed(exception, ctx);
+                }
+            }, ctx, null);
         } catch (Throwable t) {
             log.warn("failed to read entries for {}-{}", lh.getId(), position, t);
             // invalidate all entries related to ledger from the cache (it might happen if entry gets corrupt
@@ -239,47 +255,6 @@ public class RangeEntryCacheImpl implements EntryCache {
             // the bookie)
             invalidateAllEntries(lh.getId());
             callback.readEntryFailed(createManagedLedgerException(t), ctx);
-        }
-    }
-
-    private void asyncReadEntry0(ReadHandle lh, Position position, final ReadEntryCallback callback,
-            final Object ctx) {
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Reading entry ledger {}: {}", ml.getName(), lh.getId(), position.getEntryId());
-        }
-        EntryImpl entry = entries.get(position);
-        if (entry != null) {
-            EntryImpl cachedEntry = EntryImpl.create(entry);
-            entry.release();
-            manager.mlFactoryMBean.recordCacheHit(cachedEntry.getLength());
-            callback.readEntryComplete(cachedEntry, ctx);
-        } else {
-            ReadEntryUtils.readAsync(ml, lh, position.getEntryId(), position.getEntryId()).thenAcceptAsync(
-                    ledgerEntries -> {
-                        try {
-                            Iterator<LedgerEntry> iterator = ledgerEntries.iterator();
-                            if (iterator.hasNext()) {
-                                LedgerEntry ledgerEntry = iterator.next();
-                                EntryImpl returnEntry = RangeEntryCacheManagerImpl.create(ledgerEntry, interceptor);
-
-                                ml.getMbean().recordReadEntriesOpsCacheMisses(1, returnEntry.getLength());
-                                manager.mlFactoryMBean.recordCacheMiss(1, returnEntry.getLength());
-                                ml.getMbean().addReadEntriesSample(1, returnEntry.getLength());
-                                callback.readEntryComplete(returnEntry, ctx);
-                            } else {
-                                // got an empty sequence
-                                callback.readEntryFailed(new ManagedLedgerException("Could not read given position"),
-                                                         ctx);
-                            }
-                        } finally {
-                            ledgerEntries.close();
-                        }
-                    }, ml.getExecutor()).exceptionally(exception -> {
-                        ml.invalidateLedgerHandle(lh);
-                        pendingReadsManager.invalidateLedger(lh.getId());
-                        callback.readEntryFailed(createManagedLedgerException(exception), ctx);
-                        return null;
-            });
         }
     }
 
@@ -301,33 +276,49 @@ public class RangeEntryCacheImpl implements EntryCache {
     @SuppressWarnings({ "unchecked", "rawtypes" })
     void asyncReadEntry0(ReadHandle lh, long firstEntry, long lastEntry, boolean shouldCacheEntry,
             final ReadEntriesCallback callback, Object ctx) {
-        asyncReadEntry0WithLimits(lh, firstEntry, lastEntry, shouldCacheEntry, callback, ctx, null);
+        final long ledgerId = lh.getId();
+        final int numberOfEntries = (int) (lastEntry - firstEntry) + 1;
+        final Position firstPosition = PositionFactory.create(ledgerId, firstEntry);
+        final Position lastPosition = PositionFactory.create(ledgerId, lastEntry);
+        asyncReadEntry0WithLimits(lh, firstPosition, lastPosition, numberOfEntries, shouldCacheEntry, callback, ctx,
+                null);
     }
 
-    void asyncReadEntry0WithLimits(ReadHandle lh, long firstEntry, long lastEntry, boolean shouldCacheEntry,
-        final ReadEntriesCallback originalCallback, Object ctx, InflightReadsLimiter.Handle handle) {
+    void asyncReadEntry0WithLimits(ReadHandle lh, Position firstPosition, Position lastPosition, int numberOfEntries,
+                                   boolean shouldCacheEntry,
+                                   final ReadEntriesCallback originalCallback, Object ctx,
+                                   InflightReadsLimiter.Handle handle) {
+        checkArgument(firstPosition.getLedgerId() == lastPosition.getLedgerId(),
+                "Invalid range. Entries %s and %s should be in the same ledger.",
+                firstPosition, lastPosition);
 
         final AsyncCallbacks.ReadEntriesCallback callback =
-                handlePendingReadsLimits(lh, firstEntry, lastEntry, shouldCacheEntry,
+                handlePendingReadsLimits(lh, firstPosition, lastPosition, numberOfEntries, shouldCacheEntry,
                         originalCallback, ctx, handle);
         if (callback == null) {
             return;
         }
 
-        final long ledgerId = lh.getId();
-        final int entriesToRead = (int) (lastEntry - firstEntry) + 1;
-        final Position firstPosition = PositionFactory.create(lh.getId(), firstEntry);
-        final Position lastPosition = PositionFactory.create(lh.getId(), lastEntry);
-
         if (log.isDebugEnabled()) {
-            log.debug("[{}] Reading entries range ledger {}: {} to {}", ml.getName(), ledgerId, firstEntry, lastEntry);
+            log.debug("[{}] Reading {} entries in range {} to {}", ml.getName(), numberOfEntries, firstPosition,
+                    lastPosition);
         }
 
-        Collection<EntryImpl> cachedEntries = entries.getRange(firstPosition, lastPosition);
+        Collection<EntryImpl> cachedEntries;
+        if (firstPosition.compareTo(lastPosition) == 0) {
+            EntryImpl cachedEntry = entries.get(firstPosition);
+            if (cachedEntry == null) {
+                cachedEntries = Collections.emptyList();
+            } else {
+                cachedEntries = Collections.singleton(cachedEntry);
+            }
+        } else {
+            cachedEntries = entries.getRange(firstPosition, lastPosition);
+        }
 
-        if (cachedEntries.size() == entriesToRead) {
+        if (cachedEntries.size() == numberOfEntries) {
             long totalCachedSize = 0;
-            final List<EntryImpl> entriesToReturn = Lists.newArrayListWithExpectedSize(entriesToRead);
+            final List<EntryImpl> entriesToReturn = Lists.newArrayListWithExpectedSize(numberOfEntries);
 
             // All entries found in cache
             for (EntryImpl entry : cachedEntries) {
@@ -338,42 +329,44 @@ public class RangeEntryCacheImpl implements EntryCache {
 
             manager.mlFactoryMBean.recordCacheHits(entriesToReturn.size(), totalCachedSize);
             if (log.isDebugEnabled()) {
-                log.debug("[{}] Ledger {} -- Found in cache entries: {}-{}", ml.getName(), ledgerId, firstEntry,
-                        lastEntry);
+                log.debug("[{}] Cache hit for {} entries in range {} to {}", ml.getName(), numberOfEntries,
+                        firstPosition, lastPosition);
             }
-
             callback.readEntriesComplete((List) entriesToReturn, ctx);
-
         } else {
             if (!cachedEntries.isEmpty()) {
                 cachedEntries.forEach(entry -> entry.release());
             }
 
             // Read all the entries from bookkeeper
-            pendingReadsManager.readEntries(lh, firstEntry, lastEntry,
-                    shouldCacheEntry, callback, ctx);
-
+            pendingReadsManager.readEntries(lh, firstPosition.getEntryId(), lastPosition.getEntryId(), shouldCacheEntry,
+                    callback, ctx);
         }
     }
 
-    private AsyncCallbacks.ReadEntriesCallback handlePendingReadsLimits(ReadHandle lh,
-                                                                long firstEntry, long lastEntry,
-                                                                boolean shouldCacheEntry,
-                                                                AsyncCallbacks.ReadEntriesCallback originalCallback,
-                                                                Object ctx, InflightReadsLimiter.Handle handle) {
+    private AsyncCallbacks.ReadEntriesCallback handlePendingReadsLimits(ReadHandle lh, Position firstPosition,
+                                                                        Position lastPosition,
+                                                                        int numberOfEntries,
+                                                                        boolean shouldCacheEntry,
+                                                                        AsyncCallbacks.ReadEntriesCallback
+                                                                                originalCallback,
+                                                                        Object ctx,
+                                                                        InflightReadsLimiter.Handle handle) {
+        checkArgument(firstPosition.getLedgerId() == lastPosition.getLedgerId(),
+                "Invalid range. Entries %s and %s should be in the same ledger.",
+                firstPosition, lastPosition);
+
         InflightReadsLimiter pendingReadsLimiter = getPendingReadsLimiter();
         if (pendingReadsLimiter.isDisabled()) {
             return originalCallback;
         }
 
         long estimatedEntrySize = getEstimatedEntrySize();
-        long numberOfEntries = 1 + lastEntry - firstEntry;
         long estimatedReadSize = numberOfEntries * estimatedEntrySize;
         if (log.isDebugEnabled()) {
             log.debug("Estimated read size: {} bytes for {} entries with {} estimated entry size", estimatedReadSize,
                     numberOfEntries, estimatedEntrySize);
         }
-        final AsyncCallbacks.ReadEntriesCallback callback;
         InflightReadsLimiter.Handle newHandle = pendingReadsLimiter.acquire(estimatedReadSize, handle);
         if (!newHandle.success) {
             long now = System.currentTimeMillis();
@@ -392,38 +385,36 @@ public class RangeEntryCacheImpl implements EntryCache {
                 return null;
             }
             ml.getExecutor().execute(() -> {
-                asyncReadEntry0WithLimits(lh, firstEntry, lastEntry, shouldCacheEntry,
+                asyncReadEntry0WithLimits(lh, firstPosition, lastPosition, numberOfEntries, shouldCacheEntry,
                         originalCallback, ctx, newHandle);
             });
             return null;
-        } else {
-            callback = new AsyncCallbacks.ReadEntriesCallback() {
-
-                @Override
-                public void readEntriesComplete(List<Entry> entries, Object ctx) {
-                    if (!entries.isEmpty()) {
-                        AtomicInteger remainingCount = new AtomicInteger(entries.size());
-                        for (Entry entry : entries) {
-                            ((EntryImpl) entry).onDeallocate(() -> {
-                                if (remainingCount.decrementAndGet() <= 0) {
-                                    pendingReadsLimiter.release(newHandle);
-                                }
-                            });
-                        }
-                    } else {
-                        pendingReadsLimiter.release(newHandle);
-                    }
-                    originalCallback.readEntriesComplete(entries, ctx);
-                }
-
-                @Override
-                public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
-                    pendingReadsLimiter.release(newHandle);
-                    originalCallback.readEntriesFailed(exception, ctx);
-                }
-            };
         }
-        return callback;
+        return new AsyncCallbacks.ReadEntriesCallback() {
+
+            @Override
+            public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                if (!entries.isEmpty()) {
+                    AtomicInteger remainingCount = new AtomicInteger(entries.size());
+                    for (Entry entry : entries) {
+                        ((EntryImpl) entry).onDeallocate(() -> {
+                            if (remainingCount.decrementAndGet() <= 0) {
+                                pendingReadsLimiter.release(newHandle);
+                            }
+                        });
+                    }
+                } else {
+                    pendingReadsLimiter.release(newHandle);
+                }
+                originalCallback.readEntriesComplete(entries, ctx);
+            }
+
+            @Override
+            public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                pendingReadsLimiter.release(newHandle);
+                originalCallback.readEntriesFailed(exception, ctx);
+            }
+        };
     }
 
     private long getEstimatedEntrySize() {
