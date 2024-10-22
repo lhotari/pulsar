@@ -19,8 +19,6 @@
 package org.apache.pulsar.broker.service.persistent;
 
 import com.carrotsearch.hppc.ObjectSet;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -42,9 +40,7 @@ import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.ProducerConsumerBase;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionType;
-import org.awaitility.Awaitility;
 import org.awaitility.reflect.WhiteboxImpl;
-import org.jetbrains.annotations.NotNull;
 import org.mockito.Mockito;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
@@ -232,6 +228,9 @@ public class PersistentDispatcherMultipleConsumersTest extends ProducerConsumerB
         pulsarTestContext.getMockBookKeeper().setReadHandleInterceptor((firstEntry, lastEntry, entries) -> {
             return CompletableFuture.supplyAsync(() -> entries, executor);
         });
+
+        // clear the entry cache
+        pulsarTestContext.getPulsarService().getDefaultManagedLedgerFactory().getEntryCacheManager().clear();
 
         consumer2.resume();
 
