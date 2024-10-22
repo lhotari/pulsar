@@ -58,11 +58,7 @@ public class EntryCacheDefaultEvictionPolicy implements EntryCacheEvictionPolicy
         log.debug("Need to gather at least {} from caches", sizeToConsiderForEviction);
 
         int cacheIdx = 0;
-        while (cachesToEvictTotalSize < sizeToConsiderForEviction) {
-            // This condition should always be true, considering that we cannot free more size that what we have in
-            // cache
-            checkArgument(cacheIdx < caches.size());
-
+        while (cachesToEvictTotalSize < sizeToConsiderForEviction && cacheIdx < caches.size()) {
             EntryCache entryCache = caches.get(cacheIdx++);
             cachesToEvictTotalSize += entryCache.getSize();
             cachesToEvict.add(entryCache);
