@@ -370,14 +370,15 @@ public class RangeEntryCacheImpl implements EntryCache {
         InflightReadsLimiter.Handle newHandle = pendingReadsLimiter.acquire(estimatedReadSize, handle);
         if (!newHandle.success) {
             long now = System.currentTimeMillis();
-            if (now - newHandle.creationTime > readEntryTimeoutMillis) {
+            if (readEntryTimeoutMillis > 0 && now - newHandle.creationTime > readEntryTimeoutMillis) {
                 String message = "Time-out elapsed while acquiring enough permits "
                         + "on the memory limiter to read from ledger "
                         + lh.getId()
                         + ", " + getName()
                         + ", estimated read size " + estimatedReadSize + " bytes"
                         + " for " + numberOfEntries
-                        + " entries (check managedLedgerMaxReadsInFlightSizeInMB)";
+                        + " entries (check managedLedgerMaxReadsInFlightSizeInMB and "
+                        + "managedLedgerReadEntryTimeoutSeconds)";
                 log.error(message);
                 pendingReadsLimiter.release(newHandle);
                 originalCallback.readEntriesFailed(
