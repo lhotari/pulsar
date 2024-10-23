@@ -46,6 +46,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CountDownLatch;
@@ -84,6 +85,8 @@ import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedCursorAttributes;
 import org.apache.bookkeeper.mledger.ManagedCursorMXBean;
+import org.apache.bookkeeper.mledger.ManagedCursorReplayReadEntriesCallback;
+import org.apache.bookkeeper.mledger.ManagedCursorReplayReadRange;
 import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
@@ -1666,6 +1669,65 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
 
         return alreadyAcknowledgedPositions;
+    }
+
+    @Override
+    public Set<? extends Position> asyncReplayEntriesInRanges(SortedSet<? extends Position> positions,
+                                                              ManagedCursorReplayReadEntriesCallback callback,
+                                                              Object callerCtx,
+                                                              boolean invokeCallbacksInOrder) {
+        checkArgument(!positions.isEmpty(), "Positions to replay should not be empty");
+        Set<Position> alreadyAcknowledgedPositions = filterDeletedMessages(positions);
+        final int totalValidPositions = positions.size() - alreadyAcknowledgedPositions.size();
+        if (totalValidPositions == 0) {
+            return alreadyAcknowledgedPositions;
+        }
+        List<ManagedCursorReplayReadRange> ranges = toRanges(positions, alreadyAcknowledgedPositions);
+        if (isClosed()) {
+            callback.readEntriesFailed(ranges.get(0), true, new ManagedLedgerException
+                    .CursorAlreadyClosedException("Cursor was already closed"), callerCtx);
+        } else {
+            AsyncCallbacks.ReadEntriesCallback cb =
+                    new ManagedCursorReplayReadEntriesBatchCallbackImpl(ranges, invokeCallbacksInOrder, callback,
+                            callerCtx);
+            for (ManagedCursorReplayReadRange range : ranges) {
+                ledger.asyncReadEntries(
+                        OpReadEntry.create(this, range.startPosition(), range.size(), cb, range, null, null));
+            }
+        }
+        return alreadyAcknowledgedPositions;
+    }
+
+    private static List<ManagedCursorReplayReadRange> toRanges(SortedSet<? extends Position> positions,
+                                                               Set<Position> alreadyAcknowledgedPositions) {
+        List<Pair<Position, Position>> positionRanges = new ArrayList<>();
+        Position rangeStartPosition = null;
+        Position rangeLastPosition = null;
+        for (Position position : positions) {
+            if (!alreadyAcknowledgedPositions.contains(position)) {
+                if (rangeStartPosition == null) {
+                    rangeStartPosition = position;
+                    rangeLastPosition = position;
+                } else if (rangeLastPosition.getLedgerId() == position.getLedgerId()
+                        && rangeLastPosition.getEntryId() + 1 == position.getEntryId()) {
+                    rangeLastPosition = position;
+                } else {
+                    positionRanges.add(Pair.of(rangeStartPosition, rangeLastPosition));
+                    rangeStartPosition = position;
+                    rangeLastPosition = position;
+                }
+            }
+        }
+        if (rangeStartPosition != null && rangeLastPosition != null) {
+            positionRanges.add(Pair.of(rangeStartPosition, rangeLastPosition));
+        }
+        List<ManagedCursorReplayReadRange> ranges = new ArrayList<>(positionRanges.size());
+        for (int i = 0; i < positionRanges.size(); i++) {
+            Pair<Position, Position> range = positionRanges.get(i);
+            ranges.add(
+                    new ManagedCursorReplayReadRangeImpl(i, positionRanges.size(), range.getLeft(), range.getRight()));
+        }
+        return ranges;
     }
 
     @Override
@@ -3934,4 +3996,5 @@ public class ManagedCursorImpl implements ManagedCursor {
         cs.properties = getProperties();
         return cs;
     }
+
 }

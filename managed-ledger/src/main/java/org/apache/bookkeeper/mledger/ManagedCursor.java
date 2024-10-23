@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 import org.apache.bookkeeper.common.annotation.InterfaceAudience;
@@ -757,6 +758,28 @@ public interface ManagedCursor {
      */
     Set<? extends Position> asyncReplayEntries(
             Set<? extends Position> positions, ReadEntriesCallback callback, Object ctx, boolean sortEntries);
+
+    /**
+     * Read the specified set of positions from ManagedLedger in ranges.
+     * This method is used to read entries in ranges to avoid reading all entries at once.
+     *
+     * @param positions
+     *            set of positions to read
+     * @param callback
+     *            callback object returning the result of each range
+     * @param ctx
+     *            opaque context
+     * @param invokeCallbacksInOrder
+     *            when true, the callback will be invoked in order of the positions, otherwise the callback will be
+     *            invoked in the order of the completion of the range read.
+     * @return skipped positions
+     *              set of positions which are already deleted/acknowledged and skipped while replaying them
+     */
+    default Set<? extends Position> asyncReplayEntriesInRanges(SortedSet<? extends Position> positions,
+                                                               ManagedCursorReplayReadEntriesCallback callback,
+                                                               Object ctx, boolean invokeCallbacksInOrder) {
+        throw new UnsupportedOperationException("Not implemented");
+    }
 
     /**
      * Close the cursor and releases the associated resources.
