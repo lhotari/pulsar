@@ -1621,6 +1621,9 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
 
         final int totalValidPositions = positions.size() - alreadyAcknowledgedPositions.size();
+        if (totalValidPositions == 0) {
+            return alreadyAcknowledgedPositions;
+        }
         final AtomicReference<ManagedLedgerException> exception = new AtomicReference<>();
         ReadEntryCallback cb = new ReadEntryCallback() {
             int pendingCallbacks = totalValidPositions;
@@ -1663,15 +1666,16 @@ public class ManagedCursorImpl implements ManagedCursor {
             }
         };
 
-        positions.stream().filter(position -> !alreadyAcknowledgedPositions.contains(position))
-                .forEach(p ->{
-                    if (p.compareTo(this.readPosition) == 0) {
-                        this.setReadPosition(this.readPosition.getNext());
-                        log.warn("[{}][{}] replayPosition{} equals readPosition{}," + " need set next readPosition",
-                                ledger.getName(), name, p, this.readPosition);
-                    }
-                    ledger.asyncReadEntry(p, cb, ctx);
-                });
+        for (Position position : positions) {
+            if (!alreadyAcknowledgedPositions.contains(position)) {
+                if (position.compareTo(this.readPosition) == 0) {
+                    this.setReadPosition(this.readPosition.getNext());
+                    log.warn("[{}][{}] replayPosition{} equals readPosition{}," + " need set next readPosition",
+                            ledger.getName(), name, position, this.readPosition);
+                }
+                ledger.asyncReadEntry(position, cb, ctx);
+            }
+        }
 
         return alreadyAcknowledgedPositions;
     }
