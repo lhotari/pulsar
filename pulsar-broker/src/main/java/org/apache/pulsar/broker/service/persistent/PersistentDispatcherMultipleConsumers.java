@@ -392,9 +392,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                 }
                 havePendingReplayRead = true;
                 updateMinReplayedPosition();
-                Set<? extends Position> deletedMessages = topic.isDelayedDeliveryEnabled()
-                        ? asyncReplayEntriesInOrder(messagesToReplayNow)
-                        : asyncReplayEntries(messagesToReplayNow);
+                Set<? extends Position> deletedMessages = asyncReplayEntries(messagesToReplayNow);
                 // clear already acked positions from replay bucket
                 deletedMessages.forEach(position -> redeliveryMessages.remove(position.getLedgerId(),
                         position.getEntryId()));
@@ -629,11 +627,11 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     }
 
     protected Set<? extends Position> asyncReplayEntries(Set<? extends Position> positions) {
-        return cursor.asyncReplayEntries(positions, this, ReadType.Replay);
+        return cursor.asyncReplayEntries(positions, this, ReadType.Replay, isOrderedReplayRequired());
     }
 
-    protected Set<? extends Position> asyncReplayEntriesInOrder(Set<? extends Position> positions) {
-        return cursor.asyncReplayEntries(positions, this, ReadType.Replay, true);
+    protected boolean isOrderedReplayRequired() {
+        return topic.isDelayedDeliveryEnabled();
     }
 
     @Override
