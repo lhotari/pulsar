@@ -31,6 +31,7 @@ import java.util.Map;
 import java.util.NavigableSet;
 import java.util.Optional;
 import java.util.Set;
+import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -41,6 +42,8 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.function.Predicate;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
+import org.apache.bookkeeper.mledger.ManagedCursorReplayReadEntriesCallback;
+import org.apache.bookkeeper.mledger.ManagedCursorReplayReadRange;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.NoMoreEntriesToReadException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.TooManyRequestsException;
@@ -145,6 +148,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     }
     private Position lastMarkDeletePositionBeforeReadMoreEntries;
     private volatile long readMoreEntriesCallCount;
+    private boolean asyncReplayEntriesInRangesSupported = true;
 
     public PersistentDispatcherMultipleConsumers(PersistentTopic topic, ManagedCursor cursor,
             Subscription subscription) {
@@ -383,8 +387,9 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                 return;
             }
 
-            Set<Position> messagesToReplayNow =
-                    canReplayMessages() ? getMessagesToReplayNow(messagesToRead, bytesToRead) : Collections.emptySet();
+            SortedSet<Position> messagesToReplayNow =
+                    canReplayMessages() ? getMessagesToReplayNow(messagesToRead, bytesToRead) :
+                            Collections.emptySortedSet();
             if (!messagesToReplayNow.isEmpty()) {
                 if (log.isDebugEnabled()) {
                     log.debug("[{}] Schedule replay of {} messages for {} consumers", name,
@@ -626,9 +631,61 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         return Pair.of(messagesToRead, bytesToRead);
     }
 
-    protected Set<? extends Position> asyncReplayEntries(Set<? extends Position> positions) {
+    protected Set<? extends Position> asyncReplayEntries(SortedSet<? extends Position> positions) {
+        if (asyncReplayEntriesInRangesSupported) {
+            try {
+                return internalAsyncReplayEntriesInRanges(positions);
+            } catch (UnsupportedOperationException e) {
+                asyncReplayEntriesInRangesSupported = false;
+                return internalAsyncReplayEntriesIndividually(positions);
+            }
+        } else {
+            return internalAsyncReplayEntriesIndividually(positions);
+        }
+    }
+
+    private Set<? extends Position> internalAsyncReplayEntriesIndividually(SortedSet<? extends Position> positions) {
         return cursor.asyncReplayEntries(positions, this, ReadType.Replay, isOrderedReplayRequired());
     }
+
+    private Set<? extends Position> internalAsyncReplayEntriesInRanges(SortedSet<? extends Position> positions) {
+        return cursor.asyncReplayEntriesInRanges(positions, new ManagedCursorReplayReadEntriesCallback() {
+            ManagedLedgerException lastException;
+
+            @Override
+            public synchronized void readEntriesComplete(ManagedCursorReplayReadRange range, boolean isLast,
+                                                         List<Entry> entries,
+                                                         Object ctx) {
+                internalReadEntriesComplete(entries, (ReadType) ctx, isLast && lastException == null);
+                if (isLast && lastException != null) {
+                    PersistentDispatcherMultipleConsumers.this.readEntriesFailed(lastException, ctx);
+                }
+            }
+
+            @Override
+            public synchronized void readEntriesFailed(ManagedCursorReplayReadRange range, boolean isLast,
+                                                       ManagedLedgerException exception, Object ctx) {
+                if (isLast) {
+                    PersistentDispatcherMultipleConsumers.this.readEntriesFailed(exception, ctx);
+                } else {
+                    if (log.isDebugEnabled()) {
+                        log.debug("[{}] Error reading entries at {} : {}", name, range, exception.getMessage());
+                    }
+                    if (lastException != null && shouldLogAsWarning(lastException)) {
+                        log.warn("[{}] Replacing last exception. message: ", name, lastException.getMessage());
+                    }
+                    lastException = exception;
+                }
+            }
+
+            private static boolean shouldLogAsWarning(ManagedLedgerException exception) {
+                return !(exception instanceof ManagedLedgerException.CursorAlreadyClosedException
+                        || exception.getCause() instanceof TransactionBufferException.TransactionNotSealedException
+                        || exception.getCause() instanceof ManagedLedgerException.OffloadReadHandleClosedException);
+            }
+        }, ReadType.Replay, isOrderedReplayRequired());
+    }
+
 
     protected boolean isOrderedReplayRequired() {
         return topic.isDelayedDeliveryEnabled();
@@ -713,30 +770,37 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     public final synchronized void readEntriesComplete(List<Entry> entries, Object ctx) {
-        ReadType readType = (ReadType) ctx;
-        if (readType == ReadType.Normal) {
-            havePendingRead = false;
-        } else {
-            havePendingReplayRead = false;
-        }
+        internalReadEntriesComplete(entries, (ReadType) ctx, true);
+    }
 
-        if (readBatchSize < serviceConfig.getDispatcherMaxReadBatchSize()) {
-            int newReadBatchSize = Math.min(readBatchSize * 2, serviceConfig.getDispatcherMaxReadBatchSize());
-            if (log.isDebugEnabled()) {
-                log.debug("[{}] Increasing read batch size from {} to {}", name, readBatchSize, newReadBatchSize);
+    private synchronized void internalReadEntriesComplete(List<Entry> entries, ReadType readType, boolean isLast) {
+        if (isLast) {
+            if (readType == ReadType.Normal) {
+                havePendingRead = false;
+            } else {
+                havePendingReplayRead = false;
             }
 
-            readBatchSize = newReadBatchSize;
-        }
+            if (readBatchSize < serviceConfig.getDispatcherMaxReadBatchSize()) {
+                int newReadBatchSize = Math.min(readBatchSize * 2, serviceConfig.getDispatcherMaxReadBatchSize());
+                if (log.isDebugEnabled()) {
+                    log.debug("[{}] Increasing read batch size from {} to {}", name, readBatchSize, newReadBatchSize);
+                }
 
-        readFailureBackoff.reduceToHalf();
+                readBatchSize = newReadBatchSize;
+            }
+
+            readFailureBackoff.reduceToHalf();
+        }
 
         if (shouldRewindBeforeReadingOrReplaying && readType == ReadType.Normal) {
             // All consumers got disconnected before the completion of the read operation
             entries.forEach(Entry::release);
-            cursor.rewind();
-            shouldRewindBeforeReadingOrReplaying = false;
-            readMoreEntriesAsync();
+            if (isLast) {
+                cursor.rewind();
+                shouldRewindBeforeReadingOrReplaying = false;
+                readMoreEntriesAsync();
+            }
             return;
         }
 
@@ -755,16 +819,16 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             // in a separate thread, and we want to prevent more reads
             acquireSendInProgress();
             dispatchMessagesThread.execute(() -> {
-                handleSendingMessagesAndReadingMore(readType, entries, false, totalBytesSize);
+                handleSendingMessagesAndReadingMore(readType, entries, false, totalBytesSize, isLast);
             });
         } else {
-            handleSendingMessagesAndReadingMore(readType, entries, true, totalBytesSize);
+            handleSendingMessagesAndReadingMore(readType, entries, true, totalBytesSize, isLast);
         }
     }
 
     private synchronized void handleSendingMessagesAndReadingMore(ReadType readType, List<Entry> entries,
                                                                   boolean needAcquireSendInProgress,
-                                                                  long totalBytesSize) {
+                                                                  long totalBytesSize, boolean allowReadMore) {
         boolean triggerReadingMore = sendMessagesToConsumers(readType, entries, needAcquireSendInProgress);
         int entriesProcessed = lastNumberOfEntriesProcessed;
         updatePendingBytesToDispatch(-totalBytesSize);
@@ -776,7 +840,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             skipNextBackoff = false;
             canReadMoreImmediately = true;
         }
-        if (triggerReadingMore) {
+        if (allowReadMore && triggerReadingMore) {
             if (canReadMoreImmediately) {
                 // Call readMoreEntries in the same thread to trigger the next read
                 readMoreEntries();
@@ -1025,7 +1089,6 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     public synchronized void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
-
         ReadType readType = (ReadType) ctx;
         long waitTimeMillis = readFailureBackoff.next();
 
