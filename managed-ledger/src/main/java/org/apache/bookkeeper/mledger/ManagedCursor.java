@@ -720,6 +720,7 @@ public interface ManagedCursor {
      * @throws InterruptedException
      * @throws ManagedLedgerException
      */
+    @Deprecated
     List<Entry> replayEntries(Set<? extends Position> positions)
             throws InterruptedException, ManagedLedgerException;
 
