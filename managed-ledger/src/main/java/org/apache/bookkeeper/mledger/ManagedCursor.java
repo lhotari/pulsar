@@ -736,8 +736,10 @@ public interface ManagedCursor {
      * @return skipped positions
      *              set of positions which are already deleted/acknowledged and skipped while replaying them
      */
-    Set<? extends Position> asyncReplayEntries(
-        Set<? extends Position> positions, ReadEntriesCallback callback, Object ctx);
+    default Set<? extends Position> asyncReplayEntries(final Set<? extends Position> positions,
+                                                      ReadEntriesCallback callback, Object ctx) {
+        return asyncReplayEntries(positions, callback, ctx, false);
+    }
 
     /**
      * Read the specified set of positions from ManagedLedger.

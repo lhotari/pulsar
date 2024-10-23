@@ -1598,12 +1598,6 @@ public class ManagedCursorImpl implements ManagedCursor {
      *
      */
     @Override
-    public Set<? extends Position> asyncReplayEntries(final Set<? extends Position> positions,
-            ReadEntriesCallback callback, Object ctx) {
-        return asyncReplayEntries(positions, callback, ctx, false);
-    }
-
-    @Override
     public Set<? extends Position> asyncReplayEntries(Set<? extends Position> positions,
             ReadEntriesCallback callback, Object ctx, boolean sortEntries) {
         List<Entry> entries = Lists.newArrayListWithExpectedSize(positions.size());
