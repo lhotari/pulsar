@@ -725,8 +725,9 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
     }
 
     @Override
-    protected Set<? extends Position> asyncReplayEntries(Set<? extends Position> positions) {
-        return cursor.asyncReplayEntries(positions, this, ReadType.Replay, true);
+    protected boolean isOrderedReplayRequired() {
+        // replay is always ordered for key-shared subscription
+        return true;
     }
 
     public KeySharedMode getKeySharedMode() {
