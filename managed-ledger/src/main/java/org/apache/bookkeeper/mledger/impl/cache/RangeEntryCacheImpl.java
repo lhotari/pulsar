@@ -150,7 +150,9 @@ public class RangeEntryCacheImpl implements EntryCache {
             }
         } else {
             // Use retain here to have the same counter increase as in the copy entry scenario
-            cachedData = entry.getDataBuffer().retain();
+            // Use retainedDuplicate to ensure that the readerIndex changes on the original buffer
+            // are not reflected in the cache
+            cachedData = entry.getDataBuffer().retainedDuplicate();
         }
 
         EntryImpl cacheEntry = EntryImpl.create(position, cachedData);
