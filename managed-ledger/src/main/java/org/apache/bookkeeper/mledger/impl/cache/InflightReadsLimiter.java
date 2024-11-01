@@ -24,6 +24,8 @@ import io.opentelemetry.api.metrics.ObservableLongCounter;
 import io.prometheus.client.Gauge;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import lombok.AllArgsConstructor;
 import lombok.ToString;
@@ -63,6 +65,7 @@ public class InflightReadsLimiter implements AutoCloseable {
     private final long maxReadsInFlightSize;
     private long remainingBytes;
     private final long acquireTimeoutMillis;
+    private final ScheduledExecutorService timeOutExecutor;
     private final boolean enabled;
 
     @AllArgsConstructor
@@ -77,12 +80,15 @@ public class InflightReadsLimiter implements AutoCloseable {
     }
 
     private final Queue<QueuedHandle> queuedHandles;
+    private boolean timeoutCheckRunning = false;
 
     public InflightReadsLimiter(long maxReadsInFlightSize, int maxReadsInFlightAcquireQueueSize,
-                                long acquireTimeoutMillis, OpenTelemetry openTelemetry) {
+                                long acquireTimeoutMillis, ScheduledExecutorService timeOutExecutor,
+                                OpenTelemetry openTelemetry) {
         this.maxReadsInFlightSize = maxReadsInFlightSize;
         this.remainingBytes = maxReadsInFlightSize;
         this.acquireTimeoutMillis = acquireTimeoutMillis;
+        this.timeOutExecutor = timeOutExecutor;
         if (maxReadsInFlightSize > 0) {
             enabled = true;
             this.queuedHandles = new SpscArrayQueue<>(maxReadsInFlightAcquireQueueSize);
@@ -167,6 +173,7 @@ public class InflightReadsLimiter implements AutoCloseable {
             return Optional.of(handle);
         } else {
             if (queuedHandles.offer(new QueuedHandle(handle, callback))) {
+                scheduleTimeOutCheck(acquireTimeoutMillis);
                 return Optional.empty();
             } else {
                 log.warn("Failed to queue handle for acquiring permits: {}, creationTime: {}, remainingBytes:{}",
@@ -174,6 +181,48 @@ public class InflightReadsLimiter implements AutoCloseable {
                 return Optional.of(new Handle(0, handle.creationTime, false));
             }
         }
+    }
+
+    private synchronized void scheduleTimeOutCheck(long delayMillis) {
+        if (acquireTimeoutMillis <= 0) {
+            return;
+        }
+        if (!timeoutCheckRunning) {
+            timeoutCheckRunning = true;
+            timeOutExecutor.schedule(this::timeoutCheck, delayMillis, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private synchronized void timeoutCheck() {
+        timeoutCheckRunning = false;
+        long delay = 0;
+        while (true) {
+            QueuedHandle queuedHandle = queuedHandles.peek();
+            if (queuedHandle != null) {
+                long age = System.currentTimeMillis() - queuedHandle.handle.creationTime;
+                if (age >= acquireTimeoutMillis) {
+                    // remove the peeked handle from the queue
+                    queuedHandles.poll();
+                    handleTimeout(queuedHandle);
+                } else {
+                    delay = acquireTimeoutMillis - age;
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        if (delay > 0) {
+            scheduleTimeOutCheck(delay);
+        }
+    }
+
+    private void handleTimeout(QueuedHandle queuedHandle) {
+        if (log.isDebugEnabled()) {
+            log.debug("timed out queued permits: {}, creationTime: {}, remainingBytes:{}",
+                    queuedHandle.handle.permits, queuedHandle.handle.creationTime, remainingBytes);
+        }
+        queuedHandle.callback.accept(new Handle(0, queuedHandle.handle.creationTime, false));
     }
 
     /**
@@ -210,11 +259,7 @@ public class InflightReadsLimiter implements AutoCloseable {
                         && System.currentTimeMillis() - queuedHandle.handle.creationTime > acquireTimeoutMillis) {
                     // remove the peeked handle from the queue
                     queuedHandles.poll();
-                    if (log.isDebugEnabled()) {
-                        log.debug("timed out queued permits: {}, creationTime: {}, remainingBytes:{}",
-                                queuedHandle.handle.permits, queuedHandle.handle.creationTime, remainingBytes);
-                    }
-                    queuedHandle.callback.accept(new Handle(0, queuedHandle.handle.creationTime, false));
+                    handleTimeout(queuedHandle);
                 } else {
                     break;
                 }
