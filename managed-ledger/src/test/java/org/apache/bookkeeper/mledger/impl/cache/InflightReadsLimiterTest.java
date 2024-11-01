@@ -21,6 +21,7 @@ package org.apache.bookkeeper.mledger.impl.cache;
 import static io.opentelemetry.sdk.testing.assertj.OpenTelemetryAssertions.assertThat;
 import static org.apache.pulsar.opentelemetry.OpenTelemetryAttributes.InflightReadLimiterUtilization.FREE;
 import static org.apache.pulsar.opentelemetry.OpenTelemetryAttributes.InflightReadLimiterUtilization.USED;
+import static org.mockito.Mockito.mock;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
@@ -31,6 +32,8 @@ import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
 import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import lombok.Cleanup;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.mutable.MutableObject;
@@ -59,7 +62,7 @@ public class InflightReadsLimiterTest {
         @Cleanup var metricReader = otel.getRight();
 
         var limiter = new InflightReadsLimiter(maxReadsInFlightSize, ACQUIRE_QUEUE_SIZE, ACQUIRE_TIMEOUT_MILLIS,
-                openTelemetry);
+                mock(ScheduledExecutorService.class), openTelemetry);
         assertEquals(limiter.isDisabled(), shouldBeDisabled);
 
         if (shouldBeDisabled) {
@@ -79,7 +82,8 @@ public class InflightReadsLimiterTest {
         @Cleanup var metricReader = otel.getRight();
 
         InflightReadsLimiter limiter =
-                new InflightReadsLimiter(100, ACQUIRE_QUEUE_SIZE, ACQUIRE_TIMEOUT_MILLIS, openTelemetry);
+                new InflightReadsLimiter(100, ACQUIRE_QUEUE_SIZE, ACQUIRE_TIMEOUT_MILLIS,
+                        mock(ScheduledExecutorService.class), openTelemetry);
         assertEquals(100, limiter.getRemainingBytes());
         assertLimiterMetrics(metricReader, 100, 0, 100);
 
@@ -100,7 +104,8 @@ public class InflightReadsLimiterTest {
     @Test
     public void testNotEnoughPermits() throws Exception {
         InflightReadsLimiter limiter =
-                new InflightReadsLimiter(100, ACQUIRE_QUEUE_SIZE, ACQUIRE_TIMEOUT_MILLIS, OpenTelemetry.noop());
+                new InflightReadsLimiter(100, ACQUIRE_QUEUE_SIZE, ACQUIRE_TIMEOUT_MILLIS,
+                        mock(ScheduledExecutorService.class), OpenTelemetry.noop());
         assertEquals(100, limiter.getRemainingBytes());
         Optional<InflightReadsLimiter.Handle> optionalHandle = limiter.acquire(100, null);
         assertEquals(0, limiter.getRemainingBytes());
@@ -124,8 +129,11 @@ public class InflightReadsLimiterTest {
 
     @Test
     public void testAcquireTimeout() throws Exception {
+        @Cleanup("shutdownNow")
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
         InflightReadsLimiter limiter =
-                new InflightReadsLimiter(100, ACQUIRE_QUEUE_SIZE, ACQUIRE_TIMEOUT_MILLIS, OpenTelemetry.noop());
+                new InflightReadsLimiter(100, ACQUIRE_QUEUE_SIZE, ACQUIRE_TIMEOUT_MILLIS,
+                        executor, OpenTelemetry.noop());
         assertEquals(100, limiter.getRemainingBytes());
         limiter.acquire(100, null);
 
