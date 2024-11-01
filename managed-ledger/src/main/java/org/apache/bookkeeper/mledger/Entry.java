@@ -32,8 +32,10 @@ public interface Entry {
     /**
      * @return the data
      */
+    @Deprecated
     byte[] getData();
 
+    @Deprecated
     byte[] getDataAndRelease();
 
     /**
