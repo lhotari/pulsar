@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.client.impl.LedgerEntryImpl;
 import org.apache.bookkeeper.mledger.Entry;
+import org.apache.bookkeeper.mledger.ManagedLedgerFactoryConfig;
 import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryMBeanImpl;
@@ -58,11 +59,14 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
 
 
     public RangeEntryCacheManagerImpl(ManagedLedgerFactoryImpl factory, OpenTelemetry openTelemetry) {
-        this.maxSize = factory.getConfig().getMaxCacheSize();
-        this.inflightReadsLimiter = new InflightReadsLimiter(
-                factory.getConfig().getManagedLedgerMaxReadsInFlightSize(), openTelemetry);
+        ManagedLedgerFactoryConfig config = factory.getConfig();
+        this.maxSize = config.getMaxCacheSize();
+        this.inflightReadsLimiter = new InflightReadsLimiter(config.getManagedLedgerMaxReadsInFlightSize(),
+                config.getManagedLedgerMaxReadsInFlightPermitsAcquireQueueSize(),
+                config.getManagedLedgerMaxReadsInFlightPermitsAcquireTimeoutMillis(),
+                openTelemetry);
         this.evictionTriggerThreshold = (long) (maxSize * evictionTriggerThresholdPercent);
-        this.cacheEvictionWatermark = factory.getConfig().getCacheEvictionWatermark();
+        this.cacheEvictionWatermark = config.getCacheEvictionWatermark();
         this.evictionPolicy = new EntryCacheDefaultEvictionPolicy();
         this.mlFactory = factory;
         this.mlFactoryMBean = factory.getMbean();
