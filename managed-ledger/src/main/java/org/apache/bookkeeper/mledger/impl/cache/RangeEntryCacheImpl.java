@@ -25,11 +25,13 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import org.apache.bookkeeper.client.api.BKException;
 import org.apache.bookkeeper.client.api.LedgerEntry;
@@ -121,17 +123,18 @@ public class RangeEntryCacheImpl implements EntryCache {
 
     @Override
     public boolean insert(EntryImpl entry) {
+        int entryLength = entry.getLength();
         if (!manager.hasSpaceInCache()) {
             if (log.isDebugEnabled()) {
                 log.debug("[{}] Skipping cache while doing eviction: {} - size: {}", ml.getName(), entry.getPosition(),
-                        entry.getLength());
+                        entryLength);
             }
             return false;
         }
 
         if (log.isDebugEnabled()) {
             log.debug("[{}] Adding entry to cache: {} - size: {}", ml.getName(), entry.getPosition(),
-                    entry.getLength());
+                    entryLength);
         }
 
         Position position = entry.getPosition();
@@ -153,9 +156,9 @@ public class RangeEntryCacheImpl implements EntryCache {
         EntryImpl cacheEntry = EntryImpl.create(position, cachedData);
         cachedData.release();
         if (entries.put(position, cacheEntry)) {
-            totalAddedEntriesSize.add(entry.getLength());
+            totalAddedEntriesSize.add(entryLength);
             totalAddedEntriesCount.increment();
-            manager.entryAdded(entry.getLength());
+            manager.entryAdded(entryLength);
             return true;
         } else {
             // entry was not inserted into cache, we need to discard it
@@ -178,10 +181,7 @@ public class RangeEntryCacheImpl implements EntryCache {
         }
 
         if (size > 0) {
-            ByteBuf entryBuf = entry.getDataBuffer();
-            int readerIdx = entryBuf.readerIndex();
-            cachedData.writeBytes(entryBuf);
-            entryBuf.readerIndex(readerIdx);
+            cachedData.writeBytes(entry.getDataBuffer().duplicate());
         }
 
         return cachedData;
@@ -349,7 +349,19 @@ public class RangeEntryCacheImpl implements EntryCache {
         ReadEntriesCallback wrappedCallback = new ReadEntriesCallback() {
             @Override
             public void readEntriesComplete(List<Entry> entries, Object ctx2) {
-                pendingReadsLimiter.release(handle);
+                if (!entries.isEmpty()) {
+                    // release permits only when entries have been handled
+                    AtomicInteger remainingCount = new AtomicInteger(entries.size());
+                    for (Entry entry : entries) {
+                        ((EntryImpl) entry).onDeallocate(() -> {
+                            if (remainingCount.decrementAndGet() <= 0) {
+                                pendingReadsLimiter.release(handle);
+                            }
+                        });
+                    }
+                } else {
+                    pendingReadsLimiter.release(handle);
+                }
                 originalCallback.readEntriesComplete(entries, ctx2);
             }
 
@@ -379,7 +391,7 @@ public class RangeEntryCacheImpl implements EntryCache {
 
         if (cachedEntries.size() == numberOfEntries) {
             long totalCachedSize = 0;
-            final List<EntryImpl> entriesToReturn = Lists.newArrayListWithExpectedSize(numberOfEntries);
+            final List<Entry> entriesToReturn = new ArrayList<>(numberOfEntries);
 
             // All entries found in cache
             for (EntryImpl entry : cachedEntries) {
@@ -393,7 +405,7 @@ public class RangeEntryCacheImpl implements EntryCache {
                 log.debug("[{}] Cache hit for {} entries in range {} to {}", ml.getName(), numberOfEntries,
                         firstPosition, lastPosition);
             }
-            callback.readEntriesComplete((List) entriesToReturn, ctx);
+            callback.readEntriesComplete(entriesToReturn, ctx);
         } else {
             if (!cachedEntries.isEmpty()) {
                 cachedEntries.forEach(entry -> entry.release());
@@ -446,9 +458,7 @@ public class RangeEntryCacheImpl implements EntryCache {
                                     entriesToReturn.add(entry);
                                     totalSize += entry.getLength();
                                     if (shouldCacheEntry) {
-                                        EntryImpl cacheEntry = EntryImpl.create(entry);
-                                        insert(cacheEntry);
-                                        cacheEntry.release();
+                                        insert(entry);
                                     }
                                 }
 
