@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.client.impl.LedgerEntryImpl;
+import org.apache.bookkeeper.common.util.OrderedScheduler;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerFactoryConfig;
 import org.apache.bookkeeper.mledger.impl.EntryImpl;
@@ -58,13 +59,14 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
     private static final double evictionTriggerThresholdPercent = 0.98;
 
 
-    public RangeEntryCacheManagerImpl(ManagedLedgerFactoryImpl factory, OpenTelemetry openTelemetry) {
+    public RangeEntryCacheManagerImpl(ManagedLedgerFactoryImpl factory, OrderedScheduler scheduledExecutor,
+                                      OpenTelemetry openTelemetry) {
         ManagedLedgerFactoryConfig config = factory.getConfig();
         this.maxSize = config.getMaxCacheSize();
         this.inflightReadsLimiter = new InflightReadsLimiter(config.getManagedLedgerMaxReadsInFlightSize(),
                 config.getManagedLedgerMaxReadsInFlightPermitsAcquireQueueSize(),
                 config.getManagedLedgerMaxReadsInFlightPermitsAcquireTimeoutMillis(),
-                openTelemetry);
+                scheduledExecutor, openTelemetry);
         this.evictionTriggerThreshold = (long) (maxSize * evictionTriggerThresholdPercent);
         this.cacheEvictionWatermark = config.getCacheEvictionWatermark();
         this.evictionPolicy = new EntryCacheDefaultEvictionPolicy();
