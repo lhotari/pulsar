@@ -91,7 +91,7 @@ public class PendingReadsManagerTest  {
         config.setReadEntryTimeoutSeconds(10000);
         when(rangeEntryCache.getName()).thenReturn("my-topic");
         when(rangeEntryCache.getManagedLedgerConfig()).thenReturn(config);
-        inflighReadsLimiter = new InflightReadsLimiter(0, OpenTelemetry.noop());
+        inflighReadsLimiter = new InflightReadsLimiter(0, 0, 0, OpenTelemetry.noop());
         when(rangeEntryCache.getPendingReadsLimiter()).thenReturn(inflighReadsLimiter);
         pendingReadsManager = new PendingReadsManager(rangeEntryCache);
         doAnswer(new Answer() {
@@ -108,7 +108,7 @@ public class PendingReadsManagerTest  {
                 return null;
             }
         }).when(rangeEntryCache).asyncReadEntry0(any(), anyLong(), anyLong(),
-                anyBoolean(), any(), any());
+                anyBoolean(), any(), any(), any());
 
         lh = mock(ReadHandle.class);
         ml = mock(ManagedLedgerImpl.class);

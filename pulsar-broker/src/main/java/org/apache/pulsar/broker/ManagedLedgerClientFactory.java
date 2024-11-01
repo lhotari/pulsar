@@ -82,8 +82,11 @@ public class ManagedLedgerClientFactory implements ManagedLedgerStorage {
                     conf.getManagedLedgerMaxReadsInFlightSizeInMB(), conf.getDispatcherMaxReadSizeBytes(),
                     (conf.getDispatcherMaxReadSizeBytes() / (1024L * 1024L)) + 1);
         }
-        managedLedgerFactoryConfig.setManagedLedgerMaxReadsInFlightSize(
-                managedLedgerMaxReadsInFlightSizeBytes);
+        managedLedgerFactoryConfig.setManagedLedgerMaxReadsInFlightSize(managedLedgerMaxReadsInFlightSizeBytes);
+        managedLedgerFactoryConfig.setManagedLedgerMaxReadsInFlightPermitsAcquireTimeoutMillis(
+                conf.getManagedLedgerMaxReadsInFlightPermitsAcquireTimeoutMillis());
+        managedLedgerFactoryConfig.setManagedLedgerMaxReadsInFlightPermitsAcquireQueueSize(
+                conf.getManagedLedgerMaxReadsInFlightPermitsAcquireQueueSize());
         managedLedgerFactoryConfig.setPrometheusStatsLatencyRolloverSeconds(
                 conf.getManagedLedgerPrometheusStatsLatencyRolloverSeconds());
         managedLedgerFactoryConfig.setTraceTaskExecution(conf.isManagedLedgerTraceTaskExecution());

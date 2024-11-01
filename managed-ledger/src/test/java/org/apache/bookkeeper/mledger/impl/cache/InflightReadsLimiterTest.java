@@ -79,7 +79,7 @@ public class InflightReadsLimiterTest {
         InflightReadsLimiter.Handle handle = limiter.acquire(100, null);
         assertEquals(0, limiter.getRemainingBytes());
         assertTrue(handle.success);
-        assertEquals(handle.acquiredPermits, 100);
+        assertEquals(handle.permits, 100);
         assertEquals(1, handle.trials);
         assertLimiterMetrics(metricReader, 100, 100, 0);
 
@@ -96,13 +96,13 @@ public class InflightReadsLimiterTest {
         InflightReadsLimiter.Handle handle = limiter.acquire(100, null);
         assertEquals(0, limiter.getRemainingBytes());
         assertTrue(handle.success);
-        assertEquals(handle.acquiredPermits, 100);
+        assertEquals(handle.permits, 100);
         assertEquals(1, handle.trials);
 
         InflightReadsLimiter.Handle handle2 = limiter.acquire(100, null);
         assertEquals(0, limiter.getRemainingBytes());
         assertFalse(handle2.success);
-        assertEquals(handle2.acquiredPermits, 0);
+        assertEquals(handle2.permits, 0);
         assertEquals(1, handle2.trials);
 
         limiter.release(handle);
@@ -111,7 +111,7 @@ public class InflightReadsLimiterTest {
         handle2 = limiter.acquire(100, handle2);
         assertEquals(0, limiter.getRemainingBytes());
         assertTrue(handle2.success);
-        assertEquals(handle2.acquiredPermits, 100);
+        assertEquals(handle2.permits, 100);
         assertEquals(2, handle2.trials);
 
         limiter.release(handle2);
@@ -127,13 +127,13 @@ public class InflightReadsLimiterTest {
         InflightReadsLimiter.Handle handle = limiter.acquire(30, null);
         assertEquals(70, limiter.getRemainingBytes());
         assertTrue(handle.success);
-        assertEquals(handle.acquiredPermits, 30);
+        assertEquals(handle.permits, 30);
         assertEquals(1, handle.trials);
 
         InflightReadsLimiter.Handle handle2 = limiter.acquire(100, null);
         assertEquals(0, limiter.getRemainingBytes());
         assertFalse(handle2.success);
-        assertEquals(handle2.acquiredPermits, 70);
+        assertEquals(handle2.permits, 70);
         assertEquals(1, handle2.trials);
 
         limiter.release(handle);
@@ -141,7 +141,7 @@ public class InflightReadsLimiterTest {
         handle2 = limiter.acquire(100, handle2);
         assertEquals(0, limiter.getRemainingBytes());
         assertTrue(handle2.success);
-        assertEquals(handle2.acquiredPermits, 100);
+        assertEquals(handle2.permits, 100);
         assertEquals(2, handle2.trials);
 
         limiter.release(handle2);
@@ -157,38 +157,38 @@ public class InflightReadsLimiterTest {
         InflightReadsLimiter.Handle handle = limiter.acquire(30, null);
         assertEquals(70, limiter.getRemainingBytes());
         assertTrue(handle.success);
-        assertEquals(handle.acquiredPermits, 30);
+        assertEquals(handle.permits, 30);
         assertEquals(1, handle.trials);
 
         InflightReadsLimiter.Handle handle2 = limiter.acquire(100, null);
         assertEquals(0, limiter.getRemainingBytes());
         assertFalse(handle2.success);
-        assertEquals(handle2.acquiredPermits, 70);
+        assertEquals(handle2.permits, 70);
         assertEquals(1, handle2.trials);
 
         handle2 = limiter.acquire(100, handle2);
         assertEquals(0, limiter.getRemainingBytes());
         assertFalse(handle2.success);
-        assertEquals(handle2.acquiredPermits, 70);
+        assertEquals(handle2.permits, 70);
         assertEquals(2, handle2.trials);
 
         handle2 = limiter.acquire(100, handle2);
         assertEquals(0, limiter.getRemainingBytes());
         assertFalse(handle2.success);
-        assertEquals(handle2.acquiredPermits, 70);
+        assertEquals(handle2.permits, 70);
         assertEquals(3, handle2.trials);
 
         handle2 = limiter.acquire(100, handle2);
         assertEquals(0, limiter.getRemainingBytes());
         assertFalse(handle2.success);
-        assertEquals(handle2.acquiredPermits, 70);
+        assertEquals(handle2.permits, 70);
         assertEquals(4, handle2.trials);
 
         // too many trials, start from scratch
         handle2 = limiter.acquire(100, handle2);
         assertEquals(70, limiter.getRemainingBytes());
         assertFalse(handle2.success);
-        assertEquals(handle2.acquiredPermits, 0);
+        assertEquals(handle2.permits, 0);
         assertEquals(1, handle2.trials);
 
         limiter.release(handle);
@@ -196,7 +196,7 @@ public class InflightReadsLimiterTest {
         handle2 = limiter.acquire(100, handle2);
         assertEquals(0, limiter.getRemainingBytes());
         assertTrue(handle2.success);
-        assertEquals(handle2.acquiredPermits, 100);
+        assertEquals(handle2.permits, 100);
         assertEquals(2, handle2.trials);
 
         limiter.release(handle2);
