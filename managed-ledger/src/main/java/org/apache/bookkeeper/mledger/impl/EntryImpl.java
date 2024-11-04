@@ -29,7 +29,7 @@ import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.util.AbstractCASReferenceCounted;
-import org.apache.bookkeeper.mledger.util.RangeCache;
+import org.apache.bookkeeper.mledger.impl.cache.RangeCache;
 
 public final class EntryImpl extends AbstractCASReferenceCounted implements Entry, Comparable<EntryImpl>,
         RangeCache.ValueWithKeyValidation<Position> {
