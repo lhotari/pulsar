@@ -28,15 +28,12 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.impl.cache.RangeCache.ValueWithKeyValidation;
 import org.apache.commons.lang3.tuple.Pair;
-import org.jctools.queues.MpscUnboundedArrayQueue;
-import org.jctools.queues.atomic.MpscGrowableAtomicArrayQueue;
 
 /**
  * Special type of cache where get() and delete() operations can be done over a range of keys.
@@ -64,7 +61,6 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
     private AtomicLong size; // Total size of values stored in cache
     private final Weighter<Value> weighter; // Weighter object used to extract the size from values
     private final TimestampExtractor<Value> timestampExtractor; // Extract the timestamp associated with a value
-    private final Queue<RangeCacheEntryWrapper<Key, Value>> removalQueue;
 
     /**
      * Mutable object to store the number of entries and the total size removed from the cache. The instances
@@ -121,8 +117,6 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         this.entries = new ConcurrentSkipListMap<>();
         this.weighter = weighter;
         this.timestampExtractor = timestampExtractor;
-        new MpscGrowableAtomicArrayQueue<>(1024);
-        this.removalQueue = new MpscUnboundedArrayQueue<>(1024);
     }
 
     /**
@@ -206,7 +200,8 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         List<Value> values = new ArrayList();
 
         // Return the values of the entries found in cache
-        for (Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry : entries.subMap(first, true, last, true).entrySet()) {
+        for (Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry : entries.subMap(first, true, last, true)
+                .entrySet()) {
             Value value = getValue(entry.getKey(), entry.getValue());
             if (value != null) {
                 values.add(value);
@@ -238,13 +233,15 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         BREAK_LOOP;
     }
 
-    private RemoveEntryResult removeEntry(Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry, RemovalCounters counters,
+    private RemoveEntryResult removeEntry(Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry,
+                                          RemovalCounters counters,
                                           boolean skipInvalid) {
         return removeEntry(entry, counters, skipInvalid, x -> true);
     }
 
-    private RemoveEntryResult removeEntry(Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry, RemovalCounters counters,
-                                          boolean skipInvalid, Predicate<Value> removeCondition) {
+    private RemoveEntryResult removeEntry(Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry,
+                                          RemovalCounters counters, boolean skipInvalid,
+                                          Predicate<Value> removeCondition) {
         Key key = entry.getKey();
         RangeCacheEntryWrapper<Key, Value> entryWrapper = entry.getValue();
         Value value = entryWrapper.getValue(key);
