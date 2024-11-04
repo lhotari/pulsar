@@ -51,7 +51,7 @@ public class EntryCacheDisabled implements EntryCache {
     }
 
     @Override
-    public boolean insert(EntryImpl entry) {
+    public boolean insert(Entry entry) {
         return false;
     }
 
