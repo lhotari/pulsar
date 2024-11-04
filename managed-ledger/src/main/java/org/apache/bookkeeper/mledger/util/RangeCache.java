@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -35,6 +36,12 @@ import java.util.concurrent.locks.StampedLock;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.util.RangeCache.ValueWithKeyValidation;
 import org.apache.commons.lang3.tuple.Pair;
+import org.jctools.queues.MpmcArrayQueue;
+import org.jctools.queues.MpscChunkedArrayQueue;
+import org.jctools.queues.MpscGrowableArrayQueue;
+import org.jctools.queues.MpscUnboundedArrayQueue;
+import org.jctools.queues.atomic.MpscGrowableAtomicArrayQueue;
+import org.jctools.queues.atomic.MpscLinkedAtomicQueue;
 
 /**
  * Special type of cache where get() and delete() operations can be done over a range of keys.
@@ -62,6 +69,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
     private AtomicLong size; // Total size of values stored in cache
     private final Weighter<Value> weighter; // Weighter object used to extract the size from values
     private final TimestampExtractor<Value> timestampExtractor; // Extract the timestamp associated with a value
+    private final Queue<EntryWrapper<Key, Value>> removalQueue;
 
     /**
      * Wrapper around the value to store in Map. This is needed to ensure that a specific instance can be removed from
@@ -80,6 +88,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         private K key;
         private V value;
         long size;
+        long timestampNanos;
 
         private EntryWrapper(Handle<EntryWrapper> recyclerHandle) {
             this.recyclerHandle = recyclerHandle;
@@ -91,6 +100,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
             entryWrapper.key = key;
             entryWrapper.value = value;
             entryWrapper.size = size;
+            entryWrapper.timestampNanos = System.nanoTime();
             entryWrapper.lock.unlockWrite(stamp);
             return entryWrapper;
         }
@@ -133,10 +143,31 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
             return localSize;
         }
 
+        long getTimestampNanos() {
+            long stamp = lock.tryOptimisticRead();
+            long localTimestampNanos = timestampNanos;
+            if (!lock.validate(stamp)) {
+                stamp = lock.readLock();
+                localTimestampNanos = timestampNanos;
+                lock.unlockRead(stamp);
+            }
+            return localTimestampNanos;
+        }
+
+        void markRemoved() {
+            long stamp = lock.writeLock();
+            key = null;
+            value = null;
+            size = 0;
+            timestampNanos = 0;
+            lock.unlockWrite(stamp);
+        }
+
         void recycle() {
             key = null;
             value = null;
             size = 0;
+            timestampNanos = 0;
             recyclerHandle.recycle(this);
         }
     }
@@ -196,6 +227,8 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         this.entries = new ConcurrentSkipListMap<>();
         this.weighter = weighter;
         this.timestampExtractor = timestampExtractor;
+        new MpscGrowableAtomicArrayQueue<>(1024);
+        this.removalQueue = new MpscUnboundedArrayQueue<>(1024);
     }
 
     /**
