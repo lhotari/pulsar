@@ -75,13 +75,14 @@ public class RangeEntryCacheImpl implements EntryCache {
     private final LongAdder totalAddedEntriesSize = new LongAdder();
     private final LongAdder totalAddedEntriesCount = new LongAdder();
 
-    public RangeEntryCacheImpl(RangeEntryCacheManagerImpl manager, ManagedLedgerImpl ml, boolean copyEntries) {
+    public RangeEntryCacheImpl(RangeEntryCacheManagerImpl manager, ManagedLedgerImpl ml, boolean copyEntries,
+                               RangeCacheRemovalQueue<Position, EntryImpl> rangeCacheRemovalQueue) {
         this.manager = manager;
         this.ml = ml;
         this.pendingReadsManager = new PendingReadsManager(this);
         this.interceptor = ml.getManagedLedgerInterceptor();
         this.readEntryTimeoutMillis = getManagedLedgerConfig().getReadEntryTimeoutSeconds();
-        this.entries = new RangeCache<>(EntryImpl::getLength, EntryImpl::getTimestamp);
+        this.entries = new RangeCache<>(EntryImpl::getLength, EntryImpl::getTimestamp, rangeCacheRemovalQueue);
         this.copyEntries = copyEntries;
 
         if (log.isDebugEnabled()) {
@@ -493,33 +494,6 @@ public class RangeEntryCacheImpl implements EntryCache {
     @Override
     public long getSize() {
         return entries.getSize();
-    }
-
-    @Override
-    public int compareTo(EntryCache other) {
-        return Long.compare(getSize(), other.getSize());
-    }
-
-    @Override
-    public Pair<Integer, Long> evictEntries(long sizeToFree) {
-        checkArgument(sizeToFree > 0);
-        Pair<Integer, Long> evicted = entries.evictLeastAccessedEntries(sizeToFree);
-        int evictedEntries = evicted.getLeft();
-        long evictedSize = evicted.getRight();
-        if (log.isDebugEnabled()) {
-            log.debug(
-                    "[{}] Doing cache eviction of at least {} Mb -- Deleted {} entries - Total size deleted: {} Mb "
-                            + " -- Current Size: {} Mb",
-                    ml.getName(), sizeToFree / MB, evictedEntries, evictedSize / MB, entries.getSize() / MB);
-        }
-        manager.entriesRemoved(evictedSize, evictedEntries);
-        return evicted;
-    }
-
-    @Override
-    public void invalidateEntriesBeforeTimestamp(long timestamp) {
-        Pair<Integer, Long> evictedPair = entries.evictLEntriesBeforeTimestamp(timestamp);
-        manager.entriesRemoved(evictedPair.getRight(), evictedPair.getLeft());
     }
 
     private static final Logger log = LoggerFactory.getLogger(RangeEntryCacheImpl.class);

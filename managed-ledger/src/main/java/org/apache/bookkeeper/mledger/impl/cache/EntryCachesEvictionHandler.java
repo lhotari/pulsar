@@ -18,24 +18,17 @@
  */
 package org.apache.bookkeeper.mledger.impl.cache;
 
-import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
+import org.apache.commons.lang3.tuple.Pair;
 
-public interface EntryCacheManager {
-    EntryCache getEntryCache(ManagedLedgerImpl ml);
+public interface EntryCachesEvictionHandler {
+    void invalidateEntriesBeforeTimestampNanos(long timestamp);
 
-    void removeEntryCache(String name);
-
-    long getSize();
-
-    long getMaxSize();
-
-    void clear();
-
-    void updateCacheSizeAndThreshold(long maxSize);
-
-    void updateCacheEvictionWatermark(double cacheEvictionWatermark);
-
-    double getCacheEvictionWatermark();
-
-    EntryCachesEvictionHandler getEvictionHandler();
+    /**
+     * Force the cache to drop entries to free space.
+     *
+     * @param sizeToFree
+     *            the total memory size to free
+     * @return a pair containing the number of entries evicted and their total size
+     */
+    Pair<Integer, Long> evictEntries(long sizeToFree);
 }
