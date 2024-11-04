@@ -3912,4 +3912,8 @@ public class ManagedCursorImpl implements ManagedCursor {
         cs.properties = getProperties();
         return cs;
     }
+    @Override
+    public void maybeCacheReplayedEntry(Entry entry) {
+        ledger.entryCache.insert(entry);
+    }
 }
