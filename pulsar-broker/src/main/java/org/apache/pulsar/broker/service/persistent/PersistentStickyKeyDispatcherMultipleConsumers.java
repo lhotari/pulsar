@@ -461,6 +461,9 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
                 if (blockedByHash != null && blockedByHash.isTrue()) {
                     // the entry is blocked by hash, add the consumer to the blocked set
                     blockedByHashConsumers.add(consumer);
+                } else {
+                    // consumer is out of permits, so extend lifetime in cache
+                    cursor.maybeCacheReplayedEntry(entry);
                 }
                 // add the message to replay
                 addMessageToReplay(entry.getLedgerId(), entry.getEntryId(), stickyKeyHash);

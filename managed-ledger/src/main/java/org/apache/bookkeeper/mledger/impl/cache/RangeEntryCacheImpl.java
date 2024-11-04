@@ -122,7 +122,7 @@ public class RangeEntryCacheImpl implements EntryCache {
     );
 
     @Override
-    public boolean insert(EntryImpl entry) {
+    public boolean insert(Entry entry) {
         int entryLength = entry.getLength();
         if (!manager.hasSpaceInCache()) {
             if (log.isDebugEnabled()) {
@@ -169,7 +169,7 @@ public class RangeEntryCacheImpl implements EntryCache {
         }
     }
 
-    private ByteBuf copyEntry(EntryImpl entry) {
+    private ByteBuf copyEntry(Entry entry) {
         // Copy the entry into a buffer owned by the cache. The reason is that the incoming entry is retaining a buffer
         // from netty, usually allocated in 64Kb chunks. So if we just retain the entry without copying it, we might
         // retain actually the full 64Kb even for a small entry

@@ -21,8 +21,8 @@ package org.apache.bookkeeper.mledger.impl.cache;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
+import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.Position;
-import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.commons.lang3.tuple.Pair;
 
 /**
@@ -46,7 +46,7 @@ public interface EntryCache extends Comparable<EntryCache> {
      *            the entry to be cached
      * @return whether the entry was inserted in cache
      */
-    boolean insert(EntryImpl entry);
+    boolean insert(Entry entry);
 
     /**
      * Remove from cache all the entries related to a ledger up to lastPosition excluded.
