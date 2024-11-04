@@ -453,8 +453,7 @@ public class RangeEntryCacheImpl implements EntryCache {
                             try {
                                 // We got the entries, we need to transform them to a List<> type
                                 long totalSize = 0;
-                                final List<EntryImpl> entriesToReturn =
-                                        Lists.newArrayListWithExpectedSize(entriesToRead);
+                                final List<EntryImpl> entriesToReturn = new ArrayList<>(entriesToRead);
                                 for (LedgerEntry e : ledgerEntries) {
                                     EntryImpl entry = RangeEntryCacheManagerImpl.create(e, interceptor);
                                     entriesToReturn.add(entry);
