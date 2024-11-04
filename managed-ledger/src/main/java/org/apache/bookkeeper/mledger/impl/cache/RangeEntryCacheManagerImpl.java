@@ -126,7 +126,7 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         long currentSize = this.currentSize.get();
 
         // Trigger a single eviction in background. While the eviction is running we stop inserting entries in the cache
-        if (currentSize + size > evictionTriggerThreshold) {
+        if (currentSize > evictionTriggerThreshold) {
             CompletableFuture<Void> evictionCompletionFuture = null;
             while (evictionCompletionFuture == null) {
                 evictionCompletionFuture = evictionInProgress.get();
@@ -151,27 +151,36 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
 
     private void triggerEvictionToMakeSpace(CompletableFuture<Void> evictionCompletionFuture) {
         mlFactory.getCacheEvictionExecutor().execute(() -> {
-            // Trigger a new cache eviction cycle to bring the used memory below the cacheEvictionWatermark
-            // percentage limit
-            long currentSize = this.currentSize.get();
-            long sizeToEvict = currentSize - (long) (maxSize * cacheEvictionWatermark);
-            long startTime = System.nanoTime();
-            log.info("Triggering cache eviction. total size: {} Mb -- Need to discard: {} Mb", currentSize / MB,
-                    sizeToEvict / MB);
             try {
-                evictionHandler.evictEntries(sizeToEvict);
-
-                long endTime = System.nanoTime();
-                double durationMs = TimeUnit.NANOSECONDS.toMillis(endTime - startTime);
-
-                log.info("Eviction completed. Removed {} Mb in {} ms", (currentSize - this.currentSize.get()) / MB,
-                        durationMs);
+                // Trigger a new cache eviction cycle to bring the used memory below the cacheEvictionWatermark
+                // percentage limit
+                doEvictToWatermarkWhenOverThreshold();
             } finally {
                 evictionCompletionFuture.complete(null);
-                mlFactoryMBean.recordCacheEviction();
                 evictionInProgress.set(null);
             }
         });
+    }
+
+    private void doEvictToWatermarkWhenOverThreshold() {
+        long currentSize = this.currentSize.get();
+        if (currentSize > evictionTriggerThreshold) {
+            long sizeToEvict = currentSize - (long) (maxSize * cacheEvictionWatermark);
+            if (sizeToEvict > 0) {
+                try {
+                    long startTime = System.nanoTime();
+                    log.info("Triggering cache eviction. total size: {} Mb -- Need to discard: {} Mb", currentSize / MB,
+                            sizeToEvict / MB);
+                    evictionHandler.evictEntries(sizeToEvict);
+                    long endTime = System.nanoTime();
+                    double durationMs = TimeUnit.NANOSECONDS.toMillis(endTime - startTime);
+                    log.info("Eviction completed. Removed {} Mb in {} ms", (currentSize - this.currentSize.get()) / MB,
+                            durationMs);
+                } finally {
+                    mlFactoryMBean.recordCacheEviction();
+                }
+            }
+        }
     }
 
     void makeSpaceAndAddEntry(long size) {
@@ -203,6 +212,20 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
     @Override
     public EntryCachesEvictionHandler getEvictionHandler() {
         return evictionHandler;
+    }
+
+    @Override
+    public void doCacheEviction(long maxTimestamp) {
+        // this method is expected to be called from the cache eviction executor
+        CompletableFuture<Void> evictionCompletionFuture = new CompletableFuture<>();
+        evictionInProgress.set(evictionCompletionFuture);
+        try {
+            evictionHandler.invalidateEntriesBeforeTimestampNanos(maxTimestamp);
+            doEvictToWatermarkWhenOverThreshold();
+        } finally {
+            evictionCompletionFuture.complete(null);
+            evictionInProgress.set(null);
+        }
     }
 
     @Override
