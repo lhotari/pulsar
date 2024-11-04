@@ -121,13 +121,6 @@ public class RangeEntryCacheImpl implements EntryCache {
     @Override
     public boolean insert(Entry entry) {
         int entryLength = entry.getLength();
-        if (!manager.hasSpaceInCache()) {
-            if (log.isDebugEnabled()) {
-                log.debug("[{}] Skipping cache while doing eviction: {} - size: {}", ml.getName(), entry.getPosition(),
-                        entryLength);
-            }
-            return false;
-        }
 
         if (log.isDebugEnabled()) {
             log.debug("[{}] Adding entry to cache: {} - size: {}", ml.getName(), entry.getPosition(),
@@ -157,7 +150,7 @@ public class RangeEntryCacheImpl implements EntryCache {
         if (entries.put(position, cacheEntry)) {
             totalAddedEntriesSize.add(entryLength);
             totalAddedEntriesCount.increment();
-            manager.entryAdded(entryLength);
+            manager.makeSpaceAndAddEntry(entryLength);
             return true;
         } else {
             // entry was not inserted into cache, we need to discard it

@@ -118,6 +118,7 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
     private final ManagedLedgerFactoryConfig config;
     @Getter
     protected final OrderedScheduler scheduledExecutor;
+    @Getter
     private final ScheduledExecutorService cacheEvictionExecutor;
 
     @Getter
