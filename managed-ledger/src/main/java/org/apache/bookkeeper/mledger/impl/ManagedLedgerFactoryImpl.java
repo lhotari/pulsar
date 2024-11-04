@@ -301,15 +301,7 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
 
     private synchronized void doCacheEviction() {
         long maxTimestamp = System.nanoTime() - cacheEvictionTimeThresholdNanos;
-
-        ledgers.values().forEach(mlfuture -> {
-            if (mlfuture.isDone() && !mlfuture.isCompletedExceptionally()) {
-                ManagedLedgerImpl ml = mlfuture.getNow(null);
-                if (ml != null) {
-                    ml.doCacheEviction(maxTimestamp);
-                }
-            }
-        });
+        entryCacheManager.doCacheEviction(maxTimestamp);
     }
 
     /**
