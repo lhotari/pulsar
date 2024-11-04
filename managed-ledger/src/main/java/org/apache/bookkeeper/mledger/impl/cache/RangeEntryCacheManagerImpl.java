@@ -31,6 +31,7 @@ import org.apache.bookkeeper.client.impl.LedgerEntryImpl;
 import org.apache.bookkeeper.common.util.OrderedScheduler;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerFactoryConfig;
+import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryMBeanImpl;
@@ -47,6 +48,7 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
     private volatile double cacheEvictionWatermark;
     private final AtomicLong currentSize = new AtomicLong(0);
     private final ConcurrentMap<String, EntryCache> caches = new ConcurrentHashMap();
+    private final RangeCacheRemovalQueue<Position, EntryImpl> rangeCacheRemovalQueue;
     private final EntryCacheEvictionPolicy evictionPolicy;
 
     private final AtomicBoolean evictionInProgress = new AtomicBoolean(false);
@@ -72,6 +74,7 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         this.evictionPolicy = new EntryCacheDefaultEvictionPolicy();
         this.mlFactory = factory;
         this.mlFactoryMBean = factory.getMbean();
+        this.rangeCacheRemovalQueue = new RangeCacheRemovalQueue<>();
 
         log.info("Initialized managed-ledger entry cache of {} Mb", maxSize / MB);
     }
@@ -82,7 +85,8 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
             return new EntryCacheDisabled(ml);
         }
 
-        EntryCache newEntryCache = new RangeEntryCacheImpl(this, ml, mlFactory.getConfig().isCopyEntriesInCache());
+        EntryCache newEntryCache =
+                new RangeEntryCacheImpl(this, ml, mlFactory.getConfig().isCopyEntriesInCache(), rangeCacheRemovalQueue);
         EntryCache currentEntryCache = caches.putIfAbsent(ml.getName(), newEntryCache);
         if (currentEntryCache != null) {
             return currentEntryCache;
@@ -171,6 +175,12 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
     @Override
     public double getCacheEvictionWatermark() {
         return cacheEvictionWatermark;
+    }
+
+    @Override
+    public EntryCachesEvictionHandler getEvictionHandler() {
+
+
     }
 
     @Override
