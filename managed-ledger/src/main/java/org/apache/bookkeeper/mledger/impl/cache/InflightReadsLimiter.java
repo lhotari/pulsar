@@ -249,12 +249,7 @@ public class InflightReadsLimiter implements AutoCloseable {
                 if (remainingBytes >= queuedHandle.handle.permits) {
                     // remove the peeked handle from the queue
                     queuedHandles.poll();
-                    remainingBytes -= queuedHandle.handle.permits;
-                    if (log.isDebugEnabled()) {
-                        log.debug("acquired queued permits: {}, creationTime: {}, remainingBytes:{}",
-                                queuedHandle.handle.permits, queuedHandle.handle.creationTime, remainingBytes);
-                    }
-                    queuedHandle.callback.accept(queuedHandle.handle);
+                    handleQueuedHandle(queuedHandle);
                 } else if (acquireTimeoutMillis > 0
                         && System.currentTimeMillis() - queuedHandle.handle.creationTime > acquireTimeoutMillis) {
                     // remove the peeked handle from the queue
@@ -268,6 +263,15 @@ public class InflightReadsLimiter implements AutoCloseable {
             }
         }
         updateMetrics();
+    }
+
+    private void handleQueuedHandle(QueuedHandle queuedHandle) {
+        remainingBytes -= queuedHandle.handle.permits;
+        if (log.isDebugEnabled()) {
+            log.debug("acquired queued permits: {}, creationTime: {}, remainingBytes:{}",
+                    queuedHandle.handle.permits, queuedHandle.handle.creationTime, remainingBytes);
+        }
+        queuedHandle.callback.accept(queuedHandle.handle);
     }
 
     private synchronized void updateMetrics() {
