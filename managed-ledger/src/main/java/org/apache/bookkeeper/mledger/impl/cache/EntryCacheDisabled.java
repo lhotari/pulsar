@@ -31,7 +31,6 @@ import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
-import org.apache.commons.lang3.tuple.Pair;
 
 /**
  * Implementation of cache that always read from BookKeeper.
@@ -65,15 +64,6 @@ public class EntryCacheDisabled implements EntryCache {
 
     @Override
     public void clear() {
-    }
-
-    @Override
-    public Pair<Integer, Long> evictEntries(long sizeToFree) {
-        return Pair.of(0, (long) 0);
-    }
-
-    @Override
-    public void invalidateEntriesBeforeTimestamp(long timestamp) {
     }
 
     @Override
@@ -139,10 +129,4 @@ public class EntryCacheDisabled implements EntryCache {
     public long getSize() {
         return 0;
     }
-
-    @Override
-    public int compareTo(EntryCache other) {
-        return Long.compare(getSize(), other.getSize());
-    }
-
 }

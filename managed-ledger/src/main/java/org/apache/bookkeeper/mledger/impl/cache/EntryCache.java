@@ -23,13 +23,12 @@ import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.Position;
-import org.apache.commons.lang3.tuple.Pair;
 
 /**
  * Cache of entries used by a single ManagedLedger. An EntryCache is compared to other EntryCache instances using their
  * size (the memory that is occupied by each of them).
  */
-public interface EntryCache extends Comparable<EntryCache> {
+public interface EntryCache {
 
     /**
      * @return the name of the cache
@@ -56,8 +55,6 @@ public interface EntryCache extends Comparable<EntryCache> {
      */
     void invalidateEntries(Position lastPosition);
 
-    void invalidateEntriesBeforeTimestamp(long timestamp);
-
     /**
      * Remove from the cache all the entries belonging to a specific ledger.
      *
@@ -70,15 +67,6 @@ public interface EntryCache extends Comparable<EntryCache> {
      * Remove all the entries from the cache.
      */
     void clear();
-
-    /**
-     * Force the cache to drop entries to free space.
-     *
-     * @param sizeToFree
-     *            the total memory size to free
-     * @return a pair containing the number of entries evicted and their total size
-     */
-    Pair<Integer, Long> evictEntries(long sizeToFree);
 
     /**
      * Read entries from the cache or from bookkeeper.

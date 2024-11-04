@@ -32,6 +32,8 @@ import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.bookkeeper.mledger.Position;
+import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.cache.RangeCache.ValueWithKeyValidation;
 import org.apache.commons.lang3.tuple.Pair;
 
@@ -52,6 +54,8 @@ import org.apache.commons.lang3.tuple.Pair;
  */
 @Slf4j
 public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyValidation<Key>> {
+    private final RangeCacheRemovalQueue<Key, Value> removalQueue;
+
     public interface ValueWithKeyValidation<T> extends ReferenceCounted {
         boolean matchesKey(T key);
     }
@@ -102,8 +106,8 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
     /**
      * Construct a new RangeLruCache with default Weighter.
      */
-    public RangeCache() {
-        this(new DefaultWeighter<>(), (x) -> System.nanoTime());
+    public RangeCache(RangeCacheRemovalQueue<Key, Value> removalQueue) {
+        this(new DefaultWeighter<>(), (x) -> System.nanoTime(), removalQueue);
     }
 
     /**
@@ -112,7 +116,9 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
      * @param weighter
      *            a custom weighter to compute the size of each stored value
      */
-    public RangeCache(Weighter<Value> weighter, TimestampExtractor<Value> timestampExtractor) {
+    public RangeCache(Weighter<Value> weighter, TimestampExtractor<Value> timestampExtractor,
+                      RangeCacheRemovalQueue<Key, Value> removalQueue) {
+        this.removalQueue = removalQueue;
         this.size = new AtomicLong(0);
         this.entries = new ConcurrentSkipListMap<>();
         this.weighter = weighter;
