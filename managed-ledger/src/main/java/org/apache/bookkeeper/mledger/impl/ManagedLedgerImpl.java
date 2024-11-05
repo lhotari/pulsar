@@ -162,6 +162,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     protected final String name;
     private final Map<String, byte[]> ledgerMetadata;
     protected final BookKeeper.DigestType digestType;
+    private final AtomicReference<Position> cacheEvictionPosition = new AtomicReference<>();
 
     protected ManagedLedgerConfig config;
     protected Map<String, String> propertiesMap;
@@ -2439,13 +2440,29 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         if (entryCache.getSize() <= 0) {
             return;
         }
-        if (!activeCursors.isEmpty()) {
-            Position evictionPos = activeCursors.getSlowestReaderPosition();
-            if (evictionPos != null) {
-                entryCache.invalidateEntries(evictionPos);
+        Position slowestReaderPosition = activeCursors.getSlowestReaderPosition();
+        Position evictionPos = slowestReaderPosition != null ? slowestReaderPosition : PositionFactory.LATEST;
+        Position currentEvictionPosition = cacheEvictionPosition.getAndUpdate(currentValue -> {
+            if (currentValue == null || currentValue == PositionFactory.LATEST
+                    || currentValue.compareTo(evictionPos) < 0) {
+                return evictionPos;
+            } else {
+                return currentValue;
             }
-        } else {
-            entryCache.clear();
+        });
+        // when currentEvictionPosition is null, it means there is no eviction task in progress
+        if (currentEvictionPosition == null) {
+            // start a new eviction task that will invalidate entries up to slowest reader position when the task
+            // gets executed. The cacheEvictionPosition could get updates by other threads before the task gets
+            // executed. This minimizes the number of eviction tasks that get executed.
+            getFactory().getCacheEvictionExecutor().execute(() -> {
+                Position latestEvictionPosition = cacheEvictionPosition.getAndSet(null);
+                if (latestEvictionPosition == PositionFactory.LATEST) {
+                    entryCache.clear();
+                } else if (latestEvictionPosition != null) {
+                    entryCache.invalidateEntries(latestEvictionPosition);
+                }
+            });
         }
     }
 
@@ -2963,7 +2980,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             NUMBER_OF_ENTRIES_UPDATER.addAndGet(this, -ls.getEntries());
             TOTAL_SIZE_UPDATER.addAndGet(this, -ls.getSize());
 
-            entryCache.invalidateAllEntries(ls.getLedgerId());
+            getFactory().getCacheEvictionExecutor().execute(() -> {
+                entryCache.invalidateAllEntries(ls.getLedgerId());
+            });
         }
     }
 
