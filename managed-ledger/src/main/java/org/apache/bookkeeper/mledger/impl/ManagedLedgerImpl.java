@@ -2433,12 +2433,6 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         return result;
     }
 
-    void doCacheEviction(long maxTimestamp) {
-        if (entryCache.getSize() > 0) {
-            entryCache.invalidateEntriesBeforeTimestamp(maxTimestamp);
-        }
-    }
-
     // slowest reader position is earliest mark delete position when cacheEvictionByMarkDeletedPosition=true
     // it is the earliest read position when cacheEvictionByMarkDeletedPosition=false
     private void invalidateEntriesUpToSlowestReaderPosition() {
