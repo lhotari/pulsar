@@ -156,7 +156,7 @@ public class RangeCacheTest {
         assertEquals(cache.getSize(), 10);
         assertEquals(cache.getNumberOfEntries(), 4);
 
-        Pair<Integer, Long> evictedSize = cache.evictLEntriesBeforeTimestamp(3);
+        Pair<Integer, Long> evictedSize = removalQueue.evictLEntriesBeforeTimestamp(3);
         assertEquals(evictedSize.getRight().longValue(), 6);
         assertEquals(evictedSize.getLeft().longValue(), 3);
 
@@ -227,7 +227,7 @@ public class RangeCacheTest {
         cache.put(3, new RefString("three", 3));
 
         // This should remove the LRU entries: 0, 1 whose combined size is 7
-        assertEquals(cache.evictLeastAccessedEntries(5), Pair.of(2, (long) 7));
+        assertEquals(removalQueue.evictLeastAccessedEntries(5), Pair.of(2, (long) 7));
 
         assertEquals(cache.getNumberOfEntries(), 2);
         assertEquals(cache.getSize(), 8);
@@ -236,7 +236,7 @@ public class RangeCacheTest {
         assertEquals(cache.get(2).s, "two");
         assertEquals(cache.get(3).s, "three");
 
-        assertEquals(cache.evictLeastAccessedEntries(100), Pair.of(2, (long) 8));
+        assertEquals(removalQueue.evictLeastAccessedEntries(100), Pair.of(2, (long) 8));
         assertEquals(cache.getNumberOfEntries(), 0);
         assertEquals(cache.getSize(), 0);
         assertNull(cache.get(0));
@@ -245,14 +245,14 @@ public class RangeCacheTest {
         assertNull(cache.get(3));
 
         try {
-            cache.evictLeastAccessedEntries(0);
+            removalQueue.evictLeastAccessedEntries(0);
             fail("should throw exception");
         } catch (IllegalArgumentException e) {
             // ok
         }
 
         try {
-            cache.evictLeastAccessedEntries(-1);
+            removalQueue.evictLeastAccessedEntries(-1);
             fail("should throw exception");
         } catch (IllegalArgumentException e) {
             // ok
@@ -269,17 +269,17 @@ public class RangeCacheTest {
         }
 
         assertEquals(cache.getSize(), 100);
-        Pair<Integer, Long> res = cache.evictLeastAccessedEntries(1);
+        Pair<Integer, Long> res = removalQueue.evictLeastAccessedEntries(1);
         assertEquals((int) res.getLeft(), 1);
         assertEquals((long) res.getRight(), 1);
         assertEquals(cache.getSize(), 99);
 
-        res = cache.evictLeastAccessedEntries(10);
+        res = removalQueue.evictLeastAccessedEntries(10);
         assertEquals((int) res.getLeft(), 10);
         assertEquals((long) res.getRight(), 10);
         assertEquals(cache.getSize(), 89);
 
-        res = cache.evictLeastAccessedEntries(100);
+        res = removalQueue.evictLeastAccessedEntries(100);
         assertEquals((int) res.getLeft(), 89);
         assertEquals((long) res.getRight(), 89);
         assertEquals(cache.getSize(), 0);
