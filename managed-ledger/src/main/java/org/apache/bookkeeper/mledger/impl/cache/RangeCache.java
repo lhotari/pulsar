@@ -21,8 +21,6 @@ package org.apache.bookkeeper.mledger.impl.cache;
 import static com.google.common.base.Preconditions.checkArgument;
 import com.google.common.base.Predicate;
 import io.netty.util.IllegalReferenceCountException;
-import io.netty.util.Recycler;
-import io.netty.util.Recycler.Handle;
 import io.netty.util.ReferenceCounted;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -63,43 +61,6 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
     private AtomicLong size; // Total size of values stored in cache
     private final Weighter<Value> weighter; // Weighter object used to extract the size from values
     private final TimestampExtractor<Value> timestampExtractor; // Extract the timestamp associated with a value
-
-    /**
-     * Mutable object to store the number of entries and the total size removed from the cache. The instances
-     * are recycled to avoid creating new instances.
-     */
-    private static class RemovalCounters {
-        private final Handle<RemovalCounters> recyclerHandle;
-        private static final Recycler<RemovalCounters> RECYCLER = new Recycler<RemovalCounters>() {
-            @Override
-            protected RemovalCounters newObject(Handle<RemovalCounters> recyclerHandle) {
-                return new RemovalCounters(recyclerHandle);
-            }
-        };
-        int removedEntries;
-        long removedSize;
-        private RemovalCounters(Handle<RemovalCounters> recyclerHandle) {
-            this.recyclerHandle = recyclerHandle;
-        }
-
-        static <T> RemovalCounters create() {
-            RemovalCounters results = RECYCLER.get();
-            results.removedEntries = 0;
-            results.removedSize = 0;
-            return results;
-        }
-
-        void recycle() {
-            removedEntries = 0;
-            removedSize = 0;
-            recyclerHandle.recycle(this);
-        }
-
-        public void entryRemoved(long size) {
-            removedSize += size;
-            removedEntries++;
-        }
-    }
 
     /**
      * Construct a new RangeLruCache with default Weighter.
@@ -223,7 +184,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
      * @return an pair of ints, containing the number of removed entries and the total size
      */
     public Pair<Integer, Long> removeRange(Key first, Key last, boolean lastInclusive) {
-        RemovalCounters counters = RemovalCounters.create();
+        RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
         Map<Key, RangeCacheEntryWrapper<Key, Value>> subMap = entries.subMap(first, true, last, lastInclusive);
         for (Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry : subMap.entrySet()) {
             removeEntry(entry, counters, true);
@@ -238,13 +199,13 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
     }
 
     private RemoveEntryResult removeEntry(Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry,
-                                          RemovalCounters counters,
+                                          RangeCacheRemovalCounters counters,
                                           boolean skipInvalid) {
         return removeEntry(entry, counters, skipInvalid, x -> true);
     }
 
     private RemoveEntryResult removeEntry(Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry,
-                                          RemovalCounters counters, boolean skipInvalid,
+                                          RangeCacheRemovalCounters counters, boolean skipInvalid,
                                           Predicate<Value> removeCondition) {
         Key key = entry.getKey();
         RangeCacheEntryWrapper<Key, Value> entryWrapper = entry.getValue();
@@ -319,7 +280,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         return RemoveEntryResult.ENTRY_REMOVED;
     }
 
-    private Pair<Integer, Long> handleRemovalResult(RemovalCounters counters) {
+    private Pair<Integer, Long> handleRemovalResult(RangeCacheRemovalCounters counters) {
         size.addAndGet(-counters.removedSize);
         Pair<Integer, Long> result = Pair.of(counters.removedEntries, counters.removedSize);
         counters.recycle();
@@ -333,7 +294,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
      */
     public Pair<Integer, Long> evictLeastAccessedEntries(long minSize) {
         checkArgument(minSize > 0);
-        RemovalCounters counters = RemovalCounters.create();
+        RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
         while (counters.removedSize < minSize && !Thread.currentThread().isInterrupted()) {
             Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry = entries.firstEntry();
             if (entry == null) {
@@ -350,7 +311,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
     * @return the tota
     */
    public Pair<Integer, Long> evictLEntriesBeforeTimestamp(long maxTimestamp) {
-       RemovalCounters counters = RemovalCounters.create();
+       RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
        while (!Thread.currentThread().isInterrupted()) {
            Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry = entries.firstEntry();
            if (entry == null) {
@@ -381,7 +342,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
      * @return size of removed entries
      */
     public Pair<Integer, Long> clear() {
-        RemovalCounters counters = RemovalCounters.create();
+        RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
         while (!Thread.currentThread().isInterrupted()) {
             Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry = entries.firstEntry();
             if (entry == null) {
