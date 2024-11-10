@@ -19,15 +19,17 @@
 package org.apache.bookkeeper.mledger.impl.cache;
 
 import io.netty.util.Recycler;
+import java.lang.ref.WeakReference;
 import java.util.Map;
 import java.util.concurrent.locks.StampedLock;
+import java.util.function.Function;
 
 /**
  * Wrapper around the value to store in Map. This is needed to ensure that a specific instance can be removed from
  * the map by calling the {@link Map#remove(Object, Object)} method. Certain race conditions could result in the
  * wrong value being removed from the map. The instances of this class are recycled to avoid creating new objects.
  */
-class RangeCacheEntryWrapper<K, V> {
+class RangeCacheEntryWrapper<K extends Comparable<K>, V extends RangeCache.ValueWithKeyValidation<K>> {
     private final Recycler.Handle<RangeCacheEntryWrapper> recyclerHandle;
     private static final Recycler<RangeCacheEntryWrapper> RECYCLER = new Recycler<RangeCacheEntryWrapper>() {
         @Override
@@ -36,8 +38,9 @@ class RangeCacheEntryWrapper<K, V> {
         }
     };
     private final StampedLock lock = new StampedLock();
-    private K key;
-    private V value;
+    K key;
+    V value;
+    RangeCache<K, V> rangeCache;
     long size;
     long timestampNanos;
 
@@ -45,26 +48,17 @@ class RangeCacheEntryWrapper<K, V> {
         this.recyclerHandle = recyclerHandle;
     }
 
-    static <K, V> RangeCacheEntryWrapper<K, V> create(K key, V value, long size) {
+    static <K extends Comparable<K>, V extends RangeCache.ValueWithKeyValidation<K>> RangeCacheEntryWrapper<K, V>
+    create(RangeCache<K, V> rangeCache, K key, V value, long size) {
         RangeCacheEntryWrapper<K, V> entryWrapper = RECYCLER.get();
         long stamp = entryWrapper.lock.writeLock();
+        entryWrapper.rangeCache = rangeCache;
         entryWrapper.key = key;
         entryWrapper.value = value;
         entryWrapper.size = size;
         entryWrapper.timestampNanos = System.nanoTime();
         entryWrapper.lock.unlockWrite(stamp);
         return entryWrapper;
-    }
-
-    K getKey() {
-        long stamp = lock.tryOptimisticRead();
-        K localKey = key;
-        if (!lock.validate(stamp)) {
-            stamp = lock.readLock();
-            localKey = key;
-            lock.unlockRead(stamp);
-        }
-        return localKey;
     }
 
     V getValue(K key) {
@@ -83,38 +77,37 @@ class RangeCacheEntryWrapper<K, V> {
         return localValue;
     }
 
-    long getSize() {
-        long stamp = lock.tryOptimisticRead();
-        long localSize = size;
-        if (!lock.validate(stamp)) {
-            stamp = lock.readLock();
-            localSize = size;
-            lock.unlockRead(stamp);
+    /**
+     * Marks the entry as removed if the key and value match the current key and value.
+     * This method should only be called while holding the write lock within {@link #withWriteLock(Function)}.
+     * @param key the expected key of the entry
+     * @param value the expected value of the entry
+     * @return the size of the entry if the entry was removed, -1 otherwise
+     */
+    long markRemoved(K key, V value) {
+        if (this.key != key || this.value != value) {
+            return -1;
         }
-        return localSize;
-    }
-
-    long getTimestampNanos() {
-        long stamp = lock.tryOptimisticRead();
-        long localTimestampNanos = timestampNanos;
-        if (!lock.validate(stamp)) {
-            stamp = lock.readLock();
-            localTimestampNanos = timestampNanos;
-            lock.unlockRead(stamp);
-        }
-        return localTimestampNanos;
-    }
-
-    void markRemoved() {
-        long stamp = lock.writeLock();
-        key = null;
-        value = null;
+        rangeCache = null;
+        this.key = null;
+        this.value = null;
+        long removedSize = size;
         size = 0;
         timestampNanos = 0;
-        lock.unlockWrite(stamp);
+        return removedSize;
+    }
+
+    <R> R withWriteLock(Function<RangeCacheEntryWrapper<K, V>, R> function) {
+        long stamp = lock.writeLock();
+        try {
+            return function.apply(this);
+        } finally {
+            lock.unlockWrite(stamp);
+        }
     }
 
     void recycle() {
+        rangeCache = null;
         key = null;
         value = null;
         size = 0;
