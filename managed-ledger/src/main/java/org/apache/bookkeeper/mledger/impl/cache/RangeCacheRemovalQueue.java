@@ -18,7 +18,9 @@
  */
 package org.apache.bookkeeper.mledger.impl.cache;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import java.util.Queue;
+import java.util.function.BiPredicate;
 import org.apache.commons.lang3.tuple.Pair;
 import org.jctools.queues.MpscChunkedArrayQueue;
 
@@ -26,10 +28,55 @@ class RangeCacheRemovalQueue<Key extends Comparable<Key>, Value extends RangeCac
     private final Queue<RangeCacheEntryWrapper<Key, Value>> removalQueue = new MpscChunkedArrayQueue<>(1024);
 
     public Pair<Integer, Long> evictLEntriesBeforeTimestamp(long timestampNanos) {
-        return null;
+        return evictEntries((e, c) -> e.timestampNanos < timestampNanos);
     }
 
     public Pair<Integer, Long> evictLeastAccessedEntries(long sizeToFree) {
-        return null;
+        checkArgument(sizeToFree > 0);
+        return evictEntries((e, c) -> c.removedSize < sizeToFree);
+    }
+
+    public void addEntry(RangeCacheEntryWrapper<Key, Value> newWrapper) {
+        removalQueue.offer(newWrapper);
+    }
+
+    private synchronized Pair<Integer, Long> evictEntries(
+            BiPredicate<RangeCacheEntryWrapper<Key, Value>, RangeCacheRemovalCounters> evictionPredicate) {
+        RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
+        while (!Thread.currentThread().isInterrupted()) {
+            RangeCacheEntryWrapper<Key, Value> entry = removalQueue.peek();
+            if (entry == null) {
+                break;
+            }
+            boolean removeFromQueue = entry.withWriteLock(e -> {
+                if (e.key == null) {
+                    // entry has been removed
+                    return true;
+                }
+                if (evictionPredicate.test(e, counters)) {
+                    e.rangeCache.removeEntry(e.key, e.value, e, counters, true);
+                    return true;
+                } else {
+                    return false;
+                }
+            });
+
+            if (removeFromQueue) {
+                // remove peeked entry
+                removalQueue.poll();
+                // recycle the entry after it has been removed from the queue
+                entry.recycle();
+            } else {
+                // stop removing entries
+                break;
+            }
+        }
+        return handleRemovalResult(counters);
+    }
+
+    private Pair<Integer, Long> handleRemovalResult(RangeCacheRemovalCounters counters) {
+        Pair<Integer, Long> result = Pair.of(counters.removedEntries, counters.removedSize);
+        counters.recycle();
+        return result;
     }
 }
