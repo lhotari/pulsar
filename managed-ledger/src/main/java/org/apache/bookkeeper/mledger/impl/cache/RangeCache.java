@@ -18,8 +18,6 @@
  */
 package org.apache.bookkeeper.mledger.impl.cache;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import com.google.common.base.Predicate;
 import io.netty.util.IllegalReferenceCountException;
 import io.netty.util.ReferenceCounted;
 import java.util.ArrayList;
@@ -29,6 +27,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.impl.cache.RangeCache.ValueWithKeyValidation;
 import org.apache.commons.lang3.tuple.Pair;
@@ -60,28 +59,25 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
     private final ConcurrentNavigableMap<Key, RangeCacheEntryWrapper<Key, Value>> entries;
     private AtomicLong size; // Total size of values stored in cache
     private final Weighter<Value> weighter; // Weighter object used to extract the size from values
-    private final TimestampExtractor<Value> timestampExtractor; // Extract the timestamp associated with a value
 
     /**
      * Construct a new RangeLruCache with default Weighter.
      */
     public RangeCache(RangeCacheRemovalQueue<Key, Value> removalQueue) {
-        this(new DefaultWeighter<>(), (x) -> System.nanoTime(), removalQueue);
+        this(new DefaultWeighter<>(), removalQueue);
     }
 
     /**
      * Construct a new RangeLruCache.
      *
-     * @param weighter
-     *            a custom weighter to compute the size of each stored value
+     * @param weighter a custom weighter to compute the size of each stored value
      */
-    public RangeCache(Weighter<Value> weighter, TimestampExtractor<Value> timestampExtractor,
+    public RangeCache(Weighter<Value> weighter,
                       RangeCacheRemovalQueue<Key, Value> removalQueue) {
         this.removalQueue = removalQueue;
         this.size = new AtomicLong(0);
         this.entries = new ConcurrentSkipListMap<>();
         this.weighter = weighter;
-        this.timestampExtractor = timestampExtractor;
     }
 
     /**
@@ -99,9 +95,10 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
                 throw new IllegalArgumentException("Value '" + value + "' does not match key '" + key + "'");
             }
             long entrySize = weighter.getSize(value);
-            RangeCacheEntryWrapper<Key, Value> newWrapper = RangeCacheEntryWrapper.create(key, value, entrySize);
+            RangeCacheEntryWrapper<Key, Value> newWrapper = RangeCacheEntryWrapper.create(this, key, value, entrySize);
             if (entries.putIfAbsent(key, newWrapper) == null) {
                 this.size.addAndGet(entrySize);
+                removalQueue.addEntry(newWrapper);
                 return true;
             } else {
                 // recycle the new wrapper as it was not used
@@ -207,54 +204,65 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
         Map<Key, RangeCacheEntryWrapper<Key, Value>> subMap = entries.subMap(first, true, last, lastInclusive);
         for (Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry : subMap.entrySet()) {
-            removeEntry(entry, counters);
+            removeEntryWithWriteLock(entry.getKey(), entry.getValue(), counters);
         }
         return handleRemovalResult(counters);
     }
 
-    enum RemoveEntryResult {
-        ENTRY_REMOVED,
-        CONTINUE_LOOP,
-        BREAK_LOOP;
+    boolean removeEntryWithWriteLock(Key expectedKey, RangeCacheEntryWrapper<Key, Value> entryWrapper,
+                                          RangeCacheRemovalCounters counters) {
+        return entryWrapper.withWriteLock(e -> {
+            if (e.key == null || e.key != expectedKey) {
+                // entry has already been removed
+                return false;
+            }
+            return removeEntry(e.key, e.value, e, counters, false);
+        });
     }
 
-    private RemoveEntryResult removeEntry(Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry, RemovalCounters counters) {
-        return removeEntry(entry, counters, x -> true);
-    }
-
-    private RemoveEntryResult removeEntry(Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry,
-                                          RemovalCounters counters, Predicate<Value> removeCondition) {
-        Key key = entry.getKey();
-        RangeCacheEntryWrapper<Key, Value> entryWrapper = entry.getValue();
-        Value value = getValueMatchingEntry(entry);
+    /**
+     * Remove the entry from the cache. This must be called within a function passed to
+     * {@link RangeCacheEntryWrapper#withWriteLock(Function)}.
+     * @param key the expected key of the entry
+     * @param value the expected value of the entry
+     * @param entryWrapper the entry wrapper instance
+     * @param counters the removal counters
+     * @return true if the entry was removed, false otherwise
+     */
+    boolean removeEntry(Key key, Value value, RangeCacheEntryWrapper<Key, Value> entryWrapper,
+                        RangeCacheRemovalCounters counters, boolean updateSize) {
+        // always remove the entry from the map
+        entries.remove(key, entryWrapper);
         if (value == null) {
-            // the wrapper has already been recycled or contains another key
-            entries.remove(key, entryWrapper);
-            return RemoveEntryResult.CONTINUE_LOOP;
+            // the wrapper has already been recycled and contains another key
+            return false;
         }
         try {
-            if (!removeCondition.test(value)) {
-                return RemoveEntryResult.BREAK_LOOP;
+            // add extra retain to avoid value being released while we are removing it
+            value.retain();
+        } catch (IllegalReferenceCountException e) {
+            return false;
+        }
+        try {
+            if (!value.matchesKey(key)) {
+                return false;
             }
-            // remove the specific entry
-            boolean entryRemoved = entries.remove(key, entryWrapper);
-            if (entryRemoved) {
-                counters.entryRemoved(entryWrapper.getSize());
-                // check that the value hasn't been recycled in between
-                // there should be at least 2 references since this method adds one and the cache should have
-                // one reference. it is valid that the value contains references even after the key has been
-                // removed from the cache
+            long removedSize = entryWrapper.markRemoved(key, value);
+            if (removedSize > -1) {
+                counters.entryRemoved(removedSize);
+                if (updateSize) {
+                    size.addAndGet(-removedSize);
+                }
                 if (value.refCnt() > 1) {
-                    entryWrapper.recycle();
                     // remove the cache reference
                     value.release();
                 } else {
                     log.info("Unexpected refCnt {} for key {}, removed entry without releasing the value",
                             value.refCnt(), key);
                 }
-                return RemoveEntryResult.ENTRY_REMOVED;
+                return true;
             } else {
-                return RemoveEntryResult.CONTINUE_LOOP;
+                return false;
             }
         } finally {
             // remove the extra retain
@@ -268,50 +276,6 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         counters.recycle();
         return result;
     }
-
-    /**
-     *
-     * @param minSize
-     * @return a pair containing the number of entries evicted and their total size
-     */
-    public Pair<Integer, Long> evictLeastAccessedEntries(long minSize) {
-        if (log.isDebugEnabled()) {
-            log.debug("Evicting entries to reach a minimum size of {}", minSize);
-        }
-        checkArgument(minSize > 0);
-        RemovalCounters counters = RemovalCounters.create();
-        while (counters.removedSize < minSize && !Thread.currentThread().isInterrupted()) {
-            Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry = entries.firstEntry();
-            if (entry == null) {
-                break;
-            }
-            removeEntry(entry, counters);
-        }
-        return handleRemovalResult(counters);
-    }
-
-    /**
-    *
-    * @param maxTimestamp the max timestamp of the entries to be evicted
-    * @return the tota
-    */
-   public Pair<Integer, Long> evictLEntriesBeforeTimestamp(long maxTimestamp) {
-       if (log.isDebugEnabled()) {
-              log.debug("Evicting entries with timestamp <= {}", maxTimestamp);
-       }
-       RemovalCounters counters = RemovalCounters.create();
-       while (!Thread.currentThread().isInterrupted()) {
-           Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry = entries.firstEntry();
-           if (entry == null) {
-               break;
-           }
-           if (removeEntry(entry, counters, value -> timestampExtractor.getTimestamp(value) <= maxTimestamp)
-                   == RemoveEntryResult.BREAK_LOOP) {
-               break;
-           }
-       }
-       return handleRemovalResult(counters);
-   }
 
     /**
      * Just for testing. Getting the number of entries is very expensive on the conncurrent map
@@ -339,7 +303,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
             if (entry == null) {
                 break;
             }
-            removeEntry(entry, counters);
+            removeEntryWithWriteLock(entry.getKey(), entry.getValue(), counters);
         }
         return handleRemovalResult(counters);
     }
@@ -351,15 +315,6 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
      */
     public interface Weighter<ValueT> {
         long getSize(ValueT value);
-    }
-
-    /**
-     * Interface of a object that is able to the extract the "timestamp" of the cached values.
-     *
-     * @param <ValueT>
-     */
-    public interface TimestampExtractor<ValueT> {
-        long getTimestamp(ValueT value);
     }
 
     /**

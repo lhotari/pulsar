@@ -80,7 +80,7 @@ public class RangeEntryCacheImpl implements EntryCache {
         this.ml = ml;
         this.pendingReadsManager = new PendingReadsManager(this);
         this.interceptor = ml.getManagedLedgerInterceptor();
-        this.entries = new RangeCache<>(EntryImpl::getLength, EntryImpl::getTimestamp, rangeCacheRemovalQueue);
+        this.entries = new RangeCache<>(EntryImpl::getLength, rangeCacheRemovalQueue);
         this.copyEntries = copyEntries;
 
         if (log.isDebugEnabled()) {
