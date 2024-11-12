@@ -38,11 +38,13 @@ import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
+import org.apache.bookkeeper.mledger.CachedEntry;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
+import org.apache.bookkeeper.mledger.impl.CachedEntryImpl;
 import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
@@ -65,7 +67,7 @@ public class RangeEntryCacheImpl implements EntryCache {
     private final RangeEntryCacheManagerImpl manager;
     final ManagedLedgerImpl ml;
     private ManagedLedgerInterceptor interceptor;
-    private final RangeCache<Position, EntryImpl> entries;
+    private final RangeCache<Position, CachedEntry> entries;
     private final boolean copyEntries;
     private final PendingReadsManager pendingReadsManager;
 
@@ -75,13 +77,13 @@ public class RangeEntryCacheImpl implements EntryCache {
     private final LongAdder totalAddedEntriesCount = new LongAdder();
 
     public RangeEntryCacheImpl(RangeEntryCacheManagerImpl manager, ManagedLedgerImpl ml, boolean copyEntries,
-                               RangeCacheRemovalQueue<Position, EntryImpl> rangeCacheRemovalQueue) {
+                               RangeCacheRemovalQueue<Position, CachedEntry> rangeCacheRemovalQueue) {
 
         this.manager = manager;
         this.ml = ml;
         this.pendingReadsManager = new PendingReadsManager(this);
         this.interceptor = ml.getManagedLedgerInterceptor();
-        this.entries = new RangeCache<>(EntryImpl::getLength, rangeCacheRemovalQueue);
+        this.entries = new RangeCache<>(Entry::getLength, rangeCacheRemovalQueue);
         this.copyEntries = copyEntries;
 
         if (log.isDebugEnabled()) {
@@ -120,7 +122,7 @@ public class RangeEntryCacheImpl implements EntryCache {
     );
 
     @Override
-    public boolean insert(Entry entry) {
+    public CachedEntry insert(Entry entry) {
         int entryLength = entry.getLength();
 
         if (log.isDebugEnabled()) {
@@ -130,14 +132,14 @@ public class RangeEntryCacheImpl implements EntryCache {
 
         Position position = entry.getPosition();
         if (entries.exists(position)) {
-            return false;
+            return null;
         }
 
         ByteBuf cachedData;
         if (copyEntries) {
             cachedData = copyEntry(entry);
             if (cachedData == null) {
-                return false;
+                return null;
             }
         } else {
             // Use retain here to have the same counter increase as in the copy entry scenario
@@ -146,17 +148,17 @@ public class RangeEntryCacheImpl implements EntryCache {
             cachedData = entry.getDataBuffer().retainedDuplicate();
         }
 
-        EntryImpl cacheEntry = EntryImpl.create(position, cachedData);
+        CachedEntryImpl cacheEntry = CachedEntryImpl.create(position, cachedData);
         cachedData.release();
         if (entries.put(position, cacheEntry)) {
             totalAddedEntriesSize.add(entryLength);
             totalAddedEntriesCount.increment();
             manager.entryAdded(entryLength);
-            return true;
+            return cacheEntry;
         } else {
             // entry was not inserted into cache, we need to discard it
             cacheEntry.release();
-            return false;
+            return null;
         }
     }
 
@@ -373,9 +375,9 @@ public class RangeEntryCacheImpl implements EntryCache {
     void doAsyncReadEntriesByPosition(ReadHandle lh, Position firstPosition, Position lastPosition, int numberOfEntries,
                                       Predicate<Entry> shouldCacheEntry, final ReadEntriesCallback callback,
                                       Object ctx) {
-        Collection<EntryImpl> cachedEntries;
+        Collection<CachedEntry> cachedEntries;
         if (firstPosition.compareTo(lastPosition) == 0) {
-            EntryImpl cachedEntry = entries.get(firstPosition);
+            CachedEntry cachedEntry = entries.get(firstPosition);
             if (cachedEntry == null) {
                 cachedEntries = Collections.emptyList();
             } else {
@@ -390,7 +392,7 @@ public class RangeEntryCacheImpl implements EntryCache {
             final List<Entry> entriesToReturn = new ArrayList<>(numberOfEntries);
 
             // All entries found in cache
-            for (EntryImpl entry : cachedEntries) {
+            for (Entry entry : cachedEntries) {
                 entriesToReturn.add(EntryImpl.create(entry));
                 totalCachedSize += entry.getLength();
                 entry.release();
