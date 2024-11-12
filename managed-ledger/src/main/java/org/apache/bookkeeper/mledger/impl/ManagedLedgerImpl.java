@@ -2341,7 +2341,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     // slowest reader position is earliest mark delete position when cacheEvictionByMarkDeletedPosition=true
     // it is the earliest read position when cacheEvictionByMarkDeletedPosition=false
     private void invalidateEntriesUpToSlowestReaderPosition() {
-        if (entryCache.getSize() <= 0) {
+        if (entryCache.getSize() <= 0 || config.isCacheEvictionByExpectedReadCount()) {
             return;
         }
         Position slowestReaderPosition = activeCursors.getSlowestReaderPosition();
@@ -2401,7 +2401,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     private void updateActiveCursor(ManagedCursorImpl cursor, Position newPosition) {
         Pair<Position, Position> slowestPositions = activeCursors.cursorUpdated(cursor, newPosition);
-        if (slowestPositions != null
+        if (!config.isCacheEvictionByExpectedReadCount() && slowestPositions != null
                 && !slowestPositions.getLeft().equals(slowestPositions.getRight())) {
             invalidateEntriesUpToSlowestReaderPosition();
         }
