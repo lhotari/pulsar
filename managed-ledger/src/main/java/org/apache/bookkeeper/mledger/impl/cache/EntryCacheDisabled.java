@@ -26,6 +26,7 @@ import java.util.function.Predicate;
 import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
+import org.apache.bookkeeper.mledger.CachedEntry;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
@@ -51,8 +52,8 @@ public class EntryCacheDisabled implements EntryCache {
     }
 
     @Override
-    public boolean insert(Entry entry) {
-        return false;
+    public CachedEntry insert(Entry entry) {
+        return null;
     }
 
     @Override

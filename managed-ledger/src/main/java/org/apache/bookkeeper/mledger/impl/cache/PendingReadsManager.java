@@ -235,7 +235,7 @@ public class PendingReadsManager {
 
         private List<Entry> keepEntries(List<Entry> list, long startEntry, long endEntry) {
             List<Entry> result = new ArrayList<>((int) (endEntry - startEntry));
-            for (EntryImpl entry : list) {
+            for (Entry entry : list) {
                 long entryId = entry.getEntryId();
                 if (startEntry <= entryId && entryId <= endEntry) {
                     result.add(entry);
@@ -267,11 +267,11 @@ public class PendingReadsManager {
                         if (first.startEntry == key.startEntry
                                 && first.endEntry == key.endEntry) {
                             // perfect match, no copy, this is the most common case
-                            first.callback.readEntriesComplete((List) entriesToReturn,
+                            first.callback.readEntriesComplete(entriesToReturn,
                                     first.ctx);
                         } else {
                             first.callback.readEntriesComplete(
-                                    (List) keepEntries(entriesToReturn, first.startEntry, first.endEntry),
+                                    keepEntries(entriesToReturn, first.startEntry, first.endEntry),
                                     first.ctx);
                         }
                     } else {
@@ -279,16 +279,16 @@ public class PendingReadsManager {
                             long callbackStartEntry = callback.startEntry;
                             long callbackEndEntry = callback.endEntry;
                             List<Entry> copy = new ArrayList<>((int) (callbackEndEntry - callbackStartEntry + 1));
-                            for (EntryImpl entry : entriesToReturn) {
+                            for (Entry entry : entriesToReturn) {
                                 long entryId = entry.getEntryId();
                                 if (callbackStartEntry <= entryId && entryId <= callbackEndEntry) {
                                     EntryImpl entryCopy = EntryImpl.create(entry);
                                     copy.add(entryCopy);
                                 }
                             }
-                            callback.callback.readEntriesComplete((List) copy, callback.ctx);
+                            callback.callback.readEntriesComplete(copy, callback.ctx);
                         }
-                        for (EntryImpl entry : entriesToReturn) {
+                        for (Entry entry : entriesToReturn) {
                             entry.release();
                         }
                     }
