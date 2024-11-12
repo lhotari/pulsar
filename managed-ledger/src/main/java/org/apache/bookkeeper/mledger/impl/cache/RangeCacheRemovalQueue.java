@@ -40,6 +40,14 @@ class RangeCacheRemovalQueue<Key extends Comparable<Key>, Value extends RangeCac
         return removalQueue.offer(newWrapper);
     }
 
+    /**
+     * Evict entries from the removal queue based on the provided eviction predicate.
+     * This method is synchronized to prevent multiple threads from removing entries simultaneously.
+     * An MPSC (Multiple Producer Single Consumer) queue is used as the removal queue, which expects a single consumer.
+     *
+     * @param evictionPredicate the predicate to determine if an entry should be evicted
+     * @return the number of entries and the total size removed from the cache
+     */
     private synchronized Pair<Integer, Long> evictEntries(
             BiPredicate<RangeCacheEntryWrapper<Key, Value>, RangeCacheRemovalCounters> evictionPredicate) {
         RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
