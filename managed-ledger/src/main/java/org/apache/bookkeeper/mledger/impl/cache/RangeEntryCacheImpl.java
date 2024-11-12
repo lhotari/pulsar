@@ -435,11 +435,11 @@ public class RangeEntryCacheImpl implements EntryCache {
      * @param shouldCacheEntry if we should put the entry into the cache
      * @return a handle to the operation
      */
-    CompletableFuture<List<EntryImpl>> readFromStorage(ReadHandle lh,
+    CompletableFuture<List<Entry>> readFromStorage(ReadHandle lh,
                                                        long firstEntry, long lastEntry,
                                                        Predicate<Entry> shouldCacheEntry) {
         final int entriesToRead = (int) (lastEntry - firstEntry) + 1;
-        CompletableFuture<List<EntryImpl>> readResult = ReadEntryUtils.readAsync(ml, lh, firstEntry, lastEntry)
+        CompletableFuture<List<Entry>> readResult = ReadEntryUtils.readAsync(ml, lh, firstEntry, lastEntry)
                 .thenApply(
                         ledgerEntries -> {
                             requireNonNull(ml.getName());
@@ -448,7 +448,7 @@ public class RangeEntryCacheImpl implements EntryCache {
                             try {
                                 // We got the entries, we need to transform them to a List<> type
                                 long totalSize = 0;
-                                final List<EntryImpl> entriesToReturn = new ArrayList<>(entriesToRead);
+                                final List<Entry> entriesToReturn = new ArrayList<>(entriesToRead);
                                 for (LedgerEntry e : ledgerEntries) {
                                     EntryImpl entry = RangeEntryCacheManagerImpl.create(e, interceptor);
                                     entriesToReturn.add(entry);
