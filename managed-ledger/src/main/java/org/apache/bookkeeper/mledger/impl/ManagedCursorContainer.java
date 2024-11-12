@@ -457,4 +457,14 @@ public class ManagedCursorContainer implements Iterable<ManagedCursor> {
         int i = item.idx * 2 + 2;
         return i < heap.size() ? heap.get(i) : null;
     }
+
+    public int getNumberOfCursorsBefore(ManagedCursor cursor) {
+        long stamp = rwLock.readLock();
+        try {
+            Item item = cursors.get(cursor.getName());
+            return item != null ? item.idx : 0;
+        } finally {
+            rwLock.unlockRead(stamp);
+        }
+    }
 }
