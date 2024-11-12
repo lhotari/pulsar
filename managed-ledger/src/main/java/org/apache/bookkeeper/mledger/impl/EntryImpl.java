@@ -22,33 +22,16 @@ import com.google.common.annotations.VisibleForTesting;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.util.Recycler;
-import io.netty.util.Recycler.Handle;
-import io.netty.util.ReferenceCounted;
 import org.apache.bookkeeper.client.api.LedgerEntry;
-import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.Position;
-import org.apache.bookkeeper.mledger.PositionFactory;
-import org.apache.bookkeeper.mledger.impl.cache.RangeCache;
-import org.apache.bookkeeper.mledger.util.AbstractCASReferenceCounted;
 
-public final class EntryImpl extends AbstractCASReferenceCounted implements Entry, Comparable<EntryImpl>,
-        RangeCache.ValueWithKeyValidation<Position> {
-
+public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
     private static final Recycler<EntryImpl> RECYCLER = new Recycler<EntryImpl>() {
         @Override
         protected EntryImpl newObject(Handle<EntryImpl> handle) {
             return new EntryImpl(handle);
         }
     };
-
-    private final Handle<EntryImpl> recyclerHandle;
-    private long timestamp;
-    private long ledgerId;
-    private long entryId;
-    private Position position;
-    ByteBuf data;
-
-    private Runnable onDeallocate;
 
     public static EntryImpl create(LedgerEntry ledgerEntry) {
         EntryImpl entry = RECYCLER.get();
@@ -105,111 +88,6 @@ public final class EntryImpl extends AbstractCASReferenceCounted implements Entr
     }
 
     private EntryImpl(Recycler.Handle<EntryImpl> recyclerHandle) {
-        this.recyclerHandle = recyclerHandle;
-    }
-
-    public void onDeallocate(Runnable r) {
-        if (this.onDeallocate == null) {
-            this.onDeallocate = r;
-        } else {
-            // this is not expected to happen
-            Runnable previous = this.onDeallocate;
-            this.onDeallocate = () -> {
-                try {
-                    previous.run();
-                } finally {
-                    r.run();
-                }
-            };
-        }
-    }
-
-    public long getTimestamp() {
-        return timestamp;
-    }
-
-    @Override
-    public ByteBuf getDataBuffer() {
-        return data;
-    }
-
-    @Override
-    public byte[] getData() {
-        byte[] array = new byte[data.readableBytes()];
-        data.getBytes(data.readerIndex(), array);
-        return array;
-    }
-
-    // Only for test
-    @Override
-    public byte[] getDataAndRelease() {
-        byte[] array = getData();
-        release();
-        return array;
-    }
-
-    @Override
-    public int getLength() {
-        return data.readableBytes();
-    }
-
-    @Override
-    public Position getPosition() {
-        if (position == null) {
-            position = PositionFactory.create(ledgerId, entryId);
-        }
-        return position;
-    }
-
-    @Override
-    public long getLedgerId() {
-        return ledgerId;
-    }
-
-    @Override
-    public long getEntryId() {
-        return entryId;
-    }
-
-    @Override
-    public int compareTo(EntryImpl other) {
-        if (this.ledgerId != other.ledgerId) {
-            return this.ledgerId < other.ledgerId ? -1 : 1;
-        }
-
-        if (this.entryId != other.entryId) {
-            return this.entryId < other.entryId ? -1 : 1;
-        }
-
-        return 0;
-    }
-
-    @Override
-    public ReferenceCounted touch(Object hint) {
-        return this;
-    }
-
-    @Override
-    protected void deallocate() {
-        // This method is called whenever the ref-count of the EntryImpl reaches 0, so that now we can recycle it
-        if (onDeallocate != null) {
-            try {
-                onDeallocate.run();
-            } finally {
-                onDeallocate = null;
-            }
-        }
-        data.release();
-        data = null;
-        timestamp = -1;
-        ledgerId = -1;
-        entryId = -1;
-        position = null;
-        recyclerHandle.recycle(this);
-    }
-
-    @Override
-    public boolean matchesKey(Position key) {
-        return key.compareTo(ledgerId, entryId) == 0;
+        super(recyclerHandle);
     }
 }
