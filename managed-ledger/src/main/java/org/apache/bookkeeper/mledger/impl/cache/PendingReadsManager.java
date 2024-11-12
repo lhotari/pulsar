@@ -233,8 +233,8 @@ public class PendingReadsManager {
             this.ledgerCache = ledgerCache;
         }
 
-        private List<EntryImpl> keepEntries(List<EntryImpl> list, long startEntry, long endEntry) {
-            List<EntryImpl> result = new ArrayList<>((int) (endEntry - startEntry));
+        private List<Entry> keepEntries(List<Entry> list, long startEntry, long endEntry) {
+            List<Entry> result = new ArrayList<>((int) (endEntry - startEntry));
             for (EntryImpl entry : list) {
                 long entryId = entry.getEntryId();
                 if (startEntry <= entryId && entryId <= endEntry) {
@@ -246,7 +246,7 @@ public class PendingReadsManager {
             return result;
         }
 
-        public void attach(CompletableFuture<List<EntryImpl>> handle) {
+        public void attach(CompletableFuture<List<Entry>> handle) {
             // when the future is done remove this from the map
             // new reads will go to a new instance
             // this is required because we are going to do refcount management
@@ -278,7 +278,7 @@ public class PendingReadsManager {
                         for (ReadEntriesCallbackWithContext callback : callbacks) {
                             long callbackStartEntry = callback.startEntry;
                             long callbackEndEntry = callback.endEntry;
-                            List<EntryImpl> copy = new ArrayList<>((int) (callbackEndEntry - callbackStartEntry + 1));
+                            List<Entry> copy = new ArrayList<>((int) (callbackEndEntry - callbackStartEntry + 1));
                             for (EntryImpl entry : entriesToReturn) {
                                 long entryId = entry.getEntryId();
                                 if (callbackStartEntry <= entryId && entryId <= callbackEndEntry) {
@@ -435,7 +435,7 @@ public class PendingReadsManager {
 
 
             if (createdByThisThread.get()) {
-                CompletableFuture<List<EntryImpl>> readResult = rangeEntryCache.readFromStorage(lh, firstEntry,
+                CompletableFuture<List<Entry>> readResult = rangeEntryCache.readFromStorage(lh, firstEntry,
                         lastEntry, shouldCacheEntry);
                 pendingRead.attach(readResult);
             }
