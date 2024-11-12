@@ -152,7 +152,7 @@ public class RangeEntryCacheImpl implements EntryCache {
         if (entries.put(position, cacheEntry)) {
             totalAddedEntriesSize.add(entryLength);
             totalAddedEntriesCount.increment();
-            manager.makeSpaceAndAddEntry(entryLength);
+            manager.entryAdded(entryLength);
             return true;
         } else {
             // entry was not inserted into cache, we need to discard it
