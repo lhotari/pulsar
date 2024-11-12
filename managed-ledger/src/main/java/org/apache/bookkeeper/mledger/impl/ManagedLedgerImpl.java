@@ -3845,6 +3845,10 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         }
     }
 
+    public int getNumberOfActiveCursorsBefore(ManagedCursor cursor) {
+        return activeCursors.getNumberOfCursorsBefore(cursor);
+    }
+
 
     public void removeWaitingCursor(ManagedCursor cursor) {
         this.waitingCursors.remove(cursor);
