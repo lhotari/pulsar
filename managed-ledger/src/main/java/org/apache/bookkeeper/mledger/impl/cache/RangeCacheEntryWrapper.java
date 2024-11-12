@@ -19,7 +19,6 @@
 package org.apache.bookkeeper.mledger.impl.cache;
 
 import io.netty.util.Recycler;
-import java.lang.ref.WeakReference;
 import java.util.Map;
 import java.util.concurrent.locks.StampedLock;
 import java.util.function.Function;
@@ -48,17 +47,22 @@ class RangeCacheEntryWrapper<K extends Comparable<K>, V extends RangeCache.Value
         this.recyclerHandle = recyclerHandle;
     }
 
-    static <K extends Comparable<K>, V extends RangeCache.ValueWithKeyValidation<K>> RangeCacheEntryWrapper<K, V>
-    create(RangeCache<K, V> rangeCache, K key, V value, long size) {
+    static <K extends Comparable<K>, V extends RangeCache.ValueWithKeyValidation<K>, R> R
+    withNewInstance(RangeCache<K, V> rangeCache, K key, V value, long size,
+                    Function<RangeCacheEntryWrapper<K, V>, R> function) {
         RangeCacheEntryWrapper<K, V> entryWrapper = RECYCLER.get();
-        long stamp = entryWrapper.lock.writeLock();
-        entryWrapper.rangeCache = rangeCache;
-        entryWrapper.key = key;
-        entryWrapper.value = value;
-        entryWrapper.size = size;
-        entryWrapper.timestampNanos = System.nanoTime();
-        entryWrapper.lock.unlockWrite(stamp);
-        return entryWrapper;
+        StampedLock lock = entryWrapper.lock;
+        long stamp = lock.writeLock();
+        try {
+            entryWrapper.rangeCache = rangeCache;
+            entryWrapper.key = key;
+            entryWrapper.value = value;
+            entryWrapper.size = size;
+            entryWrapper.timestampNanos = System.nanoTime();
+            return function.apply(entryWrapper);
+        } finally {
+            lock.unlockWrite(stamp);
+        }
     }
 
     V getValue(K key) {

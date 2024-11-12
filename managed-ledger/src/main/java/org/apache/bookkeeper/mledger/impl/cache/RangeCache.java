@@ -95,16 +95,17 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
                 throw new IllegalArgumentException("Value '" + value + "' does not match key '" + key + "'");
             }
             long entrySize = weighter.getSize(value);
-            RangeCacheEntryWrapper<Key, Value> newWrapper = RangeCacheEntryWrapper.create(this, key, value, entrySize);
-            if (entries.putIfAbsent(key, newWrapper) == null) {
-                this.size.addAndGet(entrySize);
-                removalQueue.addEntry(newWrapper);
-                return true;
-            } else {
-                // recycle the new wrapper as it was not used
-                newWrapper.recycle();
-                return false;
-            }
+            boolean added = RangeCacheEntryWrapper.withNewInstance(this, key, value, entrySize, newWrapper -> {
+                if (removalQueue.addEntry(newWrapper) && entries.putIfAbsent(key, newWrapper) == null) {
+                    this.size.addAndGet(entrySize);
+                    return true;
+                } else {
+                    // recycle the new wrapper as it was not used
+                    newWrapper.recycle();
+                    return false;
+                }
+            });
+            return added;
         } finally {
             value.release();
         }

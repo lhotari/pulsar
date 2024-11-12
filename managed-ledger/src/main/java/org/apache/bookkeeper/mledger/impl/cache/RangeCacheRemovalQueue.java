@@ -36,8 +36,8 @@ class RangeCacheRemovalQueue<Key extends Comparable<Key>, Value extends RangeCac
         return evictEntries((e, c) -> c.removedSize < sizeToFree);
     }
 
-    public void addEntry(RangeCacheEntryWrapper<Key, Value> newWrapper) {
-        removalQueue.offer(newWrapper);
+    public boolean addEntry(RangeCacheEntryWrapper<Key, Value> newWrapper) {
+        return removalQueue.offer(newWrapper);
     }
 
     private synchronized Pair<Integer, Long> evictEntries(
