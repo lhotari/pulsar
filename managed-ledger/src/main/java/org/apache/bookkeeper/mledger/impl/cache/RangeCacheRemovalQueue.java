@@ -22,10 +22,13 @@ import static com.google.common.base.Preconditions.checkArgument;
 import java.util.Queue;
 import java.util.function.BiPredicate;
 import org.apache.commons.lang3.tuple.Pair;
-import org.jctools.queues.MpscChunkedArrayQueue;
+import org.jctools.queues.MpscUnboundedArrayQueue;
 
 class RangeCacheRemovalQueue<Key extends Comparable<Key>, Value extends RangeCache.ValueWithKeyValidation<Key>> {
-    private final Queue<RangeCacheEntryWrapper<Key, Value>> removalQueue = new MpscChunkedArrayQueue<>(1024);
+    // The removal queue is unbounded, but we allocate memory in chunks to avoid frequent memory allocations.
+    private static final int REMOVAL_QUEUE_CHUNK_SIZE = 128 * 1024;
+    private final Queue<RangeCacheEntryWrapper<Key, Value>> removalQueue = new MpscUnboundedArrayQueue<>(
+            REMOVAL_QUEUE_CHUNK_SIZE);
 
     public Pair<Integer, Long> evictLEntriesBeforeTimestamp(long timestampNanos) {
         return evictEntries((e, c) -> e.timestampNanos < timestampNanos);
