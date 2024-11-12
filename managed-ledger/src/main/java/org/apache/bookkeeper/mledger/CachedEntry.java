@@ -18,7 +18,9 @@
  */
 package org.apache.bookkeeper.mledger;
 
-public interface CachedEntry extends Entry {
-    void markRead();
-    boolean incrementExpectedReadCount();
+import org.apache.bookkeeper.mledger.impl.cache.RangeCache;
+
+public interface CachedEntry extends Entry, RangeCache.ValueWithKeyValidation<Position> {
+    boolean addToExpectedReadCount(int delta);
+    boolean canEvict();
 }

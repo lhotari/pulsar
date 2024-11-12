@@ -22,6 +22,7 @@ import java.util.function.Predicate;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
+import org.apache.bookkeeper.mledger.CachedEntry;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.Position;
 
@@ -46,7 +47,7 @@ public interface EntryCache {
      *            the entry to be cached
      * @return whether the entry was inserted in cache
      */
-    boolean insert(Entry entry);
+    CachedEntry insert(Entry entry);
 
     /**
      * Remove from cache all the entries related to a ledger up to lastPosition excluded.
