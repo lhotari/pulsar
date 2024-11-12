@@ -21,18 +21,18 @@ package org.apache.bookkeeper.mledger.impl.cache;
 import static com.google.common.base.Preconditions.checkArgument;
 import static org.apache.bookkeeper.mledger.impl.cache.RangeEntryCacheManagerImpl.MB;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.bookkeeper.mledger.CachedEntry;
 import org.apache.bookkeeper.mledger.Position;
-import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.commons.lang3.tuple.Pair;
 
 @Slf4j
 public class RangeEntryCacheManagerEvictionHandler implements EntryCachesEvictionHandler {
 
     private final RangeEntryCacheManagerImpl manager;
-    private final RangeCacheRemovalQueue<Position, EntryImpl> rangeCacheRemovalQueue;
+    private final RangeCacheRemovalQueue<Position, CachedEntry> rangeCacheRemovalQueue;
 
     public RangeEntryCacheManagerEvictionHandler(RangeEntryCacheManagerImpl manager,
-                                                 RangeCacheRemovalQueue<Position, EntryImpl> rangeCacheRemovalQueue) {
+                                                 RangeCacheRemovalQueue<Position, CachedEntry> rangeCacheRemovalQueue) {
         this.manager = manager;
         this.rangeCacheRemovalQueue = rangeCacheRemovalQueue;
     }

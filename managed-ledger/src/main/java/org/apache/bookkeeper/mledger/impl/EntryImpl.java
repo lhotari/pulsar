@@ -23,6 +23,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.util.Recycler;
 import org.apache.bookkeeper.client.api.LedgerEntry;
+import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.Position;
 
 public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
@@ -77,12 +78,12 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         return entry;
     }
 
-    public static EntryImpl create(EntryImpl other) {
+    public static EntryImpl create(Entry other) {
         EntryImpl entry = RECYCLER.get();
         entry.timestamp = System.nanoTime();
-        entry.ledgerId = other.ledgerId;
-        entry.entryId = other.entryId;
-        entry.data = other.data.retainedDuplicate();
+        entry.ledgerId = other.getLedgerId();
+        entry.entryId = other.getEntryId();
+        entry.data = other.getDataBuffer().retainedDuplicate();
         entry.setRefCnt(1);
         return entry;
     }
