@@ -20,10 +20,10 @@ package org.apache.bookkeeper.mledger.impl.cache;
 
 import io.netty.buffer.ByteBuf;
 import io.opentelemetry.api.OpenTelemetry;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -122,7 +122,13 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         }
     }
 
-    void makeSpaceIfNeeded(long size) {
+    /**
+     * Trigger an eviction cycle if the cache size is over the threshold.
+     *
+     * @return when eviction is in progress or triggered, return  a future that will be completed when the eviction
+     * cycle is completed
+     */
+    Optional<CompletableFuture<Void>> triggerEvictionWhenNeeded() {
         long currentSize = this.currentSize.get();
 
         // Trigger a single eviction in background. While the eviction is running we stop inserting entries in the cache
@@ -138,14 +144,9 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
                     }
                 }
             }
-            // block all waiting threads until the eviction task has completed
-            try {
-                evictionCompletionFuture.get();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            } catch (ExecutionException e) {
-                throw new RuntimeException(e);
-            }
+            return Optional.of(evictionCompletionFuture);
+        } else {
+            return Optional.empty();
         }
     }
 
@@ -183,10 +184,10 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         }
     }
 
-    void makeSpaceAndAddEntry(long size) {
-        makeSpaceIfNeeded(size);
-        mlFactoryMBean.recordCacheInsertion();
+    void entryAdded(long size) {
         currentSize.addAndGet(size);
+        mlFactoryMBean.recordCacheInsertion();
+        triggerEvictionWhenNeeded();
     }
 
     void entriesRemoved(long size, int count) {
