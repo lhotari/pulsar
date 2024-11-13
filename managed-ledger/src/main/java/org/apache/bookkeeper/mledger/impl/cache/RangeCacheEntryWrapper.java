@@ -22,13 +22,15 @@ import io.netty.util.Recycler;
 import java.util.Map;
 import java.util.concurrent.locks.StampedLock;
 import java.util.function.Function;
+import org.apache.bookkeeper.mledger.CachedEntry;
+import org.apache.bookkeeper.mledger.Position;
 
 /**
  * Wrapper around the value to store in Map. This is needed to ensure that a specific instance can be removed from
  * the map by calling the {@link Map#remove(Object, Object)} method. Certain race conditions could result in the
  * wrong value being removed from the map. The instances of this class are recycled to avoid creating new objects.
  */
-class RangeCacheEntryWrapper<K extends Comparable<K>, V extends RangeCache.ValueWithKeyValidation<K>> {
+class RangeCacheEntryWrapper {
     private final Recycler.Handle<RangeCacheEntryWrapper> recyclerHandle;
     private static final Recycler<RangeCacheEntryWrapper> RECYCLER = new Recycler<RangeCacheEntryWrapper>() {
         @Override
@@ -37,9 +39,9 @@ class RangeCacheEntryWrapper<K extends Comparable<K>, V extends RangeCache.Value
         }
     };
     private final StampedLock lock = new StampedLock();
-    K key;
-    V value;
-    RangeCache<K, V> rangeCache;
+    Position key;
+    CachedEntry value;
+    RangeCache rangeCache;
     long size;
     long timestampNanos;
 
@@ -47,10 +49,10 @@ class RangeCacheEntryWrapper<K extends Comparable<K>, V extends RangeCache.Value
         this.recyclerHandle = recyclerHandle;
     }
 
-    static <K extends Comparable<K>, V extends RangeCache.ValueWithKeyValidation<K>, R> R
-    withNewInstance(RangeCache<K, V> rangeCache, K key, V value, long size,
-                    Function<RangeCacheEntryWrapper<K, V>, R> function) {
-        RangeCacheEntryWrapper<K, V> entryWrapper = RECYCLER.get();
+    static <R> R
+    withNewInstance(RangeCache rangeCache, Position key, CachedEntry value, long size,
+                    Function<RangeCacheEntryWrapper, R> function) {
+        RangeCacheEntryWrapper entryWrapper = RECYCLER.get();
         StampedLock lock = entryWrapper.lock;
         long stamp = lock.writeLock();
         try {
@@ -65,10 +67,10 @@ class RangeCacheEntryWrapper<K extends Comparable<K>, V extends RangeCache.Value
         }
     }
 
-    V getValue(K key) {
+    CachedEntry getValue(Position key) {
         long stamp = lock.tryOptimisticRead();
-        K localKey = this.key;
-        V localValue = this.value;
+        Position localKey = this.key;
+        CachedEntry localValue = this.value;
         if (!lock.validate(stamp)) {
             stamp = lock.readLock();
             localKey = this.key;
@@ -88,7 +90,7 @@ class RangeCacheEntryWrapper<K extends Comparable<K>, V extends RangeCache.Value
      * @param value the expected value of the entry
      * @return the size of the entry if the entry was removed, -1 otherwise
      */
-    long markRemoved(K key, V value) {
+    long markRemoved(Position key, CachedEntry value) {
         if (this.key != key || this.value != value) {
             return -1;
         }
@@ -101,7 +103,7 @@ class RangeCacheEntryWrapper<K extends Comparable<K>, V extends RangeCache.Value
         return removedSize;
     }
 
-    <R> R withWriteLock(Function<RangeCacheEntryWrapper<K, V>, R> function) {
+    <R> R withWriteLock(Function<RangeCacheEntryWrapper, R> function) {
         long stamp = lock.writeLock();
         try {
             return function.apply(this);
