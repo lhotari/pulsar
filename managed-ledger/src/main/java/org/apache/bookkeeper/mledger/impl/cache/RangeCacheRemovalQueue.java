@@ -63,6 +63,7 @@ class RangeCacheRemovalQueue {
             BiPredicate<RangeCacheEntryWrapper, RangeCacheRemovalCounters> evictionPredicate) {
         RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
         while (!Thread.currentThread().isInterrupted()) {
+            // TODO: replace peeking by taking the entry from the queue and storing it to a field if it's not evicted
             RangeCacheEntryWrapper entry = removalQueue.peek();
             if (entry == null) {
                 break;
