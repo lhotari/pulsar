@@ -29,14 +29,10 @@ class RangeCacheRemovalQueue {
     private static final int REMOVAL_QUEUE_CHUNK_SIZE = 128 * 1024;
     private final Queue<RangeCacheEntryWrapper> removalQueue = new MpscUnboundedArrayQueue<>(
             REMOVAL_QUEUE_CHUNK_SIZE);
-    // TODO: add 2 queues for holding the skipped entries which are not evicted. The 2 queues will be swapped in
-    // each eviction cycle so that one queue holds the skipped entries and the other one will be used on the next
-    // round to hold the skipped entries while the evicted ones are removed. The cost of retaining entries will
-    // only require writing the reference to the queue when it keeps on being skipped.
-    // The queue type could be SpscUnboundedArrayQueue for these queues. A simple array list could also be sufficient,
-    // since no thread safety is required. However the challenge with an array list is that it results in a continuous
-    // memory allocation, which could be expensive for large caches. The SpscUnboundedArrayQueue is a better choice
-    // since it allocates memory in chunks, which is more efficient for large caches.
+    // TODO: add an array list (optimized solution would be a linked chunked array list implementation)
+    //  to store the entries that are skipped during eviction
+    // this will allow us to evict entries in a single pass without peeking the message passing queue
+    // this datastructure doesn't have to be thread safe since it's a single thread reading and writing to it.
 
     public Pair<Integer, Long> evictLEntriesBeforeTimestamp(long timestampNanos) {
         return evictEntries((e, c) -> e.timestampNanos < timestampNanos);
@@ -63,7 +59,7 @@ class RangeCacheRemovalQueue {
             BiPredicate<RangeCacheEntryWrapper, RangeCacheRemovalCounters> evictionPredicate) {
         RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
         while (!Thread.currentThread().isInterrupted()) {
-            // TODO: replace peeking by taking the entry from the queue and storing it to a field if it's not evicted
+            // TODO: replace peeking by taking the entry from the queue and adding it to the skipped entries list
             RangeCacheEntryWrapper entry = removalQueue.peek();
             if (entry == null) {
                 break;
