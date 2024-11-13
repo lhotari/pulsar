@@ -24,10 +24,10 @@ import java.util.function.BiPredicate;
 import org.apache.commons.lang3.tuple.Pair;
 import org.jctools.queues.MpscUnboundedArrayQueue;
 
-class RangeCacheRemovalQueue<Key extends Comparable<Key>, Value extends RangeCache.ValueWithKeyValidation<Key>> {
+class RangeCacheRemovalQueue {
     // The removal queue is unbounded, but we allocate memory in chunks to avoid frequent memory allocations.
     private static final int REMOVAL_QUEUE_CHUNK_SIZE = 128 * 1024;
-    private final Queue<RangeCacheEntryWrapper<Key, Value>> removalQueue = new MpscUnboundedArrayQueue<>(
+    private final Queue<RangeCacheEntryWrapper> removalQueue = new MpscUnboundedArrayQueue<>(
             REMOVAL_QUEUE_CHUNK_SIZE);
 
     public Pair<Integer, Long> evictLEntriesBeforeTimestamp(long timestampNanos) {
@@ -39,7 +39,7 @@ class RangeCacheRemovalQueue<Key extends Comparable<Key>, Value extends RangeCac
         return evictEntries((e, c) -> c.removedSize < sizeToFree);
     }
 
-    public boolean addEntry(RangeCacheEntryWrapper<Key, Value> newWrapper) {
+    public boolean addEntry(RangeCacheEntryWrapper newWrapper) {
         return removalQueue.offer(newWrapper);
     }
 
@@ -52,10 +52,10 @@ class RangeCacheRemovalQueue<Key extends Comparable<Key>, Value extends RangeCac
      * @return the number of entries and the total size removed from the cache
      */
     private synchronized Pair<Integer, Long> evictEntries(
-            BiPredicate<RangeCacheEntryWrapper<Key, Value>, RangeCacheRemovalCounters> evictionPredicate) {
+            BiPredicate<RangeCacheEntryWrapper, RangeCacheRemovalCounters> evictionPredicate) {
         RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
         while (!Thread.currentThread().isInterrupted()) {
-            RangeCacheEntryWrapper<Key, Value> entry = removalQueue.peek();
+            RangeCacheEntryWrapper entry = removalQueue.peek();
             if (entry == null) {
                 break;
             }

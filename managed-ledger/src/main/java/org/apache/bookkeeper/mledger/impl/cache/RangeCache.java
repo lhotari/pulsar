@@ -29,7 +29,8 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.bookkeeper.mledger.impl.cache.RangeCache.ValueWithKeyValidation;
+import org.apache.bookkeeper.mledger.CachedEntry;
+import org.apache.bookkeeper.mledger.Position;
 import org.apache.commons.lang3.tuple.Pair;
 
 /**
@@ -41,43 +42,26 @@ import org.apache.commons.lang3.tuple.Pair;
  * that ensures that the value is removed from the map only if the exact same instance is present in the map.
  * There's also a check that ensures that the value matches the key. This is used to detect races without impacting
  * consistency.
- *
- * @param <Key>
- *            Cache key. Needs to be Comparable
- * @param <Value>
- *            Cache value
  */
 @Slf4j
-public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyValidation<Key>> {
-    private final RangeCacheRemovalQueue<Key, Value> removalQueue;
+public class RangeCache {
+    private final RangeCacheRemovalQueue removalQueue;
 
     public interface ValueWithKeyValidation<T> extends ReferenceCounted {
         boolean matchesKey(T key);
     }
 
     // Map from key to nodes inside the linked list
-    private final ConcurrentNavigableMap<Key, RangeCacheEntryWrapper<Key, Value>> entries;
+    private final ConcurrentNavigableMap<Position, RangeCacheEntryWrapper> entries;
     private AtomicLong size; // Total size of values stored in cache
-    private final Weighter<Value> weighter; // Weighter object used to extract the size from values
 
     /**
-     * Construct a new RangeLruCache with default Weighter.
+     * Construct a new RangeCache.
      */
-    public RangeCache(RangeCacheRemovalQueue<Key, Value> removalQueue) {
-        this(new DefaultWeighter<>(), removalQueue);
-    }
-
-    /**
-     * Construct a new RangeLruCache.
-     *
-     * @param weighter a custom weighter to compute the size of each stored value
-     */
-    public RangeCache(Weighter<Value> weighter,
-                      RangeCacheRemovalQueue<Key, Value> removalQueue) {
+    public RangeCache(RangeCacheRemovalQueue removalQueue) {
         this.removalQueue = removalQueue;
         this.size = new AtomicLong(0);
         this.entries = new ConcurrentSkipListMap<>();
-        this.weighter = weighter;
     }
 
     /**
@@ -87,14 +71,14 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
      * @param value ref counted value with at least 1 ref to pass on the cache
      * @return whether the entry was inserted in the cache
      */
-    public boolean put(Key key, Value value) {
+    public boolean put(Position key, CachedEntry value) {
         // retain value so that it's not released before we put it in the cache and calculate the weight
         value.retain();
         try {
             if (!value.matchesKey(key)) {
-                throw new IllegalArgumentException("Value '" + value + "' does not match key '" + key + "'");
+                throw new IllegalArgumentException("CachedEntry '" + value + "' does not match key '" + key + "'");
             }
-            long entrySize = weighter.getSize(value);
+            long entrySize = value.getLength();
             boolean added = RangeCacheEntryWrapper.withNewInstance(this, key, value, entrySize, newWrapper -> {
                 if (removalQueue.addEntry(newWrapper) && entries.putIfAbsent(key, newWrapper) == null) {
                     this.size.addAndGet(entrySize);
@@ -111,7 +95,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         }
     }
 
-    public boolean exists(Key key) {
+    public boolean exists(Position key) {
         return key != null ? entries.containsKey(key) : true;
     }
 
@@ -119,15 +103,15 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
      * Get the value associated with the key and increment the reference count of it.
      * The caller is responsible for releasing the reference.
      */
-    public Value get(Key key) {
+    public CachedEntry get(Position key) {
         return getValue(key, entries.get(key));
     }
 
-    private  Value getValue(Key key, RangeCacheEntryWrapper<Key, Value> valueWrapper) {
+    private  CachedEntry getValue(Position key, RangeCacheEntryWrapper valueWrapper) {
         if (valueWrapper == null) {
             return null;
         } else {
-            Value value = valueWrapper.getValue(key);
+            CachedEntry value = valueWrapper.getValue(key);
             if (value == null) {
                 // the wrapper has been recycled and contains another key
                 return null;
@@ -135,7 +119,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
             try {
                 value.retain();
             } catch (IllegalReferenceCountException e) {
-                // Value was already deallocated
+                // CachedEntry was already deallocated
                 return null;
             }
             // check that the value matches the key and that there's at least 2 references to it since
@@ -143,7 +127,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
             if (value.refCnt() > 1 && value.matchesKey(key)) {
                 return value;
             } else {
-                // Value or IdentityWrapper was recycled and already contains another value
+                // CachedEntry or IdentityWrapper was recycled and already contains another value
                 // release the reference added in this method
                 value.release();
                 return null;
@@ -159,13 +143,13 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
      *            the last key in the range (inclusive)
      * @return a collections of the value found in cache
      */
-    public Collection<Value> getRange(Key first, Key last) {
-        List<Value> values = new ArrayList();
+    public Collection<CachedEntry> getRange(Position first, Position last) {
+        List<CachedEntry> values = new ArrayList();
 
         // Return the values of the entries found in cache
-        for (Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry : entries.subMap(first, true, last, true)
+        for (Map.Entry<Position, RangeCacheEntryWrapper> entry : entries.subMap(first, true, last, true)
                 .entrySet()) {
-            Value value = getValue(entry.getKey(), entry.getValue());
+            CachedEntry value = getValue(entry.getKey(), entry.getValue());
             if (value != null) {
                 values.add(value);
             }
@@ -181,16 +165,16 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
      * @param lastInclusive
      * @return an pair of ints, containing the number of removed entries and the total size
      */
-    public Pair<Integer, Long> removeRange(Key first, Key last, boolean lastInclusive) {
+    public Pair<Integer, Long> removeRange(Position first, Position last, boolean lastInclusive) {
         RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
-        Map<Key, RangeCacheEntryWrapper<Key, Value>> subMap = entries.subMap(first, true, last, lastInclusive);
-        for (Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry : subMap.entrySet()) {
+        Map<Position, RangeCacheEntryWrapper> subMap = entries.subMap(first, true, last, lastInclusive);
+        for (Map.Entry<Position, RangeCacheEntryWrapper> entry : subMap.entrySet()) {
             removeEntryWithWriteLock(entry.getKey(), entry.getValue(), counters);
         }
         return handleRemovalResult(counters);
     }
 
-    boolean removeEntryWithWriteLock(Key expectedKey, RangeCacheEntryWrapper<Key, Value> entryWrapper,
+    boolean removeEntryWithWriteLock(Position expectedKey, RangeCacheEntryWrapper entryWrapper,
                                           RangeCacheRemovalCounters counters) {
         return entryWrapper.withWriteLock(e -> {
             if (e.key == null || e.key != expectedKey) {
@@ -210,7 +194,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
      * @param counters the removal counters
      * @return true if the entry was removed, false otherwise
      */
-    boolean removeEntry(Key key, Value value, RangeCacheEntryWrapper<Key, Value> entryWrapper,
+    boolean removeEntry(Position key, CachedEntry value, RangeCacheEntryWrapper entryWrapper,
                         RangeCacheRemovalCounters counters, boolean updateSize) {
         // always remove the entry from the map
         entries.remove(key, entryWrapper);
@@ -277,33 +261,12 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
     public Pair<Integer, Long> clear() {
         RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
         while (!Thread.currentThread().isInterrupted()) {
-            Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry = entries.firstEntry();
+            Map.Entry<Position, RangeCacheEntryWrapper> entry = entries.firstEntry();
             if (entry == null) {
                 break;
             }
             removeEntryWithWriteLock(entry.getKey(), entry.getValue(), counters);
         }
         return handleRemovalResult(counters);
-    }
-
-    /**
-     * Interface of a object that is able to the extract the "weight" (size/cost/space) of the cached values.
-     *
-     * @param <ValueT>
-     */
-    public interface Weighter<ValueT> {
-        long getSize(ValueT value);
-    }
-
-    /**
-     * Default cache weighter, every value is assumed the same cost.
-     *
-     * @param <Value>
-     */
-    private static class DefaultWeighter<Value> implements Weighter<Value> {
-        @Override
-        public long getSize(Value value) {
-            return 1;
-        }
     }
 }
