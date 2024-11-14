@@ -19,8 +19,9 @@
 package org.apache.bookkeeper.mledger.impl.cache;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
-import java.util.function.BiPredicate;
 import org.apache.commons.lang3.tuple.Pair;
 import org.jctools.queues.MpscUnboundedArrayQueue;
 
@@ -29,22 +30,90 @@ class RangeCacheRemovalQueue {
     private static final int REMOVAL_QUEUE_CHUNK_SIZE = 128 * 1024;
     private final Queue<RangeCacheEntryWrapper> removalQueue = new MpscUnboundedArrayQueue<>(
             REMOVAL_QUEUE_CHUNK_SIZE);
-    // TODO: add an array list (optimized solution would be a linked chunked array list implementation)
-    //  to store the entries that are skipped during eviction
-    // this will allow us to evict entries in a single pass without peeking the message passing queue
-    // this datastructure doesn't have to be thread safe since it's a single thread reading and writing to it.
+    private final RangeCacheRemovalQueueStash stash = new RangeCacheRemovalQueueStash();
 
     public Pair<Integer, Long> evictLEntriesBeforeTimestamp(long timestampNanos) {
-        return evictEntries((e, c) -> e.timestampNanos < timestampNanos);
+        return evictEntries(
+                (e, c) -> e.timestampNanos < timestampNanos ? EvictionResult.REMOVE : EvictionResult.STASH_AND_STOP);
     }
 
     public Pair<Integer, Long> evictLeastAccessedEntries(long sizeToFree) {
         checkArgument(sizeToFree > 0);
-        return evictEntries((e, c) -> c.removedSize < sizeToFree);
+        return evictEntries(
+                (e, c) -> c.removedSize < sizeToFree ? EvictionResult.REMOVE : EvictionResult.STASH_AND_STOP);
     }
 
     public boolean addEntry(RangeCacheEntryWrapper newWrapper) {
         return removalQueue.offer(newWrapper);
+    }
+
+    class RangeCacheRemovalQueueStash {
+        List<RangeCacheEntryWrapper> entries = new ArrayList<>();
+        int size = 0;
+        int removed = 0;
+
+        public void add(RangeCacheEntryWrapper entry) {
+            entries.add(entry);
+            size++;
+        }
+
+        public boolean evictEntries(EvictionPredicate evictionPredicate, RangeCacheRemovalCounters counters) {
+            boolean continueEviction = doEvictEntries(evictionPredicate, counters);
+            maybeTrim();
+            return continueEviction;
+        }
+
+        private boolean doEvictEntries(EvictionPredicate evictionPredicate, RangeCacheRemovalCounters counters) {
+            for (int i = 0; i < entries.size(); i++) {
+                RangeCacheEntryWrapper entry = entries.get(i);
+                if (entry == null) {
+                    continue;
+                }
+                EvictionResult evictionResult = handleEviction(evictionPredicate, entry, counters);
+                if (!evictionResult.shouldStash()) {
+                    entries.set(i, null);
+                    removed++;
+                }
+                if (!evictionResult.isContinueEviction() || Thread.currentThread().isInterrupted()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        void maybeTrim() {
+            if (size > 1000 && removed > size / 2) {
+                List<RangeCacheEntryWrapper> newEntries = new ArrayList<>(size - removed);
+                for (RangeCacheEntryWrapper entry : entries) {
+                    if (entry != null) {
+                        newEntries.add(entry);
+                    }
+                }
+                entries = newEntries;
+                size = entries.size();
+                removed = 0;
+            }
+        }
+    }
+
+    enum EvictionResult {
+        REMOVE, STASH, STASH_AND_STOP, MISSING;
+
+        boolean isContinueEviction() {
+            return this != STASH_AND_STOP;
+        }
+
+        boolean shouldStash() {
+            return this == STASH || this == STASH_AND_STOP;
+        }
+
+        boolean shouldRecycle() {
+            return this == REMOVE;
+        }
+    }
+
+    interface EvictionPredicate {
+        EvictionResult test(RangeCacheEntryWrapper entry, RangeCacheRemovalCounters counters);
     }
 
     /**
@@ -56,38 +125,45 @@ class RangeCacheRemovalQueue {
      * @return the number of entries and the total size removed from the cache
      */
     private synchronized Pair<Integer, Long> evictEntries(
-            BiPredicate<RangeCacheEntryWrapper, RangeCacheRemovalCounters> evictionPredicate) {
+            EvictionPredicate evictionPredicate) {
         RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
-        while (!Thread.currentThread().isInterrupted()) {
-            // TODO: replace peeking by taking the entry from the queue and adding it to the skipped entries list
-            RangeCacheEntryWrapper entry = removalQueue.peek();
-            if (entry == null) {
-                break;
-            }
-            boolean removeFromQueue = entry.withWriteLock(e -> {
-                if (e.key == null) {
-                    // entry has been removed
-                    return true;
+        boolean continueEviction = stash.evictEntries(evictionPredicate, counters);
+        if (continueEviction) {
+            while (!Thread.currentThread().isInterrupted()) {
+                RangeCacheEntryWrapper entry = removalQueue.poll();
+                if (entry == null) {
+                    break;
                 }
-                if (evictionPredicate.test(e, counters)) {
-                    e.rangeCache.removeEntry(e.key, e.value, e, counters, true);
-                    return true;
-                } else {
-                    return false;
+                EvictionResult evictionResult = handleEviction(evictionPredicate, entry, counters);
+                if (evictionResult.shouldStash()) {
+                    stash.add(entry);
                 }
-            });
-
-            if (removeFromQueue) {
-                // remove peeked entry
-                removalQueue.poll();
-                // recycle the entry after it has been removed from the queue
-                entry.recycle();
-            } else {
-                // stop removing entries
-                break;
+                if (!evictionResult.isContinueEviction()) {
+                    break;
+                }
             }
         }
         return handleRemovalResult(counters);
+    }
+
+    private EvictionResult handleEviction(EvictionPredicate evictionPredicate, RangeCacheEntryWrapper entry,
+                                          RangeCacheRemovalCounters counters) {
+        EvictionResult evictionResult = entry.withWriteLock(e -> {
+            if (e.key == null) {
+                // entry has been removed
+                return EvictionResult.MISSING;
+            }
+            EvictionResult result = evictionPredicate.test(e, counters);
+            if (result == EvictionResult.REMOVE) {
+                e.rangeCache.removeEntry(e.key, e.value, e, counters, true);
+            }
+            return result;
+        });
+        if (evictionResult.shouldRecycle()) {
+            // recycle the entry after it has been removed from the queue
+            entry.recycle();
+        }
+        return evictionResult;
     }
 
     private Pair<Integer, Long> handleRemovalResult(RangeCacheRemovalCounters counters) {
