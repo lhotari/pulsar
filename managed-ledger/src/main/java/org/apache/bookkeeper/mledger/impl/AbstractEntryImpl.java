@@ -24,11 +24,10 @@ import io.netty.util.ReferenceCounted;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
-import org.apache.bookkeeper.mledger.impl.cache.RangeCache;
 import org.apache.bookkeeper.mledger.util.AbstractCASReferenceCounted;
 
 abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends AbstractCASReferenceCounted
-        implements Entry, Comparable<T>, RangeCache.ValueWithKeyValidation<Position> {
+        implements Entry, Comparable<T> {
     protected final Recycler.Handle<T> recyclerHandle;
     protected long timestamp;
     protected long ledgerId;
@@ -163,10 +162,5 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
     @SuppressWarnings("unchecked")
     protected T self() {
         return (T) this;
-    }
-
-    @Override
-    public boolean matchesKey(Position key) {
-        return key.compareTo(ledgerId, entryId) == 0;
     }
 }
