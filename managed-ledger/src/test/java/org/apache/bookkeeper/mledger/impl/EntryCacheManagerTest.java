@@ -279,15 +279,19 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
     @Test
     public void verifyHitsMisses() throws Exception {
         ManagedLedgerFactoryConfig config = new ManagedLedgerFactoryConfig();
-        config.setMaxCacheSize(7 * 10);
+        config.setMaxCacheSize(100);
         config.setCacheEvictionWatermark(0.8);
         config.setCacheEvictionIntervalMs(1000);
+
+        ManagedLedgerConfig managedLedgerConfig = new ManagedLedgerConfig();
+        managedLedgerConfig.setCacheEvictionByExpectedReadCount(false);
+        managedLedgerConfig.setCacheEvictionByMarkDeletedPosition(false);
 
         @Cleanup("shutdown")
         ManagedLedgerFactoryImpl factory2 = new ManagedLedgerFactoryImpl(metadataStore, bkc, config);
 
         EntryCacheManager cacheManager = factory2.getEntryCacheManager();
-        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory2.open("ledger");
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory2.open("ledger", managedLedgerConfig);
 
         ManagedCursorImpl c1 = (ManagedCursorImpl) ledger.openCursor("c1");
         ManagedCursorImpl c2 = (ManagedCursorImpl) ledger.openCursor("c2");
@@ -326,6 +330,8 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
         entries = c2.readEntries(10);
         assertEquals(entries.size(), 10);
 
+        factory2.doCacheEviction();
+
         factory2.getMbean().refreshStats(1, TimeUnit.SECONDS);
         assertEquals(factory2.getMbean().getCacheUsedSize(), 0);
         assertEquals(factory2.getMbean().getCacheHitsRate(), 10.0);
@@ -336,6 +342,8 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
         Position pos = entries.get(entries.size() - 1).getPosition();
         c2.setReadPosition(pos);
         entries.forEach(Entry::release);
+
+        factory2.doCacheEviction();
 
         factory2.getMbean().refreshStats(1, TimeUnit.SECONDS);
         assertEquals(factory2.getMbean().getCacheUsedSize(), 0);
