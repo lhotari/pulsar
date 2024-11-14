@@ -77,7 +77,7 @@ class RangeCacheEntryWrapper {
             localValue = this.value;
             lock.unlockRead(stamp);
         }
-        if (localKey != key) {
+        if (localKey == null || !localKey.equals(key)) {
             return null;
         }
         return localValue;
