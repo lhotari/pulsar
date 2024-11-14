@@ -47,6 +47,7 @@ import org.apache.bookkeeper.mledger.impl.cache.EntryCacheDisabled;
 import org.apache.bookkeeper.mledger.impl.cache.EntryCacheManager;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
+import org.awaitility.Awaitility;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
@@ -76,6 +77,8 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
         ManagedLedgerFactoryConfig config = new ManagedLedgerFactoryConfig();
         config.setMaxCacheSize(10);
         config.setCacheEvictionWatermark(0.8);
+        config.setCacheEvictionIntervalMs(1000);
+        config.setCacheEvictionTimeThresholdMillis(1000);
 
         @Cleanup("shutdown")
         ManagedLedgerFactoryImpl factory2 = new ManagedLedgerFactoryImpl(metadataStore, bkc, config);
@@ -112,9 +115,7 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
         // The algorithm should evict entries from cache1
         cache2.insert(EntryImpl.create(2, 3, new byte[1]));
 
-        // Wait for eviction to be completed in background
-        Thread.sleep(100);
-        assertEquals(cacheManager.getSize(), 7);
+        Awaitility.await().untilAsserted(() -> assertEquals(cacheManager.getSize(), 7));
         assertEquals(cache1.getSize(), 3);
         assertEquals(cache2.getSize(), 4);
 
@@ -330,7 +331,7 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
         entries = c2.readEntries(10);
         assertEquals(entries.size(), 10);
 
-        factory2.doCacheEviction();
+        Thread.sleep(200L);
 
         factory2.getMbean().refreshStats(1, TimeUnit.SECONDS);
         assertEquals(factory2.getMbean().getCacheUsedSize(), 0);
@@ -343,7 +344,7 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
         c2.setReadPosition(pos);
         entries.forEach(Entry::release);
 
-        factory2.doCacheEviction();
+        Thread.sleep(200L);
 
         factory2.getMbean().refreshStats(1, TimeUnit.SECONDS);
         assertEquals(factory2.getMbean().getCacheUsedSize(), 0);
