@@ -40,8 +40,7 @@ public final class CachedEntryImpl extends AbstractEntryImpl<CachedEntryImpl> im
         entry.timestamp = System.nanoTime();
         entry.ledgerId = position.getLedgerId();
         entry.entryId = position.getEntryId();
-        entry.data = data;
-        entry.data.retain();
+        entry.setDataBuffer(data.retainedDuplicate());
         entry.setRefCnt(1);
         return entry;
     }

@@ -34,6 +34,7 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
     protected long ledgerId;
     protected long entryId;
     ByteBuf data;
+    int length;
     private Position position;
     private Runnable onDeallocate;
 
@@ -50,8 +51,15 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
         return data;
     }
 
+    protected void setDataBuffer(ByteBuf data) {
+        this.data = data;
+        // TODO: the buffer's memory size is the capacity, not the readableBytes
+        this.length = data.readableBytes();
+    }
+
     @Override
     public byte[] getData() {
+        ByteBuf data = getDataBuffer().duplicate();
         byte[] array = new byte[data.readableBytes()];
         data.getBytes(data.readerIndex(), array);
         return array;
@@ -68,7 +76,7 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
 
     @Override
     public int getLength() {
-        return data.readableBytes();
+        return length;
     }
 
     @Override
@@ -135,6 +143,7 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
         }
         data.release();
         data = null;
+        length = 0;
         timestamp = -1;
         ledgerId = -1;
         entryId = -1;
