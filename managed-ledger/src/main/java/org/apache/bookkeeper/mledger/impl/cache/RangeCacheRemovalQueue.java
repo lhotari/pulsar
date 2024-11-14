@@ -84,7 +84,11 @@ class RangeCacheRemovalQueue {
         }
 
         void maybeTrim() {
-            if (size > 1000 && removed > size / 2) {
+            if (removed == size) {
+                entries.clear();
+                size = 0;
+                removed = 0;
+            } else if (size > 1000 && removed > size / 2) {
                 List<RangeCacheEntryWrapper> newEntries = new ArrayList<>(size - removed);
                 for (RangeCacheEntryWrapper entry : entries) {
                     if (entry != null) {
@@ -110,7 +114,7 @@ class RangeCacheRemovalQueue {
         }
 
         boolean shouldRecycle() {
-            return this == REMOVE;
+            return this == REMOVE || this == MISSING;
         }
     }
 
