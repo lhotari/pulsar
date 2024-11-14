@@ -18,9 +18,10 @@
  */
 package org.apache.bookkeeper.mledger;
 
-import org.apache.bookkeeper.mledger.impl.cache.RangeCache;
+import io.netty.util.ReferenceCounted;
 
-public interface CachedEntry extends Entry, RangeCache.ValueWithKeyValidation<Position> {
+public interface CachedEntry extends Entry, ReferenceCounted {
     boolean addToExpectedReadCount(int delta);
     boolean canEvict();
+    boolean matchesKey(Position key);
 }
