@@ -48,6 +48,8 @@ class RangeCacheRemovalQueue {
     }
 
     class RangeCacheRemovalQueueStash {
+        // TODO: consider using a more efficient data structure, for example, a linked list of lists
+        // and keeping a pool of lists to recycle
         List<RangeCacheEntryWrapper> entries = new ArrayList<>();
         int size = 0;
         int removed = 0;
