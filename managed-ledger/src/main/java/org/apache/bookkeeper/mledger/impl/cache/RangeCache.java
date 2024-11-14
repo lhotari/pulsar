@@ -19,7 +19,6 @@
 package org.apache.bookkeeper.mledger.impl.cache;
 
 import io.netty.util.IllegalReferenceCountException;
-import io.netty.util.ReferenceCounted;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -46,10 +45,6 @@ import org.apache.commons.lang3.tuple.Pair;
 @Slf4j
 public class RangeCache {
     private final RangeCacheRemovalQueue removalQueue;
-
-    public interface ValueWithKeyValidation<T> extends ReferenceCounted {
-        boolean matchesKey(T key);
-    }
 
     // Map from key to nodes inside the linked list
     private final ConcurrentNavigableMap<Position, RangeCacheEntryWrapper> entries;
