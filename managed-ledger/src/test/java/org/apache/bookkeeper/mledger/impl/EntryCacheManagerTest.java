@@ -47,7 +47,6 @@ import org.apache.bookkeeper.mledger.impl.cache.EntryCacheDisabled;
 import org.apache.bookkeeper.mledger.impl.cache.EntryCacheManager;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
-import org.awaitility.Awaitility;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
@@ -115,7 +114,9 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
         // The algorithm should evict entries from cache1
         cache2.insert(EntryImpl.create(2, 3, new byte[1]));
 
-        Awaitility.await().untilAsserted(() -> assertEquals(cacheManager.getSize(), 7));
+        factory2.waitForPendingCacheEvictions();
+
+        assertEquals(cacheManager.getSize(), 7);
         assertEquals(cache1.getSize(), 3);
         assertEquals(cache2.getSize(), 4);
 
