@@ -323,6 +323,19 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
         entryCacheManager.doCacheEviction(maxTimestamp);
     }
 
+    @VisibleForTesting
+    public void waitForPendingCacheEvictions() {
+        try {
+            cacheEvictionExecutor.submit(() -> {
+                // no-op
+            }).get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     /**
      * Helper for getting stats.
      *
