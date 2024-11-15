@@ -3885,7 +3885,7 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
 
         double avgEntrySize = ledger.getStats().getEntrySizeAverage();
-        if (Double.isInfinite(avgEntrySize)) {
+        if (!Double.isFinite(avgEntrySize)) {
             if (entriesReadCount != 0) {
                 // We don't have yet any stats on the topic entries. Let's try to use the cursor avg size stats
                 avgEntrySize = (double) entriesReadSize / (double) entriesReadCount;

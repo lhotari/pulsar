@@ -97,7 +97,7 @@ public class StatsBuckets {
     }
 
     public double getAvg() {
-        return count != 0 ? sum / (double) count : Double.POSITIVE_INFINITY;
+        return count != 0 ? sum / (double) count : Double.NaN;
     }
 
     public void addAll(StatsBuckets other) {
