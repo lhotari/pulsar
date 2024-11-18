@@ -26,7 +26,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Predicate;
+import java.util.function.ToIntFunction;
 import lombok.AllArgsConstructor;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -292,6 +292,10 @@ public class PendingReadsManager {
                             entry.release();
                         }
                     }
+
+                    // TODO: move caching decision here. If all cursors were waiting for the same range, there might
+                    // be a need to cache the entries at all if the entries already met the expected read count.
+
                 }
             }, rangeEntryCache.getManagedLedger().getExecutor()).exceptionally(exception -> {
                 synchronized (PendingRead.this) {
@@ -315,7 +319,7 @@ public class PendingReadsManager {
     }
 
 
-    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, Predicate<Entry> shouldCacheEntry,
+    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, ToIntFunction<Entry> expectedReadCount,
                      final AsyncCallbacks.ReadEntriesCallback callback, Object ctx) {
         final PendingReadKey key = new PendingReadKey(firstEntry, lastEntry);
 
@@ -363,7 +367,7 @@ public class PendingReadsManager {
                                     };
                                     rangeEntryCache.asyncReadEntry0(lh,
                                             missingOnRight.startEntry, missingOnRight.endEntry,
-                                            shouldCacheEntry, readFromRightCallback, null, false);
+                                            expectedReadCount, readFromRightCallback, null, false);
                                 }
 
                                 @Override
@@ -373,7 +377,7 @@ public class PendingReadsManager {
                                 }
                             };
                             rangeEntryCache.asyncReadEntry0(lh, missingOnLeft.startEntry, missingOnLeft.endEntry,
-                                    shouldCacheEntry, readFromLeftCallback, null, false);
+                                    expectedReadCount, readFromLeftCallback, null, false);
                         } else if (missingOnLeft != null) {
                             AsyncCallbacks.ReadEntriesCallback readFromLeftCallback =
                                     new AsyncCallbacks.ReadEntriesCallback() {
@@ -396,7 +400,7 @@ public class PendingReadsManager {
                                         }
                                     };
                             rangeEntryCache.asyncReadEntry0(lh, missingOnLeft.startEntry, missingOnLeft.endEntry,
-                                    shouldCacheEntry, readFromLeftCallback, null, false);
+                                    expectedReadCount, readFromLeftCallback, null, false);
                         } else if (missingOnRight != null) {
                             AsyncCallbacks.ReadEntriesCallback readFromRightCallback =
                                     new AsyncCallbacks.ReadEntriesCallback() {
@@ -419,7 +423,7 @@ public class PendingReadsManager {
                                         }
                                     };
                             rangeEntryCache.asyncReadEntry0(lh, missingOnRight.startEntry, missingOnRight.endEntry,
-                                    shouldCacheEntry, readFromRightCallback, null, false);
+                                    expectedReadCount, readFromRightCallback, null, false);
                         }
                     }
 
@@ -436,7 +440,7 @@ public class PendingReadsManager {
 
             if (createdByThisThread.get()) {
                 CompletableFuture<List<Entry>> readResult = rangeEntryCache.readFromStorage(lh, firstEntry,
-                        lastEntry, shouldCacheEntry);
+                        lastEntry, expectedReadCount);
                 pendingRead.attach(readResult);
             }
         }
