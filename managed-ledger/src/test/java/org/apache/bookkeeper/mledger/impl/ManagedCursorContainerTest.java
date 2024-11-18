@@ -869,4 +869,20 @@ public class ManagedCursorContainerTest {
     private static ManagedCursor createCursor(ManagedCursorContainer container, String name, Position position) {
         return new MockManagedCursor(container, name, position, position, false, true);
     }
+
+    @Test
+    public void testCountNumberOfCursorsAtSamePositionOrBefore() {
+        ManagedCursorContainer container = new ManagedCursorContainer();
+        List<ManagedCursor> cursors = IntStream.rangeClosed(1, 1000)
+                .mapToObj(idx -> createCursor(container, "cursor" + idx, PositionFactory.create(0, idx)))
+                .collect(Collectors.toList());
+        // randomize adding order
+        Collections.shuffle(cursors);
+        cursors.forEach(cursor -> container.add(cursor, cursor.getReadPosition()));
+        for (int i = 1; i <= 1000; i++) {
+            ManagedCursor cursor = container.get("cursor" + i);
+            int numberOfCursorsBefore = container.getNumberOfCursorsAtSamePositionOrBefore(cursor);
+            assertThat(numberOfCursorsBefore).describedAs("cursor:%s", cursor).isEqualTo(i);
+        }
+    }
 }
