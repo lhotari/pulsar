@@ -34,13 +34,19 @@ class RangeCacheRemovalQueue {
 
     public Pair<Integer, Long> evictLEntriesBeforeTimestamp(long timestampNanos) {
         return evictEntries(
-                (e, c) -> e.timestampNanos < timestampNanos ? EvictionResult.REMOVE : EvictionResult.STASH_AND_STOP);
+                (e, c) -> e.timestampNanos < timestampNanos ? EvictionResult.REMOVE : EvictionResult.STASH_AND_STOP,
+                true);
     }
 
     public Pair<Integer, Long> evictLeastAccessedEntries(long sizeToFree) {
         checkArgument(sizeToFree > 0);
         return evictEntries(
-                (e, c) -> c.removedSize < sizeToFree ? EvictionResult.REMOVE : EvictionResult.STASH_AND_STOP);
+                (e, c) -> {
+                    if (!e.value.canEvict()) {
+                        return EvictionResult.STASH;
+                    }
+                    return c.removedSize < sizeToFree ? EvictionResult.REMOVE : EvictionResult.STASH_AND_STOP;
+                }, false);
     }
 
     public boolean addEntry(RangeCacheEntryWrapper newWrapper) {
@@ -59,13 +65,15 @@ class RangeCacheRemovalQueue {
             size++;
         }
 
-        public boolean evictEntries(EvictionPredicate evictionPredicate, RangeCacheRemovalCounters counters) {
-            boolean continueEviction = doEvictEntries(evictionPredicate, counters);
+        public boolean evictEntries(EvictionPredicate evictionPredicate, RangeCacheRemovalCounters counters,
+                                    boolean processAllEntriesInStash) {
+            boolean continueEviction = doEvictEntries(evictionPredicate, counters, processAllEntriesInStash);
             maybeTrim();
             return continueEviction;
         }
 
-        private boolean doEvictEntries(EvictionPredicate evictionPredicate, RangeCacheRemovalCounters counters) {
+        private boolean doEvictEntries(EvictionPredicate evictionPredicate, RangeCacheRemovalCounters counters,
+                                       boolean processAllEntriesInStash) {
             for (int i = 0; i < entries.size(); i++) {
                 RangeCacheEntryWrapper entry = entries.get(i);
                 if (entry == null) {
@@ -76,7 +84,8 @@ class RangeCacheRemovalQueue {
                     entries.set(i, null);
                     removed++;
                 }
-                if (!evictionResult.isContinueEviction() || Thread.currentThread().isInterrupted()) {
+                if (!processAllEntriesInStash && (!evictionResult.isContinueEviction() || Thread.currentThread()
+                        .isInterrupted())) {
                     return false;
                 }
             }
@@ -131,35 +140,49 @@ class RangeCacheRemovalQueue {
      * @return the number of entries and the total size removed from the cache
      */
     private synchronized Pair<Integer, Long> evictEntries(
-            EvictionPredicate evictionPredicate) {
+            EvictionPredicate evictionPredicate, boolean alwaysProcessAllEntriesInStash) {
         RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
-        boolean continueEviction = stash.evictEntries(evictionPredicate, counters);
+        boolean continueEviction = stash.evictEntries(evictionPredicate, counters, alwaysProcessAllEntriesInStash);
         if (continueEviction) {
-            while (!Thread.currentThread().isInterrupted()) {
-                RangeCacheEntryWrapper entry = removalQueue.poll();
-                if (entry == null) {
-                    break;
-                }
-                EvictionResult evictionResult = handleEviction(evictionPredicate, entry, counters);
-                if (evictionResult.shouldStash()) {
-                    stash.add(entry);
-                }
-                if (!evictionResult.isContinueEviction()) {
-                    break;
-                }
-            }
+            handleQueue(evictionPredicate, counters);
         }
         return handleRemovalResult(counters);
+    }
+
+    private void handleQueue(EvictionPredicate evictionPredicate,
+                                                   RangeCacheRemovalCounters counters) {
+        // peek the first entry in the queue so that we can avoid stashing entries
+        // when eviction should be stopped at the first entry
+        RangeCacheEntryWrapper peekedEntry = removalQueue.peek();
+        if (peekedEntry == null) {
+            return;
+        }
+        EvictionResult peekedEntryEvictionResult = peekedEntry.withWriteLock(e -> {
+            return evaluateEvictionPredicate(evictionPredicate, counters, e);
+        });
+        if (!peekedEntryEvictionResult.isContinueEviction()) {
+            return;
+        }
+        while (!Thread.currentThread().isInterrupted()) {
+            RangeCacheEntryWrapper entry = removalQueue.poll();
+            if (entry == null) {
+                break;
+            }
+            EvictionResult evictionResult = handleEviction(evictionPredicate, entry, counters);
+            if (evictionResult.shouldStash()) {
+                stash.add(entry);
+            }
+            if (!evictionResult.isContinueEviction()) {
+                break;
+            }
+        }
     }
 
     private EvictionResult handleEviction(EvictionPredicate evictionPredicate, RangeCacheEntryWrapper entry,
                                           RangeCacheRemovalCounters counters) {
         EvictionResult evictionResult = entry.withWriteLock(e -> {
-            if (e.key == null) {
-                // entry has been removed
-                return EvictionResult.MISSING;
-            }
-            EvictionResult result = evictionPredicate.test(e, counters);
+            EvictionResult result =
+                    evaluateEvictionPredicate(evictionPredicate, counters, e);
             if (result == EvictionResult.REMOVE) {
                 e.rangeCache.removeEntry(e.key, e.value, e, counters, true);
             }
@@ -170,6 +193,15 @@ class RangeCacheRemovalQueue {
             entry.recycle();
         }
         return evictionResult;
+    }
+
+    private static EvictionResult evaluateEvictionPredicate(EvictionPredicate evictionPredicate,
+                                                    RangeCacheRemovalCounters counters, RangeCacheEntryWrapper entry) {
+        if (entry.key == null) {
+            // entry has been removed by another thread
+            return EvictionResult.MISSING;
+        }
+        return evictionPredicate.test(entry, counters);
     }
 
     private Pair<Integer, Long> handleRemovalResult(RangeCacheRemovalCounters counters) {
