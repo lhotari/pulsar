@@ -34,6 +34,8 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         }
     };
 
+    private boolean decreaseReadCountOnRelease;
+
     public static EntryImpl create(LedgerEntry ledgerEntry, int expectedReadCount) {
         EntryImpl entry = RECYCLER.get();
         entry.timestamp = System.nanoTime();
@@ -91,10 +93,29 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         entry.readCountHandler = (EntryReadCountHandlerImpl) other.getReadCountHandler();
         entry.setDataBuffer(other.getDataBuffer().retainedDuplicate());
         entry.setRefCnt(1);
+        entry.decreaseReadCountOnRelease = true;
         return entry;
     }
 
     private EntryImpl(Recycler.Handle<EntryImpl> recyclerHandle) {
         super(recyclerHandle);
+    }
+
+    @Override
+    protected void beforeDeallocate() {
+        super.beforeDeallocate();
+        if (decreaseReadCountOnRelease && readCountHandler != null) {
+            readCountHandler.markRead();
+        }
+    }
+
+    @Override
+    protected void beforeRecycle() {
+        super.beforeRecycle();
+        decreaseReadCountOnRelease = false;
+    }
+
+    public void setDecreaseReadCountOnRelease(boolean enabled) {
+        decreaseReadCountOnRelease = enabled;
     }
 }
