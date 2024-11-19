@@ -287,6 +287,8 @@ public class PendingReadsManager {
                             callback.callback.readEntriesComplete(copy, callback.ctx);
                         }
                         for (Entry entry : entriesToReturn) {
+                            // don't decrease the read count when these entries are released
+                            ((EntryImpl) entry).setDecreaseReadCountOnRelease(false);
                             entry.release();
                         }
                     }
