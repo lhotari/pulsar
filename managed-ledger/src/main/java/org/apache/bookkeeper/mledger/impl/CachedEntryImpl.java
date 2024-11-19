@@ -20,7 +20,6 @@ package org.apache.bookkeeper.mledger.impl;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.util.Recycler;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.bookkeeper.mledger.CachedEntry;
 import org.apache.bookkeeper.mledger.Position;
 
@@ -32,14 +31,13 @@ public final class CachedEntryImpl extends AbstractEntryImpl<CachedEntryImpl> im
         }
     };
 
-    private final AtomicInteger expectedReadCount = new AtomicInteger(1);
 
-    public static CachedEntryImpl create(Position position, ByteBuf data) {
+    public static CachedEntryImpl create(Position position, ByteBuf data, EntryReadCountHandlerImpl readCountHandler) {
         CachedEntryImpl entry = RECYCLER.get();
-        entry.expectedReadCount.set(1);
         entry.timestamp = System.nanoTime();
         entry.ledgerId = position.getLedgerId();
         entry.entryId = position.getEntryId();
+        entry.readCountHandler = readCountHandler;
         entry.setDataBuffer(data.retainedDuplicate());
         entry.setRefCnt(1);
         return entry;
@@ -50,32 +48,15 @@ public final class CachedEntryImpl extends AbstractEntryImpl<CachedEntryImpl> im
     }
 
     @Override
-    public boolean addToExpectedReadCount(int delta) {
-        if (expectedReadCount.updateAndGet(v -> v >= 0 ? v + delta : -1) >= 0) {
-            return true;
-        }
-        return false;
-    }
-
-    @Override
     public boolean canEvict() {
-        return expectedReadCount.get() < 1;
+        if (readCountHandler != null) {
+            return readCountHandler.getExpectedReadCount() < 1;
+        }
+        return true;
     }
 
     @Override
     public boolean matchesKey(Position key) {
         return key != null && entryId == key.getEntryId() && ledgerId == key.getLedgerId();
-    }
-
-    @Override
-    protected void refCountDecremented(int refCount, int decrement) {
-        if (refCount >= 1 && decrement == 1) {
-            expectedReadCount.decrementAndGet();
-        }
-    }
-
-    @Override
-    protected void beforeRecycle() {
-        expectedReadCount.set(-1);
     }
 }

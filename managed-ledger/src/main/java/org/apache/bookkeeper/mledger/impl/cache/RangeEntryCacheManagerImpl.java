@@ -237,7 +237,8 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         return EntryImpl.create(ledgerId, entryId, data);
     }
 
-    public static EntryImpl create(LedgerEntry ledgerEntry, ManagedLedgerInterceptor interceptor) {
+    public static EntryImpl create(LedgerEntry ledgerEntry, ManagedLedgerInterceptor interceptor,
+                                   int expectedReadCount) {
         ManagedLedgerInterceptor.PayloadProcessorHandle processorHandle = null;
         if (interceptor != null) {
             ByteBuf duplicateBuffer = ledgerEntry.getEntryBuffer().retainedDuplicate();
@@ -250,7 +251,7 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
                 duplicateBuffer.release();
             }
         }
-        EntryImpl returnEntry = EntryImpl.create(ledgerEntry);
+        EntryImpl returnEntry = EntryImpl.create(ledgerEntry, expectedReadCount);
         if (processorHandle != null) {
             processorHandle.release();
             ledgerEntry.close();

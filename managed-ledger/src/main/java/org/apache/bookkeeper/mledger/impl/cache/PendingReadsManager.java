@@ -26,7 +26,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.ToIntFunction;
+import java.util.function.IntSupplier;
 import lombok.AllArgsConstructor;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -264,16 +264,14 @@ public class PendingReadsManager {
                 synchronized (PendingRead.this) {
                     if (callbacks.size() == 1) {
                         ReadEntriesCallbackWithContext first = callbacks.get(0);
-                        if (first.startEntry == key.startEntry
-                                && first.endEntry == key.endEntry) {
+                        List<Entry> entries;
+                        if (first.startEntry == key.startEntry && first.endEntry == key.endEntry) {
                             // perfect match, no copy, this is the most common case
-                            first.callback.readEntriesComplete(entriesToReturn,
-                                    first.ctx);
+                            entries = entriesToReturn;
                         } else {
-                            first.callback.readEntriesComplete(
-                                    keepEntries(entriesToReturn, first.startEntry, first.endEntry),
-                                    first.ctx);
+                            entries = keepEntries(entriesToReturn, first.startEntry, first.endEntry);
                         }
+                        first.callback.readEntriesComplete(entries, first.ctx);
                     } else {
                         for (ReadEntriesCallbackWithContext callback : callbacks) {
                             long callbackStartEntry = callback.startEntry;
@@ -292,10 +290,6 @@ public class PendingReadsManager {
                             entry.release();
                         }
                     }
-
-                    // TODO: move caching decision here. If all cursors were waiting for the same range, there might
-                    // be a need to cache the entries at all if the entries already met the expected read count.
-
                 }
             }, rangeEntryCache.getManagedLedger().getExecutor()).exceptionally(exception -> {
                 synchronized (PendingRead.this) {
@@ -319,7 +313,7 @@ public class PendingReadsManager {
     }
 
 
-    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, ToIntFunction<Entry> expectedReadCount,
+    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, IntSupplier expectedReadCount,
                      final AsyncCallbacks.ReadEntriesCallback callback, Object ctx) {
         final PendingReadKey key = new PendingReadKey(firstEntry, lastEntry);
 

@@ -3997,8 +3997,13 @@ public class ManagedCursorImpl implements ManagedCursor {
         return cs;
     }
 
-    @Override
-    public void maybeCacheReplayedEntry(Entry entry) {
-        ledger.entryCache.insert(entry);
+    public int getNumberOfCursorsAtSamePositionOrBefore() {
+        if (ledger.getConfig().isCacheEvictionByExpectedReadCount()) {
+            return ledger.getNumberOfCursorsAtSamePositionOrBefore(this);
+        } else if (isCacheReadEntry()) {
+            return 1;
+        } else {
+            return 0;
+        }
     }
 }
