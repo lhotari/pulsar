@@ -21,7 +21,6 @@ package org.apache.bookkeeper.mledger;
 import io.netty.util.ReferenceCounted;
 
 public interface CachedEntry extends Entry, ReferenceCounted {
-    boolean addToExpectedReadCount(int delta);
-    boolean canEvict();
     boolean matchesKey(Position key);
+    boolean canEvict();
 }

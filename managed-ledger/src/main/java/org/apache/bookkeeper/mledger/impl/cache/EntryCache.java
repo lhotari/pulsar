@@ -18,7 +18,7 @@
  */
 package org.apache.bookkeeper.mledger.impl.cache;
 
-import java.util.function.ToIntFunction;
+import java.util.function.IntSupplier;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
@@ -89,7 +89,7 @@ public interface EntryCache {
      * @param ctx
      *            the context object
      */
-    void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, ToIntFunction<Entry> expectedReadCount,
+    void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, IntSupplier expectedReadCount,
             ReadEntriesCallback callback, Object ctx);
 
     /**

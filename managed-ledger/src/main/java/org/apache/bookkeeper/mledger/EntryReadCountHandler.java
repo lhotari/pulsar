@@ -19,7 +19,6 @@
 package org.apache.bookkeeper.mledger;
 
 public interface EntryReadCountHandler {
-    void setExpectedReadCount(int expectedReadCount);
     int getExpectedReadCount();
     boolean incrementExpectedReadCount();
     void markRead();

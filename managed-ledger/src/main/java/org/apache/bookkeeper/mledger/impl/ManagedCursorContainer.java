@@ -395,4 +395,19 @@ public class ManagedCursorContainer implements Iterable<ManagedCursor> {
             rwLock.unlockRead(stamp);
         }
     }
+
+    public int size() {
+        long stamp = rwLock.tryOptimisticRead();
+        int size = cursors.size();
+        if (!rwLock.validate(stamp)) {
+            // Fallback to read lock
+            stamp = rwLock.readLock();
+            try {
+                size = cursors.size();
+            } finally {
+                rwLock.unlockRead(stamp);
+            }
+        }
+        return size;
+    }
 }
