@@ -133,6 +133,7 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
 
     @Override
     protected final void deallocate() {
+        beforeDeallocate();
         // This method is called whenever the ref-count of the EntryImpl reaches 0, so that now we can recycle it
         if (onDeallocate != null) {
             try {
@@ -151,6 +152,15 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
         readCountHandler = null;
         beforeRecycle();
         recyclerHandle.recycle(self());
+    }
+
+    /**
+     * This method is called just before the object is deallocated.
+     * Subclasses can override this method to run actions before the fields
+     * of the object are cleared and the object gets recycled.
+     */
+    protected void beforeDeallocate() {
+        // No-op
     }
 
     /**

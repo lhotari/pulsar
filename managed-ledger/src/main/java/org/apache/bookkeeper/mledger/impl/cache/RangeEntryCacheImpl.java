@@ -405,6 +405,7 @@ public class RangeEntryCacheImpl implements EntryCache {
             }
             callback.readEntriesComplete(entriesToReturn, ctx);
         } else {
+            // TODO: consider reusing the partially cached entries and only reading the missing ones
             if (!cachedEntries.isEmpty()) {
                 cachedEntries.forEach(entry -> entry.release());
             }
