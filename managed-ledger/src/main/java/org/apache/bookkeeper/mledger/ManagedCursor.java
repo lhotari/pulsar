@@ -925,14 +925,4 @@ public interface ManagedCursor {
     int applyMaxSizeCap(int maxEntries, long maxSizeBytes);
 
     void updateReadStats(int readEntriesCount, long readEntriesSize);
-
-    /**
-     * Called when entry cannot be dispatched due to consumer being out of permits and when entry
-     * gets added to the replay queue. The implementation should extend the caching lifetime for the entry
-     * to increase the cache hit rate for replay reads
-     * @param entry entry that was added to replay and should be cached
-     */
-    default void maybeCacheReplayedEntry(Entry entry) {
-        // no-op by default
-    }
 }

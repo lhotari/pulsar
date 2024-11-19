@@ -36,7 +36,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.function.ToIntFunction;
+import java.util.function.IntSupplier;
 import java.util.stream.Collectors;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -104,7 +104,7 @@ public class PendingReadsManagerTest  {
                 ReadHandle rh = invocationOnMock.getArgument(0);
                 long startEntry = invocationOnMock.getArgument(1);
                 long endEntry = invocationOnMock.getArgument(2);
-                ToIntFunction<Entry> expectedReadCount = invocationOnMock.getArgument(3);
+                IntSupplier expectedReadCount = invocationOnMock.getArgument(3);
                 AsyncCallbacks.ReadEntriesCallback callback = invocationOnMock.getArgument(4);
                 Object ctx = invocationOnMock.getArgument(5);
                 pendingReadsManager.readEntries(lh, startEntry, endEntry, expectedReadCount, callback, ctx);
@@ -167,9 +167,9 @@ public class PendingReadsManagerTest  {
     private static class PreparedReadFromStorage extends CompletableFuture<List<EntryImpl>> {
         final long firstEntry;
         final long endEntry;
-        final ToIntFunction<Entry> expectedReadCount;
+        final IntSupplier expectedReadCount;
 
-        public PreparedReadFromStorage(long firstEntry, long endEntry, ToIntFunction<Entry> expectedReadCount) {
+        public PreparedReadFromStorage(long firstEntry, long endEntry, IntSupplier expectedReadCount) {
             this.firstEntry = firstEntry;
             this.endEntry = endEntry;
             this.expectedReadCount = expectedReadCount;
@@ -186,7 +186,7 @@ public class PendingReadsManagerTest  {
     }
 
     private PreparedReadFromStorage prepareReadFromStorage(ReadHandle lh, RangeEntryCacheImpl rangeEntryCache,
-                                                           long firstEntry, long endEntry, ToIntFunction<Entry> expectedReadCount) {
+                                                           long firstEntry, long endEntry, IntSupplier expectedReadCount) {
         PreparedReadFromStorage read = new PreparedReadFromStorage(firstEntry, endEntry, expectedReadCount);
         log.info("prepareReadFromStorage from {} to {} expectedReadCount {}", firstEntry, endEntry, expectedReadCount);
         when(rangeEntryCache.readFromStorage(eq(lh), eq(firstEntry), eq(endEntry), eq(expectedReadCount))).thenAnswer(
@@ -203,7 +203,7 @@ public class PendingReadsManagerTest  {
 
         long firstEntry = 100;
         long endEntry = 199;
-        ToIntFunction<Entry> expectedReadCount = entry -> 0;
+        IntSupplier expectedReadCount = () -> 0;
 
         PreparedReadFromStorage read1
                 = prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, expectedReadCount);
@@ -228,7 +228,7 @@ public class PendingReadsManagerTest  {
 
         long firstEntry = 100;
         long endEntry = 199;
-        ToIntFunction<Entry> expectedReadCount = entry -> 0;
+        IntSupplier expectedReadCount = () -> 0;
 
         PreparedReadFromStorage read1 = prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, expectedReadCount);
 
@@ -270,7 +270,7 @@ public class PendingReadsManagerTest  {
         long firstEntrySecondRead = firstEntry + 10;
         long endEntrySecondRead = endEntry - 10;
 
-        ToIntFunction<Entry> expectedReadCount = entry -> 0;
+        IntSupplier expectedReadCount = () -> 0;
 
         PreparedReadFromStorage read1 = prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, expectedReadCount);
 
@@ -316,7 +316,7 @@ public class PendingReadsManagerTest  {
         long firstEntrySecondRead = firstEntry - 10;
         long endEntrySecondRead = endEntry;
 
-        ToIntFunction<Entry> expectedReadCount = entry -> 0;
+        IntSupplier expectedReadCount = () -> 0;
 
         PreparedReadFromStorage read1 =
                 prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, expectedReadCount);
@@ -356,7 +356,7 @@ public class PendingReadsManagerTest  {
         long firstEntrySecondRead = firstEntry;
         long endEntrySecondRead = endEntry + 10;
 
-        ToIntFunction<Entry> expectedReadCount = entry -> 0;
+        IntSupplier expectedReadCount = () -> 0;
 
         PreparedReadFromStorage read1 =
                 prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, expectedReadCount);
@@ -396,7 +396,7 @@ public class PendingReadsManagerTest  {
         long firstEntrySecondRead = firstEntry - 10;
         long endEntrySecondRead = endEntry + 10;
 
-        ToIntFunction<Entry> expectedReadCount = entry -> 0;
+        IntSupplier expectedReadCount = () -> 0;
 
         PreparedReadFromStorage read1 =
                 prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, expectedReadCount);
@@ -440,7 +440,7 @@ public class PendingReadsManagerTest  {
         long firstEntrySecondRead = 1000;
         long endEntrySecondRead = 1099;
 
-        ToIntFunction<Entry> expectedReadCount = entry -> 0;
+        IntSupplier expectedReadCount = () -> 0;
 
         PreparedReadFromStorage read1 =
                 prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, expectedReadCount);

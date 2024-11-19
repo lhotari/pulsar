@@ -65,6 +65,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.function.IntSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -500,7 +501,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                                                 entries.getEntry(lh.getLastAddConfirmed());
                                         if (ledgerEntry != null) {
                                             promise.complete(
-                                                    Optional.of(EntryImpl.create(ledgerEntry)));
+                                                    Optional.of(EntryImpl.create(ledgerEntry, 0)));
                                         } else {
                                             promise.complete(Optional.empty());
                                         }
@@ -2264,6 +2265,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     protected void asyncReadEntry(ReadHandle ledger, long firstEntry, long lastEntry, OpReadEntry opReadEntry,
             Object ctx) {
+        IntSupplier expectedReadCount = () -> opReadEntry.cursor.getNumberOfCursorsAtSamePositionOrBefore();
         if (config.getReadEntryTimeoutSeconds() > 0) {
             // set readOpCount to uniquely validate if ReadEntryCallbackWrapper is already recycled
             long readOpCount = READ_OP_COUNT_UPDATER.incrementAndGet(this);
@@ -2271,13 +2273,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             ReadEntryCallbackWrapper readCallback = ReadEntryCallbackWrapper.create(name, ledger.getId(), firstEntry,
                     opReadEntry, readOpCount, createdTime, ctx);
             lastReadCallback = readCallback;
-            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry,
-                    __ -> opReadEntry.cursor.isCacheReadEntry() ? Integer.MAX_VALUE : 0,
-                    readCallback, readOpCount);
+            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, expectedReadCount, readCallback, readOpCount);
         } else {
-            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry,
-                    __ -> opReadEntry.cursor.isCacheReadEntry() ? Integer.MAX_VALUE : 0,
-                    opReadEntry, ctx);
+            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, expectedReadCount, opReadEntry, ctx);
         }
     }
 

@@ -27,7 +27,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.ToIntFunction;
+import java.util.function.IntSupplier;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
@@ -326,7 +326,7 @@ public class PendingReadsManager {
     }
 
 
-    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, ToIntFunction<Entry> expectedReadCount,
+    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, IntSupplier expectedReadCount,
                      final AsyncCallbacks.ReadEntriesCallback callback, Object ctx) {
         final PendingReadKey key = new PendingReadKey(firstEntry, lastEntry);
 

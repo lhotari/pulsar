@@ -66,4 +66,8 @@ public interface Entry {
      * of data reached to 0).
      */
     boolean release();
+
+    default EntryReadCountHandler getReadCountHandler() {
+        return null;
+    }
 }
