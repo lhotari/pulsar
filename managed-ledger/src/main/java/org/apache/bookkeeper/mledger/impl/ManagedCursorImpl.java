@@ -35,6 +35,7 @@ import com.google.protobuf.InvalidProtocolBufferException;
 import java.time.Clock;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -1565,14 +1566,7 @@ public class ManagedCursorImpl implements ManagedCursor {
             return Collections.emptySet();
         }
 
-        // filters out messages which are already acknowledged
-        Set<Position> alreadyAcknowledgedPositions = new HashSet<>();
-        lock.readLock().lock();
-        try {
-            positions.stream().filter(this::internalIsMessageDeleted).forEach(alreadyAcknowledgedPositions::add);
-        } finally {
-            lock.readLock().unlock();
-        }
+        Set<Position> alreadyAcknowledgedPositions = filterDeletedMessages(positions);
 
         final int totalValidPositions = positions.size() - alreadyAcknowledgedPositions.size();
         if (totalValidPositions == 0) {
@@ -1632,6 +1626,25 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
 
         return alreadyAcknowledgedPositions;
+    }
+
+    @Override
+    public Set<Position> filterDeletedMessages(Collection<? extends Position> positions) {
+        Set<Position> deletedMessages = new HashSet<>();
+        // acquire a read lock once for all the positions
+        lock.readLock().lock();
+        try {
+            // prefer for loop to avoid creating stream related instances
+            for (Position position : positions) {
+                // call the internal method to avoid acquiring read lock multiple times
+                if (internalIsMessageDeleted(position)) {
+                    deletedMessages.add(position);
+                }
+            }
+        } finally {
+            lock.readLock().unlock();
+        }
+        return deletedMessages;
     }
 
     protected long getNumberOfEntries(Range<Position> range) {
