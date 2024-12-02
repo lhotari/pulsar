@@ -16,28 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.bookkeeper.mledger.impl.cache;
+package org.apache.bookkeeper.mledger;
 
-import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
+import java.util.List;
 
-public interface EntryCacheManager {
-    EntryCache getEntryCache(ManagedLedgerImpl ml);
+public interface ManagedCursorReplayReadEntriesCallback {
+    void readEntriesComplete(ManagedCursorReplayReadRange range, boolean isLast, List<Entry> entries, Object ctx);
 
-    void removeEntryCache(String name);
-
-    long getSize();
-
-    long getMaxSize();
-
-    void clear();
-
-    void updateCacheSizeAndThreshold(long maxSize);
-
-    void updateCacheEvictionWatermark(double cacheEvictionWatermark);
-
-    double getCacheEvictionWatermark();
-
-    EntryCachesEvictionHandler getEvictionHandler();
-
-    void doCacheEviction(long maxTimestamp);
+    void readEntriesFailed(ManagedCursorReplayReadRange range, boolean isLast, ManagedLedgerException exception,
+                           Object ctx);
 }

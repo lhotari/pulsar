@@ -16,28 +16,26 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.bookkeeper.mledger.impl.cache;
+package org.apache.bookkeeper.mledger;
 
-import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
+public interface ManagedCursorReplayReadRange extends Comparable<ManagedCursorReplayReadRange> {
+    int rangeIndex();
 
-public interface EntryCacheManager {
-    EntryCache getEntryCache(ManagedLedgerImpl ml);
+    int totalRanges();
 
-    void removeEntryCache(String name);
+    Position startPosition();
 
-    long getSize();
+    Position lastPosition();
 
-    long getMaxSize();
+    default int size() {
+        if (startPosition().getLedgerId() != lastPosition().getLedgerId()) {
+            throw new IllegalStateException("Cannot calculate size for range spanning multiple ledgers");
+        }
+        return (int) (lastPosition().getEntryId() - startPosition().getEntryId() + 1);
+    }
 
-    void clear();
-
-    void updateCacheSizeAndThreshold(long maxSize);
-
-    void updateCacheEvictionWatermark(double cacheEvictionWatermark);
-
-    double getCacheEvictionWatermark();
-
-    EntryCachesEvictionHandler getEvictionHandler();
-
-    void doCacheEviction(long maxTimestamp);
+    @Override
+    default int compareTo(ManagedCursorReplayReadRange o) {
+        return Integer.compare(rangeIndex(), o.rangeIndex());
+    }
 }

@@ -449,6 +449,9 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
                     // the entry is blocked by hash, add the consumer to the blocked set
                     blockedByHashConsumers.add(consumer);
                 }
+                if (entry.getReadCountHandler() != null) {
+                    entry.getReadCountHandler().incrementExpectedReadCount();
+                }
                 // add the message to replay
                 addMessageToReplay(entry.getLedgerId(), entry.getEntryId(), stickyKeyHash);
                 // release the entry as it will not be dispatched
@@ -700,8 +703,9 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
     }
 
     @Override
-    protected Set<? extends Position> asyncReplayEntries(Set<? extends Position> positions) {
-        return cursor.asyncReplayEntries(positions, this, ReadType.Replay, true);
+    protected boolean isOrderedReplayRequired() {
+        // replay is always ordered for key-shared subscription
+        return true;
     }
 
     public KeySharedMode getKeySharedMode() {

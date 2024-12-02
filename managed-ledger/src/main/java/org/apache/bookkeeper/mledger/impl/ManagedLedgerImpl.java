@@ -65,6 +65,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.function.IntSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -162,6 +163,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     protected final String name;
     private final Map<String, byte[]> ledgerMetadata;
     protected final BookKeeper.DigestType digestType;
+    private final AtomicReference<Position> cacheEvictionPosition = new AtomicReference<>();
 
     protected ManagedLedgerConfig config;
     protected Map<String, String> propertiesMap;
@@ -494,7 +496,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                                                 entries.getEntry(lh.getLastAddConfirmed());
                                         if (ledgerEntry != null) {
                                             promise.complete(
-                                                    Optional.of(EntryImpl.create(ledgerEntry)));
+                                                    Optional.of(EntryImpl.create(ledgerEntry, 0)));
                                         } else {
                                             promise.complete(Optional.empty());
                                         }
@@ -2162,6 +2164,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     protected void asyncReadEntry(ReadHandle ledger, long firstEntry, long lastEntry, OpReadEntry opReadEntry,
             Object ctx) {
+        IntSupplier expectedReadCount = () -> opReadEntry.cursor.getNumberOfCursorsAtSamePositionOrBefore();
         if (config.getReadEntryTimeoutSeconds() > 0) {
             // set readOpCount to uniquely validate if ReadEntryCallbackWrapper is already recycled
             long readOpCount = READ_OP_COUNT_UPDATER.incrementAndGet(this);
@@ -2169,11 +2172,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             ReadEntryCallbackWrapper readCallback = ReadEntryCallbackWrapper.create(name, ledger.getId(), firstEntry,
                     opReadEntry, readOpCount, createdTime, ctx);
             lastReadCallback = readCallback;
-            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, opReadEntry.cursor.isCacheReadEntry(),
-                    readCallback, readOpCount);
+            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, expectedReadCount, readCallback, readOpCount);
         } else {
-            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, opReadEntry.cursor.isCacheReadEntry(), opReadEntry,
-                    ctx);
+            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, expectedReadCount, opReadEntry, ctx);
         }
     }
 
@@ -2332,25 +2333,35 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         return result;
     }
 
-    void doCacheEviction(long maxTimestamp) {
-        if (entryCache.getSize() > 0) {
-            entryCache.invalidateEntriesBeforeTimestamp(maxTimestamp);
-        }
-    }
-
     // slowest reader position is earliest mark delete position when cacheEvictionByMarkDeletedPosition=true
     // it is the earliest read position when cacheEvictionByMarkDeletedPosition=false
     private void invalidateEntriesUpToSlowestReaderPosition() {
-        if (entryCache.getSize() <= 0) {
+        if (entryCache.getSize() <= 0 || config.isCacheEvictionByExpectedReadCount()) {
             return;
         }
-        if (!activeCursors.isEmpty()) {
-            Position evictionPos = activeCursors.getSlowestReaderPosition();
-            if (evictionPos != null) {
-                entryCache.invalidateEntries(evictionPos);
+        Position slowestReaderPosition = activeCursors.getSlowestReaderPosition();
+        Position evictionPos = slowestReaderPosition != null ? slowestReaderPosition : PositionFactory.LATEST;
+        Position currentEvictionPosition = cacheEvictionPosition.getAndUpdate(currentValue -> {
+            if (currentValue == null || currentValue == PositionFactory.LATEST
+                    || currentValue.compareTo(evictionPos) < 0) {
+                return evictionPos;
+            } else {
+                return currentValue;
             }
-        } else {
-            entryCache.clear();
+        });
+        // when currentEvictionPosition is null, it means there is no eviction task in progress
+        if (currentEvictionPosition == null) {
+            // start a new eviction task that will invalidate entries up to slowest reader position when the task
+            // gets executed. The cacheEvictionPosition could get updates by other threads before the task gets
+            // executed. This minimizes the number of eviction tasks that get executed.
+            getFactory().getCacheEvictionExecutor().execute(() -> {
+                Position latestEvictionPosition = cacheEvictionPosition.getAndSet(null);
+                if (latestEvictionPosition == PositionFactory.LATEST) {
+                    entryCache.clear();
+                } else if (latestEvictionPosition != null) {
+                    entryCache.invalidateEntries(latestEvictionPosition);
+                }
+            });
         }
     }
 
@@ -2385,7 +2396,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     private void updateActiveCursor(ManagedCursorImpl cursor, Position newPosition) {
         Pair<Position, Position> slowestPositions = activeCursors.cursorUpdated(cursor, newPosition);
-        if (slowestPositions != null
+        if (!config.isCacheEvictionByExpectedReadCount() && slowestPositions != null
                 && !slowestPositions.getLeft().equals(slowestPositions.getRight())) {
             invalidateEntriesUpToSlowestReaderPosition();
         }
@@ -2868,7 +2879,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             NUMBER_OF_ENTRIES_UPDATER.addAndGet(this, -ls.getEntries());
             TOTAL_SIZE_UPDATER.addAndGet(this, -ls.getSize());
 
-            entryCache.invalidateAllEntries(ls.getLedgerId());
+            getFactory().getCacheEvictionExecutor().execute(() -> {
+                entryCache.invalidateAllEntries(ls.getLedgerId());
+            });
         }
     }
 
@@ -3831,6 +3844,10 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         }
     }
 
+    public int getNumberOfCursorsAtSamePositionOrBefore(ManagedCursor cursor) {
+        return activeCursors.getNumberOfCursorsAtSamePositionOrBefore(cursor);
+    }
+
 
     public void removeWaitingCursor(ManagedCursor cursor) {
         this.waitingCursors.remove(cursor);
@@ -4565,7 +4582,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
 
     public void checkCursorsToCacheEntries() {
-        if (minBacklogCursorsForCaching < 1) {
+        if (minBacklogCursorsForCaching < 1 || config.isCacheEvictionByExpectedReadCount()) {
             return;
         }
         Iterator<ManagedCursor> it = cursors.iterator();

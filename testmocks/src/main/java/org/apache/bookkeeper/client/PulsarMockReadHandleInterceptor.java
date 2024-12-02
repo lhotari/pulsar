@@ -16,22 +16,22 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.bookkeeper.mledger.impl.cache;
+package org.apache.bookkeeper.client;
 
-import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import org.apache.bookkeeper.client.api.LedgerEntries;
 
 /**
- * Cache eviction policy abstraction interface.
- *
+ * Interceptor interface for intercepting read handle readAsync operations.
+ * This is useful for testing purposes, for example for introducing delays.
  */
-public interface EntryCacheEvictionPolicy {
+public interface PulsarMockReadHandleInterceptor {
     /**
-     * Perform the cache eviction of at least sizeToFree bytes on the supplied list of caches.
-     *
-     * @param caches
-     *            the list of caches to consider
-     * @param sizeToFree
-     *            the minimum size in bytes to be freed
+     * Intercepts the readAsync operation on a read handle.
+     * @param firstEntry first entry to read
+     * @param lastEntry last entry to read
+     * @param entries entries that would be returned by the read operation
+     * @return CompletableFuture that will complete with the entries to return
      */
-    void doEviction(List<EntryCache> caches, long sizeToFree);
+    CompletableFuture<LedgerEntries> interceptReadAsync(long firstEntry, long lastEntry, LedgerEntries entries);
 }
