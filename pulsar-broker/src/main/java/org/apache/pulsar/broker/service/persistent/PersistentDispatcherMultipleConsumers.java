@@ -310,6 +310,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                             + "after adding {} permits", name, consumer,
                     totalAvailablePermits, additionalNumberOfMessages);
         }
+        triggerNewReadAfterReceivingFlowPermits();
+    }
+
+    private void triggerNewReadAfterReceivingFlowPermits() {
         readMoreEntriesAsync();
     }
 
