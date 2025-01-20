@@ -391,6 +391,11 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                             messagesToReplayNow.size(), consumerList.size());
                 }
                 havePendingReplayRead = true;
+                cancelPendingRead();
+                if (havePendingRead) {
+                    // skip read since a pending read is already scheduled
+                    return;
+                }
                 updateMinReplayedPosition();
                 Set<? extends Position> deletedMessages = topic.isDelayedDeliveryEnabled()
                         ? asyncReplayEntriesInOrder(messagesToReplayNow)
@@ -717,6 +722,12 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     public final synchronized void readEntriesComplete(List<Entry> entries, Object ctx) {
         ReadType readType = (ReadType) ctx;
         if (readType == ReadType.Normal) {
+            if (!havePendingRead) {
+                log.debug("Discarding read entries as there is no pending read");
+                entries.forEach(Entry::release);
+                readMoreEntriesAsync();
+                return;
+            }
             havePendingRead = false;
         } else {
             havePendingReplayRead = false;
