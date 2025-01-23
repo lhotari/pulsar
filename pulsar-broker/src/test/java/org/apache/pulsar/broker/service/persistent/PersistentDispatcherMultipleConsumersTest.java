@@ -224,7 +224,7 @@ public class PersistentDispatcherMultipleConsumersTest extends ProducerConsumerB
         // Close consumer1 and resume consumer2
         consumer1.close();
 
-        Executor executor = CompletableFuture.delayedExecutor(4, TimeUnit.SECONDS);
+        Executor executor = CompletableFuture.delayedExecutor(1, TimeUnit.SECONDS);
         pulsarTestContext.getMockBookKeeper().setReadHandleInterceptor((ledgerId, firstEntry, lastEntry, entries) -> {
             log.info("intercepted read entries: firstEntry={}, lastEntry={}", firstEntry, lastEntry);
             return CompletableFuture.supplyAsync(() -> entries, executor);
