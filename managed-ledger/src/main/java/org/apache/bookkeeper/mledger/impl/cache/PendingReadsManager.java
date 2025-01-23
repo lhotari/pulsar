@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.IntSupplier;
 import lombok.AllArgsConstructor;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -232,9 +233,9 @@ public class PendingReadsManager {
             this.ledgerCache = ledgerCache;
         }
 
-        private List<EntryImpl> keepEntries(List<EntryImpl> list, long startEntry, long endEntry) {
-            List<EntryImpl> result = new ArrayList<>((int) (endEntry - startEntry));
-            for (EntryImpl entry : list) {
+        private List<Entry> keepEntries(List<Entry> list, long startEntry, long endEntry) {
+            List<Entry> result = new ArrayList<>((int) (endEntry - startEntry));
+            for (Entry entry : list) {
                 long entryId = entry.getEntryId();
                 if (startEntry <= entryId && entryId <= endEntry) {
                     result.add(entry);
@@ -245,7 +246,7 @@ public class PendingReadsManager {
             return result;
         }
 
-        public void attach(CompletableFuture<List<EntryImpl>> handle) {
+        public void attach(CompletableFuture<List<Entry>> handle) {
             // when the future is done remove this from the map
             // new reads will go to a new instance
             // this is required because we are going to do refcount management
@@ -263,31 +264,31 @@ public class PendingReadsManager {
                 synchronized (PendingRead.this) {
                     if (callbacks.size() == 1) {
                         ReadEntriesCallbackWithContext first = callbacks.get(0);
-                        if (first.startEntry == key.startEntry
-                                && first.endEntry == key.endEntry) {
+                        List<Entry> entries;
+                        if (first.startEntry == key.startEntry && first.endEntry == key.endEntry) {
                             // perfect match, no copy, this is the most common case
-                            first.callback.readEntriesComplete((List) entriesToReturn,
-                                    first.ctx);
+                            entries = entriesToReturn;
                         } else {
-                            first.callback.readEntriesComplete(
-                                    (List) keepEntries(entriesToReturn, first.startEntry, first.endEntry),
-                                    first.ctx);
+                            entries = keepEntries(entriesToReturn, first.startEntry, first.endEntry);
                         }
+                        first.callback.readEntriesComplete(entries, first.ctx);
                     } else {
                         for (ReadEntriesCallbackWithContext callback : callbacks) {
                             long callbackStartEntry = callback.startEntry;
                             long callbackEndEntry = callback.endEntry;
-                            List<EntryImpl> copy = new ArrayList<>((int) (callbackEndEntry - callbackStartEntry + 1));
-                            for (EntryImpl entry : entriesToReturn) {
+                            List<Entry> copy = new ArrayList<>((int) (callbackEndEntry - callbackStartEntry + 1));
+                            for (Entry entry : entriesToReturn) {
                                 long entryId = entry.getEntryId();
                                 if (callbackStartEntry <= entryId && entryId <= callbackEndEntry) {
                                     EntryImpl entryCopy = EntryImpl.create(entry);
                                     copy.add(entryCopy);
                                 }
                             }
-                            callback.callback.readEntriesComplete((List) copy, callback.ctx);
+                            callback.callback.readEntriesComplete(copy, callback.ctx);
                         }
-                        for (EntryImpl entry : entriesToReturn) {
+                        for (Entry entry : entriesToReturn) {
+                            // don't decrease the read count when these entries are released
+                            ((EntryImpl) entry).setDecreaseReadCountOnRelease(false);
                             entry.release();
                         }
                     }
@@ -314,7 +315,7 @@ public class PendingReadsManager {
     }
 
 
-    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, boolean shouldCacheEntry,
+    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, IntSupplier expectedReadCount,
                      final AsyncCallbacks.ReadEntriesCallback callback, Object ctx) {
         final PendingReadKey key = new PendingReadKey(firstEntry, lastEntry);
 
@@ -362,7 +363,7 @@ public class PendingReadsManager {
                                     };
                                     rangeEntryCache.asyncReadEntry0(lh,
                                             missingOnRight.startEntry, missingOnRight.endEntry,
-                                            shouldCacheEntry, readFromRightCallback, null);
+                                            expectedReadCount, readFromRightCallback, null, false);
                                 }
 
                                 @Override
@@ -372,7 +373,7 @@ public class PendingReadsManager {
                                 }
                             };
                             rangeEntryCache.asyncReadEntry0(lh, missingOnLeft.startEntry, missingOnLeft.endEntry,
-                                    shouldCacheEntry, readFromLeftCallback, null);
+                                    expectedReadCount, readFromLeftCallback, null, false);
                         } else if (missingOnLeft != null) {
                             AsyncCallbacks.ReadEntriesCallback readFromLeftCallback =
                                     new AsyncCallbacks.ReadEntriesCallback() {
@@ -395,7 +396,7 @@ public class PendingReadsManager {
                                         }
                                     };
                             rangeEntryCache.asyncReadEntry0(lh, missingOnLeft.startEntry, missingOnLeft.endEntry,
-                                    shouldCacheEntry, readFromLeftCallback, null);
+                                    expectedReadCount, readFromLeftCallback, null, false);
                         } else if (missingOnRight != null) {
                             AsyncCallbacks.ReadEntriesCallback readFromRightCallback =
                                     new AsyncCallbacks.ReadEntriesCallback() {
@@ -418,7 +419,7 @@ public class PendingReadsManager {
                                         }
                                     };
                             rangeEntryCache.asyncReadEntry0(lh, missingOnRight.startEntry, missingOnRight.endEntry,
-                                    shouldCacheEntry, readFromRightCallback, null);
+                                    expectedReadCount, readFromRightCallback, null, false);
                         }
                     }
 
@@ -434,8 +435,8 @@ public class PendingReadsManager {
 
 
             if (createdByThisThread.get()) {
-                CompletableFuture<List<EntryImpl>> readResult = rangeEntryCache.readFromStorage(lh, firstEntry,
-                        lastEntry, shouldCacheEntry);
+                CompletableFuture<List<Entry>> readResult = rangeEntryCache.readFromStorage(lh, firstEntry,
+                        lastEntry, expectedReadCount);
                 pendingRead.attach(readResult);
             }
         }
