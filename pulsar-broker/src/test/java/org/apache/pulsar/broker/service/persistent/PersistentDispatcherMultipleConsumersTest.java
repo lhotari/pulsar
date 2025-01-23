@@ -62,7 +62,8 @@ public class PersistentDispatcherMultipleConsumersTest extends ProducerConsumerB
     protected void doInitConf() throws Exception {
         super.doInitConf();
         conf.setManagedLedgerMaxReadsInFlightSizeInMB(10);
-        conf.setManagedLedgerCacheSizeMB(1);
+        conf.setDispatcherMaxReadSizeBytes(9 * 1024 * 1024);
+        conf.setManagedLedgerCacheSizeMB(10);
     }
 
     @AfterClass(alwaysRun = true)
@@ -224,7 +225,7 @@ public class PersistentDispatcherMultipleConsumersTest extends ProducerConsumerB
         // Close consumer1 and resume consumer2
         consumer1.close();
 
-        Executor executor = CompletableFuture.delayedExecutor(1, TimeUnit.SECONDS);
+        Executor executor = CompletableFuture.delayedExecutor(100, TimeUnit.MILLISECONDS);
         pulsarTestContext.getMockBookKeeper().setReadHandleInterceptor((ledgerId, firstEntry, lastEntry, entries) -> {
             log.info("intercepted read entries: firstEntry={}, lastEntry={}", firstEntry, lastEntry);
             return CompletableFuture.supplyAsync(() -> entries, executor);
@@ -236,8 +237,8 @@ public class PersistentDispatcherMultipleConsumersTest extends ProducerConsumerB
         consumer2.resume();
 
         // Verify that consumer2 can receive the messages
-        for (int i = 0; i < 100; i++) {
-            Message<byte[]> msg = consumer2.receive(5, TimeUnit.SECONDS);
+        for (int i = 0; i < numberOfMessages; i++) {
+            Message<byte[]> msg = consumer2.receive(1, TimeUnit.SECONDS);
             Assert.assertNotNull(msg, "Consumer2 should receive the message");
             consumer2.acknowledge(msg);
         }
