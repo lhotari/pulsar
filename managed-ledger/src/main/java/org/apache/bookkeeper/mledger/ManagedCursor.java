@@ -19,6 +19,8 @@
 package org.apache.bookkeeper.mledger;
 
 import com.google.common.collect.Range;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -917,6 +919,24 @@ public interface ManagedCursor {
     ManagedLedgerInternalStats.CursorStats getCursorStats();
 
     boolean isMessageDeleted(Position position);
+
+    /**
+     * Returns the deleted messages from the given positions.
+     * Implementation classes can override this method to provide a more efficient way to filter deleted messages.
+     *
+     * @param positions the positions to filter
+     * @return the set of deleted positions
+     */
+    default Set<Position> filterDeletedMessages(Collection<? extends Position> positions) {
+        Set<Position> deletedPositions = new HashSet<>();
+        // prefer for loop to avoid creating stream related instances
+        for (Position position : positions) {
+            if (isMessageDeleted(position)) {
+                deletedPositions.add(position);
+            }
+        }
+        return deletedPositions;
+    }
 
     ManagedCursor duplicateNonDurableCursor(String nonDurableCursorName) throws ManagedLedgerException;
 
