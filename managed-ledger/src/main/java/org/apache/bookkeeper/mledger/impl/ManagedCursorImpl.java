@@ -36,6 +36,7 @@ import java.time.Clock;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -45,6 +46,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.SortedSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CountDownLatch;
@@ -83,6 +85,8 @@ import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedCursorAttributes;
 import org.apache.bookkeeper.mledger.ManagedCursorMXBean;
+import org.apache.bookkeeper.mledger.ManagedCursorReplayReadEntriesCallback;
+import org.apache.bookkeeper.mledger.ManagedCursorReplayReadRange;
 import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
@@ -1597,12 +1601,6 @@ public class ManagedCursorImpl implements ManagedCursor {
      *
      */
     @Override
-    public Set<? extends Position> asyncReplayEntries(final Set<? extends Position> positions,
-            ReadEntriesCallback callback, Object ctx) {
-        return asyncReplayEntries(positions, callback, ctx, false);
-    }
-
-    @Override
     public Set<? extends Position> asyncReplayEntries(Set<? extends Position> positions,
             ReadEntriesCallback callback, Object ctx, boolean sortEntries) {
         List<Entry> entries = Lists.newArrayListWithExpectedSize(positions.size());
@@ -1611,16 +1609,12 @@ public class ManagedCursorImpl implements ManagedCursor {
             return Collections.emptySet();
         }
 
-        // filters out messages which are already acknowledged
-        Set<Position> alreadyAcknowledgedPositions = new HashSet<>();
-        lock.readLock().lock();
-        try {
-            positions.stream().filter(this::internalIsMessageDeleted).forEach(alreadyAcknowledgedPositions::add);
-        } finally {
-            lock.readLock().unlock();
-        }
+        Set<Position> alreadyAcknowledgedPositions = filterDeletedMessages(positions);
 
         final int totalValidPositions = positions.size() - alreadyAcknowledgedPositions.size();
+        if (totalValidPositions == 0) {
+            return alreadyAcknowledgedPositions;
+        }
         final AtomicReference<ManagedLedgerException> exception = new AtomicReference<>();
         ReadEntryCallback cb = new ReadEntryCallback() {
             int pendingCallbacks = totalValidPositions;
@@ -1663,17 +1657,96 @@ public class ManagedCursorImpl implements ManagedCursor {
             }
         };
 
-        positions.stream().filter(position -> !alreadyAcknowledgedPositions.contains(position))
-                .forEach(p ->{
-                    if (p.compareTo(this.readPosition) == 0) {
-                        this.setReadPosition(this.readPosition.getNext());
-                        log.warn("[{}][{}] replayPosition{} equals readPosition{}," + " need set next readPosition",
-                                ledger.getName(), name, p, this.readPosition);
-                    }
-                    ledger.asyncReadEntry(p, cb, ctx);
-                });
+        for (Position position : positions) {
+            if (!alreadyAcknowledgedPositions.contains(position)) {
+                if (position.compareTo(this.readPosition) == 0) {
+                    this.setReadPosition(this.readPosition.getNext());
+                    log.warn("[{}][{}] replayPosition{} equals readPosition{}," + " need set next readPosition",
+                            ledger.getName(), name, position, this.readPosition);
+                }
+                ledger.asyncReadEntry(position, cb, ctx);
+            }
+        }
 
         return alreadyAcknowledgedPositions;
+    }
+
+    @Override
+    public Set<? extends Position> asyncReplayEntriesInRanges(SortedSet<? extends Position> positions,
+                                                              ManagedCursorReplayReadEntriesCallback callback,
+                                                              Object callerCtx,
+                                                              boolean invokeCallbacksInOrder) {
+        checkArgument(!positions.isEmpty(), "Positions to replay should not be empty");
+        Set<Position> alreadyAcknowledgedPositions = filterDeletedMessages(positions);
+        final int totalValidPositions = positions.size() - alreadyAcknowledgedPositions.size();
+        if (totalValidPositions == 0) {
+            return alreadyAcknowledgedPositions;
+        }
+        List<ManagedCursorReplayReadRange> ranges = toRanges(positions, alreadyAcknowledgedPositions);
+        if (isClosed()) {
+            callback.readEntriesFailed(ranges.get(0), true, new ManagedLedgerException
+                    .CursorAlreadyClosedException("Cursor was already closed"), callerCtx);
+        } else {
+            AsyncCallbacks.ReadEntriesCallback cb =
+                    new ManagedCursorReplayReadEntriesBatchCallbackImpl(ranges, invokeCallbacksInOrder, callback,
+                            callerCtx);
+            for (ManagedCursorReplayReadRange range : ranges) {
+                ledger.asyncReadEntries(
+                        OpReadEntry.create(this, range.startPosition(), range.size(), cb, range, null, null));
+            }
+        }
+        return alreadyAcknowledgedPositions;
+    }
+
+    private static List<ManagedCursorReplayReadRange> toRanges(SortedSet<? extends Position> positions,
+                                                               Set<Position> alreadyAcknowledgedPositions) {
+        List<Pair<Position, Position>> positionRanges = new ArrayList<>();
+        Position rangeStartPosition = null;
+        Position rangeLastPosition = null;
+        for (Position position : positions) {
+            if (!alreadyAcknowledgedPositions.contains(position)) {
+                if (rangeStartPosition == null) {
+                    rangeStartPosition = position;
+                    rangeLastPosition = position;
+                } else if (rangeLastPosition.getLedgerId() == position.getLedgerId()
+                        && rangeLastPosition.getEntryId() + 1 == position.getEntryId()) {
+                    rangeLastPosition = position;
+                } else {
+                    positionRanges.add(Pair.of(rangeStartPosition, rangeLastPosition));
+                    rangeStartPosition = position;
+                    rangeLastPosition = position;
+                }
+            }
+        }
+        if (rangeStartPosition != null && rangeLastPosition != null) {
+            positionRanges.add(Pair.of(rangeStartPosition, rangeLastPosition));
+        }
+        List<ManagedCursorReplayReadRange> ranges = new ArrayList<>(positionRanges.size());
+        for (int i = 0; i < positionRanges.size(); i++) {
+            Pair<Position, Position> range = positionRanges.get(i);
+            ranges.add(
+                    new ManagedCursorReplayReadRangeImpl(i, positionRanges.size(), range.getLeft(), range.getRight()));
+        }
+        return ranges;
+    }
+
+    @Override
+    public Set<Position> filterDeletedMessages(Collection<? extends Position> positions) {
+        Set<Position> deletedMessages = new HashSet<>();
+        // acquire a read lock once for all the positions
+        lock.readLock().lock();
+        try {
+            // prefer for loop to avoid creating stream related instances
+            for (Position position : positions) {
+                // call the internal method to avoid acquiring read lock multiple times
+                if (internalIsMessageDeleted(position)) {
+                    deletedMessages.add(position);
+                }
+            }
+        } finally {
+            lock.readLock().unlock();
+        }
+        return deletedMessages;
     }
 
     protected long getNumberOfEntries(Range<Position> range) {
@@ -3813,14 +3886,14 @@ public class ManagedCursorImpl implements ManagedCursor {
 
         double avgEntrySize = ledger.getStats().getEntrySizeAverage();
         if (!Double.isFinite(avgEntrySize)) {
-            // We don't have yet any stats on the topic entries. Let's try to use the cursor avg size stats
-            avgEntrySize = (double) entriesReadSize / (double) entriesReadCount;
-        }
-
-        if (!Double.isFinite(avgEntrySize)) {
-            // If we still don't have any information, it means this is the first time we attempt reading
-            // and there are no writes. Let's start with 1 to avoid any overflow and start the avg stats
-            return 1;
+            if (entriesReadCount != 0) {
+                // We don't have yet any stats on the topic entries. Let's try to use the cursor avg size stats
+                avgEntrySize = (double) entriesReadSize / (double) entriesReadCount;
+            } else {
+                // If we still don't have any information, it means this is the first time we attempt reading
+                // and there are no writes. Let's start with 1 to avoid any overflow and start the avg stats
+                return 1;
+            }
         }
 
         int maxEntriesBasedOnSize = (int) (maxSizeBytes / avgEntrySize);
@@ -3922,5 +3995,15 @@ public class ManagedCursorImpl implements ManagedCursor {
         cs.totalNonContiguousDeletedMessagesRange = getTotalNonContiguousDeletedMessagesRange();
         cs.properties = getProperties();
         return cs;
+    }
+
+    public int getNumberOfCursorsAtSamePositionOrBefore() {
+        if (ledger.getConfig().isCacheEvictionByExpectedReadCount()) {
+            return ledger.getNumberOfCursorsAtSamePositionOrBefore(this);
+        } else if (isCacheReadEntry()) {
+            return 1;
+        } else {
+            return 0;
+        }
     }
 }
