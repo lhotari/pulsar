@@ -20,6 +20,7 @@
 package org.apache.pulsar.broker.qos;
 
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +30,9 @@ import org.slf4j.LoggerFactory;
  *
  * Starts a daemon thread that updates the snapshot value periodically with a configured interval. The close method
  * should be called to stop the thread.
+ * A single thread is used to update the monotonic clock value so that the snapshot value is always increasing,
+ * even if the clock source is not strictly monotonic across all CPUs. This might be the case in some virtualized
+ * environments.
  */
 public class DefaultMonotonicSnapshotClock implements MonotonicSnapshotClock, AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(DefaultMonotonicSnapshotClock.class);
@@ -36,7 +40,14 @@ public class DefaultMonotonicSnapshotClock implements MonotonicSnapshotClock, Au
     private final int sleepNanos;
     private final LongSupplier clockSource;
     private final Thread thread;
+    private final long snapshotIntervalNanos;
     private volatile long snapshotTickNanos;
+    private static final AtomicLongFieldUpdater<DefaultMonotonicSnapshotClock> SNAPSHOT_TICK_NANOS_UPDATER =
+            AtomicLongFieldUpdater.newUpdater(DefaultMonotonicSnapshotClock.class, "snapshotTickNanos");
+    private final Object monitor = new Object();
+    private long lastClockSourceValue;
+    private long referenceClockSourceValue;
+    private long baseClockSourceValue;
 
     public DefaultMonotonicSnapshotClock(long snapshotIntervalNanos, LongSupplier clockSource) {
         if (snapshotIntervalNanos < TimeUnit.MILLISECONDS.toNanos(1)) {
@@ -45,9 +56,11 @@ public class DefaultMonotonicSnapshotClock implements MonotonicSnapshotClock, Au
         this.sleepMillis = TimeUnit.NANOSECONDS.toMillis(snapshotIntervalNanos);
         this.sleepNanos = (int) (snapshotIntervalNanos - TimeUnit.MILLISECONDS.toNanos(sleepMillis));
         this.clockSource = clockSource;
+        this.snapshotIntervalNanos = snapshotIntervalNanos;
         updateSnapshotTickNanos();
         thread = new Thread(this::snapshotLoop, getClass().getSimpleName() + "-update-loop");
         thread.setDaemon(true);
+        thread.setPriority(Thread.MAX_PRIORITY);
         thread.start();
     }
 
@@ -55,21 +68,47 @@ public class DefaultMonotonicSnapshotClock implements MonotonicSnapshotClock, Au
     @Override
     public long getTickNanos(boolean requestSnapshot) {
         if (requestSnapshot) {
-            updateSnapshotTickNanos();
+            synchronized (monitor) {
+                monitor.notify();
+            }
         }
         return snapshotTickNanos;
     }
 
+    // Ensures that ticks will always be monotonic, even if the clock source is not strictly monotonic
     private void updateSnapshotTickNanos() {
-        snapshotTickNanos = clockSource.getAsLong();
+        long clockValue = clockSource.getAsLong();
+
+        // Initialization
+        if (referenceClockSourceValue == 0) {
+            referenceClockSourceValue = clockValue;
+            baseClockSourceValue = clockValue;
+            lastClockSourceValue = clockValue;
+            snapshotTickNanos = clockValue;
+            return;
+        }
+
+        long deltaValue = clockValue - lastClockSourceValue;
+        if (deltaValue < -2 * snapshotIntervalNanos || deltaValue > 2 * snapshotIntervalNanos) {
+            // Clock source value has jumped, reset the base value
+            referenceClockSourceValue = clockValue;
+            baseClockSourceValue = lastClockSourceValue + snapshotIntervalNanos;
+        }
+        long durationSinceReference = clockValue - referenceClockSourceValue;
+        long newSnapshotTickNanos = baseClockSourceValue + durationSinceReference;
+        SNAPSHOT_TICK_NANOS_UPDATER.updateAndGet(this, prev -> Math.max(prev, newSnapshotTickNanos));
+        lastClockSourceValue = clockValue;
     }
 
     private void snapshotLoop() {
         try {
+            updateSnapshotTickNanos();
             while (!Thread.currentThread().isInterrupted()) {
-                updateSnapshotTickNanos();
                 try {
-                    Thread.sleep(sleepMillis, sleepNanos);
+                    synchronized (monitor) {
+                        monitor.wait(sleepMillis, sleepNanos);
+                        updateSnapshotTickNanos();
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
