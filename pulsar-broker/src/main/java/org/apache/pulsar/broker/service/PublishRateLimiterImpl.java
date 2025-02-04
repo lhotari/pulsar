@@ -20,7 +20,6 @@
 package org.apache.pulsar.broker.service;
 
 import com.google.common.annotations.VisibleForTesting;
-import io.netty.channel.EventLoopGroup;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -80,7 +79,7 @@ public class PublishRateLimiterImpl implements PublishRateLimiter {
         // schedule unthrottling when the throttling count is incremented to 1
         // this is to avoid scheduling unthrottling multiple times for concurrent producers
         if (throttledProducersCount.incrementAndGet() == 1) {
-            EventLoopGroup executor = producer.getCnx().getBrokerService().executor();
+            ScheduledExecutorService executor = producer.getCnx().getBrokerService().executor().next();
             scheduleUnthrottling(executor, calculateThrottlingDurationNanos());
         }
     }
