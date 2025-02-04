@@ -161,14 +161,11 @@ public abstract class AsyncTokenBucket {
             long newTokens = calculateNewTokensSinceLastUpdate(currentNanos);
             // calculate the total amount of tokens to consume in this update
             // flush the pendingConsumedTokens by calling "sumThenReset"
-            long totalConsumedTokens = consumeTokens + pendingConsumedTokens.sumThenReset();
+            long currentPendingConsumedTokens = pendingConsumedTokens.sumThenReset();
             // update the tokens and return the current token value
             return TOKENS_UPDATER.updateAndGet(this,
-                    currentTokens ->
-                            // after adding new tokens, limit the tokens to the capacity
-                            Math.min(currentTokens + newTokens, getCapacity())
-                                    // subtract the consumed tokens
-                                    - totalConsumedTokens);
+                    currentTokens -> Math.min(currentTokens + newTokens - currentPendingConsumedTokens, getCapacity())
+                            - consumeTokens);
         } else {
             // eventual consistent fast path, tokens are not updated immediately
 
@@ -211,8 +208,10 @@ public abstract class AsyncTokenBucket {
      */
     private long calculateNewTokensSinceLastUpdate(long currentNanos) {
         long newTokens;
-        long previousLastNanos = LAST_NANOS_UPDATER.getAndSet(this, currentNanos);
-        if (previousLastNanos == 0) {
+        // update lastNanos if currentNanos is greater than the current lastNanos
+        long previousLastNanos = LAST_NANOS_UPDATER.getAndUpdate(this,
+                currentLastNanos -> Math.max(currentNanos, currentLastNanos));
+        if (previousLastNanos == 0 || previousLastNanos >= currentNanos) {
             newTokens = 0;
         } else {
             long durationNanos = currentNanos - previousLastNanos + REMAINDER_NANOS_UPDATER.getAndSet(this, 0);
