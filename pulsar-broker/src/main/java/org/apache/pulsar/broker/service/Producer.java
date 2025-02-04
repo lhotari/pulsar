@@ -265,7 +265,7 @@ public class Producer {
             }
         }
 
-        startPublishOperation((int) batchSize, msgSize);
+        startPublishOperation(batchSize, msgSize);
         return true;
     }
 
