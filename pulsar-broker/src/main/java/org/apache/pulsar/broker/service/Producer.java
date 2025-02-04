@@ -196,10 +196,11 @@ public class Producer {
     public void publishMessage(long producerId, long lowestSequenceId, long highestSequenceId,
             ByteBuf headersAndPayload, int batchSize, boolean isChunked, boolean isMarker, Position position) {
         if (lowestSequenceId > highestSequenceId) {
+            int msgSize = headersAndPayload.readableBytes();
             cnx.execute(() -> {
                 cnx.getCommandSender().sendSendError(producerId, highestSequenceId, ServerError.MetadataError,
                         "Invalid lowest or highest sequence id");
-                cnx.completedSendOperation(isNonPersistentTopic, headersAndPayload.readableBytes());
+                cnx.completedSendOperation(isNonPersistentTopic, msgSize);
             });
             return;
         }
@@ -211,11 +212,12 @@ public class Producer {
 
     public boolean checkAndStartPublish(long producerId, long sequenceId, ByteBuf headersAndPayload, int batchSize,
                                         Position position) {
+        int msgSize = headersAndPayload.readableBytes();
         if (!isShadowTopic && position != null) {
             cnx.execute(() -> {
                 cnx.getCommandSender().sendSendError(producerId, sequenceId, ServerError.NotAllowedError,
                         "Only shadow topic supports sending messages with messageId");
-                cnx.completedSendOperation(isNonPersistentTopic, headersAndPayload.readableBytes());
+                cnx.completedSendOperation(isNonPersistentTopic, msgSize);
             });
             return false;
         }
@@ -223,7 +225,7 @@ public class Producer {
             cnx.execute(() -> {
                 cnx.getCommandSender().sendSendError(producerId, sequenceId, ServerError.NotAllowedError,
                         "Cannot send messages to a shadow topic");
-                cnx.completedSendOperation(isNonPersistentTopic, headersAndPayload.readableBytes());
+                cnx.completedSendOperation(isNonPersistentTopic, msgSize);
             });
             return false;
         }
@@ -231,7 +233,7 @@ public class Producer {
             cnx.execute(() -> {
                 cnx.getCommandSender().sendSendError(producerId, sequenceId, ServerError.PersistenceError,
                         "Producer is closed");
-                cnx.completedSendOperation(isNonPersistentTopic, headersAndPayload.readableBytes());
+                cnx.completedSendOperation(isNonPersistentTopic, msgSize);
             });
             return false;
         }
@@ -240,7 +242,7 @@ public class Producer {
             cnx.execute(() -> {
                 cnx.getCommandSender().sendSendError(producerId, sequenceId, ServerError.ChecksumError,
                         "Checksum failed on the broker");
-                cnx.completedSendOperation(isNonPersistentTopic, headersAndPayload.readableBytes());
+                cnx.completedSendOperation(isNonPersistentTopic, msgSize);
             });
             return false;
         }
@@ -257,13 +259,13 @@ public class Producer {
                 cnx.execute(() -> {
                     cnx.getCommandSender().sendSendError(producerId, sequenceId, ServerError.MetadataError,
                             "Messages must be encrypted");
-                    cnx.completedSendOperation(isNonPersistentTopic, headersAndPayload.readableBytes());
+                    cnx.completedSendOperation(isNonPersistentTopic, msgSize);
                 });
                 return false;
             }
         }
 
-        startPublishOperation((int) batchSize, headersAndPayload.readableBytes());
+        startPublishOperation((int) batchSize, msgSize);
         return true;
     }
 
