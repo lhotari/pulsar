@@ -705,7 +705,7 @@ jobs:
         run: |
           if [ -d "NETTY_LEAK_DUMP_DIR" ]; then
             cd "NETTY_LEAK_DUMP_DIR"
-            cat netty_leak_*.txt | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
+            { cat netty_leak_*.txt; find tests/integration/target/container-logs -type f -name "*.tar.gz" -exec tar -Ozxvf {} --wildcards --wildcards-match-slash '*/netty_leak_*.txt' \;; }  | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
           fi
 
       - name: Upload Surefire reports
@@ -1104,7 +1104,7 @@ jobs:
         run: |
           if [ -d "NETTY_LEAK_DUMP_DIR" ]; then
             cd "NETTY_LEAK_DUMP_DIR"
-            cat netty_leak_*.txt | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
+            { cat netty_leak_*.txt; find tests/integration/target/container-logs -type f -name "*.tar.gz" -exec tar -Ozxvf {} --wildcards --wildcards-match-slash '*/netty_leak_*.txt' \;; }  | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
           fi
 
       - name: Upload container logs
@@ -1333,7 +1333,7 @@ jobs:
         run: |
           if [ -d "NETTY_LEAK_DUMP_DIR" ]; then
             cd "NETTY_LEAK_DUMP_DIR"
-            cat netty_leak_*.txt | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
+            { cat netty_leak_*.txt; find tests/integration/target/container-logs -type f -name "*.tar.gz" -exec tar -Ozxvf {} --wildcards --wildcards-match-slash '*/netty_leak_*.txt' \;; }  | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
           fi
 
       - name: Upload container logs
