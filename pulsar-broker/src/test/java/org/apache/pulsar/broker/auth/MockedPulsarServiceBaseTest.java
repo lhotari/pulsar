@@ -305,6 +305,9 @@ public abstract class MockedPulsarServiceBaseTest extends TestRetrySupport {
         pulsar = null;
         mockZooKeeper = null;
         mockZooKeeperGlobal = null;
+
+        // Call System.gc() so that Netty leak detector can catch issues early
+        System.gc();
     }
 
     protected void closeAdmin() {
