@@ -703,10 +703,13 @@ jobs:
       - name: Report detected Netty leaks
         if: ${{ always() }}
         run: |
-          if [ -d "$NETTY_LEAK_DUMP_DIR" ]; then
-            cd "$NETTY_LEAK_DUMP_DIR"
-            { cat netty_leak_*.txt; find tests/integration/target/container-logs -type f -name "*.tar.gz" -exec tar -Ozxvf {} --wildcards --wildcards-match-slash '*/netty_leak_*.txt' \;; }  | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
-          fi
+          {
+            if [ -d "$NETTY_LEAK_DUMP_DIR" ]; then
+              cd "$NETTY_LEAK_DUMP_DIR"
+              cat netty_leak_*.txt
+            fi
+            find tests/integration/target/container-logs -type f -name "*.tar.gz" -exec tar -Ozxvf {} --wildcards --wildcards-match-slash '*/netty_leak_*.txt' \;
+          } | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
 
       - name: Upload Surefire reports
         uses: actions/upload-artifact@v4
@@ -1102,10 +1105,13 @@ jobs:
       - name: Report detected Netty leaks
         if: ${{ always() }}
         run: |
-          if [ -d "$NETTY_LEAK_DUMP_DIR" ]; then
-            cd "$NETTY_LEAK_DUMP_DIR"
-            { cat netty_leak_*.txt; find tests/integration/target/container-logs -type f -name "*.tar.gz" -exec tar -Ozxvf {} --wildcards --wildcards-match-slash '*/netty_leak_*.txt' \;; }  | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
-          fi
+          {
+            if [ -d "$NETTY_LEAK_DUMP_DIR" ]; then
+              cd "$NETTY_LEAK_DUMP_DIR"
+              cat netty_leak_*.txt
+            fi
+            find tests/integration/target/container-logs -type f -name "*.tar.gz" -exec tar -Ozxvf {} --wildcards --wildcards-match-slash '*/netty_leak_*.txt' \;
+          } | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
 
       - name: Upload container logs
         uses: actions/upload-artifact@v4
@@ -1331,10 +1337,13 @@ jobs:
       - name: Report detected Netty leaks
         if: ${{ always() }}
         run: |
-          if [ -d "$NETTY_LEAK_DUMP_DIR" ]; then
-            cd "$NETTY_LEAK_DUMP_DIR"
-            { cat netty_leak_*.txt; find tests/integration/target/container-logs -type f -name "*.tar.gz" -exec tar -Ozxvf {} --wildcards --wildcards-match-slash '*/netty_leak_*.txt' \;; }  | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
-          fi
+          {
+            if [ -d "$NETTY_LEAK_DUMP_DIR" ]; then
+              cd "$NETTY_LEAK_DUMP_DIR"
+              cat netty_leak_*.txt
+            fi
+            find tests/integration/target/container-logs -type f -name "*.tar.gz" -exec tar -Ozxvf {} --wildcards --wildcards-match-slash '*/netty_leak_*.txt' \;
+          } | awk '/^Traced leak detected/ {print "::warning::" $0 "\n"; next} {print}'
 
       - name: Upload container logs
         uses: actions/upload-artifact@v4
