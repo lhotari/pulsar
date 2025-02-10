@@ -1823,7 +1823,9 @@ flexible messaging model and an intuitive client API.</description>
         <configuration>
           <argLine>${testJacocoAgentArgument} -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=${testHeapDumpPath} -XX:+ExitOnOutOfMemoryError -Xmx${testMaxHeapSize} -XX:+UseZGC
             -Dpulsar.allocator.pooled=true
-            -Dpulsar.allocator.leak_detection=Advanced
+            -Dpulsar.allocator.leak_detection=Paranoid
+            -Dio.netty.leakDetectionLevel=paranoid
+            -Dio.netty.customResourceLeakDetector=org.apache.pulsar.tests.ExitJVMNettyLeakDetector
             -Dio.netty.leakDetection.targetRecords=40
             -Dpulsar.allocator.exit_on_oom=false
             -Dpulsar.allocator.out_of_memory_policy=FallbackToHeap
