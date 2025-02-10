@@ -113,6 +113,14 @@ flexible messaging model and an intuitive client API.</description>
       --add-opens java.management/sun.management=ALL-UNNAMED <!--JvmDefaultGCMetricsLogger & MBeanStatsGenerator-->
       --add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED <!--MBeanStatsGenerator-->
       --add-opens java.base/jdk.internal.platform=ALL-UNNAMED <!--LinuxInfoUtils-->
+      <!--
+      enable optimized Netty direct memory buffer access
+      https://pulsar.apache.org/docs/4.0.x/client-libraries-java-setup/#enabling-optimized-netty-direct-memory-buffer-access
+      -->
+      --add-opens java.base/java.nio=ALL-UNNAMED
+      --add-opens java.base/jdk.internal.misc=ALL-UNNAMED
+      -Dio.netty.tryReflectionSetAccessible=true
+      -Dorg.apache.pulsar.shade.io.netty.tryReflectionSetAccessible=true
     </test.additional.args>
     <testMaxHeapSize>1300M</testMaxHeapSize>
     <testReuseFork>true</testReuseFork>
@@ -1815,10 +1823,12 @@ flexible messaging model and an intuitive client API.</description>
         <configuration>
           <argLine>${testJacocoAgentArgument} -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=${testHeapDumpPath} -XX:+ExitOnOutOfMemoryError -Xmx${testMaxHeapSize} -XX:+UseZGC
             -Dpulsar.allocator.pooled=true
-            -Dpulsar.allocator.leak_detection=Advanced
+            -Dio.netty.customResourceLeakDetector=org.apache.pulsar.tests.ExitJVMNettyLeakDetector
+            -Dio.netty.leakDetection.level=paranoid
+            -Dio.netty.leakDetection.targetRecords=16
+            -Dio.netty.leakDetection.acquireAndReleaseOnly=true
             -Dpulsar.allocator.exit_on_oom=false
             -Dpulsar.allocator.out_of_memory_policy=FallbackToHeap
-            -Dio.netty.tryReflectionSetAccessible=true
             ${test.additional.args}
           </argLine>
           <reuseForks>${testReuseFork}</reuseForks>
