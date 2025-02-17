@@ -30,6 +30,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.common.concurrent.FutureUtils;
+import org.apache.pulsar.common.util.Backoff;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.metadata.api.GetResult;
 import org.apache.pulsar.metadata.api.MetadataCache;
@@ -70,6 +71,7 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
     private InternalState internalState;
 
     private static final int LEADER_ELECTION_RETRY_DELAY_SECONDS = 5;
+    private final Backoff retryBackoff;
 
     LeaderElectionImpl(MetadataStoreExtended store, Class<T> clazz, String path,
             Consumer<LeaderElectionState> stateChangesListener,
@@ -91,6 +93,11 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
         updateCachedValueFuture = executor.scheduleWithFixedDelay(this::getLeaderValue,
                 metadataCacheConfig.getRefreshAfterWriteMillis() / 2,
                 metadataCacheConfig.getRefreshAfterWriteMillis(), TimeUnit.MILLISECONDS);
+        retryBackoff = new Backoff(
+                100, TimeUnit.MILLISECONDS,
+                LEADER_ELECTION_RETRY_DELAY_SECONDS, TimeUnit.SECONDS,
+                0, TimeUnit.MILLISECONDS);
+
     }
 
     @Override
@@ -174,6 +181,7 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
     }
 
     private synchronized void changeState(LeaderElectionState les) {
+        retryBackoff.reset();
         if (internalState == InternalState.Closed) {
             return;
         }
@@ -256,15 +264,18 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
                     if (ex.getCause() instanceof BadVersionException) {
                         // There was a conflict between 2 participants trying to become leaders at same time. Retry
                         // to fetch info on new leader.
+                        long retryDelayMillis = retryBackoff.next();
                         log.info("There was a conflict between 2 participants trying to become leaders at the same "
-                                        + "time on {}. Attempted with value {}. Retrying.",
-                                path, value);
-                        elect()
-                            .thenAccept(lse -> result.complete(lse))
-                            .exceptionally(ex2 -> {
-                                result.completeExceptionally(ex2);
-                                return null;
-                            });
+                                        + "time on {}. Attempted with value {}. Retrying after {}ms.",
+                                path, value, retryDelayMillis);
+                        executor.schedule(() -> {
+                            elect()
+                                    .thenAccept(lse -> result.complete(lse))
+                                    .exceptionally(ex2 -> {
+                                        result.completeExceptionally(ex2);
+                                        return null;
+                                    });
+                        }, retryDelayMillis, TimeUnit.MILLISECONDS);
                     } else {
                         result.completeExceptionally(ex.getCause());
                     }
@@ -371,7 +382,7 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
                                         executor.schedule(() -> {
                                             log.info("Retrying Leader election for path {}", path);
                                             elect();
-                                        }, LEADER_ELECTION_RETRY_DELAY_SECONDS, TimeUnit.SECONDS);
+                                        }, retryBackoff.next(), TimeUnit.MILLISECONDS);
                                     }
                                 }
                                 return null;
