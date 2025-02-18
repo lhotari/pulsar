@@ -257,29 +257,17 @@ class LeaderElectionImpl<T> implements LeaderElection<T>, LeaderElectionControl 
                                             result.complete(leaderElectionState);
                                         }
                                     }).exceptionally(ex -> {
-                                        // We fail to do the get(), so clean up the leader election fail the whole
-                                        // operation
+                                        long delayMs = retryBackoff.next();
                                         log.warn("Failed to get the current state after acquiring leadership on {}. "
-                                                + " Conditionally deleting current entry.", path, ex);
-                                        store.delete(path, Optional.of(stat.getVersion()))
-                                                .thenRun(() -> result.completeExceptionally(ex))
-                                                .exceptionally(ex2 -> {
-                                                    result.completeExceptionally(ex2);
-                                                    return null;
-                                                });
+                                                + "Restarting election after {}ms.", path, delayMs, ex);
+                                        retryElectionAfterDelay(result, delayMs);
                                         return null;
                                     });
                         } else {
+                            long delayMs = retryBackoff.next();
                             log.info("Leadership on {} with value {} was lost. "
-                                            + "Conditionally deleting entry with stat={}.", path, value, stat);
-                            // LeaderElection was closed in between. Release the lock asynchronously
-                            store.delete(path, Optional.of(stat.getVersion()))
-                                    .thenRun(() -> result.completeExceptionally(
-                                            new AlreadyClosedException("The leader election was already closed")))
-                                    .exceptionally(ex -> {
-                                        result.completeExceptionally(ex);
-                                        return null;
-                                    });
+                                            + "Restarting election after {}ms.", path, value, delayMs);
+                            retryElectionAfterDelay(result, delayMs);
                         }
                     }
                 }).exceptionally(ex -> {
@@ -290,14 +278,7 @@ class LeaderElectionImpl<T> implements LeaderElection<T>, LeaderElectionControl 
                         log.info("There was a conflict between 2 participants trying to become leaders at the same "
                                         + "time on {}. Attempted with value {}. Retrying after {}ms.",
                                 path, value, retryDelayMillis);
-                        executor.schedule(() -> {
-                            elect()
-                                    .thenAccept(lse -> result.complete(lse))
-                                    .exceptionally(ex2 -> {
-                                        result.completeExceptionally(ex2);
-                                        return null;
-                                    });
-                        }, retryDelayMillis, TimeUnit.MILLISECONDS);
+                        retryElectionAfterDelay(result, retryDelayMillis);
                     } else {
                         result.completeExceptionally(ex.getCause());
                     }
@@ -305,6 +286,12 @@ class LeaderElectionImpl<T> implements LeaderElection<T>, LeaderElectionControl 
                 });
 
         return result;
+    }
+
+    private void retryElectionAfterDelay(CompletableFuture<LeaderElectionState> resultFuture, long retryDelayMillis) {
+        executor.schedule(() -> {
+            FutureUtil.completeAfter(resultFuture, elect());
+        }, retryDelayMillis, TimeUnit.MILLISECONDS);
     }
 
     @Override
