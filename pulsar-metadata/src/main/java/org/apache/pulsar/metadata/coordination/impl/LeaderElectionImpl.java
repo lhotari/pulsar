@@ -234,7 +234,10 @@ class LeaderElectionImpl<T> implements LeaderElection<T>, LeaderElectionControl 
         store.put(path, payload, Optional.of(-1L), EnumSet.of(CreateOption.Ephemeral))
                 .thenAccept(stat -> {
                     synchronized (LeaderElectionImpl.this) {
-                        if (internalState == InternalState.ElectionInProgress) {
+                        if (internalState == InternalState.Closed) {
+                            result.completeExceptionally(new AlreadyClosedException(
+                                    "The leader election was already closed"));
+                        } else if (internalState == InternalState.ElectionInProgress) {
                             // Do a get() in order to force a notification later, if the z-node disappears
                             cache.get(path)
                                     .thenRun(() -> {
