@@ -268,8 +268,8 @@ class LeaderElectionImpl<T> implements LeaderElection<T>, LeaderElectionControl 
                                     });
                         } else {
                             long delayMs = retryBackoff.next();
-                            log.info("Leadership on {} with value {} was lost. "
-                                            + "Restarting election after {}ms.", path, value, delayMs);
+                            log.info("Internal state changed to {}. Leadership on {} with value {} was lost. "
+                                            + "Restarting election after {}ms.", internalState, path, value, delayMs);
                             retryElectionAfterDelay(result, delayMs);
                         }
                     }
