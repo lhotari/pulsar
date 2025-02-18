@@ -20,6 +20,8 @@ package org.apache.pulsar.metadata.coordination.impl;
 
 import com.fasterxml.jackson.databind.type.TypeFactory;
 import com.google.common.annotations.VisibleForTesting;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.EnumSet;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -41,6 +43,7 @@ import org.apache.pulsar.metadata.api.MetadataStoreException.AlreadyClosedExcept
 import org.apache.pulsar.metadata.api.MetadataStoreException.BadVersionException;
 import org.apache.pulsar.metadata.api.Notification;
 import org.apache.pulsar.metadata.api.NotificationType;
+import org.apache.pulsar.metadata.api.Stat;
 import org.apache.pulsar.metadata.api.coordination.LeaderElection;
 import org.apache.pulsar.metadata.api.coordination.LeaderElectionControl;
 import org.apache.pulsar.metadata.api.coordination.LeaderElectionState;
@@ -59,7 +62,6 @@ class LeaderElectionImpl<T> implements LeaderElection<T>, LeaderElectionControl 
     private final ScheduledFuture<?> updateCachedValueFuture;
 
     private LeaderElectionState leaderElectionState;
-    private Optional<Long> version = Optional.empty();
     private Optional<T> proposedValue;
 
     private final ScheduledExecutorService executor;
@@ -144,7 +146,7 @@ class LeaderElectionImpl<T> implements LeaderElection<T>, LeaderElectionControl 
         }
         T existingValue;
         try {
-            existingValue = serde.deserialize(path, res.getValue(), res.getStat());
+            existingValue = deserializeValue(res);
         } catch (Throwable t) {
             return FutureUtils.exception(t);
         }
@@ -180,6 +182,14 @@ class LeaderElectionImpl<T> implements LeaderElection<T>, LeaderElectionControl 
         // If the existing value is different, it means there's already another leader
         changeState(LeaderElectionState.Following);
         return CompletableFuture.completedFuture(LeaderElectionState.Following);
+    }
+
+    private T deserializeValue(GetResult res) {
+        try {
+            return serde.deserialize(path, res.getValue(), res.getStat());
+        } catch (IOException e) {
+            throw new UncheckedIOException("Error deserializing value for path " + path, e);
+        }
     }
 
     private synchronized void changeState(LeaderElectionState les) {
@@ -367,8 +377,8 @@ class LeaderElectionImpl<T> implements LeaderElection<T>, LeaderElectionControl 
 
             if (notification.getType() == NotificationType.Deleted) {
                 if (leaderElectionState == LeaderElectionState.Leading) {
-                    // We've lost the leadership, switch to follower mode
-                    log.warn("Leadership released for {}", path);
+                    // We've lost the leadership, revalidate leadership
+                    log.warn("Leadership released for {}, revalidating leadership", path);
                 }
 
                 leaderElectionState = LeaderElectionState.NoLeader;
@@ -425,16 +435,29 @@ class LeaderElectionImpl<T> implements LeaderElection<T>, LeaderElectionControl 
         if (leaderElectionState == LeaderElectionState.Leading) {
             leaderElectionState = LeaderElectionState.NoLeader;
             log.info("Releasing leadership for {}", path);
-            return store.delete(path, version)
-                    .exceptionally(ex -> {
-                        log.warn("Failed to release leadership for {}", path, ex);
-                        return null;
-                    })
-                    .thenRun(() -> {
-                        cache.invalidate(path);
-                    });
+            return store.get(path).thenCompose(optLock -> {
+                if (optLock.isPresent()) {
+                    GetResult getResult = optLock.get();
+                    Stat stat = getResult.getStat();
+                    T existingValue = deserializeValue(getResult);
+                    T currentProposedValue = proposedValue.orElse(null);
+                    if (existingValue.equals(currentProposedValue)) {
+                        log.info("Deleting leadership for {} with value {}", path, existingValue);
+                        return store.delete(path, Optional.of(stat.getVersion()));
+                    } else {
+                        log.info("Leadership value has already changed for {}. Skipping deletion of {}.", path,
+                                existingValue);
+                    }
+                }
+                return CompletableFuture.completedFuture(null);
+            }).exceptionally(ex -> {
+                log.warn("Failed to release leadership for {}", path, ex);
+                return null;
+            }).thenRun(() -> {
+                cache.invalidate(path);
+            });
         } else {
-            log.info("No leadership to release for {} ({}, {})", path, internalState, leaderElectionState);
+            log.debug("No leadership to release for {} ({}, {})", path, internalState, leaderElectionState);
             return CompletableFuture.completedFuture(null);
         }
     }
