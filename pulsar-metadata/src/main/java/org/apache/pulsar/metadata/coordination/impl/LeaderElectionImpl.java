@@ -42,6 +42,7 @@ import org.apache.pulsar.metadata.api.MetadataStoreException.BadVersionException
 import org.apache.pulsar.metadata.api.Notification;
 import org.apache.pulsar.metadata.api.NotificationType;
 import org.apache.pulsar.metadata.api.coordination.LeaderElection;
+import org.apache.pulsar.metadata.api.coordination.LeaderElectionControl;
 import org.apache.pulsar.metadata.api.coordination.LeaderElectionState;
 import org.apache.pulsar.metadata.api.extended.CreateOption;
 import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
@@ -49,7 +50,7 @@ import org.apache.pulsar.metadata.api.extended.SessionEvent;
 import org.apache.pulsar.metadata.cache.impl.JSONMetadataSerdeSimpleType;
 
 @Slf4j
-class LeaderElectionImpl<T> implements LeaderElection<T> {
+class LeaderElectionImpl<T> implements LeaderElection<T>, LeaderElectionControl {
     private final String path;
     private final MetadataSerde<T> serde;
     private final MetadataStoreExtended store;
@@ -69,6 +70,7 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
     }
 
     private InternalState internalState;
+    private boolean participateInElections = true;
 
     private static final int LEADER_ELECTION_RETRY_DELAY_SECONDS = 5;
     private final Backoff retryBackoff;
@@ -200,6 +202,16 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
         if (internalState == InternalState.Closed) {
             return FutureUtils.exception(new AlreadyClosedException("The leader election was already closed"));
         }
+
+        if (!participateInElections) {
+            long delayMillis = retryBackoff.next();
+            log.info("Skipping elections. Waiting for leader to be elected for path {}. Checking again in {}ms", path,
+                    delayMillis);
+            executor.schedule(() -> {
+                elect();
+            }, delayMillis, TimeUnit.MILLISECONDS);
+        }
+
         T value = proposedValue.get();
         byte[] payload;
         try {
@@ -299,21 +311,9 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
         if (internalState == InternalState.Closed) {
             return CompletableFuture.completedFuture(null);
         }
-
         updateCachedValueFuture.cancel(true);
         internalState = InternalState.Closed;
-
-        if (leaderElectionState != LeaderElectionState.Leading) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        return store.delete(path, version)
-                .thenAccept(__ -> {
-                            synchronized (LeaderElectionImpl.this) {
-                                leaderElectionState = LeaderElectionState.NoLeader;
-                            }
-                        }
-                );
+        return releasePossibleLeaderRoleAsync();
     }
 
     @Override
@@ -332,6 +332,12 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
     }
 
     private void handleSessionNotification(SessionEvent event) {
+        synchronized (this) {
+            // ignore session events when the instance is already closed
+            if (internalState == InternalState.Closed) {
+                return;
+            }
+        }
         // Ensure we're only processing one session event at a time.
         sequencer.sequential(() -> FutureUtil.composeAsync(() -> {
             if (event == SessionEvent.Reconnected || event == SessionEvent.SessionReestablished) {
@@ -354,8 +360,8 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
         }
 
         synchronized (this) {
-            if (internalState != InternalState.LeaderIsPresent) {
-                // Ignoring notification since we're not trying to become leader
+            // ignore notifications when the instance is closed
+            if (internalState == InternalState.Closed) {
                 return;
             }
 
@@ -395,5 +401,51 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
     @VisibleForTesting
     protected ScheduledExecutorService getSchedulerExecutor() {
         return executor;
+    }
+
+    @Override
+    public synchronized void releasePossibleLeaderRole() {
+        boolean wasLeading = leaderElectionState == LeaderElectionState.Leading;
+        releasePossibleLeaderRoleAsync().join();
+        executor.execute(() -> {
+            synchronized (this) {
+                if (wasLeading) {
+                    try {
+                        stateChangesListener.accept(leaderElectionState);
+                    } catch (Throwable t) {
+                        log.warn("Exception in state change listener", t);
+                    }
+                }
+                elect();
+            }
+        });
+    }
+
+    private CompletableFuture<Void> releasePossibleLeaderRoleAsync() {
+        if (leaderElectionState == LeaderElectionState.Leading) {
+            leaderElectionState = LeaderElectionState.NoLeader;
+            log.info("Releasing leadership for {}", path);
+            return store.delete(path, version)
+                    .exceptionally(ex -> {
+                        log.warn("Failed to release leadership for {}", path, ex);
+                        return null;
+                    })
+                    .thenRun(() -> {
+                        cache.invalidate(path);
+                    });
+        } else {
+            log.info("No leadership to release for {} ({}, {})", path, internalState, leaderElectionState);
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    @Override
+    public synchronized void skipElections() {
+        participateInElections = false;
+    }
+
+    @Override
+    public synchronized void resumeElections() {
+        participateInElections = true;
     }
 }
