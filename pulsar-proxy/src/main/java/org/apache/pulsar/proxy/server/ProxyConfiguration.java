@@ -260,11 +260,19 @@ public class ProxyConfiguration implements PulsarConfiguration {
     private String bindAddress = "0.0.0.0";
 
     @FieldContext(
-        category = CATEGORY_SERVER,
-        doc = "Hostname or IP address the service advertises to the outside world."
-            + " If not set, the value of `InetAddress.getLocalHost().getCanonicalHostName()` is used."
+            category = CATEGORY_SERVER,
+            doc = "Hostname or IP address the service advertises to the outside world."
+                    + " If not set, the value of `InetAddress.getLocalHost().getCanonicalHostName()` is used."
+                    + " Append a dot to a fully-qualified domain name (FQDN) to make it absolute and"
+                    + " prevent unnecessary DNS lookups on clients."
     )
     private String advertisedAddress;
+
+    @FieldContext(category = CATEGORY_SERVER, doc =
+            "When the advertised address is not set, appends a dot to the auto-resolved FQDN to make it "
+                    + "absolute. This reduces the load on client-side DNS servers by preventing the client from "
+                    + "appending search domains during DNS resolution, regardless of the client's ndots option value.")
+    private boolean advertisedAddressAutoResolvedHostNameAsAbsoluteDnsName = false;
 
     @FieldContext(
             category = CATEGORY_SERVER,
