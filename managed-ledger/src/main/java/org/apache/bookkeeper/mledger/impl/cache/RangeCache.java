@@ -49,26 +49,14 @@ public class RangeCache {
     // Map from key to nodes inside the linked list
     private final ConcurrentNavigableMap<Position, RangeCacheEntryWrapper> entries;
     private AtomicLong size; // Total size of values stored in cache
-    private final Weighter<CachedEntry> weighter; // Weighter object used to extract the size from values
 
     /**
-     * Construct a new RangeLruCache with default Weighter.
+     * Construct a new RangeCache.
      */
     public RangeCache(RangeCacheRemovalQueue removalQueue) {
-        this(new DefaultWeighter<>(), removalQueue);
-    }
-
-    /**
-     * Construct a new RangeLruCache.
-     *
-     * @param weighter a custom weighter to compute the size of each stored value
-     */
-    public RangeCache(Weighter<CachedEntry> weighter,
-                      RangeCacheRemovalQueue removalQueue) {
         this.removalQueue = removalQueue;
         this.size = new AtomicLong(0);
         this.entries = new ConcurrentSkipListMap<>();
-        this.weighter = weighter;
     }
 
     /**
@@ -85,7 +73,7 @@ public class RangeCache {
             if (!value.matchesKey(key)) {
                 throw new IllegalArgumentException("Value '" + value + "' does not match key '" + key + "'");
             }
-            long entrySize = weighter.getSize(value);
+            long entrySize = value.getLength();
             boolean added = RangeCacheEntryWrapper.withNewInstance(this, key, value, entrySize, newWrapper -> {
                 if (removalQueue.addEntry(newWrapper) && entries.putIfAbsent(key, newWrapper) == null) {
                     this.size.addAndGet(entrySize);
@@ -298,26 +286,5 @@ public class RangeCache {
             removeEntryWithWriteLock(entry.getKey(), entry.getValue(), counters);
         }
         return handleRemovalResult(counters);
-    }
-
-    /**
-     * Interface of a object that is able to the extract the "weight" (size/cost/space) of the cached values.
-     *
-     * @param <ValueT>
-     */
-    public interface Weighter<ValueT> {
-        long getSize(ValueT value);
-    }
-
-    /**
-     * Default cache weighter, every value is assumed the same cost.
-     *
-     * @param <Value>
-     */
-    private static class DefaultWeighter<Value> implements Weighter<Value> {
-        @Override
-        public long getSize(Value value) {
-            return 1;
-        }
     }
 }
