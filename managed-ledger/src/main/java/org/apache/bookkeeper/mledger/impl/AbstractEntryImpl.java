@@ -22,6 +22,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.util.Recycler;
 import io.netty.util.ReferenceCounted;
 import org.apache.bookkeeper.mledger.Entry;
+import org.apache.bookkeeper.mledger.EntryReadCountHandler;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.util.AbstractCASReferenceCounted;
@@ -174,5 +175,10 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
     @SuppressWarnings("unchecked")
     protected T self() {
         return (T) this;
+    }
+
+    @Override
+    public EntryReadCountHandler getReadCountHandler() {
+        return readCountHandler;
     }
 }

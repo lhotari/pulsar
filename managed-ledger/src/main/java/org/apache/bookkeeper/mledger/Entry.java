@@ -67,7 +67,5 @@ public interface Entry {
      */
     boolean release();
 
-    default EntryReadCountHandler getReadCountHandler() {
-        return null;
-    }
+    EntryReadCountHandler getReadCountHandler();
 }
