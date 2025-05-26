@@ -63,6 +63,11 @@ public final class CachedEntryImpl extends AbstractEntryImpl<CachedEntryImpl> im
     }
 
     @Override
+    public boolean matchesKey(Position key) {
+        return key != null && entryId == key.getEntryId() && ledgerId == key.getLedgerId();
+    }
+
+    @Override
     protected void refCountDecremented(int refCount, int decrement) {
         if (refCount >= 1 && decrement == 1) {
             expectedReadCount.decrementAndGet();
