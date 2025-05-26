@@ -255,17 +255,18 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
                                   boolean shouldCacheEntry, Consumer<Throwable> assertion)
             throws InterruptedException {
         final var future = new CompletableFuture<List<Entry>>();
-        entryCache.asyncReadEntry(lh, firstEntry, lastEntry, __ -> shouldCacheEntry, new ReadEntriesCallback() {
-            @Override
-            public void readEntriesComplete(List<Entry> entries, Object ctx) {
-                future.complete(entries);
-            }
+        entryCache.asyncReadEntry(lh, firstEntry, lastEntry, __ -> shouldCacheEntry ? Integer.MAX_VALUE : 0,
+                new ReadEntriesCallback() {
+                    @Override
+                    public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                        future.complete(entries);
+                    }
 
-            @Override
-            public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
-                future.completeExceptionally(exception);
-            }
-        }, null);
+                    @Override
+                    public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                        future.completeExceptionally(exception);
+                    }
+                }, null);
         try {
             final var entries = future.get();
             assertNull(assertion);

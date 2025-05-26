@@ -27,7 +27,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Predicate;
+import java.util.function.ToIntFunction;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
@@ -326,7 +326,7 @@ public class PendingReadsManager {
     }
 
 
-    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, Predicate<Entry> shouldCacheEntry,
+    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, ToIntFunction<Entry> expectedReadCount,
                      final AsyncCallbacks.ReadEntriesCallback callback, Object ctx) {
         final PendingReadKey key = new PendingReadKey(firstEntry, lastEntry);
 
@@ -374,7 +374,7 @@ public class PendingReadsManager {
                                     };
                                     rangeEntryCache.asyncReadEntry0(lh,
                                             missingOnRight.startEntry, missingOnRight.endEntry,
-                                            shouldCacheEntry, readFromRightCallback, null, false);
+                                            expectedReadCount, readFromRightCallback, null, false);
                                 }
 
                                 @Override
@@ -384,7 +384,7 @@ public class PendingReadsManager {
                                 }
                             };
                             rangeEntryCache.asyncReadEntry0(lh, missingOnLeft.startEntry, missingOnLeft.endEntry,
-                                    shouldCacheEntry, readFromLeftCallback, null, false);
+                                    expectedReadCount, readFromLeftCallback, null, false);
                         } else if (missingOnLeft != null) {
                             AsyncCallbacks.ReadEntriesCallback readFromLeftCallback =
                                     new AsyncCallbacks.ReadEntriesCallback() {
@@ -407,7 +407,7 @@ public class PendingReadsManager {
                                         }
                                     };
                             rangeEntryCache.asyncReadEntry0(lh, missingOnLeft.startEntry, missingOnLeft.endEntry,
-                                    shouldCacheEntry, readFromLeftCallback, null, false);
+                                    expectedReadCount, readFromLeftCallback, null, false);
                         } else if (missingOnRight != null) {
                             AsyncCallbacks.ReadEntriesCallback readFromRightCallback =
                                     new AsyncCallbacks.ReadEntriesCallback() {
@@ -430,7 +430,7 @@ public class PendingReadsManager {
                                         }
                                     };
                             rangeEntryCache.asyncReadEntry0(lh, missingOnRight.startEntry, missingOnRight.endEntry,
-                                    shouldCacheEntry, readFromRightCallback, null, false);
+                                    expectedReadCount, readFromRightCallback, null, false);
                         }
                     }
 
@@ -447,7 +447,7 @@ public class PendingReadsManager {
 
             if (createdByThisThread.get()) {
                 CompletableFuture<List<Entry>> readResult = rangeEntryCache.readFromStorage(lh, firstEntry,
-                        lastEntry, shouldCacheEntry);
+                        lastEntry, expectedReadCount);
                 pendingRead.attach(readResult);
             }
         }

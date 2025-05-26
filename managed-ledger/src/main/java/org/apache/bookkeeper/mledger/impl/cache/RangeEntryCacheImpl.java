@@ -32,7 +32,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.function.Predicate;
+import java.util.function.ToIntFunction;
 import org.apache.bookkeeper.client.api.BKException;
 import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.client.api.ReadHandle;
@@ -230,7 +230,7 @@ public class RangeEntryCacheImpl implements EntryCache {
             final Object ctx) {
         try {
             asyncReadEntriesByPosition(lh, position, position, 1,
-                    __ -> DEFAULT_CACHE_INDIVIDUAL_READ_ENTRY,
+                    __ -> DEFAULT_CACHE_INDIVIDUAL_READ_ENTRY ? Integer.MAX_VALUE : 0,
                     new ReadEntriesCallback() {
                 @Override
                 public void readEntriesComplete(List<Entry> entries, Object ctx) {
@@ -257,10 +257,10 @@ public class RangeEntryCacheImpl implements EntryCache {
     }
 
     @Override
-    public void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, Predicate<Entry> shouldCacheEntry,
+    public void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, ToIntFunction<Entry> expectedReadCount,
                                final ReadEntriesCallback callback, Object ctx) {
         try {
-            asyncReadEntry0(lh, firstEntry, lastEntry, shouldCacheEntry, callback, ctx, true);
+            asyncReadEntry0(lh, firstEntry, lastEntry, expectedReadCount, callback, ctx, true);
         } catch (Throwable t) {
             log.warn("failed to read entries for {}--{}-{}", lh.getId(), firstEntry, lastEntry, t);
             // invalidate all entries related to ledger from the cache (it might happen if entry gets corrupt
@@ -272,18 +272,18 @@ public class RangeEntryCacheImpl implements EntryCache {
     }
 
     @SuppressWarnings({ "unchecked", "rawtypes" })
-    void asyncReadEntry0(ReadHandle lh, long firstEntry, long lastEntry, Predicate<Entry> shouldCacheEntry,
+    void asyncReadEntry0(ReadHandle lh, long firstEntry, long lastEntry, ToIntFunction<Entry> expectedReadCount,
                          final ReadEntriesCallback callback, Object ctx, boolean acquirePermits) {
         final long ledgerId = lh.getId();
         final int numberOfEntries = (int) (lastEntry - firstEntry) + 1;
         final Position firstPosition = PositionFactory.create(ledgerId, firstEntry);
         final Position lastPosition = PositionFactory.create(ledgerId, lastEntry);
-        asyncReadEntriesByPosition(lh, firstPosition, lastPosition, numberOfEntries, shouldCacheEntry, callback, ctx,
+        asyncReadEntriesByPosition(lh, firstPosition, lastPosition, numberOfEntries, expectedReadCount, callback, ctx,
                 acquirePermits);
     }
 
     void asyncReadEntriesByPosition(ReadHandle lh, Position firstPosition, Position lastPosition, int numberOfEntries,
-                                    Predicate<Entry> shouldCacheEntry, final ReadEntriesCallback originalCallback,
+                                    ToIntFunction<Entry> expectedReadCount, final ReadEntriesCallback originalCallback,
                                     Object ctx, boolean acquirePermits) {
         checkArgument(firstPosition.getLedgerId() == lastPosition.getLedgerId(),
                 "Invalid range. Entries %s and %s should be in the same ledger.",
@@ -299,7 +299,7 @@ public class RangeEntryCacheImpl implements EntryCache {
 
         InflightReadsLimiter pendingReadsLimiter = getPendingReadsLimiter();
         if (!acquirePermits || pendingReadsLimiter.isDisabled()) {
-            doAsyncReadEntriesByPosition(lh, firstPosition, lastPosition, numberOfEntries, shouldCacheEntry,
+            doAsyncReadEntriesByPosition(lh, firstPosition, lastPosition, numberOfEntries, expectedReadCount,
                     originalCallback, ctx);
         } else {
             long estimatedEntrySize = getEstimatedEntrySize(lh);
@@ -315,19 +315,19 @@ public class RangeEntryCacheImpl implements EntryCache {
                         // or timeout
                         ml.getExecutor().execute(() -> {
                             doAsyncReadEntriesWithAcquiredPermits(lh, firstPosition, lastPosition, numberOfEntries,
-                                    shouldCacheEntry, originalCallback, ctx, handle, estimatedReadSize);
+                                    expectedReadCount, originalCallback, ctx, handle, estimatedReadSize);
                         });
                     });
             // permits were immediately available and acquired
             if (optionalHandle.isPresent()) {
                 doAsyncReadEntriesWithAcquiredPermits(lh, firstPosition, lastPosition, numberOfEntries,
-                        shouldCacheEntry, originalCallback, ctx, optionalHandle.get(), estimatedReadSize);
+                        expectedReadCount, originalCallback, ctx, optionalHandle.get(), estimatedReadSize);
             }
         }
     }
 
     void doAsyncReadEntriesWithAcquiredPermits(ReadHandle lh, Position firstPosition, Position lastPosition,
-                                               int numberOfEntries, Predicate<Entry> shouldCacheEntry,
+                                               int numberOfEntries, ToIntFunction<Entry> expectedReadCount,
                                                final ReadEntriesCallback originalCallback, Object ctx,
                                                InflightReadsLimiter.Handle handle, long estimatedReadSize) {
         if (!handle.success()) {
@@ -368,12 +368,12 @@ public class RangeEntryCacheImpl implements EntryCache {
                 originalCallback.readEntriesFailed(exception, ctx2);
             }
         };
-        doAsyncReadEntriesByPosition(lh, firstPosition, lastPosition, numberOfEntries, shouldCacheEntry,
+        doAsyncReadEntriesByPosition(lh, firstPosition, lastPosition, numberOfEntries, expectedReadCount,
                 wrappedCallback, ctx);
     }
 
     void doAsyncReadEntriesByPosition(ReadHandle lh, Position firstPosition, Position lastPosition, int numberOfEntries,
-                                      Predicate<Entry> shouldCacheEntry, final ReadEntriesCallback callback,
+                                      ToIntFunction<Entry> expectedReadCount, final ReadEntriesCallback callback,
                                       Object ctx) {
         Collection<CachedEntry> cachedEntries;
         if (firstPosition.compareTo(lastPosition) == 0) {
@@ -413,7 +413,7 @@ public class RangeEntryCacheImpl implements EntryCache {
 
             // Read all the entries from bookkeeper
             pendingReadsManager.readEntries(lh, firstPosition.getEntryId(), lastPosition.getEntryId(),
-                    shouldCacheEntry, callback, ctx);
+                    expectedReadCount, callback, ctx);
         }
     }
 
@@ -435,14 +435,14 @@ public class RangeEntryCacheImpl implements EntryCache {
     /**
      * Reads the entries from Storage.
      *
-     * @param lh               the handle
-     * @param firstEntry       the first entry
-     * @param lastEntry        the last entry
-     * @param shouldCacheEntry if we should put the entry into the cache
+     * @param lh                the handle
+     * @param firstEntry        the first entry
+     * @param lastEntry         the last entry
+     * @param expectedReadCount if we should put the entry into the cache
      * @return a handle to the operation
      */
     CompletableFuture<List<Entry>> readFromStorage(ReadHandle lh, long firstEntry, long lastEntry,
-                                                   Predicate<Entry> shouldCacheEntry) {
+                                                   ToIntFunction<Entry> expectedReadCount) {
         final int entriesToRead = (int) (lastEntry - firstEntry) + 1;
         CompletableFuture<List<Entry>> readResult = ReadEntryUtils.readAsync(ml, lh, firstEntry, lastEntry)
                 .thenApply(
@@ -458,7 +458,9 @@ public class RangeEntryCacheImpl implements EntryCache {
                                     EntryImpl entry = RangeEntryCacheManagerImpl.create(e, interceptor);
                                     entriesToReturn.add(entry);
                                     totalSize += entry.getLength();
-                                    if (shouldCacheEntry.test(entry)) {
+                                    int expectedReadCountVal = expectedReadCount.applyAsInt(entry);
+                                    if (expectedReadCountVal > 0) {
+                                        // TODO: handle passing expected read count to the cached entry
                                         EntryImpl cacheEntry = EntryImpl.create(entry);
                                         insert(cacheEntry);
                                         cacheEntry.release();

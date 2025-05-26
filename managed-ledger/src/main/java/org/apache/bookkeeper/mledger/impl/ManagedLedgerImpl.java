@@ -2271,10 +2271,12 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             ReadEntryCallbackWrapper readCallback = ReadEntryCallbackWrapper.create(name, ledger.getId(), firstEntry,
                     opReadEntry, readOpCount, createdTime, ctx);
             lastReadCallback = readCallback;
-            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, __ -> opReadEntry.cursor.isCacheReadEntry(),
+            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry,
+                    __ -> opReadEntry.cursor.isCacheReadEntry() ? Integer.MAX_VALUE : 0,
                     readCallback, readOpCount);
         } else {
-            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, __ -> opReadEntry.cursor.isCacheReadEntry(),
+            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry,
+                    __ -> opReadEntry.cursor.isCacheReadEntry() ? Integer.MAX_VALUE : 0,
                     opReadEntry, ctx);
         }
     }
