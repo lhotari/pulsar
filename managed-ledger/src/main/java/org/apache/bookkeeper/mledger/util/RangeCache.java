@@ -32,16 +32,11 @@ import java.util.Queue;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.StampedLock;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.util.RangeCache.ValueWithKeyValidation;
 import org.apache.commons.lang3.tuple.Pair;
-import org.jctools.queues.MpmcArrayQueue;
-import org.jctools.queues.MpscChunkedArrayQueue;
-import org.jctools.queues.MpscGrowableArrayQueue;
 import org.jctools.queues.MpscUnboundedArrayQueue;
 import org.jctools.queues.atomic.MpscGrowableAtomicArrayQueue;
-import org.jctools.queues.atomic.MpscLinkedAtomicQueue;
 
 /**
  * Special type of cache where get() and delete() operations can be done over a range of keys.
@@ -65,148 +60,11 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
     }
 
     // Map from key to nodes inside the linked list
-    private final ConcurrentNavigableMap<Key, EntryWrapper<Key, Value>> entries;
+    private final ConcurrentNavigableMap<Key, RangeCacheEntryWrapper<Key, Value>> entries;
     private AtomicLong size; // Total size of values stored in cache
     private final Weighter<Value> weighter; // Weighter object used to extract the size from values
     private final TimestampExtractor<Value> timestampExtractor; // Extract the timestamp associated with a value
-    private final Queue<EntryWrapper<Key, Value>> removalQueue;
-
-    /**
-     * Wrapper around the value to store in Map. This is needed to ensure that a specific instance can be removed from
-     * the map by calling the {@link Map#remove(Object, Object)} method. Certain race conditions could result in the
-     * wrong value being removed from the map. The instances of this class are recycled to avoid creating new objects.
-     */
-    private static class EntryWrapper<K, V> {
-        private final Handle<EntryWrapper> recyclerHandle;
-        private static final Recycler<EntryWrapper> RECYCLER = new Recycler<EntryWrapper>() {
-            @Override
-            protected EntryWrapper newObject(Handle<EntryWrapper> recyclerHandle) {
-                return new EntryWrapper(recyclerHandle);
-            }
-        };
-        private final StampedLock lock = new StampedLock();
-        private K key;
-        private V value;
-        long size;
-        long timestampNanos;
-
-        private EntryWrapper(Handle<EntryWrapper> recyclerHandle) {
-            this.recyclerHandle = recyclerHandle;
-        }
-
-        static <K, V> EntryWrapper<K, V> create(K key, V value, long size) {
-            EntryWrapper<K, V> entryWrapper = RECYCLER.get();
-            long stamp = entryWrapper.lock.writeLock();
-            entryWrapper.key = key;
-            entryWrapper.value = value;
-            entryWrapper.size = size;
-            entryWrapper.timestampNanos = System.nanoTime();
-            entryWrapper.lock.unlockWrite(stamp);
-            return entryWrapper;
-        }
-
-        K getKey() {
-            long stamp = lock.tryOptimisticRead();
-            K localKey = key;
-            if (!lock.validate(stamp)) {
-                stamp = lock.readLock();
-                localKey = key;
-                lock.unlockRead(stamp);
-            }
-            return localKey;
-        }
-
-        /**
-         * Get the value associated with the key. Returns null if the key does not match the key.
-         *
-         * @param key the key to match
-         * @return the value associated with the key, or null if the value has already been recycled or the key does not
-         * match
-         */
-        V getValue(K key) {
-            return getValueInternal(key, false);
-        }
-
-        /**
-         * Get the value associated with the Map.Entry's key and value. Exact instance of the key is required to match.
-         * @param entry the entry which contains the key and {@link EntryWrapper} value to get the value from
-         * @return the value associated with the key, or null if the value has already been recycled or the key does not
-         * exactly match the same instance
-         */
-        static <K, V> V getValueMatchingMapEntry(Map.Entry<K, EntryWrapper<K, V>> entry) {
-            return entry.getValue().getValueInternal(entry.getKey(), true);
-        }
-
-        /**
-         * Get the value associated with the key. Returns null if the key does not match the key associated with the
-         * value.
-         *
-         * @param key                    the key to match
-         * @param requireSameKeyInstance when true, the matching will be restricted to exactly the same instance of the
-         *                               key as the one stored in the wrapper. This is used to avoid any races
-         *                               when retrieving or removing the entries from the cache when the key and value
-         *                               instances are available.
-         * @return the value associated with the key, or null if the key does not match
-         */
-        private V getValueInternal(K key, boolean requireSameKeyInstance) {
-            long stamp = lock.tryOptimisticRead();
-            K localKey = this.key;
-            V localValue = this.value;
-            if (!lock.validate(stamp)) {
-                stamp = lock.readLock();
-                localKey = this.key;
-                localValue = this.value;
-                lock.unlockRead(stamp);
-            }
-            // check that the given key matches the key associated with the value in the entry
-            // this is used to detect if the entry has already been recycled and contains another key
-            // when requireSameKeyInstance is true, the key must be exactly the same instance as the one stored in the
-            // entry to match
-            if (localKey != key && (requireSameKeyInstance || localKey == null || !localKey.equals(key))) {
-                return null;
-            }
-            return localValue;
-        }
-
-        long getSize() {
-            long stamp = lock.tryOptimisticRead();
-            long localSize = size;
-            if (!lock.validate(stamp)) {
-                stamp = lock.readLock();
-                localSize = size;
-                lock.unlockRead(stamp);
-            }
-            return localSize;
-        }
-
-        long getTimestampNanos() {
-            long stamp = lock.tryOptimisticRead();
-            long localTimestampNanos = timestampNanos;
-            if (!lock.validate(stamp)) {
-                stamp = lock.readLock();
-                localTimestampNanos = timestampNanos;
-                lock.unlockRead(stamp);
-            }
-            return localTimestampNanos;
-        }
-
-        void markRemoved() {
-            long stamp = lock.writeLock();
-            key = null;
-            value = null;
-            size = 0;
-            timestampNanos = 0;
-            lock.unlockWrite(stamp);
-        }
-
-        void recycle() {
-            key = null;
-            value = null;
-            size = 0;
-            timestampNanos = 0;
-            recyclerHandle.recycle(this);
-        }
-    }
+    private final Queue<RangeCacheEntryWrapper<Key, Value>> removalQueue;
 
     /**
      * Mutable object to store the number of entries and the total size removed from the cache. The instances
@@ -282,7 +140,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
                 throw new IllegalArgumentException("Value '" + value + "' does not match key '" + key + "'");
             }
             long entrySize = weighter.getSize(value);
-            EntryWrapper<Key, Value> newWrapper = EntryWrapper.create(key, value, entrySize);
+            RangeCacheEntryWrapper<Key, Value> newWrapper = RangeCacheEntryWrapper.create(key, value, entrySize);
             if (entries.putIfAbsent(key, newWrapper) == null) {
                 this.size.addAndGet(entrySize);
                 return true;
@@ -308,7 +166,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         return getValueFromWrapper(key, entries.get(key));
     }
 
-    private Value getValueFromWrapper(Key key, EntryWrapper<Key, Value> valueWrapper) {
+    private Value getValueFromWrapper(Key key, RangeCacheEntryWrapper<Key, Value> valueWrapper) {
         if (valueWrapper == null) {
             return null;
         } else {
@@ -320,8 +178,8 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
     /**
      * @apiNote the returned value must be released if it's not null
      */
-    private Value getValueMatchingEntry(Map.Entry<Key, EntryWrapper<Key, Value>> entry) {
-        Value valueMatchingEntry = EntryWrapper.getValueMatchingMapEntry(entry);
+    private Value getValueMatchingEntry(Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry) {
+        Value valueMatchingEntry = RangeCacheEntryWrapper.getValueMatchingMapEntry(entry);
         return getRetainedValueMatchingKey(entry.getKey(), valueMatchingEntry);
     }
 
@@ -365,7 +223,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         List<Value> values = new ArrayList();
 
         // Return the values of the entries found in cache
-        for (Map.Entry<Key, EntryWrapper<Key, Value>> entry : entries.subMap(first, true, last, true).entrySet()) {
+        for (Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry : entries.subMap(first, true, last, true).entrySet()) {
             Value value = getValueMatchingEntry(entry);
             if (value != null) {
                 values.add(value);
@@ -387,8 +245,8 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
             log.debug("Removing entries in range [{}, {}], lastInclusive: {}", first, last, lastInclusive);
         }
         RemovalCounters counters = RemovalCounters.create();
-        Map<Key, EntryWrapper<Key, Value>> subMap = entries.subMap(first, true, last, lastInclusive);
-        for (Map.Entry<Key, EntryWrapper<Key, Value>> entry : subMap.entrySet()) {
+        Map<Key, RangeCacheEntryWrapper<Key, Value>> subMap = entries.subMap(first, true, last, lastInclusive);
+        for (Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry : subMap.entrySet()) {
             removeEntry(entry, counters);
         }
         return handleRemovalResult(counters);
@@ -400,14 +258,14 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         BREAK_LOOP;
     }
 
-    private RemoveEntryResult removeEntry(Map.Entry<Key, EntryWrapper<Key, Value>> entry, RemovalCounters counters) {
+    private RemoveEntryResult removeEntry(Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry, RemovalCounters counters) {
         return removeEntry(entry, counters, x -> true);
     }
 
-    private RemoveEntryResult removeEntry(Map.Entry<Key, EntryWrapper<Key, Value>> entry, RemovalCounters counters,
+    private RemoveEntryResult removeEntry(Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry, RemovalCounters counters,
                                           Predicate<Value> removeCondition) {
         Key key = entry.getKey();
-        EntryWrapper<Key, Value> entryWrapper = entry.getValue();
+        RangeCacheEntryWrapper<Key, Value> entryWrapper = entry.getValue();
         Value value = getValueMatchingEntry(entry);
         if (value == null) {
             // the wrapper has already been recycled or contains another key
@@ -463,7 +321,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         checkArgument(minSize > 0);
         RemovalCounters counters = RemovalCounters.create();
         while (counters.removedSize < minSize && !Thread.currentThread().isInterrupted()) {
-            Map.Entry<Key, EntryWrapper<Key, Value>> entry = entries.firstEntry();
+            Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry = entries.firstEntry();
             if (entry == null) {
                 break;
             }
@@ -483,7 +341,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
        }
        RemovalCounters counters = RemovalCounters.create();
        while (!Thread.currentThread().isInterrupted()) {
-           Map.Entry<Key, EntryWrapper<Key, Value>> entry = entries.firstEntry();
+           Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry = entries.firstEntry();
            if (entry == null) {
                break;
            }
@@ -517,7 +375,7 @@ public class RangeCache<Key extends Comparable<Key>, Value extends ValueWithKeyV
         }
         RemovalCounters counters = RemovalCounters.create();
         while (!Thread.currentThread().isInterrupted()) {
-            Map.Entry<Key, EntryWrapper<Key, Value>> entry = entries.firstEntry();
+            Map.Entry<Key, RangeCacheEntryWrapper<Key, Value>> entry = entries.firstEntry();
             if (entry == null) {
                 break;
             }
