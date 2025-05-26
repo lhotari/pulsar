@@ -22,10 +22,8 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.pulsar.common.naming.TopicName.PARTITIONED_TOPIC_SUFFIX;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotEquals;
@@ -91,6 +89,7 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.PulsarVersion;
 import org.apache.pulsar.broker.BrokerTestUtil;
 import org.apache.pulsar.broker.PulsarService;
+import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.service.ServerCnx;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.broker.storage.ManagedLedgerStorage;
@@ -152,6 +151,18 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         super.producerBaseSetup();
     }
 
+    @Override
+    protected ServiceConfiguration getDefaultConf() {
+        ServiceConfiguration defaultConf = super.getDefaultConf();
+        configureDefaults(defaultConf);
+        return defaultConf;
+    }
+
+    private void configureDefaults(ServiceConfiguration defaultConf) {
+        // Set the default managed ledger cache eviction time threshold to 60 seconds
+        defaultConf.setManagedLedgerCacheEvictionTimeThresholdMillis(60000L);
+    }
+
     @AfterMethod(alwaysRun = true)
     public void cleanupAfterMethod() throws Exception {
         try {
@@ -171,6 +182,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
 
             pulsar.getConfiguration().setForceDeleteTenantAllowed(false);
             pulsar.getConfiguration().setForceDeleteNamespaceAllowed(false);
+            configureDefaults(pulsar.getConfiguration());
             super.producerBaseSetup();
         } catch (Exception | AssertionError e) {
             log.warn("Failed to clean up state. Restarting broker.", e);
@@ -1134,7 +1146,10 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
     @Test(timeOut = 100000)
     public void testActiveAndInActiveConsumerEntryCacheBehavior() throws Exception {
         log.info("-- Starting {} test --", methodName);
-
+        // set long eviction time threshold to avoid eviction during the test
+        long originalEvictionTimeThresholdMillis =
+                pulsar.getConfiguration().getManagedLedgerCacheEvictionTimeThresholdMillis();
+        conf.setManagedLedgerCacheEvictionTimeThresholdMillis(60000L);
 
         final long batchMessageDelayMs = 100;
         final int receiverSize = 10;
@@ -1172,8 +1187,8 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
             subscriber1.acknowledge(msg);
         }
 
-        // Verify: EntryCache has been invalidated
-        verify(entryCache, atLeastOnce()).invalidateEntries(any());
+        // Verify: entry cache should have been cleared as subscriber1 has consumed all messages
+        Awaitility.await().untilAsserted(() -> assertEquals(entryCache.getSize(), 0));
 
         // sleep for a second: as ledger.updateCursorRateLimit RateLimiter will allow to invoke cursor-update after a
         // second
@@ -1208,16 +1223,14 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         msg = subscriber1.receive(RECEIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         // Verify: as active-subscriber2 has not consumed messages: EntryCache must have those entries in cache
-        Awaitility.await().untilAsserted(() -> assertNotEquals(entryCache.getSize(), 0));
+        assertNotEquals(entryCache.getSize(), 0);
 
         // 3.b Close subscriber2: which will trigger cache to clear the cache
         subscriber2.close();
 
-        // retry strategically until broker clean up closed subscribers and invalidate all cache entries
-        retryStrategically((test) -> entryCache.getSize() == 0, 5, 100);
-
         // Verify: EntryCache should be cleared
-        assertEquals(entryCache.getSize(), 0);
+        Awaitility.await().untilAsserted(() -> assertEquals(entryCache.getSize(), 0));
+
         subscriber1.close();
         log.info("-- Exiting {} test --", methodName);
     }
