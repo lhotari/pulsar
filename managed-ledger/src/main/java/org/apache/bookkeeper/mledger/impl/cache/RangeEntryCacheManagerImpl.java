@@ -30,10 +30,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.client.impl.LedgerEntryImpl;
 import org.apache.bookkeeper.common.util.OrderedScheduler;
-import org.apache.bookkeeper.mledger.CachedEntry;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerFactoryConfig;
-import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryMBeanImpl;
@@ -50,7 +48,7 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
     private volatile double cacheEvictionWatermark;
     private final AtomicLong currentSize = new AtomicLong(0);
     private final ConcurrentMap<String, EntryCache> caches = new ConcurrentHashMap();
-    private final RangeCacheRemovalQueue<Position, CachedEntry> rangeCacheRemovalQueue;
+    private final RangeCacheRemovalQueue rangeCacheRemovalQueue;
     private final RangeEntryCacheManagerEvictionHandler evictionHandler;
 
     private final AtomicReference<CompletableFuture<Void>> evictionInProgress = new AtomicReference<>(null);
@@ -75,7 +73,7 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         this.cacheEvictionWatermark = config.getCacheEvictionWatermark();
         this.mlFactory = factory;
         this.mlFactoryMBean = factory.getMbean();
-        this.rangeCacheRemovalQueue = new RangeCacheRemovalQueue<>();
+        this.rangeCacheRemovalQueue = new RangeCacheRemovalQueue();
         this.evictionHandler = new RangeEntryCacheManagerEvictionHandler(this, rangeCacheRemovalQueue);
 
         log.info("Initialized managed-ledger entry cache of {} Mb", maxSize / MB);

@@ -67,7 +67,7 @@ public class RangeEntryCacheImpl implements EntryCache {
     private final RangeEntryCacheManagerImpl manager;
     final ManagedLedgerImpl ml;
     private ManagedLedgerInterceptor interceptor;
-    private final RangeCache<Position, CachedEntry> entries;
+    private final RangeCache entries;
     private final boolean copyEntries;
     private final PendingReadsManager pendingReadsManager;
 
@@ -77,13 +77,13 @@ public class RangeEntryCacheImpl implements EntryCache {
     private final LongAdder totalAddedEntriesCount = new LongAdder();
 
     public RangeEntryCacheImpl(RangeEntryCacheManagerImpl manager, ManagedLedgerImpl ml, boolean copyEntries,
-                               RangeCacheRemovalQueue<Position, CachedEntry> rangeCacheRemovalQueue) {
+                               RangeCacheRemovalQueue rangeCacheRemovalQueue) {
 
         this.manager = manager;
         this.ml = ml;
         this.pendingReadsManager = new PendingReadsManager(this);
         this.interceptor = ml.getManagedLedgerInterceptor();
-        this.entries = new RangeCache<>(Entry::getLength, rangeCacheRemovalQueue);
+        this.entries = new RangeCache(rangeCacheRemovalQueue);
         this.copyEntries = copyEntries;
 
         if (log.isDebugEnabled()) {
