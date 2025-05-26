@@ -27,7 +27,6 @@ import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
-
 import io.netty.buffer.Unpooled;
 import java.util.ArrayList;
 import java.util.List;
@@ -256,7 +255,7 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
                                   boolean shouldCacheEntry, Consumer<Throwable> assertion)
             throws InterruptedException {
         final var future = new CompletableFuture<List<Entry>>();
-        entryCache.asyncReadEntry(lh, firstEntry, lastEntry, shouldCacheEntry, new ReadEntriesCallback() {
+        entryCache.asyncReadEntry(lh, firstEntry, lastEntry, __ -> shouldCacheEntry, new ReadEntriesCallback() {
             @Override
             public void readEntriesComplete(List<Entry> entries, Object ctx) {
                 future.complete(entries);

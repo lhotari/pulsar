@@ -18,6 +18,7 @@
  */
 package org.apache.bookkeeper.mledger.impl.cache;
 
+import java.util.function.Predicate;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
@@ -86,8 +87,8 @@ public interface EntryCache {
      * @param ctx
      *            the context object
      */
-    void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, boolean shouldCacheEntry,
-            ReadEntriesCallback callback, Object ctx);
+    void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, Predicate<Entry> shouldCacheEntry,
+                        ReadEntriesCallback callback, Object ctx);
 
     /**
      * Read entry at given position from the cache or from bookkeeper.

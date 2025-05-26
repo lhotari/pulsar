@@ -36,6 +36,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -103,14 +104,14 @@ public class PendingReadsManagerTest  {
                 ReadHandle rh = invocationOnMock.getArgument(0);
                 long startEntry = invocationOnMock.getArgument(1);
                 long endEntry = invocationOnMock.getArgument(2);
-                boolean shouldCacheEntry = invocationOnMock.getArgument(3);
+                Predicate<Entry> shouldCacheEntry = invocationOnMock.getArgument(3);
                 AsyncCallbacks.ReadEntriesCallback callback = invocationOnMock.getArgument(4);
                 Object ctx = invocationOnMock.getArgument(5);
                 pendingReadsManager.readEntries(lh, startEntry, endEntry, shouldCacheEntry, callback, ctx);
                 return null;
             }
         }).when(rangeEntryCache).asyncReadEntry0(any(), anyLong(), anyLong(),
-                anyBoolean(), any(), any(), anyBoolean());
+                any(), any(), any(), anyBoolean());
 
         lh = mock(ReadHandle.class);
         ml = mock(ManagedLedgerImpl.class);
@@ -166,9 +167,9 @@ public class PendingReadsManagerTest  {
     private static class PreparedReadFromStorage extends CompletableFuture<List<EntryImpl>> {
         final long firstEntry;
         final long endEntry;
-        final boolean shouldCacheEntry;
+        final Predicate<Entry> shouldCacheEntry;
 
-        public PreparedReadFromStorage(long firstEntry, long endEntry, boolean shouldCacheEntry) {
+        public PreparedReadFromStorage(long firstEntry, long endEntry, Predicate<Entry> shouldCacheEntry) {
             this.firstEntry = firstEntry;
             this.endEntry = endEntry;
             this.shouldCacheEntry = shouldCacheEntry;
@@ -185,7 +186,7 @@ public class PendingReadsManagerTest  {
     }
 
     private PreparedReadFromStorage prepareReadFromStorage(ReadHandle lh, RangeEntryCacheImpl rangeEntryCache,
-                                                                      long firstEntry, long endEntry, boolean shouldCacheEntry) {
+                                                           long firstEntry, long endEntry, Predicate<Entry> shouldCacheEntry) {
         PreparedReadFromStorage read = new PreparedReadFromStorage(firstEntry, endEntry, shouldCacheEntry);
         log.info("prepareReadFromStorage from {} to {} shouldCacheEntry {}", firstEntry, endEntry, shouldCacheEntry);
         when(rangeEntryCache.readFromStorage(eq(lh), eq(firstEntry), eq(endEntry), eq(shouldCacheEntry))).thenAnswer(
@@ -202,7 +203,7 @@ public class PendingReadsManagerTest  {
 
         long firstEntry = 100;
         long endEntry = 199;
-        boolean shouldCacheEntry = false;
+        Predicate<Entry> shouldCacheEntry = entry -> false;
 
         PreparedReadFromStorage read1
                 = prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, shouldCacheEntry);
@@ -227,7 +228,7 @@ public class PendingReadsManagerTest  {
 
         long firstEntry = 100;
         long endEntry = 199;
-        boolean shouldCacheEntry = false;
+        Predicate<Entry> shouldCacheEntry = entry -> false;
 
         PreparedReadFromStorage read1 = prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, shouldCacheEntry);
 
@@ -269,7 +270,7 @@ public class PendingReadsManagerTest  {
         long firstEntrySecondRead = firstEntry + 10;
         long endEntrySecondRead = endEntry - 10;
 
-        boolean shouldCacheEntry = false;
+        Predicate<Entry> shouldCacheEntry = entry -> false;
 
         PreparedReadFromStorage read1 = prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, shouldCacheEntry);
 
@@ -315,7 +316,7 @@ public class PendingReadsManagerTest  {
         long firstEntrySecondRead = firstEntry - 10;
         long endEntrySecondRead = endEntry;
 
-        boolean shouldCacheEntry = false;
+        Predicate<Entry> shouldCacheEntry = entry -> false;
 
         PreparedReadFromStorage read1 =
                 prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, shouldCacheEntry);
@@ -355,7 +356,7 @@ public class PendingReadsManagerTest  {
         long firstEntrySecondRead = firstEntry;
         long endEntrySecondRead = endEntry + 10;
 
-        boolean shouldCacheEntry = false;
+        Predicate<Entry> shouldCacheEntry = entry -> false;
 
         PreparedReadFromStorage read1 =
                 prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, shouldCacheEntry);
@@ -395,7 +396,7 @@ public class PendingReadsManagerTest  {
         long firstEntrySecondRead = firstEntry - 10;
         long endEntrySecondRead = endEntry + 10;
 
-        boolean shouldCacheEntry = false;
+        Predicate<Entry> shouldCacheEntry = entry -> false;
 
         PreparedReadFromStorage read1 =
                 prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, shouldCacheEntry);
@@ -439,7 +440,7 @@ public class PendingReadsManagerTest  {
         long firstEntrySecondRead = 1000;
         long endEntrySecondRead = 1099;
 
-        boolean shouldCacheEntry = false;
+        Predicate<Entry> shouldCacheEntry = entry -> false;
 
         PreparedReadFromStorage read1 =
                 prepareReadFromStorage(lh, rangeEntryCache, firstEntry, endEntry, shouldCacheEntry);

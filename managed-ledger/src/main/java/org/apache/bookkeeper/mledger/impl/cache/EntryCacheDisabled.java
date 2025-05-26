@@ -22,6 +22,7 @@ import static org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl.createManaged
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.Predicate;
 import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
@@ -67,7 +68,7 @@ public class EntryCacheDisabled implements EntryCache {
     }
 
     @Override
-    public void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, boolean isSlowestReader,
+    public void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, Predicate<Entry> shouldCacheEntry,
                                final AsyncCallbacks.ReadEntriesCallback callback, Object ctx) {
         ReadEntryUtils.readAsync(ml, lh, firstEntry, lastEntry).thenAcceptAsync(
                 ledgerEntries -> {
