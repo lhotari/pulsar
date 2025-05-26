@@ -83,7 +83,8 @@ class RangeCacheEntryWrapper<K extends Comparable<K>, V extends RangeCache.Value
      * @return the value associated with the key, or null if the value has already been recycled or the key does not
      * exactly match the same instance
      */
-    static <K, V> V getValueMatchingMapEntry(Map.Entry<K, RangeCacheEntryWrapper<K, V>> entry) {
+    static <K extends Comparable<K>, V extends RangeCache.ValueWithKeyValidation<K>> V getValueMatchingMapEntry(
+            Map.Entry<K, RangeCacheEntryWrapper<K, V>> entry) {
         return entry.getValue().getValueInternal(entry.getKey(), true);
     }
 
