@@ -133,6 +133,8 @@ public class RangeEntryCacheImpl implements EntryCache {
 
         Position position = entry.getPosition();
         if (entries.exists(position)) {
+            // TODO: if the entry already exists in the cache, it might be necessary to increase the expected
+            // read count of the already cached entry
             return null;
         }
 
@@ -461,6 +463,7 @@ public class RangeEntryCacheImpl implements EntryCache {
                                             RangeEntryCacheManagerImpl.create(e, interceptor, expectedReadCountVal);
                                     entriesToReturn.add(entry);
                                     totalSize += entry.getLength();
+                                    // TODO: is it useful to cache entries with expected read count of 1?
                                     if (expectedReadCountVal > 0) {
                                         insert(entry);
                                     }
