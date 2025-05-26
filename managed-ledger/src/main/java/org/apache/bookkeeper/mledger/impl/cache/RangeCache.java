@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.bookkeeper.mledger.util;
+package org.apache.bookkeeper.mledger.impl.cache;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import com.google.common.base.Predicate;
@@ -33,7 +33,7 @@ import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.bookkeeper.mledger.util.RangeCache.ValueWithKeyValidation;
+import org.apache.bookkeeper.mledger.impl.cache.RangeCache.ValueWithKeyValidation;
 import org.apache.commons.lang3.tuple.Pair;
 import org.jctools.queues.MpscUnboundedArrayQueue;
 import org.jctools.queues.atomic.MpscGrowableAtomicArrayQueue;
