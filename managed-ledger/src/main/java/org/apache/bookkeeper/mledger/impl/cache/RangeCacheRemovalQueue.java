@@ -22,6 +22,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayList;
 import java.util.List;
+import org.apache.bookkeeper.mledger.CachedEntry;
 import org.apache.commons.lang3.mutable.MutableInt;
 import org.apache.commons.lang3.mutable.MutableLong;
 import org.apache.commons.lang3.tuple.Pair;
@@ -58,15 +59,16 @@ class RangeCacheRemovalQueue {
      * @return a pair containing the number of entries and their total size in bytes
      */
     @VisibleForTesting
-    public synchronized Pair<Integer, Long> getActualSize() {
+    public synchronized Pair<Integer, Long> getNonEvictableSize() {
         final MutableInt entries = new MutableInt(0);
         final MutableLong bytesSize = new MutableLong(0L);
         stash.entries.forEach((entry) -> {
             if (entry != null) {
                 entry.withWriteLock(wrapper -> {
-                    if (wrapper.value != null) {
+                    CachedEntry value = wrapper.value;
+                    if (value != null && !value.canEvict()) {
                         entries.increment();
-                        bytesSize.add(wrapper.size);
+                        bytesSize.add(value.getLength());
                     }
                     return null;
                 });
@@ -75,9 +77,12 @@ class RangeCacheRemovalQueue {
         removalQueue.drain((entry) -> {
             if (entry != null) {
                 boolean exists = entry.withWriteLock(wrapper -> {
-                    if (wrapper.value != null) {
-                        entries.increment();
-                        bytesSize.add(wrapper.size);
+                    CachedEntry value = wrapper.value;
+                    if (value != null) {
+                        if (!value.canEvict()) {
+                            entries.increment();
+                            bytesSize.add(wrapper.size);
+                        }
                         return true;
                     }
                     return false;

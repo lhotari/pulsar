@@ -202,8 +202,8 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
     }
 
     @VisibleForTesting
-    public Pair<Integer, Long> getActualSize() {
-        return evictionHandler.getActualSize();
+    public Pair<Integer, Long> getNonEvictableSize() {
+        return evictionHandler.getNonEvictableSize();
     }
 
     @Override
