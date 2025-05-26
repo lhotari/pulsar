@@ -37,7 +37,5 @@ public interface EntryCacheManager {
 
     double getCacheEvictionWatermark();
 
-    EntryCachesEvictionHandler getEvictionHandler();
-
     void doCacheEviction(long maxTimestamp);
 }

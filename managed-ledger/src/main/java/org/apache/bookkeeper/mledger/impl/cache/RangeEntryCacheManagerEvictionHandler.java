@@ -56,4 +56,8 @@ public class RangeEntryCacheManagerEvictionHandler implements EntryCachesEvictio
         manager.entriesRemoved(evictedSize, evictedEntries);
         return evicted;
     }
+
+    public Pair<Integer, Long> getActualSize() {
+        return rangeCacheRemovalQueue.getActualSize();
+    }
 }

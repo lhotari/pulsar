@@ -18,6 +18,7 @@
  */
 package org.apache.bookkeeper.mledger.impl.cache;
 
+import com.google.common.annotations.VisibleForTesting;
 import io.netty.buffer.ByteBuf;
 import io.opentelemetry.api.OpenTelemetry;
 import java.util.Optional;
@@ -37,6 +38,7 @@ import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryMBeanImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
+import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -199,6 +201,11 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         return currentSize.get();
     }
 
+    @VisibleForTesting
+    public Pair<Integer, Long> getActualSize() {
+        return evictionHandler.getActualSize();
+    }
+
     @Override
     public long getMaxSize() {
         return maxSize;
@@ -209,7 +216,6 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         return cacheEvictionWatermark;
     }
 
-    @Override
     public EntryCachesEvictionHandler getEvictionHandler() {
         return evictionHandler;
     }
