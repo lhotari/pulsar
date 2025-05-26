@@ -83,6 +83,7 @@ import org.apache.bookkeeper.mledger.ManagedLedgerFactory;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.mledger.impl.cache.EntryCache;
 import org.apache.bookkeeper.mledger.impl.cache.EntryCacheManager;
+import org.apache.bookkeeper.mledger.impl.cache.RangeEntryCacheManagerImpl;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.commons.lang3.reflect.FieldUtils;
 import org.apache.commons.lang3.tuple.Pair;
@@ -1153,16 +1154,15 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
 
         final long batchMessageDelayMs = 100;
         final int receiverSize = 10;
-        final String topicName = "cache-topic";
+        final String topic = BrokerTestUtil.newUniqueName("persistent://my-property/my-ns/cache-topic");
         final String sub1 = "faster-sub1";
         final String sub2 = "slower-sub2";
 
         /************ usecase-1: *************/
         // 1. Subscriber Faster subscriber
         Consumer<byte[]> subscriber1 = pulsarClient.newConsumer()
-                .topic("persistent://my-property/my-ns/" + topicName).subscriptionName(sub1)
+                .topic(topic).subscriptionName(sub1)
                 .subscriptionType(SubscriptionType.Shared).receiverQueueSize(receiverSize).subscribe();
-        final String topic = "persistent://my-property/my-ns/" + topicName;
         ProducerBuilder<byte[]> producerBuilder = pulsarClient.newProducer().topic(topic);
 
         producerBuilder.batchingMaxPublishDelay(batchMessageDelayMs, TimeUnit.MILLISECONDS);
@@ -1172,6 +1172,9 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
 
         PersistentTopic topicRef = (PersistentTopic) pulsar.getBrokerService().getTopicReference(topic).get();
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) topicRef.getManagedLedger();
+
+        RangeEntryCacheManagerImpl entryCacheManager =
+                (RangeEntryCacheManagerImpl) ledger.getFactory().getEntryCacheManager();
 
         EntryCache entryCache = (EntryCache) FieldUtils.readField(ledger, "entryCache", true);
 
@@ -1188,7 +1191,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         }
 
         // Verify: entry cache should have been cleared as subscriber1 has consumed all messages
-        Awaitility.await().untilAsserted(() -> assertEquals(entryCache.getSize(), 0));
+        Awaitility.await().untilAsserted(() -> assertEquals(entryCacheManager.getNonEvictableSize(), Pair.of(0, 0L)));
 
         // sleep for a second: as ledger.updateCursorRateLimit RateLimiter will allow to invoke cursor-update after a
         // second
@@ -1201,7 +1204,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         /************ usecase-2: *************/
         // 1.b Subscriber slower-subscriber
         Consumer<byte[]> subscriber2 = pulsarClient.newConsumer()
-                .topic("persistent://my-property/my-ns/" + topicName).subscriptionName(sub2).subscribe();
+                .topic(topic).subscriptionName(sub2).subscribe();
         // Produce messages
         final int moreMessages = 10;
         for (int i = 0; i < receiverSize + moreMessages; i++) {
@@ -1223,13 +1226,13 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         msg = subscriber1.receive(RECEIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         // Verify: as active-subscriber2 has not consumed messages: EntryCache must have those entries in cache
-        assertNotEquals(entryCache.getSize(), 0);
+        assertNotEquals(entryCacheManager.getNonEvictableSize(), Pair.of(0, 0L));
 
         // 3.b Close subscriber2: which will trigger cache to clear the cache
         subscriber2.close();
 
         // Verify: EntryCache should be cleared
-        Awaitility.await().untilAsserted(() -> assertEquals(entryCache.getSize(), 0));
+        Awaitility.await().untilAsserted(() -> assertEquals(entryCacheManager.getNonEvictableSize(), Pair.of(0, 0L)));
 
         subscriber1.close();
         log.info("-- Exiting {} test --", methodName);
