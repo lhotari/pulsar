@@ -123,7 +123,7 @@ public class RangeEntryCacheImpl implements EntryCache {
     );
 
     @Override
-    public CachedEntry insert(Entry entry) {
+    public boolean insert(Entry entry) {
         int entryLength = entry.getLength();
 
         if (log.isDebugEnabled()) {
@@ -132,17 +132,19 @@ public class RangeEntryCacheImpl implements EntryCache {
         }
 
         Position position = entry.getPosition();
-        if (entries.exists(position)) {
-            // TODO: if the entry already exists in the cache, it might be necessary to increase the expected
-            // read count of the already cached entry
-            return null;
+        CachedEntry previousEntry = entries.get(position);
+        if (previousEntry != null) {
+            // If the entry is already in the cache, increase the expected read count on the existing entry
+            if (previousEntry.increaseReadCount(entry.getReadCountHandler().getExpectedReadCount())) {
+                return false;
+            }
         }
 
         ByteBuf cachedData;
         if (copyEntries) {
             cachedData = copyEntry(entry);
             if (cachedData == null) {
-                return null;
+                return false;
             }
         } else {
             // Use retain here to have the same counter increase as in the copy entry scenario
@@ -156,11 +158,11 @@ public class RangeEntryCacheImpl implements EntryCache {
             totalAddedEntriesSize.add(entryLength);
             totalAddedEntriesCount.increment();
             manager.entryAdded(entryLength);
-            return cacheEntry;
+            return true;
         } else {
             // entry was not inserted into cache, we need to discard it
             cacheEntry.release();
-            return null;
+            return false;
         }
     }
 

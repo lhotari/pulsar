@@ -211,6 +211,8 @@ public class RangeCache {
      */
     boolean removeEntry(Position key, CachedEntry value, RangeCacheEntryWrapper entryWrapper,
                         RangeCacheRemovalCounters counters, boolean updateSize) {
+        // mark the read count handler as evicted
+        value.getReadCountHandler().markEvicted();
         // always remove the entry from the map
         entries.remove(key, entryWrapper);
         if (value == null) {

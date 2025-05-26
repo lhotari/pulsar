@@ -56,6 +56,14 @@ public final class CachedEntryImpl extends AbstractEntryImpl<CachedEntryImpl> im
     }
 
     @Override
+    public boolean increaseReadCount(int expectedReadCount) {
+        if (readCountHandler != null) {
+            return readCountHandler.incrementExpectedReadCount(expectedReadCount);
+        }
+        return false;
+    }
+
+    @Override
     public boolean matchesKey(Position key) {
         return key != null && entryId == key.getEntryId() && ledgerId == key.getLedgerId();
     }

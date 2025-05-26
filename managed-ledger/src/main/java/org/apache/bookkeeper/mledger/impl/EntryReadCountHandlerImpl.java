@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import org.apache.bookkeeper.mledger.EntryReadCountHandler;
 
 public class EntryReadCountHandlerImpl implements EntryReadCountHandler {
+    private static final int EVICTED_VALUE = Integer.MIN_VALUE / 2;
     private static AtomicIntegerFieldUpdater<EntryReadCountHandlerImpl> expectedReadCountUpdater =
             AtomicIntegerFieldUpdater.newUpdater(EntryReadCountHandlerImpl.class, "expectedReadCount");
 
@@ -36,14 +37,38 @@ public class EntryReadCountHandlerImpl implements EntryReadCountHandler {
     }
 
     @Override
+    public boolean incrementExpectedReadCount(int increment) {
+        int newValue = expectedReadCountUpdater.updateAndGet(this, current -> {
+            // If the value is EVICTED_VALUE, we don't allow incrementing it anymore
+            if (current == EVICTED_VALUE) {
+                return current;
+            } else {
+                return current + increment;
+            }
+        });
+        return newValue != EVICTED_VALUE;
+    }
+
+    @Override
     public boolean incrementExpectedReadCount() {
-        expectedReadCountUpdater.incrementAndGet(this);
-        return true;
+        return incrementExpectedReadCount(1);
     }
 
     @Override
     public void markRead() {
-        expectedReadCountUpdater.decrementAndGet(this);
+        expectedReadCountUpdater.updateAndGet(this, current -> {
+            // If the value is EVICTED_VALUE, don't change it
+            if (current == EVICTED_VALUE) {
+                return current;
+            } else {
+                return current - 1;
+            }
+        });
+    }
+
+    @Override
+    public void markEvicted() {
+        expectedReadCountUpdater.set(this, EVICTED_VALUE);
     }
 
     public static EntryReadCountHandlerImpl create(int expectedReadCount) {
