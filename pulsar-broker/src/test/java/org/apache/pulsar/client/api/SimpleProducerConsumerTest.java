@@ -79,13 +79,12 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import org.apache.avro.Schema.Parser;
 import org.apache.bookkeeper.common.concurrent.FutureUtils;
+import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.ManagedLedgerFactory;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
-import org.apache.bookkeeper.mledger.impl.cache.EntryCache;
 import org.apache.bookkeeper.mledger.impl.cache.EntryCacheManager;
 import org.apache.bookkeeper.mledger.impl.cache.RangeEntryCacheManagerImpl;
 import org.apache.commons.lang3.RandomUtils;
-import org.apache.commons.lang3.reflect.FieldUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.PulsarVersion;
 import org.apache.pulsar.broker.BrokerTestUtil;
@@ -167,6 +166,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
     @AfterMethod(alwaysRun = true)
     public void cleanupAfterMethod() throws Exception {
         try {
+            pulsarTestContext.getMockBookKeeper().setReadHandleInterceptor(null);
             pulsar.getConfiguration().setForceDeleteTenantAllowed(true);
             pulsar.getConfiguration().setForceDeleteNamespaceAllowed(true);
 
@@ -1134,29 +1134,34 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
     }
 
     /**
-     * Usecase 1: Only 1 Active Subscription - 1 subscriber - Produce Messages - EntryCache should cache messages -
-     * EntryCache should be cleaned : Once active subscription consumes messages
+     * Usecase 1: Only 1 Active Subscription - 1 subscriber - Produce Messages - EntryCache should be used -
+     * entries should be eligible for eviction : Once active subscription consumes messages
      *
-     * Usecase 2: 2 Active Subscriptions (faster and slower) and slower gets closed - 2 subscribers - Produce Messages -
-     * 1 faster-subscriber consumes all messages and another slower-subscriber none - EntryCache should have cached
-     * messages as slower-subscriber has not consumed messages yet - close slower-subscriber - EntryCache should be
-     * cleared
+     * Usecase 2: 2 Active Subscriptions (faster and slower) - 2 subscribers - Produce Messages -
+     * 1 faster-subscriber consumes all messages and another slower-subscriber none - cache should have cached
+     * messages as slower-subscriber has not consumed messages yet - consume messages in slower-subscriber -
+     * entries should be eligible for eviction
      *
      * @throws Exception
      */
     @Test(timeOut = 100000)
     public void testActiveAndInActiveConsumerEntryCacheBehavior() throws Exception {
         log.info("-- Starting {} test --", methodName);
-        // set long eviction time threshold to avoid eviction during the test
-        long originalEvictionTimeThresholdMillis =
-                pulsar.getConfiguration().getManagedLedgerCacheEvictionTimeThresholdMillis();
-        conf.setManagedLedgerCacheEvictionTimeThresholdMillis(60000L);
 
         final long batchMessageDelayMs = 100;
         final int receiverSize = 10;
         final String topic = BrokerTestUtil.newUniqueName("persistent://my-property/my-ns/cache-topic");
         final String sub1 = "faster-sub1";
         final String sub2 = "slower-sub2";
+
+        // Make the test fail if there's a cache miss
+        pulsarTestContext.getMockBookKeeper().setReadHandleInterceptor((ledgerId, firstEntry, lastEntry, entries) -> {
+            log.error("Attempting to read from BK when cache should be used. {}:{} to {}:{}", ledgerId, firstEntry,
+                    ledgerId, lastEntry);
+            return CompletableFuture.failedFuture(
+                    new ManagedLedgerException.NonRecoverableLedgerException(
+                            "Should not read from BK since cache should be used."));
+        });
 
         /************ usecase-1: *************/
         // 1. Subscriber Faster subscriber
@@ -1175,8 +1180,6 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
 
         RangeEntryCacheManagerImpl entryCacheManager =
                 (RangeEntryCacheManagerImpl) ledger.getFactory().getEntryCacheManager();
-
-        EntryCache entryCache = (EntryCache) FieldUtils.readField(ledger, "entryCache", true);
 
         Message<byte[]> msg;
         // 2. Produce messages
@@ -1204,7 +1207,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         /************ usecase-2: *************/
         // 1.b Subscriber slower-subscriber
         Consumer<byte[]> subscriber2 = pulsarClient.newConsumer()
-                .topic(topic).subscriptionName(sub2).subscribe();
+                .topic(topic).receiverQueueSize(5).subscriptionName(sub2).subscribe();
         // Produce messages
         final int moreMessages = 10;
         for (int i = 0; i < receiverSize + moreMessages; i++) {
@@ -1228,13 +1231,18 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         // Verify: as active-subscriber2 has not consumed messages: EntryCache must have those entries in cache
         assertNotEquals(entryCacheManager.getNonEvictableSize(), Pair.of(0, 0L));
 
-        // 3.b Close subscriber2: which will trigger cache to clear the cache
-        subscriber2.close();
+        // Consume messages for subscriber2
+        for (int i = 0; i < receiverSize + moreMessages; i++) {
+            msg = subscriber2.receive(RECEIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            subscriber2.acknowledge(msg);
+        }
 
         // Verify: EntryCache should be cleared
         Awaitility.await().untilAsserted(() -> assertEquals(entryCacheManager.getNonEvictableSize(), Pair.of(0, 0L)));
 
+        subscriber2.close();
         subscriber1.close();
+
         log.info("-- Exiting {} test --", methodName);
     }
 
