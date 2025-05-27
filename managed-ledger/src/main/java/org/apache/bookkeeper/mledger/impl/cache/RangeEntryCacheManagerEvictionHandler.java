@@ -42,9 +42,9 @@ public class RangeEntryCacheManagerEvictionHandler implements EntryCachesEvictio
     }
 
     @Override
-    public Pair<Integer, Long> evictEntries(long sizeToFree) {
+    public Pair<Integer, Long> evictEntries(long sizeToFree, long timestamp) {
         checkArgument(sizeToFree > 0);
-        Pair<Integer, Long> evicted = rangeCacheRemovalQueue.evictLeastAccessedEntries(sizeToFree);
+        Pair<Integer, Long> evicted = rangeCacheRemovalQueue.evictLeastAccessedEntries(sizeToFree, timestamp);
         int evictedEntries = evicted.getLeft();
         long evictedSize = evicted.getRight();
         if (log.isDebugEnabled()) {

@@ -41,14 +41,20 @@ class RangeCacheRemovalQueue {
                 true);
     }
 
-    public Pair<Integer, Long> evictLeastAccessedEntries(long sizeToFree) {
+    public Pair<Integer, Long> evictLeastAccessedEntries(long sizeToFree, long timestampNanos) {
         checkArgument(sizeToFree > 0);
         return evictEntries(
                 (e, c) -> {
-                    if (!e.value.canEvict()) {
+                    // stop eviction if we have already removed enough entries
+                    if (c.removedSize >= sizeToFree) {
+                        return EvictionResult.STASH_AND_STOP;
+                    }
+                    // stash entries that are not evictable and haven't expired
+                    boolean expired = e.timestampNanos < timestampNanos;
+                    if (!(e.value.canEvict() || expired)) {
                         return EvictionResult.STASH;
                     }
-                    return c.removedSize < sizeToFree ? EvictionResult.REMOVE : EvictionResult.STASH_AND_STOP;
+                    return EvictionResult.REMOVE;
                 }, false);
     }
 

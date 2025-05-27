@@ -26,9 +26,9 @@ public interface EntryCachesEvictionHandler {
     /**
      * Force the cache to drop entries to free space.
      *
-     * @param sizeToFree
-     *            the total memory size to free
+     * @param sizeToFree the total memory size to free
+     * @param timestamp the timestamp before which entries which aren't evictable will be evicted
      * @return a pair containing the number of entries evicted and their total size
      */
-    Pair<Integer, Long> evictEntries(long sizeToFree);
+    Pair<Integer, Long> evictEntries(long sizeToFree, long timestamp);
 }
