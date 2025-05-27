@@ -23,8 +23,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
@@ -154,13 +153,13 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
         EntryCacheManager cacheManager = factory2.getEntryCacheManager();
         EntryCache cache1 = cacheManager.getEntryCache(ml1);
 
-        assertNotNull(cache1.insert(EntryImpl.create(1, 1, new byte[4])));
-        assertNotNull(cache1.insert(EntryImpl.create(1, 0, new byte[3])));
+        assertTrue(cache1.insert(EntryImpl.create(1, 1, new byte[4])));
+        assertTrue(cache1.insert(EntryImpl.create(1, 0, new byte[3])));
 
         assertEquals(cache1.getSize(), 7);
         assertEquals(cacheManager.getSize(), 7);
 
-        assertNull(cache1.insert(EntryImpl.create(1, 0, new byte[5])));
+        assertFalse(cache1.insert(EntryImpl.create(1, 0, new byte[5])));
 
         assertEquals(cache1.getSize(), 7);
         assertEquals(cacheManager.getSize(), 7);
@@ -185,7 +184,7 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
         // Put entries into cache.
         for (int i = 0; i < 20; i++) {
             entries.add(EntryImpl.create(1, i, new byte[i + 1]));
-            assertNotNull(cache1.insert(entries.get(i)));
+            assertTrue(cache1.insert(entries.get(i)));
         }
         assertEquals(210, cacheManager.getSize());
 
