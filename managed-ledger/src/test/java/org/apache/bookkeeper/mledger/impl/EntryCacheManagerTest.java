@@ -46,6 +46,7 @@ import org.apache.bookkeeper.mledger.impl.cache.EntryCacheDisabled;
 import org.apache.bookkeeper.mledger.impl.cache.EntryCacheManager;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
+import org.awaitility.Awaitility;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
@@ -173,6 +174,8 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
         ManagedLedgerFactoryConfig config = new ManagedLedgerFactoryConfig();
         config.setMaxCacheSize(200);
         config.setCacheEvictionWatermark(0.8);
+        // Set a long eviction time threshold to avoid eviction by timestamp during the test
+        config.setCacheEvictionTimeThresholdMillis(20000);
 
         @Cleanup("shutdown")
         ManagedLedgerFactoryImpl factory2 = new ManagedLedgerFactoryImpl(metadataStore, bkc, config);
@@ -186,7 +189,12 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
             entries.add(EntryImpl.create(1, i, new byte[i + 1]));
             assertTrue(cache1.insert(entries.get(i)));
         }
-        assertEquals(210, cacheManager.getSize());
+
+        // cache eviction gets triggered asynchronously
+        Awaitility.await().untilAsserted(() -> {
+                    // cache size should be less or equal to 0.8 (cacheEvictionWatermark) * 200 (maxCacheSize)
+                    assertEquals(cacheManager.getSize(), 155);
+                });
 
         // Consume some entries.
         Random random = new Random();
@@ -199,7 +207,7 @@ public class EntryCacheManagerTest extends MockedBookKeeperTestCase {
         cacheManager.removeEntryCache(ml1.getName());
         assertEquals(factory2.getMbean().getCacheInsertedEntriesCount(), 20);
         assertEquals(factory2.getMbean().getCacheEntriesCount(), 0);
-        assertEquals(0, cacheManager.getSize());
+        assertEquals(cacheManager.getSize(), 0);
         assertEquals(factory2.getMbean().getCacheEvictedEntriesCount(), 20);
     }
 
