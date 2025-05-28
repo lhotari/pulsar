@@ -133,10 +133,17 @@ public class RangeEntryCacheImpl implements EntryCache {
 
         Position position = entry.getPosition();
         CachedEntry previousEntry = entries.get(position);
-        if (previousEntry != null && entry.getReadCountHandler() != null) {
-            // If the entry is already in the cache, increase the expected read count on the existing entry
-            if (previousEntry.increaseReadCount(entry.getReadCountHandler().getExpectedReadCount())) {
-                return false;
+        if (previousEntry != null) {
+            try {
+                if (entry.getReadCountHandler() != null) {
+                    // If the entry is already in the cache, increase the expected read count on the existing entry
+                    if (previousEntry.increaseReadCount(entry.getReadCountHandler().getExpectedReadCount())) {
+                        return false;
+                    }
+                }
+            } finally {
+                // Release the previous entry
+                previousEntry.release();
             }
         }
 
