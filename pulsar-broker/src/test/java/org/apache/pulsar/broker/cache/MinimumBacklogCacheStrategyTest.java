@@ -44,6 +44,7 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
+@Test(groups = "broker-api")
 @Slf4j
 public class MinimumBacklogCacheStrategyTest extends ProducerConsumerBase {
     @BeforeMethod
