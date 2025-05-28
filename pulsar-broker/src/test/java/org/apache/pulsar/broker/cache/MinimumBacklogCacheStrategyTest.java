@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.client.api;
+package org.apache.pulsar.broker.cache;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
@@ -34,6 +34,12 @@ import org.apache.bookkeeper.mledger.impl.cache.PendingReadsManager;
 import org.apache.bookkeeper.mledger.impl.cache.RangeEntryCacheImpl;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
+import org.apache.pulsar.client.api.Consumer;
+import org.apache.pulsar.client.api.Producer;
+import org.apache.pulsar.client.api.ProducerBuilder;
+import org.apache.pulsar.client.api.ProducerConsumerBase;
+import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.api.SubscriptionType;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -60,6 +66,7 @@ public class MinimumBacklogCacheStrategyTest extends ProducerConsumerBase {
         defaultConf.setManagedLedgerMinimumBacklogCursorsForCaching(2);
         defaultConf.setManagedLedgerMinimumBacklogEntriesForCaching(10);
         defaultConf.setManagedLedgerCacheEvictionTimeThresholdMillis(60 * 1000);
+        defaultConf.setCacheEvictionByExpectedReadCount(false);
         return defaultConf;
     }
 
