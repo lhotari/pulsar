@@ -32,8 +32,8 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
     protected long timestamp;
     protected long ledgerId;
     protected long entryId;
-    ByteBuf data;
-    int length;
+    private ByteBuf data;
+    private int length = -1;
     private Position position;
     private Runnable onDeallocate;
 
@@ -52,7 +52,6 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
 
     protected void setDataBuffer(ByteBuf data) {
         this.data = data;
-        // TODO: the buffer's memory size is the capacity, not the readableBytes
         this.length = data.readableBytes();
     }
 
@@ -75,6 +74,9 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
 
     @Override
     public int getLength() {
+        if (length == -1) {
+            throw new IllegalStateException("Entry has no length. Call setDataBuffer to set the data buffer first.");
+        }
         return length;
     }
 
@@ -143,7 +145,7 @@ abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends Abstrac
         }
         data.release();
         data = null;
-        length = 0;
+        length = -1;
         timestamp = -1;
         ledgerId = -1;
         entryId = -1;
