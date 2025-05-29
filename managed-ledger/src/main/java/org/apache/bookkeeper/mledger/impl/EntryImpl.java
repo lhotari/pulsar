@@ -40,7 +40,8 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         entry.timestamp = System.nanoTime();
         entry.ledgerId = ledgerEntry.getLedgerId();
         entry.entryId = ledgerEntry.getEntryId();
-        entry.setDataBuffer(ledgerEntry.getEntryBuffer().retainedDuplicate());
+        entry.data = ledgerEntry.getEntryBuffer();
+        entry.data.retain();
         entry.setRefCnt(1);
         return entry;
     }
@@ -51,7 +52,7 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         entry.timestamp = System.nanoTime();
         entry.ledgerId = ledgerId;
         entry.entryId = entryId;
-        entry.setDataBuffer(Unpooled.wrappedBuffer(data));
+        entry.data = Unpooled.wrappedBuffer(data);
         entry.setRefCnt(1);
         return entry;
     }
@@ -61,7 +62,8 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         entry.timestamp = System.nanoTime();
         entry.ledgerId = ledgerId;
         entry.entryId = entryId;
-        entry.setDataBuffer(data.retainedDuplicate());
+        entry.data = data;
+        entry.data.retain();
         entry.setRefCnt(1);
         return entry;
     }
@@ -71,7 +73,8 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         entry.timestamp = System.nanoTime();
         entry.ledgerId = position.getLedgerId();
         entry.entryId = position.getEntryId();
-        entry.setDataBuffer(data.retainedDuplicate());
+        entry.data = data;
+        entry.data.retain();
         entry.setRefCnt(1);
         return entry;
     }
@@ -81,7 +84,7 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         entry.timestamp = System.nanoTime();
         entry.ledgerId = other.getLedgerId();
         entry.entryId = other.getEntryId();
-        entry.setDataBuffer(other.getDataBuffer().retainedDuplicate());
+        entry.data = other.data.retainedDuplicate();
         entry.setRefCnt(1);
         return entry;
     }
