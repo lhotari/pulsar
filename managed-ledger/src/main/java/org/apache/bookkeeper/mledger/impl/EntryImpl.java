@@ -84,7 +84,7 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         entry.timestamp = System.nanoTime();
         entry.ledgerId = other.getLedgerId();
         entry.entryId = other.getEntryId();
-        entry.data = other.data.retainedDuplicate();
+        entry.data = other.getDataBuffer().retainedDuplicate();
         entry.setRefCnt(1);
         return entry;
     }
