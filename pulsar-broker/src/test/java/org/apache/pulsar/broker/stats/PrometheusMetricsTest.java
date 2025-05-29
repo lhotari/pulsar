@@ -87,7 +87,6 @@ import org.apache.pulsar.broker.service.persistent.PersistentSubscription;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsGenerator;
 import org.apache.pulsar.client.api.Consumer;
-import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageRoutingMode;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.PulsarClient;
@@ -665,10 +664,8 @@ public class PrometheusMetricsTest extends BrokerTestBase {
     public void testStorageReadCacheMissesRate(boolean cacheEnable) throws Exception {
         cleanup();
         conf.setManagedLedgerStatsPeriodSeconds(Integer.MAX_VALUE);
-        conf.setManagedLedgerCacheEvictionIntervalMs(Integer.MAX_VALUE);
         conf.setManagedLedgerCacheEvictionTimeThresholdMillis(Long.MAX_VALUE);
         conf.setCacheEvictionByMarkDeletedPosition(true);
-        conf.setManagedLedgerMinimumBacklogCursorsForCaching(0);
         if (cacheEnable) {
             conf.setManagedLedgerCacheSizeMB(1);
         } else {
@@ -684,27 +681,19 @@ public class PrometheusMetricsTest extends BrokerTestBase {
         @Cleanup
         Consumer<byte[]> consumer = pulsarClient.newConsumer()
                 .topic(topic)
-                .receiverQueueSize(1)
                 .subscriptionName("test")
                 .subscribe();
+        byte[] msg = new byte[2 * 1024 * 1024];
+        new Random().nextBytes(msg);
+        producer.send(msg);
+        consumer.receive();
+        // when cacheEnable, the second msg will read cache miss
+        producer.send(msg);
+        consumer.receive();
 
         PersistentTopic persistentTopic =
                 (PersistentTopic) pulsar.getBrokerService().getTopicIfExists(topic).get().get();
         ManagedLedgerImpl managedLedger = ((ManagedLedgerImpl) persistentTopic.getManagedLedger());
-
-        byte[] msg = new byte[990 * 1024];
-        new Random().nextBytes(msg);
-        producer.send(msg);
-        Message<byte[]> message = consumer.receive();
-        // when cacheEnable, the second msg will read cache miss
-        producer.send(msg);
-
-        managedLedger.getFactory().waitForPendingCacheEvictions();
-
-        consumer.acknowledge(message);
-        message = consumer.receive();
-        consumer.acknowledge(message);
-
         managedLedger.getMbean().refreshStats(1, TimeUnit.SECONDS);
 
         // includeTopicMetric true
