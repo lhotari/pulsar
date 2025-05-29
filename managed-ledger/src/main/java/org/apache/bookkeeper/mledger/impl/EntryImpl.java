@@ -34,7 +34,6 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         }
     };
 
-    private boolean decreaseReadCountOnRelease;
 
     public static EntryImpl create(LedgerEntry ledgerEntry) {
         EntryImpl entry = RECYCLER.get();
@@ -84,7 +83,6 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         entry.entryId = other.getEntryId();
         entry.setDataBuffer(other.getDataBuffer().retainedDuplicate());
         entry.setRefCnt(1);
-        entry.decreaseReadCountOnRelease = true;
         return entry;
     }
 
@@ -92,7 +90,4 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         super(recyclerHandle);
     }
 
-    public void setDecreaseReadCountOnRelease(boolean enabled) {
-        decreaseReadCountOnRelease = enabled;
-    }
 }
