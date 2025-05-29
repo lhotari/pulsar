@@ -116,14 +116,19 @@ public abstract class MockedBookKeeperTestCase {
         }
         try {
             LOG.info("@@@@@@@@@ stopping " + method);
-            try {
-                factory.shutdownAsync().get(10, TimeUnit.SECONDS);
-            } catch (ManagedLedgerException.ManagedLedgerFactoryClosedException e) {
-                // ignore
+            if (factory != null) {
+                try {
+                    factory.shutdownAsync().get(10, TimeUnit.SECONDS);
+                } catch (ManagedLedgerException.ManagedLedgerFactoryClosedException e) {
+                    // ignore
+                }
+                factory = null;
             }
-            factory = null;
             stopBookKeeper();
-            metadataStore.close();
+            if (metadataStore != null) {
+                metadataStore.close();
+                metadataStore = null;
+            }
             LOG.info("--------- stopped {}", method);
         } catch (Exception e) {
             LOG.error("tearDown Error", e);
@@ -166,7 +171,10 @@ public abstract class MockedBookKeeperTestCase {
     }
 
     protected void stopBookKeeper() {
-        bkc.shutdown();
+        if (bkc != null) {
+            bkc.shutdown();
+            bkc = null;
+        }
     }
 
     protected void stopMetadataStore() {
