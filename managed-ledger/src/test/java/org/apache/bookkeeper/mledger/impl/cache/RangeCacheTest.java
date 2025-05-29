@@ -237,7 +237,7 @@ public class RangeCacheTest {
         putToCache(cache, 3, "three");
 
         // This should remove the LRU entries: 0, 1 whose combined size is 7
-        assertEquals(removalQueue.evictLeastAccessedEntries(5, 0), Pair.of(2, (long) 7));
+        assertEquals(removalQueue.evictLeastAccessedEntries(5), Pair.of(2, (long) 7));
 
         assertEquals(cache.getNumberOfEntries(), 2);
         assertEquals(cache.getSize(), 8);
@@ -246,7 +246,7 @@ public class RangeCacheTest {
         assertEquals(cache.get(createPosition(2)).getData(), "two".getBytes());
         assertEquals(cache.get(createPosition(3)).getData(), "three".getBytes());
 
-        assertEquals(removalQueue.evictLeastAccessedEntries(100, 0), Pair.of(2, (long) 8));
+        assertEquals(removalQueue.evictLeastAccessedEntries(100), Pair.of(2, (long) 8));
         assertEquals(cache.getNumberOfEntries(), 0);
         assertEquals(cache.getSize(), 0);
         assertNull(cache.get(createPosition(0)));
@@ -255,14 +255,14 @@ public class RangeCacheTest {
         assertNull(cache.get(createPosition(3)));
 
         try {
-            removalQueue.evictLeastAccessedEntries(0, 0);
+            removalQueue.evictLeastAccessedEntries(0);
             fail("should throw exception");
         } catch (IllegalArgumentException e) {
             // ok
         }
 
         try {
-            removalQueue.evictLeastAccessedEntries(-1, 0);
+            removalQueue.evictLeastAccessedEntries(-1);
             fail("should throw exception");
         } catch (IllegalArgumentException e) {
             // ok
@@ -282,19 +282,19 @@ public class RangeCacheTest {
         }
 
         assertEquals(cache.getSize(), expectedSize);
-        Pair<Integer, Long> res = removalQueue.evictLeastAccessedEntries(1, 0);
+        Pair<Integer, Long> res = removalQueue.evictLeastAccessedEntries(1);
         assertEquals((int) res.getLeft(), 1);
         assertEquals((long) res.getRight(), 1);
         expectedSize -= 1;
         assertEquals(cache.getSize(), expectedSize);
 
-        res = removalQueue.evictLeastAccessedEntries(10, 0);
+        res = removalQueue.evictLeastAccessedEntries(10);
         assertEquals((int) res.getLeft(), 10);
         assertEquals((long) res.getRight(), 11);
         expectedSize -= 11;
         assertEquals(cache.getSize(), expectedSize);
 
-        res = removalQueue.evictLeastAccessedEntries(expectedSize, 0);
+        res = removalQueue.evictLeastAccessedEntries(expectedSize);
         assertEquals((int) res.getLeft(), 89);
         assertEquals((long) res.getRight(), expectedSize);
         assertEquals(cache.getSize(), 0);

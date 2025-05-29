@@ -38,7 +38,7 @@ class RangeCacheRemovalQueue {
                 (e, c) -> e.timestampNanos < timestampNanos ? EvictionResult.REMOVE : EvictionResult.STOP);
     }
 
-    public Pair<Integer, Long> evictLeastAccessedEntries(long sizeToFree, long timestampNanos) {
+    public Pair<Integer, Long> evictLeastAccessedEntries(long sizeToFree) {
         checkArgument(sizeToFree > 0);
         return evictEntries(
                 (e, c) -> {

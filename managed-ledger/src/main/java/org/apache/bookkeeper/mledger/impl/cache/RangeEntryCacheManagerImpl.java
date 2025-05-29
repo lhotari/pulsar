@@ -171,8 +171,7 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
                     long startTime = System.nanoTime();
                     log.info("Triggering cache eviction. total size: {} Mb -- Need to discard: {} Mb", currentSize / MB,
                             sizeToEvict / MB);
-                    long maxTimestampNanos = startTime - mlFactory.getCacheEvictionTimeThreshold();
-                    evictionHandler.evictEntries(sizeToEvict, maxTimestampNanos);
+                    evictionHandler.evictEntries(sizeToEvict);
                     long endTime = System.nanoTime();
                     double durationMs = TimeUnit.NANOSECONDS.toMillis(endTime - startTime);
                     log.info("Eviction completed. Removed {} Mb in {} ms", (currentSize - this.currentSize.get()) / MB,

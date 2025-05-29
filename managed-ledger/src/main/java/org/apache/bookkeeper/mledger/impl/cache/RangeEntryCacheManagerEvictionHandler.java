@@ -49,12 +49,11 @@ public class RangeEntryCacheManagerEvictionHandler {
      * Force the cache to drop entries to free space.
      *
      * @param sizeToFree the total memory size to free
-     * @param timestamp the timestamp before which entries which aren't evictable will be evicted
      * @return a pair containing the number of entries evicted and their total size
      */
-    public Pair<Integer, Long> evictEntries(long sizeToFree, long timestamp) {
+    public Pair<Integer, Long> evictEntries(long sizeToFree) {
         checkArgument(sizeToFree > 0);
-        Pair<Integer, Long> evicted = rangeCacheRemovalQueue.evictLeastAccessedEntries(sizeToFree, timestamp);
+        Pair<Integer, Long> evicted = rangeCacheRemovalQueue.evictLeastAccessedEntries(sizeToFree);
         int evictedEntries = evicted.getLeft();
         long evictedSize = evicted.getRight();
         if (log.isDebugEnabled()) {
