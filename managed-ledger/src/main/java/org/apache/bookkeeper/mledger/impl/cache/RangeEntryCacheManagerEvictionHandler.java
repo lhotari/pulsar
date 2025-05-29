@@ -24,7 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.tuple.Pair;
 
 @Slf4j
-public class RangeEntryCacheManagerEvictionHandler implements EntryCachesEvictionHandler {
+public class RangeEntryCacheManagerEvictionHandler {
 
     private final RangeEntryCacheManagerImpl manager;
     private final RangeCacheRemovalQueue rangeCacheRemovalQueue;
@@ -35,13 +35,23 @@ public class RangeEntryCacheManagerEvictionHandler implements EntryCachesEvictio
         this.rangeCacheRemovalQueue = rangeCacheRemovalQueue;
     }
 
-    @Override
+    /**
+     * Invalidate all entries in the cache which were created before the given timestamp.
+     *
+     * @param timestamp the timestamp before which entries will be invalidated
+     */
     public void invalidateEntriesBeforeTimestampNanos(long timestamp) {
         Pair<Integer, Long> evictedPair = rangeCacheRemovalQueue.evictLEntriesBeforeTimestamp(timestamp);
         manager.entriesRemoved(evictedPair.getRight(), evictedPair.getLeft());
     }
 
-    @Override
+    /**
+     * Force the cache to drop entries to free space.
+     *
+     * @param sizeToFree the total memory size to free
+     * @param timestamp the timestamp before which entries which aren't evictable will be evicted
+     * @return a pair containing the number of entries evicted and their total size
+     */
     public Pair<Integer, Long> evictEntries(long sizeToFree, long timestamp) {
         checkArgument(sizeToFree > 0);
         Pair<Integer, Long> evicted = rangeCacheRemovalQueue.evictLeastAccessedEntries(sizeToFree, timestamp);

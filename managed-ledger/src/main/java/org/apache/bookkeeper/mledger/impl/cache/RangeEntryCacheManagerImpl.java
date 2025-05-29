@@ -210,10 +210,6 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         return cacheEvictionWatermark;
     }
 
-    public EntryCachesEvictionHandler getEvictionHandler() {
-        return evictionHandler;
-    }
-
     @Override
     public void doCacheEviction(long maxTimestamp) {
         // this method is expected to be called from the cache eviction executor
