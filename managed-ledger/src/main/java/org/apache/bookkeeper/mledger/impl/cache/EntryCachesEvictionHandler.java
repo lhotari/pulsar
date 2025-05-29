@@ -18,20 +18,17 @@
  */
 package org.apache.bookkeeper.mledger.impl.cache;
 
-import java.util.List;
+import org.apache.commons.lang3.tuple.Pair;
 
-/**
- * Cache eviction policy abstraction interface.
- *
- */
-public interface EntryCacheEvictionPolicy {
+public interface EntryCachesEvictionHandler {
+    void invalidateEntriesBeforeTimestampNanos(long timestamp);
+
     /**
-     * Perform the cache eviction of at least sizeToFree bytes on the supplied list of caches.
+     * Force the cache to drop entries to free space.
      *
-     * @param caches
-     *            the list of caches to consider
-     * @param sizeToFree
-     *            the minimum size in bytes to be freed
+     * @param sizeToFree the total memory size to free
+     * @param timestamp the timestamp before which entries which aren't evictable will be evicted
+     * @return a pair containing the number of entries evicted and their total size
      */
-    void doEviction(List<EntryCache> caches, long sizeToFree);
+    Pair<Integer, Long> evictEntries(long sizeToFree, long timestamp);
 }

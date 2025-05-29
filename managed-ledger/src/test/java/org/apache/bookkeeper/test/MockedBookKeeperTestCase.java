@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 import lombok.SneakyThrows;
 import org.apache.bookkeeper.client.PulsarMockBookKeeper;
 import org.apache.bookkeeper.common.util.OrderedScheduler;
+import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.ManagedLedgerFactoryConfig;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
@@ -84,9 +85,17 @@ public abstract class MockedBookKeeperTestCase {
 
         ManagedLedgerFactoryConfig managedLedgerFactoryConfig = new ManagedLedgerFactoryConfig();
         initManagedLedgerFactoryConfig(managedLedgerFactoryConfig);
-        factory = new ManagedLedgerFactoryImpl(metadataStore, bkc);
+        ManagedLedgerConfig managedLedgerConfig = new ManagedLedgerConfig();
+        initManagedLedgerConfig(managedLedgerConfig);
+        factory =
+                new ManagedLedgerFactoryImpl(metadataStore, bkc, managedLedgerFactoryConfig, managedLedgerConfig);
 
         setUpTestCase();
+    }
+
+    protected ManagedLedgerConfig initManagedLedgerConfig(ManagedLedgerConfig config) {
+        config.setCacheEvictionByExpectedReadCount(false);
+        return config;
     }
 
     protected void initManagedLedgerFactoryConfig(ManagedLedgerFactoryConfig config) {

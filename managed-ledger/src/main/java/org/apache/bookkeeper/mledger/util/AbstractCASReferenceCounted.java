@@ -98,6 +98,7 @@ public abstract class AbstractCASReferenceCounted implements ReferenceCounted {
             }
 
             if (refCntUpdater.compareAndSet(this, refCnt, refCnt - decrement)) {
+                refCountDecremented(refCnt - decrement, decrement);
                 if (refCnt == decrement) {
                     deallocate();
                     return true;
@@ -105,6 +106,10 @@ public abstract class AbstractCASReferenceCounted implements ReferenceCounted {
                 return false;
             }
         }
+    }
+
+    protected void refCountDecremented(int refCount, int decrement) {
+        // no-op
     }
 
     /**

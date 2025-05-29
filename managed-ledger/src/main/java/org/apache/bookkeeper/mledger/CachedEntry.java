@@ -16,26 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.bookkeeper.mledger.impl.cache;
+package org.apache.bookkeeper.mledger;
 
-import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
+import io.netty.util.ReferenceCounted;
 
-public interface EntryCacheManager {
-    EntryCache getEntryCache(ManagedLedgerImpl ml);
-
-    void removeEntryCache(String name);
-
-    long getSize();
-
-    long getMaxSize();
-
-    void clear();
-
-    void updateCacheSizeAndThreshold(long maxSize);
-
-    void updateCacheEvictionWatermark(double cacheEvictionWatermark);
-
-    double getCacheEvictionWatermark();
-
-    void doCacheEviction(long maxTimestamp);
+public interface CachedEntry extends Entry, ReferenceCounted {
+    boolean matchesKey(Position key);
+    boolean canEvict();
+    boolean increaseReadCount(int expectedReadCount);
 }
