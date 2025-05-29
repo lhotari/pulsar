@@ -18,7 +18,6 @@
  */
 package org.apache.bookkeeper.mledger.impl.cache;
 
-import java.util.function.IntSupplier;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
@@ -76,12 +75,11 @@ public interface EntryCache {
      * @param lh                the ledger handle
      * @param firstEntry        the first entry to read (inclusive)
      * @param lastEntry         the last entry to read (inclusive)
-     * @param expectedReadCount resolves the expected read count for the given entry. When the expected read count is
-     *                         >0, the entry can be cached and reused later.
+     * @param shouldCacheEntry  the entry will be cached after reading
      * @param callback          the callback object that will be notified when read is done
      * @param ctx               the context object
      */
-    void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, IntSupplier expectedReadCount,
+    void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, boolean shouldCacheEntry,
                         ReadEntriesCallback callback, Object ctx);
 
     /**

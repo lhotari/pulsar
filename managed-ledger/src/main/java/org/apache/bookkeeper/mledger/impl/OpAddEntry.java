@@ -252,13 +252,7 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
             int activeCursorCount = ml.getActiveCursors().size();
             // Avoid caching entries if no cursor has been created
             if (activeCursorCount > 0) {
-                int expectedReadCount = 0;
-                // only use expectedReadCount if cache eviction is enabled by expected read count
-                if (ml.getConfig().isCacheEvictionByExpectedReadCount()) {
-                    expectedReadCount = activeCursorCount;
-                }
-                EntryImpl entry = EntryImpl.create(ledgerId, entryId, data, expectedReadCount);
-                entry.setDecreaseReadCountOnRelease(false);
+                EntryImpl entry = EntryImpl.create(ledgerId, entryId, data);
                 // EntryCache.insert: duplicates entry by allocating new entry and data. so, recycle entry after calling
                 // insert
                 ml.entryCache.insert(entry);

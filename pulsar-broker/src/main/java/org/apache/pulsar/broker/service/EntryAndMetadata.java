@@ -23,7 +23,6 @@ import io.netty.buffer.ByteBuf;
 import java.util.function.ToIntFunction;
 import lombok.Getter;
 import org.apache.bookkeeper.mledger.Entry;
-import org.apache.bookkeeper.mledger.EntryReadCountHandler;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.protocol.Commands;
@@ -136,10 +135,5 @@ public class EntryAndMetadata implements Entry {
     @VisibleForTesting
     public Entry unwrap() {
         return entry;
-    }
-
-    @Override
-    public EntryReadCountHandler getReadCountHandler() {
-        return entry.getReadCountHandler();
     }
 }

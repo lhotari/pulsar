@@ -18,7 +18,6 @@
  */
 package org.apache.bookkeeper.mledger.impl.cache;
 
-import com.google.common.annotations.VisibleForTesting;
 import io.netty.buffer.ByteBuf;
 import io.opentelemetry.api.OpenTelemetry;
 import java.util.Optional;
@@ -38,7 +37,6 @@ import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryMBeanImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
-import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -202,11 +200,6 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         return currentSize.get();
     }
 
-    @VisibleForTesting
-    public Pair<Integer, Long> getNonEvictableSize() {
-        return evictionHandler.getNonEvictableSize();
-    }
-
     @Override
     public long getMaxSize() {
         return maxSize;
@@ -244,8 +237,7 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         return EntryImpl.create(ledgerId, entryId, data);
     }
 
-    public static EntryImpl create(LedgerEntry ledgerEntry, ManagedLedgerInterceptor interceptor,
-                                   int expectedReadCount) {
+    public static EntryImpl create(LedgerEntry ledgerEntry, ManagedLedgerInterceptor interceptor) {
         ManagedLedgerInterceptor.PayloadProcessorHandle processorHandle = null;
         if (interceptor != null) {
             ByteBuf duplicateBuffer = ledgerEntry.getEntryBuffer().retainedDuplicate();
@@ -258,7 +250,7 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
                 duplicateBuffer.release();
             }
         }
-        EntryImpl returnEntry = EntryImpl.create(ledgerEntry, expectedReadCount);
+        EntryImpl returnEntry = EntryImpl.create(ledgerEntry);
         if (processorHandle != null) {
             processorHandle.release();
             ledgerEntry.close();

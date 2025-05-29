@@ -107,7 +107,7 @@ public class RangeCacheTest {
     }
 
     private static CachedEntry createCachedEntry(Position position, String str) {
-        return CachedEntryImpl.create(position, Unpooled.wrappedBuffer(str.getBytes()), null);
+        return CachedEntryImpl.create(position, Unpooled.wrappedBuffer(str.getBytes()));
     }
 
     private static Position createPosition(int i) {

@@ -28,7 +28,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.IntSupplier;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
@@ -287,8 +286,6 @@ public class PendingReadsManager {
                             copyEntries(entriesToReturn, callback.startEntry, callback.endEntry), callback.ctx);
                 }
                 for (Entry entry : entriesToReturn) {
-                    // don't decrease the read count when these entries are released
-                    ((EntryImpl) entry).setDecreaseReadCountOnRelease(false);
                     entry.release();
                 }
             }
@@ -329,7 +326,7 @@ public class PendingReadsManager {
     }
 
 
-    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, IntSupplier expectedReadCount,
+    void readEntries(ReadHandle lh, long firstEntry, long lastEntry, boolean shouldCacheEntry,
                      final AsyncCallbacks.ReadEntriesCallback callback, Object ctx) {
         final PendingReadKey key = new PendingReadKey(firstEntry, lastEntry);
 
@@ -351,9 +348,9 @@ public class PendingReadsManager {
                     continue;
                 }
                 CompletableFuture<List<Entry>> readFromLeftFuture =
-                        recursiveReadMissingEntriesAsync(lh, expectedReadCount, findBestCandidateOutcome.missingOnLeft);
+                        recursiveReadMissingEntriesAsync(lh, shouldCacheEntry, findBestCandidateOutcome.missingOnLeft);
                 CompletableFuture<List<Entry>> readFromRightFuture =
-                        recursiveReadMissingEntriesAsync(lh, expectedReadCount,
+                        recursiveReadMissingEntriesAsync(lh, shouldCacheEntry,
                                 findBestCandidateOutcome.missingOnRight);
                 readFromLeftFuture
                         .thenCombine(readFromMidFuture, (left, mid) -> {
@@ -381,20 +378,20 @@ public class PendingReadsManager {
 
             if (createdByThisThread.get()) {
                 CompletableFuture<List<Entry>> readResult = rangeEntryCache.readFromStorage(lh, firstEntry,
-                        lastEntry, expectedReadCount);
+                        lastEntry, shouldCacheEntry);
                 pendingRead.attach(readResult);
             }
         }
     }
 
     private CompletableFuture<List<Entry>> recursiveReadMissingEntriesAsync(ReadHandle lh,
-                                                                            IntSupplier expectedReadCount,
+                                                                            boolean shouldCacheEntry,
                                                                             PendingReadKey missingKey) {
         CompletableFuture<List<Entry>> future;
         if (missingKey != null) {
             future = new CompletableFuture<>();
             ReadEntriesCallback callback = new ReadEntriesCallback(future);
-            rangeEntryCache.asyncReadEntry0(lh, missingKey.startEntry, missingKey.endEntry, expectedReadCount, callback,
+            rangeEntryCache.asyncReadEntry0(lh, missingKey.startEntry, missingKey.endEntry, shouldCacheEntry, callback,
                     null, false);
         } else {
             future = CompletableFuture.completedFuture(Collections.emptyList());

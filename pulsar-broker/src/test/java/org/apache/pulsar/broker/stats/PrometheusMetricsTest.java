@@ -668,7 +668,6 @@ public class PrometheusMetricsTest extends BrokerTestBase {
         conf.setManagedLedgerCacheEvictionIntervalMs(Integer.MAX_VALUE);
         conf.setManagedLedgerCacheEvictionTimeThresholdMillis(Long.MAX_VALUE);
         conf.setCacheEvictionByMarkDeletedPosition(true);
-        conf.setCacheEvictionByExpectedReadCount(false);
         conf.setManagedLedgerMinimumBacklogCursorsForCaching(0);
         if (cacheEnable) {
             conf.setManagedLedgerCacheSizeMB(1);

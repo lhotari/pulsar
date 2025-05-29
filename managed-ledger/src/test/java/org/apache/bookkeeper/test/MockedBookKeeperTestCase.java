@@ -94,7 +94,6 @@ public abstract class MockedBookKeeperTestCase {
     }
 
     protected ManagedLedgerConfig initManagedLedgerConfig(ManagedLedgerConfig config) {
-        config.setCacheEvictionByExpectedReadCount(false);
         return config;
     }
 

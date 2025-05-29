@@ -22,6 +22,4 @@ import io.netty.util.ReferenceCounted;
 
 public interface CachedEntry extends Entry, ReferenceCounted {
     boolean matchesKey(Position key);
-    boolean canEvict();
-    boolean increaseReadCount(int expectedReadCount);
 }

@@ -36,13 +36,12 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
 
     private boolean decreaseReadCountOnRelease;
 
-    public static EntryImpl create(LedgerEntry ledgerEntry, int expectedReadCount) {
+    public static EntryImpl create(LedgerEntry ledgerEntry) {
         EntryImpl entry = RECYCLER.get();
         entry.timestamp = System.nanoTime();
         entry.ledgerId = ledgerEntry.getLedgerId();
         entry.entryId = ledgerEntry.getEntryId();
         entry.setDataBuffer(ledgerEntry.getEntryBuffer().retainedDuplicate());
-        entry.readCountHandler = EntryReadCountHandlerImpl.create(expectedReadCount);
         entry.setRefCnt(1);
         return entry;
     }
@@ -59,18 +58,11 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
     }
 
     public static EntryImpl create(long ledgerId, long entryId, ByteBuf data) {
-        return create(ledgerId, entryId, data, 0);
-    }
-
-    public static EntryImpl create(long ledgerId, long entryId, ByteBuf data, int expectedReadCount) {
         EntryImpl entry = RECYCLER.get();
         entry.timestamp = System.nanoTime();
         entry.ledgerId = ledgerId;
         entry.entryId = entryId;
         entry.setDataBuffer(data.retainedDuplicate());
-        if (expectedReadCount > 0) {
-            entry.readCountHandler = EntryReadCountHandlerImpl.create(expectedReadCount);
-        }
         entry.setRefCnt(1);
         return entry;
     }
@@ -90,7 +82,6 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         entry.timestamp = System.nanoTime();
         entry.ledgerId = other.getLedgerId();
         entry.entryId = other.getEntryId();
-        entry.readCountHandler = (EntryReadCountHandlerImpl) other.getReadCountHandler();
         entry.setDataBuffer(other.getDataBuffer().retainedDuplicate());
         entry.setRefCnt(1);
         entry.decreaseReadCountOnRelease = true;
@@ -99,20 +90,6 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
 
     private EntryImpl(Recycler.Handle<EntryImpl> recyclerHandle) {
         super(recyclerHandle);
-    }
-
-    @Override
-    protected void beforeDeallocate() {
-        super.beforeDeallocate();
-        if (decreaseReadCountOnRelease && readCountHandler != null) {
-            readCountHandler.markRead();
-        }
-    }
-
-    @Override
-    protected void beforeRecycle() {
-        super.beforeRecycle();
-        decreaseReadCountOnRelease = false;
     }
 
     public void setDecreaseReadCountOnRelease(boolean enabled) {

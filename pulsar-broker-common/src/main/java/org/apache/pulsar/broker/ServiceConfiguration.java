@@ -3422,14 +3422,6 @@ public class ServiceConfiguration implements PulsarConfiguration {
     )
     private boolean cacheEvictionByMarkDeletedPosition = false;
 
-    @FieldContext(
-            category = CATEGORY_STORAGE_ML,
-            doc = "Evicting cache data by expected read count. Expected read count is calculated by the number of "
-                    + "active cursors with a read position that is behind the position of the cached entry. "
-                    + "This setting will override the cacheEvictionByMarkDeletedPosition setting."
-    )
-    private boolean cacheEvictionByExpectedReadCount = true;
-
     /**** --- Transaction config variables. --- ****/
     @FieldContext(
             category = CATEGORY_TRANSACTION,

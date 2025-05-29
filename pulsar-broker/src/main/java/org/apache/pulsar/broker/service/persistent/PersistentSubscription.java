@@ -245,8 +245,7 @@ public class PersistentSubscription extends AbstractSubscription {
             synchronized (PersistentSubscription.this) {
                 cursor.updateLastActive();
                 if (!cursor.isActive()
-                        && (topic.getManagedLedger().getConfig().isCacheEvictionByExpectedReadCount()
-                        || getCursor().getNumberOfEntries() < topic.getBackloggedCursorThresholdEntries())) {
+                        && getCursor().getNumberOfEntries() < topic.getBackloggedCursorThresholdEntries()) {
                     cursor.setActive();
                 }
 

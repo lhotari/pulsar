@@ -19,12 +19,8 @@
 package org.apache.bookkeeper.mledger.impl.cache;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.bookkeeper.mledger.CachedEntry;
-import org.apache.commons.lang3.mutable.MutableInt;
-import org.apache.commons.lang3.mutable.MutableLong;
 import org.apache.commons.lang3.tuple.Pair;
 import org.jctools.queues.MpscUnboundedArrayQueue;
 
@@ -49,57 +45,8 @@ class RangeCacheRemovalQueue {
                     if (c.removedSize >= sizeToFree) {
                         return EvictionResult.STASH_AND_STOP;
                     }
-                    // stash entries that are not evictable and haven't expired
-                    boolean expired = e.timestampNanos < timestampNanos;
-                    if (!(e.value.canEvict() || expired)) {
-                        return EvictionResult.STASH;
-                    }
                     return EvictionResult.REMOVE;
                 }, false);
-    }
-
-    /**
-     * Returns the actual size of the removal queue, including entries in the stash.
-     * This method is used for testing purposes to verify actual size of cached entries.
-     * This has a performance impact, so it should not be used in production code.
-     * @return a pair containing the number of entries and their total size in bytes
-     */
-    @VisibleForTesting
-    public synchronized Pair<Integer, Long> getNonEvictableSize() {
-        final MutableInt entries = new MutableInt(0);
-        final MutableLong bytesSize = new MutableLong(0L);
-        stash.entries.forEach((entry) -> {
-            if (entry != null) {
-                entry.withWriteLock(wrapper -> {
-                    CachedEntry value = wrapper.value;
-                    if (value != null && !value.canEvict()) {
-                        entries.increment();
-                        bytesSize.add(value.getLength());
-                    }
-                    return null;
-                });
-            }
-        });
-        removalQueue.drain((entry) -> {
-            if (entry != null) {
-                boolean exists = entry.withWriteLock(wrapper -> {
-                    CachedEntry value = wrapper.value;
-                    if (value != null) {
-                        if (!value.canEvict()) {
-                            entries.increment();
-                            bytesSize.add(wrapper.size);
-                        }
-                        return true;
-                    }
-                    return false;
-                });
-                if (exists) {
-                    // Add the entry to the stash to avoid losing it
-                    stash.add(entry);
-                }
-            }
-        });
-        return Pair.of(entries.getValue(), bytesSize.getValue());
     }
 
     public boolean addEntry(RangeCacheEntryWrapper newWrapper) {

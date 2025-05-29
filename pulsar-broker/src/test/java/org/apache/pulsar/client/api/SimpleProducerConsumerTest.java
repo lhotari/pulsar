@@ -1193,8 +1193,10 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
             subscriber1.acknowledge(msg);
         }
 
+        ledger.getFactory().waitForPendingCacheEvictions();
+
         // Verify: entry cache should have been cleared as subscriber1 has consumed all messages
-        Awaitility.await().untilAsserted(() -> assertEquals(entryCacheManager.getNonEvictableSize(), Pair.of(0, 0L)));
+        Awaitility.await().untilAsserted(() -> assertEquals(entryCacheManager.getSize(), 0L));
 
         // sleep for a second: as ledger.updateCursorRateLimit RateLimiter will allow to invoke cursor-update after a
         // second
@@ -1229,7 +1231,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         msg = subscriber1.receive(RECEIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         // Verify: as active-subscriber2 has not consumed messages: EntryCache must have those entries in cache
-        assertNotEquals(entryCacheManager.getNonEvictableSize(), Pair.of(0, 0L));
+        assertNotEquals(entryCacheManager.getSize(), 0L);
 
         // Consume messages for subscriber2
         for (int i = 0; i < receiverSize + moreMessages; i++) {
@@ -1238,7 +1240,7 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
         }
 
         // Verify: EntryCache should be cleared
-        Awaitility.await().untilAsserted(() -> assertEquals(entryCacheManager.getNonEvictableSize(), Pair.of(0, 0L)));
+        Awaitility.await().untilAsserted(() -> assertEquals(entryCacheManager.getSize(), 0L));
 
         subscriber2.close();
         subscriber1.close();

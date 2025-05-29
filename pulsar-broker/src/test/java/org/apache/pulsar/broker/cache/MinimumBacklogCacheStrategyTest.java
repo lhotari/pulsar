@@ -67,7 +67,6 @@ public class MinimumBacklogCacheStrategyTest extends ProducerConsumerBase {
         defaultConf.setManagedLedgerMinimumBacklogCursorsForCaching(2);
         defaultConf.setManagedLedgerMinimumBacklogEntriesForCaching(10);
         defaultConf.setManagedLedgerCacheEvictionTimeThresholdMillis(60 * 1000);
-        defaultConf.setCacheEvictionByExpectedReadCount(false);
         return defaultConf;
     }
 

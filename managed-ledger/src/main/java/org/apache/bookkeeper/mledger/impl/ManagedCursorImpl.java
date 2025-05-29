@@ -3912,13 +3912,4 @@ public class ManagedCursorImpl implements ManagedCursor {
         cs.properties = getProperties();
         return cs;
     }
-    public int getNumberOfCursorsAtSamePositionOrBefore() {
-        if (ledger.getConfig().isCacheEvictionByExpectedReadCount()) {
-            return ledger.getNumberOfCursorsAtSamePositionOrBefore(this);
-        } else if (isCacheReadEntry()) {
-            return 1;
-        } else {
-            return 0;
-        }
-    }
 }

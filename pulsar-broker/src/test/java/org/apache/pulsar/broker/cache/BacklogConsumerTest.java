@@ -26,7 +26,6 @@ import java.util.concurrent.TimeUnit;
 import lombok.Cleanup;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
-import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.Message;
@@ -56,13 +55,6 @@ public class BacklogConsumerTest extends ProducerConsumerBase {
     @Override
     protected void cleanup() throws Exception {
         internalCleanup();
-    }
-
-    @Override
-    protected ServiceConfiguration getDefaultConf() {
-        ServiceConfiguration defaultConf = super.getDefaultConf();
-        defaultConf.setCacheEvictionByExpectedReadCount(false);
-        return defaultConf;
     }
 
     @DataProvider(name = "ackReceiptEnabled")
