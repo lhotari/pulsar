@@ -24,8 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.tuple.Pair;
 
 @Slf4j
-public class RangeEntryCacheManagerEvictionHandler {
-
+class RangeEntryCacheManagerEvictionHandler {
     private final RangeEntryCacheManagerImpl manager;
     private final RangeCacheRemovalQueue rangeCacheRemovalQueue;
 

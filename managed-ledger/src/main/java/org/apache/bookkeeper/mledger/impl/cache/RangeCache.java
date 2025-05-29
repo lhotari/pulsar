@@ -28,7 +28,6 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.bookkeeper.mledger.CachedEntry;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.commons.lang3.tuple.Pair;
 
@@ -43,11 +42,9 @@ import org.apache.commons.lang3.tuple.Pair;
  * consistency.
  */
 @Slf4j
-public class RangeCache {
-    private final RangeCacheRemovalQueue removalQueue;
-
-    // Map from key to nodes inside the linked list
+class RangeCache {
     private final ConcurrentNavigableMap<Position, RangeCacheEntryWrapper> entries;
+    private final RangeCacheRemovalQueue removalQueue;
     private AtomicLong size; // Total size of values stored in cache
 
     /**
@@ -55,8 +52,8 @@ public class RangeCache {
      */
     public RangeCache(RangeCacheRemovalQueue removalQueue) {
         this.removalQueue = removalQueue;
-        this.size = new AtomicLong(0);
         this.entries = new ConcurrentSkipListMap<>();
+        this.size = new AtomicLong(0);
     }
 
     /**
@@ -258,7 +255,7 @@ public class RangeCache {
     }
 
     /**
-     * Just for testing. Getting the number of entries is very expensive on the conncurrent map
+     * Just for testing. Getting the number of entries is very expensive on the concurrent map
      */
     protected long getNumberOfEntries() {
         return entries.size();

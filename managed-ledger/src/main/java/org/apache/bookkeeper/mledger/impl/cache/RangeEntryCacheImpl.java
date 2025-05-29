@@ -37,13 +37,11 @@ import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
-import org.apache.bookkeeper.mledger.CachedEntry;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
-import org.apache.bookkeeper.mledger.impl.CachedEntryImpl;
 import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
@@ -55,6 +53,18 @@ import org.slf4j.LoggerFactory;
  * Cache data payload for entries of all ledgers.
  */
 public class RangeEntryCacheImpl implements EntryCache {
+    /**
+     * The Netty allocator used when managedLedgerCacheCopyEntries=true.
+     */
+    public static final PooledByteBufAllocator ALLOCATOR = new PooledByteBufAllocator(true, // preferDirect
+            0, // nHeapArenas,
+            PooledByteBufAllocator.defaultNumDirectArena(), // nDirectArena
+            PooledByteBufAllocator.defaultPageSize(), // pageSize
+            PooledByteBufAllocator.defaultMaxOrder(), // maxOrder
+            PooledByteBufAllocator.defaultSmallCacheSize(), // smallCacheSize
+            PooledByteBufAllocator.defaultNormalCacheSize(), // normalCacheSize,
+            true // Use cache for all threads
+    );
 
     /**
      * Overhead per-entry to take into account the envelope.
@@ -109,16 +119,6 @@ public class RangeEntryCacheImpl implements EntryCache {
     public InflightReadsLimiter getPendingReadsLimiter() {
         return manager.getInflightReadsLimiter();
     }
-
-    public static final PooledByteBufAllocator ALLOCATOR = new PooledByteBufAllocator(true, // preferDirect
-            0, // nHeapArenas,
-            PooledByteBufAllocator.defaultNumDirectArena(), // nDirectArena
-            PooledByteBufAllocator.defaultPageSize(), // pageSize
-            PooledByteBufAllocator.defaultMaxOrder(), // maxOrder
-            PooledByteBufAllocator.defaultSmallCacheSize(), // smallCacheSize
-            PooledByteBufAllocator.defaultNormalCacheSize(), // normalCacheSize,
-            true // Use cache for all threads
-    );
 
     @Override
     public boolean insert(Entry entry) {
@@ -454,7 +454,7 @@ public class RangeEntryCacheImpl implements EntryCache {
                                 long totalSize = 0;
                                 final List<Entry> entriesToReturn = new ArrayList<>(entriesToRead);
                                 for (LedgerEntry e : ledgerEntries) {
-                                    EntryImpl entry = RangeEntryCacheManagerImpl.create(e, interceptor);
+                                    EntryImpl entry = EntryImpl.create(e, interceptor);
                                     entriesToReturn.add(entry);
                                     totalSize += entry.getLength();
                                     if (shouldCacheEntry) {

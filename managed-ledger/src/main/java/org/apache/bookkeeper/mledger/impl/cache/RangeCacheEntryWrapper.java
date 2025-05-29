@@ -22,7 +22,6 @@ import io.netty.util.Recycler;
 import java.util.Map;
 import java.util.concurrent.locks.StampedLock;
 import java.util.function.Function;
-import org.apache.bookkeeper.mledger.CachedEntry;
 import org.apache.bookkeeper.mledger.Position;
 
 /**
@@ -49,9 +48,8 @@ class RangeCacheEntryWrapper {
         this.recyclerHandle = recyclerHandle;
     }
 
-    static <R> R
-    withNewInstance(RangeCache rangeCache, Position key, CachedEntry value, long size,
-                    Function<RangeCacheEntryWrapper, R> function) {
+    static <R> R withNewInstance(RangeCache rangeCache, Position key, CachedEntry value, long size,
+                                 Function<RangeCacheEntryWrapper, R> function) {
         RangeCacheEntryWrapper entryWrapper = RECYCLER.get();
         StampedLock lock = entryWrapper.lock;
         long stamp = lock.writeLock();

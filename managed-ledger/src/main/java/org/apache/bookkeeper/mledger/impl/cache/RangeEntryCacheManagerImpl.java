@@ -18,7 +18,6 @@
  */
 package org.apache.bookkeeper.mledger.impl.cache;
 
-import io.netty.buffer.ByteBuf;
 import io.opentelemetry.api.OpenTelemetry;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -27,16 +26,11 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import org.apache.bookkeeper.client.api.LedgerEntry;
-import org.apache.bookkeeper.client.impl.LedgerEntryImpl;
 import org.apache.bookkeeper.common.util.OrderedScheduler;
-import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerFactoryConfig;
-import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryMBeanImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
-import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -226,31 +220,6 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
     @Override
     public void clear() {
         caches.values().forEach(EntryCache::clear);
-    }
-
-    public static Entry create(long ledgerId, long entryId, ByteBuf data) {
-        return EntryImpl.create(ledgerId, entryId, data);
-    }
-
-    public static EntryImpl create(LedgerEntry ledgerEntry, ManagedLedgerInterceptor interceptor) {
-        ManagedLedgerInterceptor.PayloadProcessorHandle processorHandle = null;
-        if (interceptor != null) {
-            ByteBuf duplicateBuffer = ledgerEntry.getEntryBuffer().retainedDuplicate();
-            processorHandle = interceptor
-                    .processPayloadBeforeEntryCache(duplicateBuffer);
-            if (processorHandle != null) {
-                ledgerEntry  = LedgerEntryImpl.create(ledgerEntry.getLedgerId(), ledgerEntry.getEntryId(),
-                        ledgerEntry.getLength(), processorHandle.getProcessedPayload());
-            } else {
-                duplicateBuffer.release();
-            }
-        }
-        EntryImpl returnEntry = EntryImpl.create(ledgerEntry);
-        if (processorHandle != null) {
-            processorHandle.release();
-            ledgerEntry.close();
-        }
-        return returnEntry;
     }
 
     public InflightReadsLimiter getInflightReadsLimiter() {

@@ -26,7 +26,7 @@ import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.util.AbstractCASReferenceCounted;
 
-abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends AbstractCASReferenceCounted
+public abstract class AbstractEntryImpl<T extends AbstractEntryImpl<T>> extends AbstractCASReferenceCounted
         implements Entry, Comparable<T> {
     protected final Recycler.Handle<T> recyclerHandle;
     protected long timestamp;

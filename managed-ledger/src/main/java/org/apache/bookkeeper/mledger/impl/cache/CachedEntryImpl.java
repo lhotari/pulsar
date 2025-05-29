@@ -16,21 +16,20 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.bookkeeper.mledger.impl;
+package org.apache.bookkeeper.mledger.impl.cache;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.util.Recycler;
-import org.apache.bookkeeper.mledger.CachedEntry;
 import org.apache.bookkeeper.mledger.Position;
+import org.apache.bookkeeper.mledger.impl.AbstractEntryImpl;
 
-public final class CachedEntryImpl extends AbstractEntryImpl<CachedEntryImpl> implements CachedEntry {
+final class CachedEntryImpl extends AbstractEntryImpl<CachedEntryImpl> implements CachedEntry {
     private static final Recycler<CachedEntryImpl> RECYCLER = new Recycler<CachedEntryImpl>() {
         @Override
         protected CachedEntryImpl newObject(Handle<CachedEntryImpl> handle) {
             return new CachedEntryImpl(handle);
         }
     };
-
 
     public static CachedEntryImpl create(Position position, ByteBuf data) {
         CachedEntryImpl entry = RECYCLER.get();
