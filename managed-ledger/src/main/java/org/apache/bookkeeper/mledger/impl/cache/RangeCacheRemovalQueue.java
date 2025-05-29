@@ -22,6 +22,11 @@ import static com.google.common.base.Preconditions.checkArgument;
 import org.apache.commons.lang3.tuple.Pair;
 import org.jctools.queues.MpscUnboundedArrayQueue;
 
+/**
+ * A central queue to hold entries that are scheduled for removal from all range cache instances.
+ * Removal of entries is done in a single thread to avoid contention.
+ * This queue is used to evict entries based on timestamp or based on size to free up space in the cache.
+ */
 class RangeCacheRemovalQueue {
     // The removal queue is unbounded, but we allocate memory in chunks to avoid frequent memory allocations.
     private static final int REMOVAL_QUEUE_CHUNK_SIZE = 128 * 1024;
