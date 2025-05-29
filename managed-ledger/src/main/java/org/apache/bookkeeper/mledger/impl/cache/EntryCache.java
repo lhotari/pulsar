@@ -72,15 +72,21 @@ public interface EntryCache {
      *
      * <p/>Get the entry data either from cache or bookkeeper and mixes up the results in a single list.
      *
-     * @param lh                the ledger handle
-     * @param firstEntry        the first entry to read (inclusive)
-     * @param lastEntry         the last entry to read (inclusive)
-     * @param shouldCacheEntry  the entry will be cached after reading
-     * @param callback          the callback object that will be notified when read is done
-     * @param ctx               the context object
+     * @param lh
+     *            the ledger handle
+     * @param firstEntry
+     *            the first entry to read (inclusive)
+     * @param lastEntry
+     *            the last entry to read (inclusive)
+     * @param shouldCacheEntry
+     *            whether the read entry should be cached
+     * @param callback
+     *            the callback object that will be notified when read is done
+     * @param ctx
+     *            the context object
      */
     void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, boolean shouldCacheEntry,
-                        ReadEntriesCallback callback, Object ctx);
+            ReadEntriesCallback callback, Object ctx);
 
     /**
      * Read entry at given position from the cache or from bookkeeper.

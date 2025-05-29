@@ -257,7 +257,7 @@ public class RangeEntryCacheImpl implements EntryCache {
 
     @Override
     public void asyncReadEntry(ReadHandle lh, long firstEntry, long lastEntry, boolean shouldCacheEntry,
-                               final ReadEntriesCallback callback, Object ctx) {
+            final ReadEntriesCallback callback, Object ctx) {
         try {
             asyncReadEntry0(lh, firstEntry, lastEntry, shouldCacheEntry, callback, ctx, true);
         } catch (Throwable t) {
@@ -272,7 +272,7 @@ public class RangeEntryCacheImpl implements EntryCache {
 
     @SuppressWarnings({ "unchecked", "rawtypes" })
     void asyncReadEntry0(ReadHandle lh, long firstEntry, long lastEntry, boolean shouldCacheEntry,
-                         final ReadEntriesCallback callback, Object ctx, boolean acquirePermits) {
+            final ReadEntriesCallback callback, Object ctx, boolean acquirePermits) {
         final long ledgerId = lh.getId();
         final int numberOfEntries = (int) (lastEntry - firstEntry) + 1;
         final Position firstPosition = PositionFactory.create(ledgerId, firstEntry);
@@ -434,10 +434,9 @@ public class RangeEntryCacheImpl implements EntryCache {
 
     /**
      * Reads the entries from Storage.
-     *
-     * @param lh                the handle
-     * @param firstEntry        the first entry
-     * @param lastEntry         the last entry
+     * @param lh the handle
+     * @param firstEntry the first entry
+     * @param lastEntry the last entry
      * @param shouldCacheEntry if we should put the entry into the cache
      * @return a handle to the operation
      */
@@ -455,8 +454,7 @@ public class RangeEntryCacheImpl implements EntryCache {
                                 long totalSize = 0;
                                 final List<Entry> entriesToReturn = new ArrayList<>(entriesToRead);
                                 for (LedgerEntry e : ledgerEntries) {
-                                    EntryImpl entry =
-                                            RangeEntryCacheManagerImpl.create(e, interceptor);
+                                    EntryImpl entry = RangeEntryCacheManagerImpl.create(e, interceptor);
                                     entriesToReturn.add(entry);
                                     totalSize += entry.getLength();
                                     if (shouldCacheEntry) {

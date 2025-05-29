@@ -248,15 +248,13 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
 
         long ledgerId = ledger != null ? ledger.getId() : ((Position) ctx).getLedgerId();
         // Don't insert to the entry cache for the ShadowManagedLedger
-        if (!(ml instanceof ShadowManagedLedgerImpl)) {
+        if (!(ml instanceof ShadowManagedLedgerImpl) && ml.hasActiveCursors()) {
             // Avoid caching entries if no cursor has been created
-            if (!ml.getActiveCursors().isEmpty()) {
-                EntryImpl entry = EntryImpl.create(ledgerId, entryId, data);
-                // EntryCache.insert: duplicates entry by allocating new entry and data. so, recycle entry after calling
-                // insert
-                ml.entryCache.insert(entry);
-                entry.release();
-            }
+            EntryImpl entry = EntryImpl.create(ledgerId, entryId, data);
+            // EntryCache.insert: duplicates entry by allocating new entry and data. so, recycle entry after calling
+            // insert
+            ml.entryCache.insert(entry);
+            entry.release();
         }
 
         Position lastEntry = PositionFactory.create(ledgerId, entryId);

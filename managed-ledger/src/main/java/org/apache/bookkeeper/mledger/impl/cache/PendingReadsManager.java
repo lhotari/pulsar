@@ -384,15 +384,14 @@ public class PendingReadsManager {
         }
     }
 
-    private CompletableFuture<List<Entry>> recursiveReadMissingEntriesAsync(ReadHandle lh,
-                                                                            boolean shouldCacheEntry,
+    private CompletableFuture<List<Entry>> recursiveReadMissingEntriesAsync(ReadHandle lh, boolean shouldCacheEntry,
                                                                             PendingReadKey missingKey) {
         CompletableFuture<List<Entry>> future;
         if (missingKey != null) {
             future = new CompletableFuture<>();
             ReadEntriesCallback callback = new ReadEntriesCallback(future);
-            rangeEntryCache.asyncReadEntry0(lh, missingKey.startEntry, missingKey.endEntry, shouldCacheEntry, callback,
-                    null, false);
+            rangeEntryCache.asyncReadEntry0(lh, missingKey.startEntry, missingKey.endEntry,
+                    shouldCacheEntry, callback, null, false);
         } else {
             future = CompletableFuture.completedFuture(Collections.emptyList());
         }
