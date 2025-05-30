@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.bookkeeper.mledger.EntryReadCountHandler;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.commons.lang3.tuple.Pair;
 
@@ -208,6 +209,11 @@ class RangeCache {
      */
     boolean removeEntry(Position key, CachedEntry value, RangeCacheEntryWrapper entryWrapper,
                         RangeCacheRemovalCounters counters, boolean updateSize) {
+        // mark the read count handler as evicted
+        EntryReadCountHandler readCountHandler = value.getReadCountHandler();
+        if (readCountHandler != null) {
+            readCountHandler.markEvicted();
+        }
         // always remove the entry from the map
         entries.remove(key, entryWrapper);
         if (value == null) {

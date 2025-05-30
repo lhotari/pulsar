@@ -36,7 +36,10 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         }
     };
 
-    public static EntryImpl create(LedgerEntry ledgerEntry, ManagedLedgerInterceptor interceptor) {
+    private boolean decreaseReadCountOnRelease;
+
+    public static EntryImpl create(LedgerEntry ledgerEntry, ManagedLedgerInterceptor interceptor,
+                                   int expectedReadCount) {
         ManagedLedgerInterceptor.PayloadProcessorHandle processorHandle = null;
         if (interceptor != null) {
             ByteBuf duplicateBuffer = ledgerEntry.getEntryBuffer().retainedDuplicate();
@@ -49,7 +52,7 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
                 duplicateBuffer.release();
             }
         }
-        EntryImpl returnEntry = create(ledgerEntry);
+        EntryImpl returnEntry = create(ledgerEntry, expectedReadCount);
         if (processorHandle != null) {
             processorHandle.release();
             ledgerEntry.close();
@@ -57,12 +60,13 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         return returnEntry;
     }
 
-    public static EntryImpl create(LedgerEntry ledgerEntry) {
+    public static EntryImpl create(LedgerEntry ledgerEntry, int expectedReadCount) {
         EntryImpl entry = RECYCLER.get();
         entry.timestamp = System.nanoTime();
         entry.ledgerId = ledgerEntry.getLedgerId();
         entry.entryId = ledgerEntry.getEntryId();
         entry.setDataBuffer(ledgerEntry.getEntryBuffer().retain());
+        entry.readCountHandler = EntryReadCountHandlerImpl.create(expectedReadCount);
         entry.setRefCnt(1);
         return entry;
     }
@@ -79,11 +83,18 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
     }
 
     public static EntryImpl create(long ledgerId, long entryId, ByteBuf data) {
+        return create(ledgerId, entryId, data, 0);
+    }
+
+    public static EntryImpl create(long ledgerId, long entryId, ByteBuf data, int expectedReadCount) {
         EntryImpl entry = RECYCLER.get();
         entry.timestamp = System.nanoTime();
         entry.ledgerId = ledgerId;
         entry.entryId = entryId;
         entry.setDataBuffer(data.retain());
+        if (expectedReadCount > 0) {
+            entry.readCountHandler = EntryReadCountHandlerImpl.create(expectedReadCount);
+        }
         entry.setRefCnt(1);
         return entry;
     }
@@ -103,12 +114,32 @@ public final class EntryImpl extends AbstractEntryImpl<EntryImpl> {
         entry.timestamp = System.nanoTime();
         entry.ledgerId = other.getLedgerId();
         entry.entryId = other.getEntryId();
+        entry.readCountHandler = (EntryReadCountHandlerImpl) other.getReadCountHandler();
         entry.setDataBuffer(other.getDataBuffer().retainedDuplicate());
         entry.setRefCnt(1);
+        entry.decreaseReadCountOnRelease = true;
         return entry;
     }
 
     private EntryImpl(Recycler.Handle<EntryImpl> recyclerHandle) {
         super(recyclerHandle);
+    }
+
+    public void setDecreaseReadCountOnRelease(boolean enabled) {
+        decreaseReadCountOnRelease = enabled;
+    }
+
+    @Override
+    protected void beforeDeallocate() {
+        super.beforeDeallocate();
+        if (decreaseReadCountOnRelease && readCountHandler != null) {
+            readCountHandler.markRead();
+        }
+    }
+
+    @Override
+    protected void beforeRecycle() {
+        super.beforeRecycle();
+        decreaseReadCountOnRelease = false;
     }
 }

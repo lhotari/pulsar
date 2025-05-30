@@ -1846,6 +1846,7 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         ManagedLedgerConfig config = new ManagedLedgerConfig();
         initManagedLedgerConfig(config);
         config.setCacheEvictionByMarkDeletedPosition(true);
+        config.setCacheEvictionByExpectedReadCount(false);
         ManagedLedgerImpl ledger =
                 (ManagedLedgerImpl) factory.open("my_test_ledger_for_invalidateEntriesFromCacheByMarkDeletePosition",
                         config);

@@ -22,6 +22,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.util.Recycler;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.AbstractEntryImpl;
+import org.apache.bookkeeper.mledger.impl.EntryReadCountHandlerImpl;
 
 final class CachedEntryImpl extends AbstractEntryImpl<CachedEntryImpl> implements CachedEntry {
     private static final Recycler<CachedEntryImpl> RECYCLER = new Recycler<CachedEntryImpl>() {
@@ -31,11 +32,12 @@ final class CachedEntryImpl extends AbstractEntryImpl<CachedEntryImpl> implement
         }
     };
 
-    public static CachedEntryImpl create(Position position, ByteBuf data) {
+    public static CachedEntryImpl create(Position position, ByteBuf data, EntryReadCountHandlerImpl readCountHandler) {
         CachedEntryImpl entry = RECYCLER.get();
         entry.timestamp = System.nanoTime();
         entry.ledgerId = position.getLedgerId();
         entry.entryId = position.getEntryId();
+        entry.readCountHandler = readCountHandler;
         entry.setDataBuffer(data.retainedDuplicate());
         entry.setRefCnt(1);
         return entry;
@@ -43,6 +45,22 @@ final class CachedEntryImpl extends AbstractEntryImpl<CachedEntryImpl> implement
 
     private CachedEntryImpl(Recycler.Handle<CachedEntryImpl> recyclerHandle) {
         super(recyclerHandle);
+    }
+
+    @Override
+    public boolean canEvict() {
+        if (readCountHandler != null) {
+            return readCountHandler.getExpectedReadCount() < 1;
+        }
+        return true;
+    }
+
+    @Override
+    public boolean increaseReadCount(int expectedReadCount) {
+        if (readCountHandler != null) {
+            return readCountHandler.incrementExpectedReadCount(expectedReadCount);
+        }
+        return false;
     }
 
     @Override
