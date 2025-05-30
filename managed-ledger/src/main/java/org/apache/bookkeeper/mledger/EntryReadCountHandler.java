@@ -16,17 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.bookkeeper.mledger.impl.cache;
+package org.apache.bookkeeper.mledger;
 
-import io.netty.util.ReferenceCounted;
-import org.apache.bookkeeper.mledger.Entry;
-import org.apache.bookkeeper.mledger.Position;
-
-/**
- * Interface for cached entries in the {@link RangeCache}.
- */
-public interface CachedEntry extends Entry, ReferenceCounted {
-    boolean matchesKey(Position key);
-    boolean canEvict();
-    boolean increaseReadCount(int expectedReadCount);
+public interface EntryReadCountHandler {
+    int getExpectedReadCount();
+    boolean incrementExpectedReadCount();
+    boolean incrementExpectedReadCount(int increment);
+    void markRead();
+    void markEvicted();
 }
