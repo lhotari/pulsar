@@ -24,6 +24,7 @@ on:
       - master
       - branch-*
       - pulsar-*
+      - lh-*
   schedule:
     # scheduled job with JDK 21
     - cron: '0 12 * * *'
