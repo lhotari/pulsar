@@ -65,7 +65,7 @@ public class OpenTelemetryManagedLedgerCacheStatsTest extends BrokerTestBase {
 
     @Test
     public void testManagedLedgerCacheStats() throws Exception {
-        var topicName = BrokerTestUtil.newUniqueName("persistent://prop/ns-abc/testManagedLedgerCacheStats");
+        var topicName = BrokerTestUtil.newUniqueName("persistent://tenant/ns-abc/testManagedLedgerCacheStats");
 
         @Cleanup
         var producer = pulsarClient.newProducer().topic(topicName).create();

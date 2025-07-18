@@ -61,8 +61,8 @@ public class NullValueTest extends BrokerTestBase {
     @DataProvider(name = "topics")
     public static Object[][] topics() {
         return new Object[][]{
-                {"persistent://prop/ns-abc/null-value-test-0", 1},
-                {"persistent://prop/ns-abc/null-value-test-1", 3},
+                {"persistent://tenant/ns-abc/null-value-test-0", 1},
+                {"persistent://tenant/ns-abc/null-value-test-1", 3},
         };
     }
 

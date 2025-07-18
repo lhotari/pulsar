@@ -42,8 +42,8 @@ public class ResourceGroupRateLimiterTest extends BrokerTestBase {
     final String rgName = "testRG";
     org.apache.pulsar.common.policies.data.ResourceGroup testAddRg =
     new org.apache.pulsar.common.policies.data.ResourceGroup();
-    final String namespaceName = "prop/ns-abc";
-    final String persistentTopicString = "persistent://prop/ns-abc/test-topic";
+    final String namespaceName = "tenant/ns-abc";
+    final String persistentTopicString = "persistent://tenant/ns-abc/test-topic";
     static final int MESSAGE_SIZE = 10;
 
     @BeforeClass

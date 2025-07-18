@@ -864,7 +864,7 @@ public class ModularLoadManagerImplTest {
 
         final String cluster = "use";
         final String tenant = "my-tenant";
-        final String namespace = "my-tenant/use/my-ns";
+        final String namespace = "my-tenant/my-ns";
         final String bundle = "0x00000000_0xffffffff";
         final String brokerHost = pulsar1.getAdvertisedAddress();
         final String brokerAddress = brokerHost  + ":8080";

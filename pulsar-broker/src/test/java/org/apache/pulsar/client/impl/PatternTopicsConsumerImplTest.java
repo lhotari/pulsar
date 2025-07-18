@@ -101,7 +101,7 @@ public class PatternTopicsConsumerImplTest extends ProducerConsumerBase {
         Pattern pattern = Pattern.compile(patternString);
 
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName2, 2);
         admin.topics().createPartitionedTopic(topicName3, 3);
 
@@ -186,7 +186,7 @@ public class PatternTopicsConsumerImplTest extends ProducerConsumerBase {
 
         // 1. create partition
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName2, 2);
         admin.topics().createPartitionedTopic(topicName3, 3);
 
@@ -283,7 +283,7 @@ public class PatternTopicsConsumerImplTest extends ProducerConsumerBase {
 
         // 1. create partition
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName1, 1);
         admin.topics().createPartitionedTopic(topicName2, 2);
         admin.topics().createPartitionedTopic(topicName3, 3);
@@ -354,7 +354,7 @@ public class PatternTopicsConsumerImplTest extends ProducerConsumerBase {
 
         // 1. create partition
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName2, 2);
         admin.topics().createPartitionedTopic(topicName3, 3);
 
@@ -452,7 +452,7 @@ public class PatternTopicsConsumerImplTest extends ProducerConsumerBase {
 
         // 1. create partition
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName2, 2);
         admin.topics().createPartitionedTopic(topicName3, 3);
 
@@ -549,7 +549,7 @@ public class PatternTopicsConsumerImplTest extends ProducerConsumerBase {
 
         // 1. create partition
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName2, 2);
         admin.topics().createPartitionedTopic(topicName3, 3);
 
@@ -660,7 +660,7 @@ public class PatternTopicsConsumerImplTest extends ProducerConsumerBase {
         // 1. create partition
         String topicName = "persistent://my-property/my-ns/pattern-topic-1-" + key;
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName, 4);
 
         // 2. verify consumer get methods. There is no need to trigger discovery, because the broker will push the
@@ -941,7 +941,7 @@ public class PatternTopicsConsumerImplTest extends ProducerConsumerBase {
 
         // 1. create partition
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName2, 2);
         admin.topics().createPartitionedTopic(topicName3, 3);
 
@@ -1056,7 +1056,7 @@ public class PatternTopicsConsumerImplTest extends ProducerConsumerBase {
 
         // 1. create partition
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName2, 2);
         admin.topics().createPartitionedTopic(topicName3, 3);
 

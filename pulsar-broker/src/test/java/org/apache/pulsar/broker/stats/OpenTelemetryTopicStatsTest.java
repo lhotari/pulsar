@@ -59,7 +59,7 @@ public class OpenTelemetryTopicStatsTest extends BrokerTestBase {
 
     @Test(timeOut = 30_000)
     public void testMessagingMetrics() throws Exception {
-        var topicName = BrokerTestUtil.newUniqueName("persistent://prop/ns-abc/testMessagingMetrics");
+        var topicName = BrokerTestUtil.newUniqueName("persistent://tenant/ns-abc/testMessagingMetrics");
         admin.topics().createNonPartitionedTopic(topicName);
 
         var producerCount = 5;
@@ -90,8 +90,8 @@ public class OpenTelemetryTopicStatsTest extends BrokerTestBase {
 
         var attributes = Attributes.builder()
                 .put(OpenTelemetryAttributes.PULSAR_DOMAIN, "persistent")
-                .put(OpenTelemetryAttributes.PULSAR_TENANT, "prop")
-                .put(OpenTelemetryAttributes.PULSAR_NAMESPACE, "prop/ns-abc")
+                .put(OpenTelemetryAttributes.PULSAR_TENANT, "tenant")
+                .put(OpenTelemetryAttributes.PULSAR_NAMESPACE, "tenant/ns-abc")
                 .put(OpenTelemetryAttributes.PULSAR_TOPIC, topicName)
                 .build();
 
@@ -121,7 +121,7 @@ public class OpenTelemetryTopicStatsTest extends BrokerTestBase {
 
     @Test(timeOut = 30_000)
     public void testPublishRateLimitMetric() throws Exception {
-        var topicName = BrokerTestUtil.newUniqueName("persistent://prop/ns-abc/testPublishRateLimitMetric");
+        var topicName = BrokerTestUtil.newUniqueName("persistent://tenant/ns-abc/testPublishRateLimitMetric");
         admin.topics().createNonPartitionedTopic(topicName);
 
         var publishRate = new PublishRate(1, -1);
@@ -134,8 +134,8 @@ public class OpenTelemetryTopicStatsTest extends BrokerTestBase {
 
         var attributes = Attributes.builder()
                 .put(OpenTelemetryAttributes.PULSAR_DOMAIN, "persistent")
-                .put(OpenTelemetryAttributes.PULSAR_TENANT, "prop")
-                .put(OpenTelemetryAttributes.PULSAR_NAMESPACE, "prop/ns-abc")
+                .put(OpenTelemetryAttributes.PULSAR_TENANT, "tenant")
+                .put(OpenTelemetryAttributes.PULSAR_NAMESPACE, "tenant/ns-abc")
                 .put(OpenTelemetryAttributes.PULSAR_TOPIC, topicName)
                 .build();
 

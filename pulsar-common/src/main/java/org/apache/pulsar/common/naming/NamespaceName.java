@@ -211,7 +211,7 @@ public class NamespaceName implements ServiceUnitId {
     }
 
     /**
-     * Returns true if this is a V2 namespace prop/namespace-name.
+     * Returns true if this is a V2 namespace tenant/namespace-name.
      * @return true if v2
      */
     public boolean isV2() {

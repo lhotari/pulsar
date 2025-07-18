@@ -141,7 +141,7 @@ public class PrometheusMetricsTest extends BrokerTestBase {
         conf.setBrokerPublisherThrottlingMaxByteRate(10000000);
         conf.setStatsUpdateFrequencyInSecs(100000000);
         setup();
-        String ns1 = "prop/ns-abc1" + UUID.randomUUID();
+        String ns1 = "tenant/ns-abc1" + UUID.randomUUID();
         admin.namespaces().createNamespace(ns1, 1);
         String topicName = "persistent://" + ns1 + "/metrics" + UUID.randomUUID();
         String topicName2 = "persistent://" + ns1 + "/metrics" + UUID.randomUUID();
@@ -319,8 +319,8 @@ public class PrometheusMetricsTest extends BrokerTestBase {
 
     @Test
     public void testMetricsTopicCount() throws Exception {
-        String ns1 = "prop/ns-abc1";
-        String ns2 = "prop/ns-abc2";
+        String ns1 = "tenant/ns-abc1";
+        String ns2 = "tenant/ns-abc2";
         admin.namespaces().createNamespace(ns1);
         admin.namespaces().createNamespace(ns2);
         String baseTopic1 = "persistent://" + ns1 + "/testMetricsTopicCount";
@@ -358,7 +358,7 @@ public class PrometheusMetricsTest extends BrokerTestBase {
 
     @Test
     public void testMetricsAvgMsgSize2() throws Exception {
-        String ns1 = "prop/ns-abc1";
+        String ns1 = "tenant/ns-abc1";
         admin.namespaces().createNamespace(ns1, 1);
         String baseTopic1 = "persistent://" + ns1 + "/testMetricsTopicCount";
         String topicName = baseTopic1 + UUID.randomUUID();
@@ -673,7 +673,7 @@ public class PrometheusMetricsTest extends BrokerTestBase {
             conf.setManagedLedgerCacheSizeMB(0);
         }
         setup();
-        String ns = "prop/ns-abc1";
+        String ns = "tenant/ns-abc1";
         admin.namespaces().createNamespace(ns);
         String topic = "persistent://" + ns + "/testStorageReadCacheMissesRate" + UUID.randomUUID();
 
@@ -774,7 +774,7 @@ public class PrometheusMetricsTest extends BrokerTestBase {
 
     @Test
     public void testPerTopicExpiredStat() throws Exception {
-        String ns = "prop/ns-abc1";
+        String ns = "tenant/ns-abc1";
         admin.namespaces().createNamespace(ns);
         String topic1 = "persistent://" + ns + "/testPerTopicExpiredStat1";
         String topic2 = "persistent://" + ns + "/testPerTopicExpiredStat2";
@@ -1954,8 +1954,8 @@ public class PrometheusMetricsTest extends BrokerTestBase {
 
     @Test
     public void testSplitTopicAndPartitionLabel() throws Exception {
-        String ns1 = "prop/ns-abc1";
-        String ns2 = "prop/ns-abc2";
+        String ns1 = "tenant/ns-abc1";
+        String ns2 = "tenant/ns-abc2";
         admin.namespaces().createNamespace(ns1);
         admin.namespaces().createNamespace(ns2);
         String baseTopic1 = "persistent://" + ns1 + "/testMetricsTopicCount";
@@ -2055,7 +2055,7 @@ public class PrometheusMetricsTest extends BrokerTestBase {
 
     @Test
     public void testEscapeLabelValue() throws Exception {
-        String ns1 = "prop/ns-abc1";
+        String ns1 = "tenant/ns-abc1";
         admin.namespaces().createNamespace(ns1);
         String topic = "persistent://" + ns1 + "/\"mytopic";
         admin.topics().createNonPartitionedTopic(topic);
@@ -2076,8 +2076,8 @@ public class PrometheusMetricsTest extends BrokerTestBase {
         System.out.println(subCountLines);
         assertEquals(subCountLines.size(), 1);
         assertEquals(subCountLines.get(0),
-                "pulsar_subscriptions_count{cluster=\"test\",namespace=\"prop/ns-abc1\","
-                        + "topic=\"persistent://prop/ns-abc1/\\\"mytopic\"} 1");
+                "pulsar_subscriptions_count{cluster=\"test\",namespace=\"tenant/ns-abc1\","
+                        + "topic=\"persistent://tenant/ns-abc1/\\\"mytopic\"} 1");
     }
 
 }

@@ -313,7 +313,7 @@ public class WebServiceTest {
 
     @Test
     public void testSplitPath() {
-        String result = PulsarWebResource.splitPath("prop/cluster/ns/topic1", 4);
+        String result = PulsarWebResource.splitPath("tenant/ns/topic1", 3);
         Assert.assertEquals(result, "topic1");
     }
 

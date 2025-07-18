@@ -65,7 +65,7 @@ public class ResendRequestTest extends BrokerTestBase {
     @Test(timeOut = testTimeout)
     public void testExclusiveSingleAckedNormalTopic() throws Exception {
         String key = "testExclusiveSingleAckedNormalTopic";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;
@@ -158,7 +158,7 @@ public class ResendRequestTest extends BrokerTestBase {
     @Test(timeOut = testTimeout)
     public void testSharedSingleAckedNormalTopic() throws Exception {
         String key = "testSharedSingleAckedNormalTopic";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-shared-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;
@@ -245,7 +245,7 @@ public class ResendRequestTest extends BrokerTestBase {
     @Test(timeOut = testTimeout)
     public void testFailoverSingleAckedNormalTopic() throws Exception {
         String key = "testFailoverSingleAckedNormalTopic";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-failover-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;
@@ -363,7 +363,7 @@ public class ResendRequestTest extends BrokerTestBase {
     @Test(timeOut = testTimeout)
     public void testExclusiveCumulativeAckedNormalTopic() throws Exception {
         String key = "testExclusiveCumulativeAckedNormalTopic";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;
@@ -420,13 +420,13 @@ public class ResendRequestTest extends BrokerTestBase {
     @Test(timeOut = testTimeout)
     public void testExclusiveSingleAckedPartitionedTopic() throws Exception {
         String key = "testExclusiveSingleAckedPartitionedTopic";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;
         final int numberOfPartitions = 4;
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName, numberOfPartitions);
         // Special step to create partitioned topic
 
@@ -476,13 +476,13 @@ public class ResendRequestTest extends BrokerTestBase {
     @Test(timeOut = testTimeout)
     public void testSharedSingleAckedPartitionedTopic() throws Exception {
         String key = "testSharedSingleAckedPartitionedTopic";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-shared-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;
         final int numberOfPartitions = 3;
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName, numberOfPartitions);
         Random rn = new Random();
         // Special step to create partitioned topic
@@ -577,13 +577,13 @@ public class ResendRequestTest extends BrokerTestBase {
     @Test(timeOut = testTimeout)
     public void testFailoverSingleAckedPartitionedTopic() throws Exception {
         String key = "testFailoverSingleAckedPartitionedTopic";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-failover-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;
         final int numberOfPartitions = 3;
         TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("prop", tenantInfo);
+        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName, numberOfPartitions);
         Random rn = new Random();
         // Special step to create partitioned topic
@@ -668,7 +668,7 @@ public class ResendRequestTest extends BrokerTestBase {
     @Test(timeOut = testTimeout)
     public void testFailoverInactiveConsumer() throws Exception {
         String key = "testFailoverInactiveConsumer";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-failover-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;

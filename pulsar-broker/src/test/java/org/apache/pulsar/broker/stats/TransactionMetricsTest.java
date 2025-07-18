@@ -135,7 +135,7 @@ public class TransactionMetricsTest extends BrokerTestBase {
     @Test
     public void testTransactionCoordinatorRateMetrics() throws Exception {
         int txnCount = 120;
-        String ns1 = "prop/ns-abc1";
+        String ns1 = "tenant/ns-abc1";
         admin.namespaces().createNamespace(ns1);
         String topic = "persistent://" + ns1 + "/test_coordinator_metrics";
         String subName = "test_coordinator_metrics";
@@ -243,7 +243,7 @@ public class TransactionMetricsTest extends BrokerTestBase {
         serviceConfiguration.setTransactionCoordinatorEnabled(true);
         super.baseSetup(serviceConfiguration);
 
-        String ns1 = "prop/ns-abc1";
+        String ns1 = "tenant/ns-abc1";
         admin.namespaces().createNamespace(ns1);
         String topic = "persistent://" + ns1 + "/test_managed_ledger_metrics";
         String subName = "test_managed_ledger_metrics";
@@ -303,7 +303,7 @@ public class TransactionMetricsTest extends BrokerTestBase {
 
     @Test
     public void testManagedLedgerMetricsWhenPendingAckNotInit() throws Exception {
-        String ns1 = "prop/ns-abc1";
+        String ns1 = "tenant/ns-abc1";
         admin.namespaces().createNamespace(ns1);
         String topic = "persistent://" + ns1 + "/testManagedLedgerMetricsWhenPendingAckNotInit";
         String subName = "test_managed_ledger_metrics";

@@ -64,10 +64,10 @@ public class AdminApiGetLastMessageIdTest extends MockedPulsarServiceBaseTest {
     protected void setup() throws Exception {
         super.internalSetup();
         admin.clusters().createCluster("test", ClusterData.builder().serviceUrl(brokerUrl.toString()).build());
-        admin.tenants().createTenant("prop",
+        admin.tenants().createTenant("tenant",
                 new TenantInfoImpl(Set.of("appid1"), Set.of("test")));
-        admin.namespaces().createNamespace("prop/ns-abc");
-        admin.namespaces().setNamespaceReplicationClusters("prop/ns-abc", Set.of("test"));
+        admin.namespaces().createNamespace("tenant/ns-abc");
+        admin.namespaces().setNamespaceReplicationClusters("tenant/ns-abc", Set.of("test"));
         persistentTopics = spy(PersistentTopics.class);
         persistentTopics.setServletContext(new MockServletContext());
         persistentTopics.setPulsar(pulsar);
@@ -172,7 +172,7 @@ public class AdminApiGetLastMessageIdTest extends MockedPulsarServiceBaseTest {
         }
 
         String key = "legendtkl";
-        final String topicName = "persistent://prop/ns-abc/my-topic";
+        final String topicName = "persistent://tenant/ns-abc/my-topic";
         final String messagePredicate = "my-message-" + key + "-";
         final int numberOfMessages = 30;
 
@@ -188,7 +188,7 @@ public class AdminApiGetLastMessageIdTest extends MockedPulsarServiceBaseTest {
             producer.send(message.getBytes());
         }
 
-        persistentTopics.getLastMessageId(asyncResponse, "prop", "ns-abc", "my-topic", true);
+        persistentTopics.getLastMessageId(asyncResponse, "tenant", "ns-abc", "my-topic", true);
         Awaitility.await().until(() -> id[0] != null);
         Assert.assertTrue(((MessageIdImpl) id[0]).getLedgerId() >= 0);
         Assert.assertEquals(numberOfMessages - 1, ((MessageIdImpl) id[0]).getEntryId());
@@ -200,7 +200,7 @@ public class AdminApiGetLastMessageIdTest extends MockedPulsarServiceBaseTest {
             String message = messagePredicate + i;
             producer.send(message.getBytes());
         }
-        persistentTopics.getLastMessageId(asyncResponse, "prop", "ns-abc", "my-topic", true);
+        persistentTopics.getLastMessageId(asyncResponse, "tenant", "ns-abc", "my-topic", true);
         while (id[0] == messageId) {
             Thread.sleep(1);
         }
@@ -217,7 +217,7 @@ public class AdminApiGetLastMessageIdTest extends MockedPulsarServiceBaseTest {
      */
     @Test
     public void testGetLastMessageIdWhenTopicWithoutData() throws Exception {
-        final String topic = "persistent://prop/ns-abc/testGetLastMessageIdWhenTopicWithoutData-" + UUID.randomUUID();
+        final String topic = "persistent://tenant/ns-abc/testGetLastMessageIdWhenTopicWithoutData-" + UUID.randomUUID();
         Producer<String> producer = pulsarClient.newProducer(Schema.STRING)
                 .topic(topic)
                 .create();

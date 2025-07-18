@@ -57,13 +57,13 @@ public class LedgerOffloaderMetricsTest extends BrokerTestBase {
         conf.setExposeTopicLevelMetricsInPrometheus(true);
         super.baseSetup();
 
-        String ns1 = "prop/ns-abc1";
+        String ns1 = "tenant/ns-abc1";
         admin.namespaces().createNamespace(ns1);
         String[] topics = new String[3];
 
         LedgerOffloaderStatsImpl offloaderStats = (LedgerOffloaderStatsImpl) pulsar.getOffloaderStats();
         for (int i = 0; i < 3; i++) {
-            String topicName = "persistent://prop/ns-abc1/testMetrics" + UUID.randomUUID();
+            String topicName = "persistent://tenant/ns-abc1/testMetrics" + UUID.randomUUID();
             topics[i] = topicName;
             offloaderStats.recordOffloadError(topicName);
             offloaderStats.recordOffloadError(topicName);
@@ -93,8 +93,8 @@ public class LedgerOffloaderMetricsTest extends BrokerTestBase {
         conf.setExposeTopicLevelMetricsInPrometheus(false);
         super.baseSetup();
 
-        String ns1 = "prop/ns-abc1";
-        String ns2 = "prop/ns-abc2";
+        String ns1 = "tenant/ns-abc1";
+        String ns2 = "tenant/ns-abc2";
 
         LedgerOffloaderStatsImpl offloaderStats = (LedgerOffloaderStatsImpl) pulsar.getOffloaderStats();
         Map<String, List<String>> namespace2Topics = new HashMap<>();

@@ -104,7 +104,7 @@ public abstract class BkEnsemblesTestBase extends TestRetrySupport {
 
             admin.clusters().createCluster("usc", ClusterData.builder()
                     .serviceUrl(pulsar.getWebServiceAddress()).build());
-            admin.tenants().createTenant("prop",
+            admin.tenants().createTenant("tenant",
                     new TenantInfoImpl(Sets.newHashSet("appid1"), Sets.newHashSet("usc")));
         } catch (Throwable t) {
             log.error("Error setting up broker test", t);

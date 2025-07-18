@@ -75,10 +75,10 @@ public class MetadataStoreStatsTest extends BrokerTestBase {
 
     @Test
     public void testMetadataStoreStats() throws Exception {
-        String ns = "prop/ns-abc1";
+        String ns = "tenant/ns-abc1";
         admin.namespaces().createNamespace(ns);
 
-        String topic = "persistent://prop/ns-abc1/metadata-store-" + UUID.randomUUID();
+        String topic = "persistent://tenant/ns-abc1/metadata-store-" + UUID.randomUUID();
         String subName = "my-sub1";
 
         @Cleanup
@@ -165,10 +165,10 @@ public class MetadataStoreStatsTest extends BrokerTestBase {
 
     @Test
     public void testBatchMetadataStoreMetrics() throws Exception {
-        String ns = "prop/ns-abc1";
+        String ns = "tenant/ns-abc1";
         admin.namespaces().createNamespace(ns);
 
-        String topic = "persistent://prop/ns-abc1/metadata-store-" + UUID.randomUUID();
+        String topic = "persistent://tenant/ns-abc1/metadata-store-" + UUID.randomUUID();
         String subName = "my-sub1";
 
         @Cleanup

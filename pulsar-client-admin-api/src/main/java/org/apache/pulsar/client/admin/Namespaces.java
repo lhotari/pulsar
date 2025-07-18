@@ -104,7 +104,7 @@ public interface Namespaces {
      * Response Example:
      *
      * <pre>
-     * <code>["my-tenant/use/namespace1", "my-tenant/use/namespace2"]</code>
+     * <code>["my-tenant/namespace1", "my-tenant/namespace2"]</code>
      * </pre>
      *
      * @param tenant
@@ -130,8 +130,8 @@ public interface Namespaces {
      * Response Example:
      *
      * <pre>
-     * <code>["persistent://my-tenant/use/namespace1/my-topic-1",
-     *  "persistent://my-tenant/use/namespace1/my-topic-2"]</code>
+     * <code>["persistent://my-tenant/namespace1/my-topic-1",
+     *  "persistent://my-tenant/namespace1/my-topic-2"]</code>
      * </pre>
      *
      * @param namespace
@@ -154,8 +154,8 @@ public interface Namespaces {
      * Response Example:
      *
      * <pre>
-     * <code>["persistent://my-tenant/use/namespace1/my-topic-1",
-     *  "persistent://my-tenant/use/namespace1/my-topic-2"]</code>
+     * <code>["persistent://my-tenant/namespace1/my-topic-1",
+     *  "persistent://my-tenant/namespace1/my-topic-2"]</code>
      * </pre>
      *
      * @param namespace
@@ -171,8 +171,8 @@ public interface Namespaces {
      * Response Example:
      *
      * <pre>
-     * <code>["persistent://my-tenant/use/namespace1/my-topic-1",
-     *  "persistent://my-tenant/use/namespace1/my-topic-2"]</code>
+     * <code>["persistent://my-tenant/namespace1/my-topic-1",
+     *  "persistent://my-tenant/namespace1/my-topic-2"]</code>
      * </pre>
      *
      * @param namespace
@@ -197,8 +197,8 @@ public interface Namespaces {
      * Response Example:
      *
      * <pre>
-     * <code>["persistent://my-tenant/use/namespace1/my-topic-1",
-     *  "persistent://my-tenant/use/namespace1/my-topic-2"]</code>
+     * <code>["persistent://my-tenant/namespace1/my-topic-1",
+     *  "persistent://my-tenant/namespace1/my-topic-2"]</code>
      * </pre>
      *
      * @param namespace
@@ -251,7 +251,7 @@ public interface Namespaces {
      *       "my-role" : [ "produce" ]
      *     },
      *     "destination_auth" : {
-     *       "persistent://prop/local/ns1/my-topic" : {
+     *       "persistent://tenant/local/ns1/my-topic" : {
      *         "role-1" : [ "produce" ],
      *         "role-2" : [ "consume" ]
      *       }
@@ -290,7 +290,7 @@ public interface Namespaces {
      *       "my-role" : [ "produce" ]
      *     },
      *     "destination_auth" : {
-     *       "persistent://prop/local/ns1/my-topic" : {
+     *       "persistent://tenant/local/ns1/my-topic" : {
      *         "role-1" : [ "produce" ],
      *         "role-2" : [ "consume" ]
      *       }

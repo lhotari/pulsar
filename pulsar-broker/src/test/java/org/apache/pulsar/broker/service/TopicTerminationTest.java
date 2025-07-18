@@ -65,7 +65,7 @@ public class TopicTerminationTest extends BrokerTestBase {
         super.internalCleanup();
     }
 
-    private final String topicName = "persistent://prop/ns-abc/topic0";
+    private final String topicName = "persistent://tenant/ns-abc/topic0";
 
     @Test
     public void testSimpleTermination() throws Exception {
