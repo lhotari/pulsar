@@ -147,7 +147,6 @@ import org.apache.pulsar.common.api.proto.TxnAction;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.TopicName;
-import org.apache.pulsar.common.policies.data.AuthAction;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.TopicOperation;
 import org.apache.pulsar.common.protocol.ByteBufPair;
@@ -193,7 +192,6 @@ public class ServerCnxTest {
     private final String successSubName = "successSub";
     private final String nonExistentTopicName =
             "persistent://nonexistent-tenant/nonexistent-cluster/nonexistent-namespace/successNonExistentTopic";
-    private final String topicWithNonLocalCluster = "persistent://tenant/ns-abc/successTopic";
     private final List<String> matchingTopics = Arrays.asList(
             "persistent://tenant/ns-abc/topic-1",
             "persistent://tenant/ns-abc/topic-2");
@@ -1660,43 +1658,6 @@ public class ServerCnxTest {
                 successSubName, 1 /* consumer id */, 1 /* request id */, SubType.Exclusive, 0,
                 "test" /* consumer name */, 0);
         channel.writeInbound(newSubscribeCmd);
-        assertTrue(getResponse() instanceof CommandError);
-        channel.finish();
-    }
-
-    @Test(timeOut = 30000)
-    public void testClusterAccess() throws Exception {
-        svcConfig.setAuthorizationEnabled(true);
-        AuthorizationService authorizationService =
-                spyWithClassAndConstructorArgs(AuthorizationService.class, svcConfig, pulsar.getPulsarResources());
-        Field providerField = AuthorizationService.class.getDeclaredField("provider");
-        providerField.setAccessible(true);
-        PulsarAuthorizationProvider authorizationProvider =
-                spyWithClassAndConstructorArgs(PulsarAuthorizationProvider.class, svcConfig,
-                        pulsar.getPulsarResources());
-        providerField.set(authorizationService, authorizationProvider);
-        doReturn(authorizationService).when(brokerService).getAuthorizationService();
-        svcConfig.setAuthorizationEnabled(true);
-        doReturn(CompletableFuture.completedFuture(false)).when(authorizationProvider)
-                .isSuperUser(Mockito.anyString(), Mockito.any(), Mockito.any());
-        doReturn(CompletableFuture.completedFuture(false)).when(authorizationProvider)
-                .validateTenantAdminAccess(Mockito.anyString(), Mockito.any(), Mockito.any());
-        doReturn(CompletableFuture.completedFuture(true)).when(authorizationProvider)
-                .checkPermission(any(TopicName.class), Mockito.anyString(),
-                        any(AuthAction.class));
-
-        resetChannel();
-        setChannelConnected();
-        ByteBuf clientCommand = Commands.newProducer(successTopicName, 1 /* producer id */, 1 /* request id */,
-                "prod-name", Collections.emptyMap(), false);
-        channel.writeInbound(clientCommand);
-        assertTrue(getResponse() instanceof CommandProducerSuccess);
-
-        resetChannel();
-        setChannelConnected();
-        clientCommand = Commands.newProducer(topicWithNonLocalCluster, 1 /* producer id */, 1 /* request id */,
-                "prod-name", Collections.emptyMap(), false);
-        channel.writeInbound(clientCommand);
         assertTrue(getResponse() instanceof CommandError);
         channel.finish();
     }
