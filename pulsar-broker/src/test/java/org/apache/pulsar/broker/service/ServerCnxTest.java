@@ -195,13 +195,13 @@ public class ServerCnxTest {
             "persistent://nonexistent-tenant/nonexistent-cluster/nonexistent-namespace/successNonExistentTopic";
     private final String topicWithNonLocalCluster = "persistent://tenant/ns-abc/successTopic";
     private final List<String> matchingTopics = Arrays.asList(
-            "persistent://use/ns-abc/topic-1",
-            "persistent://use/ns-abc/topic-2");
+            "persistent://tenant/ns-abc/topic-1",
+            "persistent://tenant/ns-abc/topic-2");
 
     private final List<String> topics = Arrays.asList(
-            "persistent://use/ns-abc/topic-1",
-            "persistent://use/ns-abc/topic-2",
-            "persistent://use/ns-abc/topic");
+            "persistent://tenant/ns-abc/topic-1",
+            "persistent://tenant/ns-abc/topic-2",
+            "persistent://tenant/ns-abc/topic");
 
     private ManagedLedger ledgerMock;
     private ManagedCursor cursorMock;
@@ -217,7 +217,7 @@ public class ServerCnxTest {
         svcConfig.setLoadBalancerOverrideBrokerNicSpeedGbps(Optional.of(1.0d));
         svcConfig.setKeepAliveIntervalSeconds(inSec(1, TimeUnit.SECONDS));
         svcConfig.setBacklogQuotaCheckEnabled(false);
-        svcConfig.setClusterName("use");
+        svcConfig.setClusterName("test");
         pulsarTestContext = PulsarTestContext.builderForNonStartableContext()
                 .config(svcConfig)
                 .spyByDefault()
@@ -234,11 +234,11 @@ public class ServerCnxTest {
         doReturn(true).when(namespaceService).isServiceUnitActive(any());
         doReturn(CompletableFuture.completedFuture(true)).when(namespaceService).isServiceUnitActiveAsync(any());
         doReturn(CompletableFuture.completedFuture(topics)).when(namespaceService).getListOfTopics(
-                NamespaceName.get("use", "ns-abc"), CommandGetTopicsOfNamespace.Mode.ALL);
+                NamespaceName.get("tenant", "ns-abc"), CommandGetTopicsOfNamespace.Mode.ALL);
         doReturn(CompletableFuture.completedFuture(topics)).when(namespaceService).getListOfUserTopics(
-                NamespaceName.get("use", "ns-abc"), CommandGetTopicsOfNamespace.Mode.ALL);
+                NamespaceName.get("tenant", "ns-abc"), CommandGetTopicsOfNamespace.Mode.ALL);
         doReturn(CompletableFuture.completedFuture(topics)).when(namespaceService).getListOfPersistentTopics(
-                NamespaceName.get("use", "ns-abc"));
+                NamespaceName.get("tenant", "ns-abc"));
 
         setupMLAsyncCallbackMocks();
 
@@ -3141,7 +3141,7 @@ public class ServerCnxTest {
         resetChannel();
         setChannelConnected();
         ByteBuf clientCommand = Commands.newGetTopicsOfNamespaceRequest(
-                "use/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL, null, null);
+                "tenant/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL, null, null);
         channel.writeInbound(clientCommand);
         CommandGetTopicsOfNamespaceResponse response = (CommandGetTopicsOfNamespaceResponse) getResponse();
 
@@ -3159,8 +3159,8 @@ public class ServerCnxTest {
         resetChannel();
         setChannelConnected();
         ByteBuf clientCommand = Commands.newGetTopicsOfNamespaceRequest(
-                "use/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
-                "use/ns-abc/topic-.*", null);
+                "tenant/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
+                "tenant/ns-abc/topic-.*", null);
         channel.writeInbound(clientCommand);
         CommandGetTopicsOfNamespaceResponse response = (CommandGetTopicsOfNamespaceResponse) getResponse();
 
@@ -3179,8 +3179,8 @@ public class ServerCnxTest {
         resetChannel();
         setChannelConnected();
         ByteBuf clientCommand = Commands.newGetTopicsOfNamespaceRequest(
-                "use/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
-                "use/ns-abc/(t|o|to|p|i|c)+-?)+!", null);
+                "tenant/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
+                "tenant/ns-abc/(t|o|to|p|i|c)+-?)+!", null);
         channel.writeInbound(clientCommand);
         CommandGetTopicsOfNamespaceResponse response = (CommandGetTopicsOfNamespaceResponse) getResponse();
 
@@ -3198,8 +3198,8 @@ public class ServerCnxTest {
         resetChannel();
         setChannelConnected();
         ByteBuf clientCommand = Commands.newGetTopicsOfNamespaceRequest(
-                "use/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
-                "use/ns-abc/topic-.*", "SOME_HASH");
+                "tenant/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
+                "tenant/ns-abc/topic-.*", "SOME_HASH");
         channel.writeInbound(clientCommand);
         CommandGetTopicsOfNamespaceResponse response = (CommandGetTopicsOfNamespaceResponse) getResponse();
 
@@ -3217,8 +3217,8 @@ public class ServerCnxTest {
         resetChannel();
         setChannelConnected();
         ByteBuf clientCommand = Commands.newGetTopicsOfNamespaceRequest(
-                "use/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
-                "use/ns-abc/topic-.*", TopicList.calculateHash(matchingTopics));
+                "tenant/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
+                "tenant/ns-abc/topic-.*", TopicList.calculateHash(matchingTopics));
         channel.writeInbound(clientCommand);
         CommandGetTopicsOfNamespaceResponse response = (CommandGetTopicsOfNamespaceResponse) getResponse();
 
@@ -3235,7 +3235,7 @@ public class ServerCnxTest {
         svcConfig.setEnableBrokerSideSubscriptionPatternEvaluation(true);
         resetChannel();
         setChannelConnected();
-        BaseCommand command = Commands.newWatchTopicList(1, 3, "use/ns-abc", "use/ns-abc/topic-.*", null);
+        BaseCommand command = Commands.newWatchTopicList(1, 3, "tenant/ns-abc", "tenant/ns-abc/topic-.*", null);
         ByteBuf serializedCommand = Commands.serializeWithSize(command);
 
         channel.writeInbound(serializedCommand);
