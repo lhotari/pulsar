@@ -529,7 +529,7 @@ public class BrokerClientIntegrationTest extends ProducerConsumerBase {
      */
     @Test
     public void testMaxConcurrentTopicLoading() throws Exception {
-        final String topicName = "persistent://prop/usw/my-ns/cocurrentLoadingTopic";
+        final String topicName = "persistent://tenant/my-ns/cocurrentLoadingTopic";
         int concurrentTopic = pulsar.getConfiguration().getMaxConcurrentTopicLoadRequest();
         final int concurrentLookupRequests = 20;
         @Cleanup("shutdownNow")
@@ -588,7 +588,7 @@ public class BrokerClientIntegrationTest extends ProducerConsumerBase {
     @Test
     public void testCloseConnectionOnInternalServerError() throws Exception {
 
-        final String topicName = "persistent://prop/usw/my-ns/newTopic";
+        final String topicName = "persistent://tenant/my-ns/newTopic";
 
         @Cleanup
         final PulsarClient pulsarClient = PulsarClient.builder()

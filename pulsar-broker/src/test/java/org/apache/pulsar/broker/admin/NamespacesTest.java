@@ -233,19 +233,19 @@ public class NamespacesTest extends MockedPulsarServiceBaseTest {
                 .validateTenantOperation(this.testOtherTenant, null);
 
         doThrow(new RestException(Status.UNAUTHORIZED, "unauthorized")).when(namespaces)
-                .validateNamespacePolicyOperation(NamespaceName.get("other-tenant/use/test-namespace-1"),
+                .validateNamespacePolicyOperation(NamespaceName.get("other-tenant/test-namespace-1"),
                         PolicyName.PERSISTENCE, PolicyOperation.WRITE);
 
         doThrow(new RestException(Status.UNAUTHORIZED, "unauthorized")).when(namespaces)
-                .validateNamespacePolicyOperation(NamespaceName.get("other-tenant/use/test-namespace-1"),
+                .validateNamespacePolicyOperation(NamespaceName.get("other-tenant/test-namespace-1"),
                         PolicyName.RETENTION, PolicyOperation.WRITE);
 
         doReturn(FutureUtil.failedFuture(new RestException(Status.UNAUTHORIZED, "unauthorized"))).when(namespaces)
-                .validateNamespacePolicyOperationAsync(NamespaceName.get("other-tenant/use/test-namespace-1"),
+                .validateNamespacePolicyOperationAsync(NamespaceName.get("other-tenant/test-namespace-1"),
                         PolicyName.PERSISTENCE, PolicyOperation.WRITE);
 
         doReturn(FutureUtil.failedFuture(new RestException(Status.UNAUTHORIZED, "unauthorized"))).when(namespaces)
-                .validateNamespacePolicyOperationAsync(NamespaceName.get("other-tenant/use/test-namespace-1"),
+                .validateNamespacePolicyOperationAsync(NamespaceName.get("other-tenant/test-namespace-1"),
                         PolicyName.RETENTION, PolicyOperation.WRITE);
 
         nsSvc = pulsar.getNamespaceService();
@@ -296,7 +296,7 @@ public class NamespacesTest extends MockedPulsarServiceBaseTest {
 
         mockZooKeeperGlobal.failConditional(Code.SESSIONEXPIRED, (op, path) -> {
                 return op == MockZooKeeper.Op.CREATE
-                    && path.equals("/admin/policies/my-tenant/use/my-namespace-3");
+                    && path.equals("/admin/policies/my-tenant/my-namespace-3");
             });
         try {
             asyncRequests(response -> namespaces.createNamespace(response, this.testTenant,
@@ -370,7 +370,7 @@ public class NamespacesTest extends MockedPulsarServiceBaseTest {
 
         mockZooKeeperGlobal.failConditional(Code.SESSIONEXPIRED, (op, path) -> {
                 return op == MockZooKeeper.Op.GET_CHILDREN
-                    && path.equals("/admin/policies/my-tenant/use");
+                    && path.equals("/admin/policies/my-tenant");
             });
         try {
             namespaces.getNamespacesForCluster(this.testTenant, this.testLocalCluster);
@@ -1106,7 +1106,7 @@ public class NamespacesTest extends MockedPulsarServiceBaseTest {
     @Test
     public void testValidateAdminAccessOnTenant() throws Exception {
         try {
-            final String tenant = "prop";
+            final String tenant = "tenant";
             pulsar.getConfiguration().setAuthenticationEnabled(true);
             pulsar.getConfiguration().setAuthorizationEnabled(true);
             pulsar.getPulsarResources().getTenantResources().createTenant(tenant,
@@ -2207,7 +2207,7 @@ public class NamespacesTest extends MockedPulsarServiceBaseTest {
 
         mockZooKeeperGlobal.failConditional(Code.SESSIONEXPIRED, (op, path) -> {
             return op == MockZooKeeper.Op.CREATE
-                    && path.equals("/admin/policies/my-tenant/use/my-namespace-3");
+                    && path.equals("/admin/policies/my-tenant/my-namespace-3");
         });
         try {
             asyncRequests(response -> namespaces.createNamespace(response, this.testTenant,

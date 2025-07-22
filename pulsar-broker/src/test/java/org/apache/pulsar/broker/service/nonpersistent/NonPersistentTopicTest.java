@@ -64,7 +64,7 @@ public class NonPersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testAccumulativeStats() throws Exception {
-        final String topicName = "non-persistent://prop/ns-abc/aTopic";
+        final String topicName = "non-persistent://tenant/ns-abc/aTopic";
         final String sharedSubName = "shared";
         final String failoverSubName = "failOver";
 
@@ -113,7 +113,7 @@ public class NonPersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testCreateNonExistentPartitions() throws PulsarAdminException {
-        final String topicName = "non-persistent://prop/ns-abc/testCreateNonExistentPartitions";
+        final String topicName = "non-persistent://tenant/ns-abc/testCreateNonExistentPartitions";
         admin.topics().createPartitionedTopic(topicName, 4);
         TopicName partition = TopicName.get(topicName).getPartition(4);
         assertThrows(PulsarClientException.NotAllowedException.class, () -> {
@@ -128,7 +128,7 @@ public class NonPersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testSubscriptionsOnNonPersistentTopic() throws Exception {
-        final String topicName = "non-persistent://prop/ns-abc/topic_" + UUID.randomUUID();
+        final String topicName = "non-persistent://tenant/ns-abc/topic_" + UUID.randomUUID();
         final String exclusiveSubName = "exclusive";
         final String failoverSubName = "failover";
         final String sharedSubName = "shared";
@@ -251,7 +251,7 @@ public class NonPersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testRemoveProducerOnNonPersistentTopic() throws Exception {
-        final String topicName = "non-persistent://prop/ns-abc/topic_" + UUID.randomUUID();
+        final String topicName = "non-persistent://tenant/ns-abc/topic_" + UUID.randomUUID();
 
         Producer<byte[]> producer = pulsarClient.newProducer()
                 .topic(topicName)

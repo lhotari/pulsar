@@ -21,10 +21,10 @@ package org.apache.pulsar.broker.namespace;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Cleanup;
+import org.apache.pulsar.broker.BrokerTestUtil;
 import org.apache.pulsar.broker.service.BrokerTestBase;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.ProducerBuilder;
@@ -54,7 +54,7 @@ public class NamespaceCreateBundlesTest extends BrokerTestBase {
 
     @Test
     public void testCreateNamespaceWithDefaultBundles() throws Exception {
-        String namespaceName = "prop/" + UUID.randomUUID().toString();
+        String namespaceName = BrokerTestUtil.newUniqueName("tenant/ns");
 
         admin.namespaces().createNamespace(namespaceName);
 
@@ -65,7 +65,7 @@ public class NamespaceCreateBundlesTest extends BrokerTestBase {
 
     @Test
     public void testSplitBundleUpdatesLocalPoliciesWithoutOverwriting() throws Exception {
-        String namespaceName = "prop/" + UUID.randomUUID().toString();
+        String namespaceName = BrokerTestUtil.newUniqueName("tenant/ns");
         String topicName = "persistent://" + namespaceName + "/my-topic5";
 
         admin.namespaces().createNamespace(namespaceName);
@@ -87,7 +87,7 @@ public class NamespaceCreateBundlesTest extends BrokerTestBase {
 
     @Test
     public void testBundleSplitListener() throws Exception {
-        String namespaceName = "prop/" + UUID.randomUUID().toString();
+        String namespaceName = BrokerTestUtil.newUniqueName("tenant/ns");
         String topicName = "persistent://" + namespaceName + "/my-topic5";
         admin.namespaces().createNamespace(namespaceName);
         @Cleanup

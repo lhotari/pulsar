@@ -120,7 +120,7 @@ public class BrokerServiceThrottlingTest extends BrokerTestBase {
     @Test
     public void testLookupThrottlingForClientByBroker0Permit() throws Exception {
 
-        final String topicName = "persistent://prop/ns-abc/newTopic";
+        final String topicName = "persistent://tenant/ns-abc/newTopic";
 
         @Cleanup
         PulsarClient pulsarClient = PulsarClient.builder()
@@ -163,7 +163,7 @@ public class BrokerServiceThrottlingTest extends BrokerTestBase {
      */
     @Test
     public void testLookupThrottlingForClientByBroker() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/newTopic";
+        final String topicName = "persistent://tenant/ns-abc/newTopic";
 
         @Cleanup
         PulsarClient pulsarClient = PulsarClient.builder()
@@ -280,7 +280,7 @@ public class BrokerServiceThrottlingTest extends BrokerTestBase {
      */
     @Test
     public void testLookupThrottlingForClientByBrokerInternalRetry() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/newTopic-" + UUID.randomUUID().toString();
+        final String topicName = "persistent://tenant/ns-abc/newTopic-" + UUID.randomUUID().toString();
 
         @Cleanup
         PulsarClient pulsarClient = PulsarClient.builder()

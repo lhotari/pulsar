@@ -78,7 +78,7 @@ public class ShadowTopicTest extends BrokerTestBase {
         Assert.assertEquals(admin.topics().getShadowSource(shadowTopic), sourceTopic);
 
         //2. test shadow topic could be properly loaded after unload.
-        admin.namespaces().unload("prop/ns-abc");
+        admin.namespaces().unload("tenant/ns-abc");
         Assert.assertTrue(pulsar.getBrokerService().getTopicReference(shadowTopic).isEmpty());
         Assert.assertEquals(admin.topics().getShadowSource(shadowTopic), sourceTopic);
         brokerShadowTopic = (PersistentTopic) pulsar.getBrokerService().getTopicIfExists(shadowTopic).get().get();
@@ -105,7 +105,7 @@ public class ShadowTopicTest extends BrokerTestBase {
         Assert.assertEquals(admin.topics().getShadowSource(shadowTopic), sourceTopic);
 
         //2. test shadow topic could be properly loaded after unload.
-        admin.namespaces().unload("prop/ns-abc");
+        admin.namespaces().unload("tenant/ns-abc");
         Assert.assertTrue(pulsar.getBrokerService().getTopicReference(shadowTopic).isEmpty());
 
         Assert.assertEquals(admin.topics().getShadowSource(shadowTopic), sourceTopic);

@@ -95,7 +95,7 @@ public class PartitionedSystemTopicTest extends BrokerTestBase {
 
     @Test
     public void testAutoCreatedPartitionedSystemTopic() throws Exception {
-        final String ns = "prop/ns-test";
+        final String ns = "tenant/ns-test";
         admin.namespaces().createNamespace(ns, 2);
         NamespaceEventsSystemTopicFactory systemTopicFactory = new NamespaceEventsSystemTopicFactory(pulsarClient);
         TopicPoliciesSystemTopicClient systemTopicClientForNamespace = systemTopicFactory
@@ -253,7 +253,7 @@ public class PartitionedSystemTopicTest extends BrokerTestBase {
 
     @Test
     public void testSetBacklogCausedCreatingProducerFailure() throws Exception {
-        final String ns = "prop/ns-test";
+        final String ns = "tenant/ns-test";
         final String topic = ns + "/topic-1";
 
         admin.namespaces().createNamespace(ns, 2);
@@ -315,7 +315,7 @@ public class PartitionedSystemTopicTest extends BrokerTestBase {
 
     @Test
     public void testSystemTopicNotCheckExceed() throws Exception {
-        final String ns = "prop/ns-test";
+        final String ns = "tenant/ns-test";
         final String topic = ns + "/topic-1";
 
         admin.namespaces().createNamespace(ns, 2);
@@ -356,9 +356,9 @@ public class PartitionedSystemTopicTest extends BrokerTestBase {
 
     @Test
     public void testDeleteTopicSchemaAndPolicyWhenTopicIsNotLoaded() throws Exception {
-        final String ns = "prop/ns-test";
+        final String ns = "tenant/ns-test";
         admin.namespaces().createNamespace(ns, 2);
-        final String topicName = "persistent://prop/ns-test/testDeleteTopicSchemaAndPolicyWhenTopicIsNotLoaded";
+        final String topicName = "persistent://tenant/ns-test/testDeleteTopicSchemaAndPolicyWhenTopicIsNotLoaded";
         admin.topics().createNonPartitionedTopic(topicName);
         pulsarClient.newProducer(Schema.STRING).topic(topicName).create().close();
         admin.topicPolicies().setMaxConsumers(topicName, 2);

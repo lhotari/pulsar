@@ -497,7 +497,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
 
     @Test
     public void testMessageDeduplication() throws Exception {
-        String topicName = "persistent://prop/ns-abc/testMessageDeduplication";
+        String topicName = "persistent://tenant/ns-abc/testMessageDeduplication";
         String producerName = "test-producer";
         Producer<String> producer = pulsarClient
                 .newProducer(Schema.STRING)
@@ -526,7 +526,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
     @Test
     public void testMessageDeduplicationShouldNotWorkForSystemTopic() throws PulsarAdminException {
         final String localName = UUID.randomUUID().toString();
-        final String namespace = "prop/ns-abc";
+        final String namespace = "tenant/ns-abc";
         final String prefix = "persistent://%s/".formatted(namespace);
         final String topic = prefix + localName;
         admin.topics().createNonPartitionedTopic(topic);

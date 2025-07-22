@@ -51,7 +51,7 @@ public class CurrentLedgerRolloverIfFullTest extends BrokerTestBase {
 
     @Test
     public void testCurrentLedgerRolloverIfFull() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/CurrentLedgerRolloverIfFullTest";
+        final String topicName = "persistent://tenant/ns-abc/CurrentLedgerRolloverIfFullTest";
 
         @Cleanup
         Producer<byte[]> producer = pulsarClient.newProducer()

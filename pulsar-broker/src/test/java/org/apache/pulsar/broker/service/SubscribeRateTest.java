@@ -49,7 +49,7 @@ public class SubscribeRateTest extends BrokerTestBase {
 
     @Test
     public void testBrokerLevelSubscribeRateDynamicUpdate() throws Exception {
-        final String topic = "persistent://prop/ns-abc/testBrokerLevelSubscribeRateDynamicUpdate";
+        final String topic = "persistent://tenant/ns-abc/testBrokerLevelSubscribeRateDynamicUpdate";
         Producer<byte[]> producer = pulsarClient.newProducer()
             .topic(topic)
             .producerName("producer-name")
@@ -90,7 +90,7 @@ public class SubscribeRateTest extends BrokerTestBase {
     @Test
     public void testUpdateSubscribeRateLimiter() throws Exception {
 
-        final String topic = "persistent://prop/ns-abc/testUpdateSubscribeRateLimiter";
+        final String topic = "persistent://tenant/ns-abc/testUpdateSubscribeRateLimiter";
 
         @Cleanup
         Producer<byte[]> producer = pulsarClient.newProducer()
