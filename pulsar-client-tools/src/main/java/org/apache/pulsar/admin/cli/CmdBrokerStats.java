@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.stream.JsonWriter;
 import java.io.OutputStreamWriter;
@@ -47,21 +48,23 @@ public class CmdBrokerStats extends CmdBase {
         @Override
         void run() throws Exception {
             String s = getAdmin().brokerStats().getMetrics();
-            JsonArray metrics = new Gson().fromJson(s, JsonArray.class);
-
-            try (Writer out = new OutputStreamWriter(System.out, StandardCharsets.UTF_8);
-                 JsonWriter jsonWriter = new JsonWriter(out)) {
-                for (int i = 0; i < metrics.size(); i++) {
-                    JsonObject m = (JsonObject) metrics.get(i);
-                    if (indent) {
-                        jsonWriter.setIndent(DEFAULT_INDENTATION);
-                        new Gson().toJson(m, jsonWriter);
-                        out.write('\n');
-                        out.write('\n');
-                    } else {
-                        new Gson().toJson(m, jsonWriter);
+            JsonElement result = new Gson().fromJson(s, JsonElement.class);
+            if (result.isJsonArray()) {
+                JsonArray metrics = result.getAsJsonArray();
+                try (Writer out = new OutputStreamWriter(System.out, StandardCharsets.UTF_8);
+                     JsonWriter jsonWriter = new JsonWriter(out)) {
+                    for (int i = 0; i < metrics.size(); i++) {
+                        JsonObject m = (JsonObject) metrics.get(i);
+                        if (indent) {
+                            jsonWriter.setIndent(DEFAULT_INDENTATION);
+                            new Gson().toJson(m, jsonWriter);
+                            out.write('\n');
+                            out.write('\n');
+                        } else {
+                            new Gson().toJson(m, jsonWriter);
+                        }
+                        out.flush();
                     }
-                    out.flush();
                 }
             }
         }
@@ -75,7 +78,7 @@ public class CmdBrokerStats extends CmdBase {
         @Override
         void run() throws Exception {
             String s = getAdmin().brokerStats().getMBeans();
-            JsonArray result = new Gson().fromJson(s, JsonArray.class);
+            JsonElement result = new Gson().fromJson(s, JsonElement.class);
             try (Writer out = new OutputStreamWriter(System.out, StandardCharsets.UTF_8);
                  JsonWriter jsonWriter = new JsonWriter(out)) {
                 if (indent) {
@@ -105,7 +108,7 @@ public class CmdBrokerStats extends CmdBase {
         @Override
         void run() throws Exception {
             String s = getAdmin().brokerStats().getTopics();
-            JsonObject result = new Gson().fromJson(s, JsonObject.class);
+            JsonElement result = new Gson().fromJson(s, JsonElement.class);
             try (Writer out = new OutputStreamWriter(System.out, StandardCharsets.UTF_8);
                  JsonWriter jsonWriter = new JsonWriter(out)) {
                 if (indent) {
