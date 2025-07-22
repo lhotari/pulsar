@@ -27,7 +27,6 @@ import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageRoutingMode;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.SubscriptionType;
-import org.apache.pulsar.common.policies.data.TenantInfoImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.annotations.AfterMethod;
@@ -43,7 +42,7 @@ public class PerMessageUnAcknowledgedRedeliveryTest extends BrokerTestBase {
     @Override
     @BeforeMethod
     public void setup() throws Exception {
-        super.internalSetup();
+        baseSetup();
     }
 
     @Override
@@ -402,8 +401,6 @@ public class PerMessageUnAcknowledgedRedeliveryTest extends BrokerTestBase {
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 15;
         final int numberOfPartitions = 3;
-        TenantInfoImpl tenantInfo = createDefaultTenantInfo();
-        admin.tenants().createTenant("tenant", tenantInfo);
         admin.topics().createPartitionedTopic(topicName, numberOfPartitions);
 
         // 1. producer connect
