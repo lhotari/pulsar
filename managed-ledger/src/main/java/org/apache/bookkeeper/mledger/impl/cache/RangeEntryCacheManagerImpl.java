@@ -214,11 +214,12 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
     }
 
     @Override
-    public void doCacheEviction(long maxTimestamp) {
+    public void doCacheEviction() {
         // this method is expected to be called from the cache eviction executor
         CompletableFuture<Void> evictionCompletionFuture = new CompletableFuture<>();
         evictionInProgress.set(evictionCompletionFuture);
         try {
+            long maxTimestamp = System.nanoTime() - mlFactory.getCacheEvictionTimeThreshold();
             evictionHandler.invalidateEntriesBeforeTimestampNanos(maxTimestamp);
             doEvictToWatermarkWhenOverThreshold();
         } finally {

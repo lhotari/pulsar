@@ -322,8 +322,7 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
 
     @VisibleForTesting
     public synchronized void doCacheEviction() {
-        long maxTimestamp = System.nanoTime() - cacheEvictionTimeThresholdNanos;
-        entryCacheManager.doCacheEviction(maxTimestamp);
+        entryCacheManager.doCacheEviction();
     }
 
     /**
