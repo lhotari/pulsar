@@ -220,16 +220,40 @@ public interface ManagedLedgerFactory {
     EntryCacheManager getEntryCacheManager();
 
     /**
-     * update cache evictionTimeThreshold.
-     *
-     * @param cacheEvictionTimeThresholdNanos time threshold for eviction.
+     * update cache evictionTimeThreshold dynamically. Similar as
+     * {@link ManagedLedgerFactoryConfig#setCacheEvictionTimeThresholdMillis(long)}
+     * but the value is in nanos. This inconsistency is kept for backwards compatibility.
+     * @param cacheEvictionTimeThresholdNanos time threshold in nanos for eviction.
      */
     void updateCacheEvictionTimeThreshold(long cacheEvictionTimeThresholdNanos);
 
     /**
+     * time threshold for eviction. Similar as
+     * {@link ManagedLedgerFactoryConfig#setCacheEvictionTimeThresholdMillis(long)}
+     * but the value is in nanos.
      * @return time threshold for eviction.
-     * */
+     */
     long getCacheEvictionTimeThreshold();
+
+    /**
+     * update cache evictionTimeThresholdMax. Similar as
+     * {@link ManagedLedgerFactoryConfig#setCacheEvictionTimeThresholdMillisMax(long)}
+     * but the value is in nanos. This inconsistency is kept for consistency with
+     * {@link #updateCacheEvictionTimeThreshold(long)}.
+     * @param cacheEvictionTimeThresholdMaxNanos time threshold in nanos for eviction.
+     */
+    default void updateCacheEvictionTimeThresholdMax(long cacheEvictionTimeThresholdMaxNanos) {
+        // Default implementation does nothing for backwards compatibility of the ManagedLedgerFactory interface.
+        // Subclasses can override this method to provide specific behavior.
+    }
+
+    /**
+     * max time threshold for eviction. Similar as
+     * {@link ManagedLedgerFactoryConfig#setCacheEvictionTimeThresholdMillisMax(long)}
+     * but the value is in nanos.
+     * @return max time threshold for eviction.
+     * */
+    long getCacheEvictionTimeThresholdMax();
 
     /**
      * @return properties of this managedLedger.

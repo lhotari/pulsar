@@ -2880,7 +2880,12 @@ public class BrokerService implements Closeable {
                     defaultManagedLedgerFactory.updateCacheEvictionTimeThreshold(MILLISECONDS
                             .toNanos((long) cacheEvictionTimeThresholdMills));
                 });
-
+        //  add listener to notify broker managedLedgerCacheEvictionTimeThresholdMillisMax dynamic config
+        registerConfigurationListener(
+                "managedLedgerCacheEvictionTimeThresholdMillisMax", (cacheEvictionTimeThresholdMillisMax) -> {
+                    defaultManagedLedgerFactory.updateCacheEvictionTimeThresholdMax(MILLISECONDS
+                            .toNanos((long) cacheEvictionTimeThresholdMillisMax));
+                });
 
         // add listener to update message-dispatch-rate in msg for topic
         registerConfigurationListener("dispatchThrottlingRatePerTopicInMsg", (dispatchRatePerTopicInMsg) -> {

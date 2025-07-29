@@ -135,6 +135,7 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
     private final ScheduledFuture<?> flushCursorsTask;
 
     private volatile long cacheEvictionTimeThresholdNanos;
+    private volatile long cacheEvictionTimeThresholdNanosMax;
     private final MetadataStore metadataStore;
 
     private final OpenTelemetryManagedLedgerCacheStats openTelemetryCacheStats;
@@ -251,6 +252,8 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
 
         this.cacheEvictionTimeThresholdNanos = TimeUnit.MILLISECONDS
                 .toNanos(config.getCacheEvictionTimeThresholdMillis());
+        this.cacheEvictionTimeThresholdNanosMax = TimeUnit.MILLISECONDS
+                .toNanos(config.getCacheEvictionTimeThresholdMillisMax());
 
         long evictionTaskInterval = config.getCacheEvictionIntervalMs();
         cacheEvictionExecutor.scheduleWithFixedDelay(Runnables.catchingAndLoggingThrowables(this::doCacheEviction),
@@ -1150,6 +1153,16 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
     @Override
     public long getCacheEvictionTimeThreshold(){
         return cacheEvictionTimeThresholdNanos;
+    }
+
+    @Override
+    public void updateCacheEvictionTimeThresholdMax(long cacheEvictionTimeThresholdNanosMax){
+        this.cacheEvictionTimeThresholdNanosMax = cacheEvictionTimeThresholdNanosMax;
+    }
+
+    @Override
+    public long getCacheEvictionTimeThresholdMax(){
+        return cacheEvictionTimeThresholdNanosMax;
     }
 
     @Override

@@ -2148,10 +2148,23 @@ public class ServiceConfiguration implements PulsarConfiguration {
             doc = "Configure the cache eviction interval in milliseconds for the managed ledger cache, default is 10ms")
     private long managedLedgerCacheEvictionIntervalMs = 10;
 
-    @FieldContext(category = CATEGORY_STORAGE_ML,
-            dynamic = true,
-            doc = "All entries that have stayed in cache for more than the configured time, will be evicted")
+    @FieldContext(category = CATEGORY_STORAGE_ML, dynamic = true, doc =
+            "All entries that have stayed in cache for more than the configured time will be evicted. "
+                    + "When cacheEvictionByExpectedReadCount is enabled, this threshold applies only to entries "
+                    + "that have reached their expected read count (i.e., entries that have been read by all "
+                    + "anticipated consumers). Entries with a positive expected read count use "
+                    + "managedLedgerCacheEvictionTimeThresholdMillisMax instead.")
     private long managedLedgerCacheEvictionTimeThresholdMillis = 1000;
+
+    @FieldContext(category = CATEGORY_STORAGE_ML, dynamic = true, doc =
+            "Maximum time-to-live in cache for entries that still have pending expected reads. "
+                    + "This setting is only effective when cacheEvictionByExpectedReadCount is enabled. "
+                    + "Entries with a positive expected read count (indicating they are anticipated to be "
+                    + "read by additional consumers) will be retained in cache up to this longer threshold, "
+                    + "helping avoid cache misses for scenarios like Key_Shared subscription replays, "
+                    + "catch-up reads, and consumers that temporarily fall behind the tail.")
+    private long managedLedgerCacheEvictionTimeThresholdMillisMax = 5000;
+
     @FieldContext(category = CATEGORY_STORAGE_ML,
             doc = "Configure the threshold (in number of entries) from where a cursor should be considered 'backlogged'"
                     + " and thus should be set as inactive.")

@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.bookkeeper.common.util.OrderedScheduler;
+import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.ManagedLedgerFactoryConfig;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryMBeanImpl;
@@ -75,14 +76,15 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
         log.info("Initialized managed-ledger entry cache of {} Mb", maxSize / MB);
     }
 
-    public EntryCache getEntryCache(ManagedLedgerImpl ml) {
+    public EntryCache getEntryCache(ManagedLedger ml) {
         if (maxSize == 0) {
             // Cache is disabled
-            return new EntryCacheDisabled(ml);
+            return new EntryCacheDisabled((ManagedLedgerImpl) ml);
         }
 
         EntryCache newEntryCache =
-                new RangeEntryCacheImpl(this, ml, mlFactory.getConfig().isCopyEntriesInCache(), rangeCacheRemovalQueue);
+                new RangeEntryCacheImpl(this, (ManagedLedgerImpl) ml, mlFactory.getConfig().isCopyEntriesInCache(),
+                        rangeCacheRemovalQueue);
         EntryCache currentEntryCache = caches.putIfAbsent(ml.getName(), newEntryCache);
         if (currentEntryCache != null) {
             return currentEntryCache;
