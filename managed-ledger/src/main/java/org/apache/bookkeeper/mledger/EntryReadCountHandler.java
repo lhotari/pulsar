@@ -18,19 +18,11 @@
  */
 package org.apache.bookkeeper.mledger;
 
-import io.netty.util.ReferenceCounted;
-
-/**
- * An Entry that is also reference counted.
- */
-public interface ReferenceCountedEntry extends Entry, ReferenceCounted {
-    EntryReadCountHandler getReadCountHandler();
-
+public interface EntryReadCountHandler {
+    int getExpectedReadCount();
+    void incrementExpectedReadCount();
+    void markRead();
     default boolean hasExpectedReads() {
-        EntryReadCountHandler readCountHandler = getReadCountHandler();
-        if (readCountHandler != null) {
-            return readCountHandler.hasExpectedReads();
-        }
-        return false;
+        return getExpectedReadCount() >= 1;
     }
 }

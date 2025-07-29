@@ -18,6 +18,7 @@
  */
 package org.apache.bookkeeper.mledger.impl.cache;
 
+import com.google.common.annotations.VisibleForTesting;
 import io.opentelemetry.api.OpenTelemetry;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -31,6 +32,7 @@ import org.apache.bookkeeper.mledger.ManagedLedgerFactoryConfig;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryMBeanImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
+import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -165,7 +167,8 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
                     long startTime = System.nanoTime();
                     log.info("Triggering cache eviction. total size: {} Mb -- Need to discard: {} Mb", currentSize / MB,
                             sizeToEvict / MB);
-                    evictionHandler.evictEntries(sizeToEvict);
+                    long maxTimestampNanos = startTime - mlFactory.getCacheEvictionTimeThreshold();
+                    evictionHandler.evictEntries(sizeToEvict, maxTimestampNanos);
                     long endTime = System.nanoTime();
                     double durationMs = TimeUnit.NANOSECONDS.toMillis(endTime - startTime);
                     log.info("Eviction completed. Removed {} Mb in {} ms", (currentSize - this.currentSize.get()) / MB,
@@ -191,6 +194,11 @@ public class RangeEntryCacheManagerImpl implements EntryCacheManager {
     @Override
     public long getSize() {
         return currentSize.get();
+    }
+
+    @VisibleForTesting
+    public Pair<Integer, Long> getNonEvictableSize() {
+        return evictionHandler.getNonEvictableSize();
     }
 
     @Override

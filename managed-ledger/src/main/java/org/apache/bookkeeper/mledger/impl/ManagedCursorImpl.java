@@ -4086,4 +4086,13 @@ public class ManagedCursorImpl implements ManagedCursor {
             registeredToWaitingCursors = true;
         }
     }
+    public int getNumberOfCursorsAtSamePositionOrBefore() {
+        if (ledger.getConfig().isCacheEvictionByExpectedReadCount()) {
+            return ledger.getNumberOfCursorsAtSamePositionOrBefore(this);
+        } else if (isCacheReadEntry()) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
 }
