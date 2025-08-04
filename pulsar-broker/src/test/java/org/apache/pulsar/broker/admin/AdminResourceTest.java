@@ -119,7 +119,7 @@ public class AdminResourceTest extends BrokerTestBase {
 
     @Test
     public void testValidatePartitionedTopicMetadata() throws Exception {
-        String tenant = "prop";
+        String tenant = "tenant";
         String namespace = "ns-abc";
         String partitionedTopic = "partitionedTopic";
         String nonPartitionedTopic = "notPartitionedTopic";

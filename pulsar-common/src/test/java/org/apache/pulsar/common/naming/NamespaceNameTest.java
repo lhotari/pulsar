@@ -63,49 +63,48 @@ public class NamespaceNameTest {
 
     @Test
     public void namespace_persistentTopic() {
-        assertEquals(NamespaceName.get("prop/cluster/ns").getPersistentTopicName("ds"),
-                "persistent://prop/cluster/ns/ds");
+        assertEquals(NamespaceName.get("tenant/ns").getPersistentTopicName("ds"),
+                "persistent://tenant/ns/ds");
     }
 
     @Test(expectedExceptions = IllegalArgumentException.class)
     public void namespace_topicNameNullDomain() {
-        NamespaceName.get("prop/cluster/ns").getTopicName(null, "ds");
+        NamespaceName.get("tenant/ns").getTopicName(null, "ds");
     }
 
     @Test
     public void namespace_persistentTopicExplicitDomain() {
-        assertEquals(NamespaceName.get("prop/cluster/ns").getTopicName(TopicDomain.persistent, "ds"),
-                "persistent://prop/cluster/ns/ds");
+        assertEquals(NamespaceName.get("tenant/ns").getTopicName(TopicDomain.persistent, "ds"),
+                "persistent://tenant/ns/ds");
     }
 
     @Test
     public void namespace_equals() {
-        assertEquals(NamespaceName.get("prop/cluster/ns"), NamespaceName.get("prop/cluster/ns"));
+        assertEquals(NamespaceName.get("tenant/ns"), NamespaceName.get("tenant/ns"));
     }
 
     @Test
     public void namespace_toString() {
-        assertEquals(NamespaceName.get("prop/cluster/ns").toString(), "prop/cluster/ns");
+        assertEquals(NamespaceName.get("tenant/ns").toString(), "tenant/ns");
     }
 
     @SuppressWarnings("AssertBetweenInconvertibleTypes")
     @Test
     public void namespace_equalsCheckType() {
-        assertNotEquals(NamespaceName.get("prop/cluster/ns"), "prop/cluster/ns");
+        assertNotEquals(NamespaceName.get("tenant/ns"), "tenant/ns");
     }
 
     @Test
     public void namespace_vargEquivalentToParse() {
-        assertEquals(NamespaceName.get("prop", "cluster", "ns"), NamespaceName.get("prop/cluster/ns"));
+        assertEquals(NamespaceName.get("tenant", "ns"), NamespaceName.get("tenant/ns"));
     }
 
-    // Deprecation warning suppressed as this test targets deprecated methods
-    @SuppressWarnings("deprecation")
     @Test
     public void namespace_members() {
-        assertEquals(NamespaceName.get("prop/cluster/ns").getTenant(), "prop");
-        assertEquals(NamespaceName.get("prop/cluster/ns").getCluster(), "cluster");
-        assertEquals(NamespaceName.get("prop/cluster/ns").getLocalName(), "ns");
+        NamespaceName ns = NamespaceName.get("tenant/ns");
+        assertEquals(ns.getTenant(), "tenant");
+        assertTrue(ns.isV2());
+        assertEquals(ns.getLocalName(), "ns");
     }
 
     @Test(expectedExceptions = IllegalArgumentException.class)
@@ -168,22 +167,13 @@ public class NamespaceNameTest {
     // Deprecation warning suppressed as this test targets deprecated methods
     @SuppressWarnings("deprecation")
     @Test
-    public void namespace_v2Namespace() {
-        NamespaceName v2Namespace = NamespaceName.get("pulsar/colo1/testns-1");
-        assertEquals(v2Namespace.getTenant(), "pulsar");
-        assertEquals(v2Namespace.getCluster(), "colo1");
-        assertEquals(v2Namespace.getLocalName(), "testns-1");
-    }
-
-    // Deprecation warning suppressed as this test targets deprecated methods
-    @SuppressWarnings("deprecation")
-    @Test
     void testNewScheme() {
         NamespaceName ns = NamespaceName.get("my-tenant/my-namespace");
         assertEquals(ns.getTenant(), "my-tenant");
         assertEquals(ns.getLocalName(), "my-namespace");
         assertTrue(ns.isGlobal());
         assertNull(ns.getCluster());
+        assertTrue(ns.isV2());
         assertEquals(ns.getPersistentTopicName("my-topic"), "persistent://my-tenant/my-namespace/my-topic");
     }
 }

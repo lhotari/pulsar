@@ -216,14 +216,14 @@ public class TopicNameTest {
                 .get("persistent://tenant/cluster/namespace/$#3rpa/table/1");
         assertEquals(nameWithRandomCharacters.getEncodedLocalName(), Codec.encode("$#3rpa/table/1"));
 
-        TopicName topicName = TopicName.get("persistent://myprop/mycolo/myns/mytopic");
-        assertEquals(topicName.getPartition(0).toString(), "persistent://myprop/mycolo/myns/mytopic-partition-0");
+        TopicName topicName = TopicName.get("persistent://mytenant/mycolo/myns/mytopic");
+        assertEquals(topicName.getPartition(0).toString(), "persistent://mytenant/mycolo/myns/mytopic-partition-0");
 
-        TopicName partitionedDn = TopicName.get("persistent://myprop/mycolo/myns/mytopic").getPartition(2);
+        TopicName partitionedDn = TopicName.get("persistent://mytenant/mycolo/myns/mytopic").getPartition(2);
         assertEquals(partitionedDn.getPartitionIndex(), 2);
         assertEquals(topicName.getPartitionIndex(), -1);
 
-        assertEquals(TopicName.getPartitionIndex("persistent://myprop/mycolo/myns/mytopic-partition-4"), 4);
+        assertEquals(TopicName.getPartitionIndex("persistent://mytenant/mycolo/myns/mytopic-partition-4"), 4);
 
         // Following behavior is not right actually, none partitioned topic, partition index is -1
         assertEquals(TopicName.getPartitionIndex("mytopic-partition--1"), -1);
@@ -253,12 +253,12 @@ public class TopicNameTest {
         assertEquals(Codec.decode(encodedName), rawName);
         assertEquals(Codec.encode(rawName), encodedName);
 
-        String topicName = "persistent://prop/colo/ns/" + rawName;
+        String topicName = "persistent://tenant/colo/ns/" + rawName;
         TopicName name = TopicName.get(topicName);
 
         assertEquals(name.getLocalName(), rawName);
         assertEquals(name.getEncodedLocalName(), encodedName);
-        assertEquals(name.getPersistenceNamingEncoding(), "prop/colo/ns/persistent/" + encodedName);
+        assertEquals(name.getPersistenceNamingEncoding(), "tenant/colo/ns/persistent/" + encodedName);
     }
 
     @Test

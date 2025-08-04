@@ -44,7 +44,7 @@ public class BrokerServiceBundlesCacheInvalidationTest extends BrokerTestBase {
 
     @Test
     public void testRecreateNamespace() throws Exception {
-        String namespace = "prop/test-" + System.nanoTime();
+        String namespace = "tenant/test-" + System.nanoTime();
         String topic = namespace + "/my-topic";
 
         // First create namespace with 20 bundles

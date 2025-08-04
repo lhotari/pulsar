@@ -102,9 +102,9 @@ public class TopicEventsListenerTest extends BrokerTestBase {
 
     @BeforeMethod
     protected void setupTest() throws Exception {
-        namespace = "prop/" + UUID.randomUUID();
+        namespace = BrokerTestUtil.newUniqueName("tenant/ns");
         admin.namespaces().createNamespace(namespace, Sets.newHashSet("test"));
-        assertTrue(admin.namespaces().getNamespaces("prop").contains(namespace));
+        assertTrue(admin.namespaces().getNamespaces("tenant").contains(namespace));
         admin.namespaces().setRetention(namespace, new RetentionPolicies(3, 10));
         try (PulsarAdmin admin2 = createPulsarAdmin()) {
             Awaitility.await().untilAsserted(() ->

@@ -94,7 +94,7 @@ public class FilterEntryTest extends BrokerTestBase {
     @Test
     public void testOverride() throws Exception {
         conf.setAllowOverrideEntryFilters(true);
-        String topic = "persistent://prop/ns-abc/topic" + UUID.randomUUID();
+        String topic = "persistent://tenant/ns-abc/topic" + UUID.randomUUID();
         String subName = "sub";
         Producer<String> producer = pulsarClient.newProducer(Schema.STRING)
                 .enableBatching(false).topic(topic).create();
@@ -158,7 +158,7 @@ public class FilterEntryTest extends BrokerTestBase {
     @Test
     public void testEntryFilterWithCompactor() throws Exception {
         conf.setAllowOverrideEntryFilters(true);
-        String topic = "persistent://prop/ns-abc/topic" + UUID.randomUUID();
+        String topic = "persistent://tenant/ns-abc/topic" + UUID.randomUUID();
 
         List<String> messages = new ArrayList<>();
         Producer<String> producer = pulsarClient.newProducer(Schema.STRING)
@@ -223,7 +223,7 @@ public class FilterEntryTest extends BrokerTestBase {
         Map<String, String> map = new HashMap<>();
         map.put("1", "1");
         map.put("2", "2");
-        String topic = "persistent://prop/ns-abc/topic" + UUID.randomUUID();
+        String topic = "persistent://tenant/ns-abc/topic" + UUID.randomUUID();
         String subName = "sub";
         Consumer<String> consumer = pulsarClient.newConsumer(Schema.STRING).topic(topic)
                 .subscriptionProperties(map)
@@ -349,8 +349,8 @@ public class FilterEntryTest extends BrokerTestBase {
     @DataProvider(name = "topicProvider")
     public Object[][] topicProvider() {
         return new Object[][]{
-                {"persistent://prop/ns-abc/topic" + UUID.randomUUID()},
-                {"non-persistent://prop/ns-abc/topic" + UUID.randomUUID()},
+                {"persistent://tenant/ns-abc/topic" + UUID.randomUUID()},
+                {"non-persistent://tenant/ns-abc/topic" + UUID.randomUUID()},
         };
     }
 
@@ -426,7 +426,7 @@ public class FilterEntryTest extends BrokerTestBase {
     public void testEntryFilterRescheduleMessageDependingOnConsumerSharedSubscription() throws Throwable {
         assertTrue(pulsar.getConfiguration().isSubscriptionRedeliveryTrackerEnabled());
 
-        String topic = "persistent://prop/ns-abc/topic" + UUID.randomUUID();
+        String topic = "persistent://tenant/ns-abc/topic" + UUID.randomUUID();
         String subName = "sub";
 
         Map<String, String> metadataConsumer1 = new HashMap<>();
@@ -574,7 +574,7 @@ public class FilterEntryTest extends BrokerTestBase {
     @Test(dataProvider = "overrideBrokerEntryFilters")
     public void testExecuteInOrder(boolean overrideBrokerEntryFilters) throws Exception {
         conf.setAllowOverrideEntryFilters(true);
-        String topic = "persistent://prop/ns-abc/topic" + UUID.randomUUID();
+        String topic = "persistent://tenant/ns-abc/topic" + UUID.randomUUID();
         String subName = "sub";
         Producer<String> producer = pulsarClient.newProducer(Schema.STRING)
                 .enableBatching(false).topic(topic).create();

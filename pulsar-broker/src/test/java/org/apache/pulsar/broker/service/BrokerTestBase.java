@@ -51,10 +51,10 @@ public abstract class BrokerTestBase extends MockedPulsarServiceBaseTest {
 
     private void baseSetupCommon() throws Exception {
         admin.clusters().createCluster("test", ClusterData.builder().serviceUrl(brokerUrl.toString()).build());
-        admin.tenants().createTenant("prop",
+        admin.tenants().createTenant("tenant",
                 new TenantInfoImpl(Sets.newHashSet("appid1"), Sets.newHashSet("test")));
-        admin.namespaces().createNamespace("prop/ns-abc");
-        admin.namespaces().setNamespaceReplicationClusters("prop/ns-abc", Sets.newHashSet("test"));
+        admin.namespaces().createNamespace("tenant/ns-abc");
+        admin.namespaces().setNamespaceReplicationClusters("tenant/ns-abc", Sets.newHashSet("test"));
     }
 
     protected void createTransactionCoordinatorAssign() throws MetadataStoreException {
@@ -103,7 +103,7 @@ public abstract class BrokerTestBase extends MockedPulsarServiceBaseTest {
     private static final Random random = new Random();
 
     protected String newTopicName() {
-        return "prop/ns-abc/topic-" + Long.toHexString(random.nextLong());
+        return "tenant/ns-abc/topic-" + Long.toHexString(random.nextLong());
     }
 
     private static final Logger LOG = LoggerFactory.getLogger(BrokerTestBase.class);

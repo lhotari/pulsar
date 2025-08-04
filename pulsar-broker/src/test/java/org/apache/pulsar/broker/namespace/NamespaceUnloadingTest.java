@@ -50,33 +50,33 @@ public class NamespaceUnloadingTest extends BrokerTestBase {
 
     @Test
     public void testUnloadNotLoadedNamespace() throws Exception {
-        admin.namespaces().createNamespace("prop/ns-test-1");
-        admin.namespaces().setNamespaceReplicationClusters("prop/ns-test-1", Sets.newHashSet("test"));
+        admin.namespaces().createNamespace("tenant/ns-test-1");
+        admin.namespaces().setNamespaceReplicationClusters("tenant/ns-test-1", Sets.newHashSet("test"));
 
-        assertTrue(admin.namespaces().getNamespaces("prop").contains("prop/ns-test-1"));
+        assertTrue(admin.namespaces().getNamespaces("tenant").contains("tenant/ns-test-1"));
 
-        admin.namespaces().unload("prop/ns-test-1");
+        admin.namespaces().unload("tenant/ns-test-1");
     }
 
     @Test
     public void testUnloadPartiallyLoadedNamespace() throws Exception {
-        admin.namespaces().createNamespace("prop/ns-test-2", 16);
-        admin.namespaces().setNamespaceReplicationClusters("prop/ns-test-2", Sets.newHashSet("test"));
+        admin.namespaces().createNamespace("tenant/ns-test-2", 16);
+        admin.namespaces().setNamespaceReplicationClusters("tenant/ns-test-2", Sets.newHashSet("test"));
 
-        Producer<byte[]> producer = pulsarClient.newProducer().topic("persistent://prop/ns-test-2/my-topic")
+        Producer<byte[]> producer = pulsarClient.newProducer().topic("persistent://tenant/ns-test-2/my-topic")
                 .create();
 
-        assertTrue(admin.namespaces().getNamespaces("prop").contains("prop/ns-test-2"));
+        assertTrue(admin.namespaces().getNamespaces("tenant").contains("tenant/ns-test-2"));
 
-        admin.namespaces().unload("prop/ns-test-2");
+        admin.namespaces().unload("tenant/ns-test-2");
 
         producer.close();
     }
 
     @Test
     public void testUnloadWithTopicCreation() throws PulsarAdminException, PulsarClientException {
-        final String namespaceName = "prop/ns_unloading";
-        final String topicName = "persistent://prop/ns_unloading/with_topic_creation";
+        final String namespaceName = "tenant/ns_unloading";
+        final String topicName = "persistent://tenant/ns_unloading/with_topic_creation";
         final int partitions = 5;
         admin.namespaces().createNamespace(namespaceName, 1);
         admin.topics().createPartitionedTopic(topicName, partitions);

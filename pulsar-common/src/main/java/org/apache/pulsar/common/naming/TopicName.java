@@ -263,9 +263,9 @@ public class TopicName implements ServiceUnitId {
      * For partitions in a topic, return the base partitioned topic name.
      * Eg:
      * <ul>
-     *  <li><code>persistent://prop/cluster/ns/my-topic-partition-1</code> -->
-     *  <code>persistent://prop/cluster/ns/my-topic</code>
-     *  <li><code>persistent://prop/cluster/ns/my-topic</code> --> <code>persistent://prop/cluster/ns/my-topic</code>
+     *  <li><code>persistent://tenant/ns/my-topic-partition-1</code> -->
+     *  <code>persistent://tenant/ns/my-topic</code>
+     *  <li><code>persistent://tenant/ns/my-topic</code> --> <code>persistent://tenant/ns/my-topic</code>
      * </ul>
      */
     public String getPartitionedTopicName() {
@@ -437,7 +437,7 @@ public class TopicName implements ServiceUnitId {
     }
 
     /**
-     * Returns true if this a V2 topic name prop/ns/topic-name.
+     * Returns true if this a V2 topic name tenant/ns/topic-name.
      * @return true if V2
      */
     public boolean isV2() {

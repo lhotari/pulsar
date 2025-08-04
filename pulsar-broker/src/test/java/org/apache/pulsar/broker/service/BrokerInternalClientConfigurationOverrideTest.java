@@ -119,7 +119,7 @@ public class BrokerInternalClientConfigurationOverrideTest extends BrokerTestBas
     @Test
     public void testOldNamespacePolicy() throws Exception {
 
-        String ns = "prop/oldNsWithDefaultNonNullValues";
+        String ns = "tenant/oldNsWithDefaultNonNullValues";
         String topic = "persistent://" + ns + "/t1";
         Policies policies = new Policies();
         policies.max_consumers_per_subscription = -1;

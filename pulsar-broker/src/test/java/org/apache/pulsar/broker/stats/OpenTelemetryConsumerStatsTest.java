@@ -56,7 +56,7 @@ public class OpenTelemetryConsumerStatsTest extends BrokerTestBase {
 
     @Test(timeOut = 30_000)
     public void testMessagingMetrics() throws Exception {
-        var topicName = BrokerTestUtil.newUniqueName("persistent://prop/ns-abc/testConsumerMessagingMetrics");
+        var topicName = BrokerTestUtil.newUniqueName("persistent://tenant/ns-abc/testConsumerMessagingMetrics");
         admin.topics().createNonPartitionedTopic(topicName);
 
         var messageCount = 5;
@@ -89,8 +89,8 @@ public class OpenTelemetryConsumerStatsTest extends BrokerTestBase {
 
         var attributes = Attributes.builder()
                 .put(OpenTelemetryAttributes.PULSAR_DOMAIN, "persistent")
-                .put(OpenTelemetryAttributes.PULSAR_TENANT, "prop")
-                .put(OpenTelemetryAttributes.PULSAR_NAMESPACE, "prop/ns-abc")
+                .put(OpenTelemetryAttributes.PULSAR_TENANT, "tenant")
+                .put(OpenTelemetryAttributes.PULSAR_NAMESPACE, "tenant/ns-abc")
                 .put(OpenTelemetryAttributes.PULSAR_TOPIC, topicName)
                 .put(OpenTelemetryAttributes.PULSAR_SUBSCRIPTION_NAME, subscriptionName)
                 .put(OpenTelemetryAttributes.PULSAR_SUBSCRIPTION_TYPE, SubscriptionType.Shared.toString())

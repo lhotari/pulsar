@@ -58,7 +58,7 @@ public class EnableProxyProtocolTest extends BrokerTestBase  {
 
     @Test
     public void testSimpleProduceAndConsume() throws Exception {
-        final String namespace = "prop/ns-abc";
+        final String namespace = "tenant/ns-abc";
         final String topicName = "persistent://" + namespace + "/testSimpleProduceAndConsume";
         final String subName = "my-subscriber-name";
         final int messages = 100;
@@ -94,7 +94,7 @@ public class EnableProxyProtocolTest extends BrokerTestBase  {
 
     @Test
     public void testProxyProtocol() throws Exception {
-        final String namespace = "prop/ns-abc";
+        final String namespace = "tenant/ns-abc";
         final String topicName = "persistent://" + namespace + "/testProxyProtocol";
         final String subName = "my-subscriber-name";
 
@@ -119,7 +119,7 @@ public class EnableProxyProtocolTest extends BrokerTestBase  {
 
     @Test(timeOut = 10000)
     public void testPubSubWhenSlowNetwork() throws Exception {
-        final String namespace = "prop/ns-abc";
+        final String namespace = "tenant/ns-abc";
         final String topicName = BrokerTestUtil.newUniqueName("persistent://" + namespace + "/tp");
         final String subName = "my-subscriber-name";
 

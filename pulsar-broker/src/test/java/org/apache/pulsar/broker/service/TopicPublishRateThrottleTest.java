@@ -49,8 +49,8 @@ public class TopicPublishRateThrottleTest extends BrokerTestBase{
         PublishRate publishRate = new PublishRate(1, 10);
         conf.setMaxPendingPublishRequestsPerConnection(0);
         super.baseSetup();
-        admin.namespaces().setPublishRate("prop/ns-abc", publishRate);
-        final String topic = "persistent://prop/ns-abc/testPrecisTopicPublishRateLimiting";
+        admin.namespaces().setPublishRate("tenant/ns-abc", publishRate);
+        final String topic = "persistent://tenant/ns-abc/testPrecisTopicPublishRateLimiting";
         org.apache.pulsar.client.api.Producer<byte[]> producer = pulsarClient.newProducer()
                 .topic(topic)
                 .producerName("producer-name")
@@ -77,15 +77,15 @@ public class TopicPublishRateThrottleTest extends BrokerTestBase{
     public void testSystemTopicPublishNonBlock() throws Exception {
         super.baseSetup();
         PublishRate publishRate = new PublishRate(1, 10);
-        admin.namespaces().setPublishRate("prop/ns-abc", publishRate);
-        final String topic = BrokerTestUtil.newUniqueName("persistent://prop/ns-abc/tp");
+        admin.namespaces().setPublishRate("tenant/ns-abc", publishRate);
+        final String topic = BrokerTestUtil.newUniqueName("persistent://tenant/ns-abc/tp");
         PulsarAdmin admin1 = PulsarAdmin.builder().serviceHttpUrl(brokerUrl != null
             ? brokerUrl.toString() : brokerUrlTls.toString()).readTimeout(5, TimeUnit.SECONDS).build();
         admin1.topics().createNonPartitionedTopic(topic);
         admin1.topicPolicies().setDeduplicationStatus(topic, true);
         admin1.topicPolicies().setDeduplicationStatus(topic, false);
         // cleanup.
-        admin.namespaces().removePublishRate("prop/ns-abc");
+        admin.namespaces().removePublishRate("tenant/ns-abc");
         admin1.close();
     }
 
@@ -94,8 +94,8 @@ public class TopicPublishRateThrottleTest extends BrokerTestBase{
         PublishRate publishRate = new PublishRate(1, 10);
         conf.setMaxPendingPublishRequestsPerConnection(0);
         super.baseSetup();
-        admin.namespaces().setPublishRate("prop/ns-abc", publishRate);
-        final String topic = "persistent://prop/ns-abc/testPrecisTopicPublishRateLimiting";
+        admin.namespaces().setPublishRate("tenant/ns-abc", publishRate);
+        final String topic = "persistent://tenant/ns-abc/testPrecisTopicPublishRateLimiting";
         org.apache.pulsar.client.api.Producer<byte[]> producer = pulsarClient.newProducer()
                 .topic(topic)
                 .producerName("producer-name")
@@ -129,7 +129,7 @@ public class TopicPublishRateThrottleTest extends BrokerTestBase{
     public void testBrokerLevelPublishRateDynamicUpdate() throws Exception{
         conf.setMaxPendingPublishRequestsPerConnection(0);
         super.baseSetup();
-        final String topic = "persistent://prop/ns-abc/testMultiLevelPublishRate";
+        final String topic = "persistent://tenant/ns-abc/testMultiLevelPublishRate";
         org.apache.pulsar.client.api.Producer<byte[]> producer = pulsarClient.newProducer()
             .topic(topic)
             .producerName("producer-name")

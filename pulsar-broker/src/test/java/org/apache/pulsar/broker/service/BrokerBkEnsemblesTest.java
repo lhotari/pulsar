@@ -93,7 +93,7 @@ public class BrokerBkEnsemblesTest extends BkEnsemblesTestBase {
                 .statsInterval(0, TimeUnit.SECONDS)
                 .build();
 
-        final String ns1 = "prop/usc/crash-broker";
+        final String ns1 = "tenant/crash-broker";
 
         admin.namespaces().createNamespace(ns1);
 
@@ -191,7 +191,7 @@ public class BrokerBkEnsemblesTest extends BkEnsemblesTestBase {
                 .statsInterval(0, TimeUnit.SECONDS)
                 .build();
 
-        final String ns1 = "prop/usc/crash-broker";
+        final String ns1 = "tenant/crash-broker";
         final int totalMessages = 99;
         final int totalDataLedgers = 5;
         final int entriesPerLedger = 20;
@@ -300,7 +300,7 @@ public class BrokerBkEnsemblesTest extends BkEnsemblesTestBase {
         final int totalDataLedgers = 5;
         final int entriesPerLedger = 20;
 
-        final String tenant = "prop";
+        final String tenant = "tenant";
         try {
             admin.tenants().createTenant(tenant, new TenantInfoImpl(Sets.newHashSet("role1", "role2"),
                     Sets.newHashSet(config.getClusterName())));
@@ -430,7 +430,7 @@ public class BrokerBkEnsemblesTest extends BkEnsemblesTestBase {
                 .statsInterval(0, TimeUnit.SECONDS)
                 .build();
 
-        final String ns1 = "prop/usc/topicWithSpecialChar";
+        final String ns1 = "tenant/topicWithSpecialChar";
         try {
             admin.namespaces().createNamespace(ns1);
         } catch (Exception e) {
@@ -454,7 +454,7 @@ public class BrokerBkEnsemblesTest extends BkEnsemblesTestBase {
 
     @Test
     public void testDeleteTopicWithMissingData() throws Exception {
-        String namespace = BrokerTestUtil.newUniqueName("prop/usc");
+        String namespace = BrokerTestUtil.newUniqueName("tenant/ns");
         admin.namespaces().createNamespace(namespace);
 
         String topic = BrokerTestUtil.newUniqueName(namespace + "/my-topic");
@@ -499,7 +499,7 @@ public class BrokerBkEnsemblesTest extends BkEnsemblesTestBase {
 
     @Test
     public void testDeleteTopicWithoutTopicLoaded() throws Exception {
-        String namespace = BrokerTestUtil.newUniqueName("prop/usc");
+        String namespace = BrokerTestUtil.newUniqueName("tenant/ns");
         admin.namespaces().createNamespace(namespace);
 
         String topic = BrokerTestUtil.newUniqueName(namespace + "/my-topic");

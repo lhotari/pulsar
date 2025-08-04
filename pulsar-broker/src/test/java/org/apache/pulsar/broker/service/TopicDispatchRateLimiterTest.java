@@ -113,12 +113,12 @@ public class TopicDispatchRateLimiterTest extends BrokerTestBase {
             .dispatchThrottlingRateInMsg(100)
             .dispatchThrottlingRateInByte(1000L)
             .build();
-        admin.namespaces().setDispatchRate("prop/ns-abc", dispatchRate);
+        admin.namespaces().setDispatchRate("tenant/ns-abc", dispatchRate);
 
         Awaitility.await().untilAsserted(() -> {
-            assertNotNull(admin.namespaces().getDispatchRate("prop/ns-abc"));
-            assertEquals(admin.namespaces().getDispatchRate("prop/ns-abc").getDispatchThrottlingRateInMsg(), 100);
-            assertEquals(admin.namespaces().getDispatchRate("prop/ns-abc").getDispatchThrottlingRateInByte(), 1000L);
+            assertNotNull(admin.namespaces().getDispatchRate("tenant/ns-abc"));
+            assertEquals(admin.namespaces().getDispatchRate("tenant/ns-abc").getDispatchThrottlingRateInMsg(), 100);
+            assertEquals(admin.namespaces().getDispatchRate("tenant/ns-abc").getDispatchThrottlingRateInByte(), 1000L);
         });
 
         Awaitility.await().untilAsserted(() -> assertTrue(topic.getDispatchRateLimiter().isPresent()));

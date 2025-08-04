@@ -42,9 +42,9 @@ public class PartitionedTopicsSchemaTest extends BkEnsemblesTestBase {
      */
     @Test
     public void partitionedTopicWithSchema() throws Exception {
-        admin.namespaces().createNamespace("prop/my-test", Collections.singleton("usc"));
+        admin.namespaces().createNamespace("tenant/my-test", Collections.singleton("usc"));
 
-        String topicName = "prop/my-test/my-topic";
+        String topicName = "tenant/my-test/my-topic";
 
         admin.topics().createPartitionedTopic(topicName, 16);
 
@@ -75,7 +75,7 @@ public class PartitionedTopicsSchemaTest extends BkEnsemblesTestBase {
         producer.close();
 
         // Force topic reloading to re-open the schema multiple times in parallel
-        admin.namespaces().unload("prop/my-test");
+        admin.namespaces().unload("tenant/my-test");
 
         producerFuture = client.newProducer(Schema.STRING)
             .topic(topicName)
