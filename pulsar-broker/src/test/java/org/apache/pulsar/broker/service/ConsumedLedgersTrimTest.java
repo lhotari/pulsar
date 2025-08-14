@@ -70,7 +70,7 @@ public class ConsumedLedgersTrimTest extends BrokerTestBase {
     public void testConsumedLedgersTrim() throws Exception {
         conf.setRetentionCheckIntervalInSeconds(1);
         super.baseSetup();
-        final String topicName = "persistent://prop/ns-abc/TestConsumedLedgersTrim";
+        final String topicName = "persistent://tenant/ns-abc/TestConsumedLedgersTrim";
         final String subscriptionName = "my-subscriber-name";
 
         @Cleanup
@@ -122,7 +122,7 @@ public class ConsumedLedgersTrimTest extends BrokerTestBase {
         conf.setRetentionCheckIntervalInSeconds(1);
         conf.setBrokerDeleteInactiveTopicsEnabled(false);
         super.baseSetup();
-        final String topicName = "persistent://prop/ns-abc/TestConsumedLedgersTrimNoSubscriptions";
+        final String topicName = "persistent://tenant/ns-abc/TestConsumedLedgersTrimNoSubscriptions";
 
         // write some messages
         @Cleanup
@@ -192,7 +192,7 @@ public class ConsumedLedgersTrimTest extends BrokerTestBase {
         conf.setRetentionCheckIntervalInSeconds(Integer.MAX_VALUE / 2);
         conf.setDefaultNumberOfNamespaceBundles(1);
         super.baseSetup();
-        final String topicName = "persistent://prop/ns-abc/TestAdminTrimLedgers" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/TestAdminTrimLedgers" + UUID.randomUUID();
         final String subscriptionName = "my-sub";
         final int maxEntriesPerLedger = 2;
         final int partitionedNum = 3;
@@ -240,7 +240,7 @@ public class ConsumedLedgersTrimTest extends BrokerTestBase {
     @Test
     public void trimNonPersistentTopic() throws Exception {
         super.baseSetup();
-        String topicName = "non-persistent://prop/ns-abc/trimNonPersistentTopic" + UUID.randomUUID();
+        String topicName = "non-persistent://tenant/ns-abc/trimNonPersistentTopic" + UUID.randomUUID();
         int partitionedNum = 3;
         admin.topics().createPartitionedTopic(topicName, partitionedNum);
         @Cleanup

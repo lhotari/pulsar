@@ -401,9 +401,9 @@ public class NamespaceBundleFactory {
     }
 
     /*
-     * @param path - path for the namespace policies ex. /admin/policies/prop/cluster/namespace
+     * @param path - path for the namespace policies ex. /admin/policies/tenant/namespace
      *
-     * @returns namespace with path, ex. prop/cluster/namespace
+     * @returns namespace with path, ex. tenant/namespace
      */
     public static String getNamespaceFromPoliciesPath(String path) {
         if (path.isEmpty()) {

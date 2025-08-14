@@ -76,7 +76,7 @@ public class BatchMessageWithBatchIndexLevelTest extends BatchMessageTest {
     @SneakyThrows
     public void testBatchMessageAck() {
         int numMsgs = 40;
-        final String topicName = "persistent://prop/ns-abc/batchMessageAck-" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/batchMessageAck-" + UUID.randomUUID();
         final String subscriptionName = "sub-batch-1";
 
         @Cleanup
@@ -149,7 +149,7 @@ public class BatchMessageWithBatchIndexLevelTest extends BatchMessageTest {
     @Test(dataProvider = "enabledBatchSend")
     @SneakyThrows
     public void testBatchMessageNAck(boolean enabledBatchSend) {
-        final String topicName = BrokerTestUtil.newUniqueName("persistent://prop/ns-abc/tp");
+        final String topicName = BrokerTestUtil.newUniqueName("persistent://tenant/ns-abc/tp");
         final String subscriptionName = "s1";
         ConsumerImpl<byte[]> consumer = (ConsumerImpl<byte[]>) pulsarClient.newConsumer().topic(topicName)
                 .subscriptionName(subscriptionName)
@@ -201,7 +201,7 @@ public class BatchMessageWithBatchIndexLevelTest extends BatchMessageTest {
 
     @Test
     public void testBatchMessageMultiNegtiveAck() throws Exception{
-        final String topicName = "persistent://prop/ns-abc/batchMessageMultiNegtiveAck-" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/batchMessageMultiNegtiveAck-" + UUID.randomUUID();
         final String subscriptionName = "sub-negtive-1";
 
         @Cleanup
@@ -243,7 +243,7 @@ public class BatchMessageWithBatchIndexLevelTest extends BatchMessageTest {
         });
 
         // Test negtive ack with sleep
-        final String topicName2 = "persistent://prop/ns-abc/batchMessageMultiNegtiveAck2-" + UUID.randomUUID();
+        final String topicName2 = "persistent://tenant/ns-abc/batchMessageMultiNegtiveAck2-" + UUID.randomUUID();
         final String subscriptionName2 = "sub-negtive-2";
         @Cleanup
         Consumer<String> consumer2 = pulsarClient.newConsumer(Schema.STRING)
@@ -286,7 +286,7 @@ public class BatchMessageWithBatchIndexLevelTest extends BatchMessageTest {
     @Test
     public void testAckMessageWithNotOwnerConsumerUnAckMessageCount() throws Exception {
         final String subName = "test";
-        final String topicName = "persistent://prop/ns-abc/testAckMessageWithNotOwnerConsumerUnAckMessageCount-"
+        final String topicName = "persistent://tenant/ns-abc/testAckMessageWithNotOwnerConsumerUnAckMessageCount-"
                 + UUID.randomUUID();
 
         @Cleanup
@@ -363,7 +363,7 @@ public class BatchMessageWithBatchIndexLevelTest extends BatchMessageTest {
 
     @Test
     public void testNegativeAckAndLongAckDelayWillNotLeadRepeatConsume() throws Exception {
-        final String topicName = BrokerTestUtil.newUniqueName("persistent://prop/ns-abc/tp_");
+        final String topicName = BrokerTestUtil.newUniqueName("persistent://tenant/ns-abc/tp_");
         final String subscriptionName = "s1";
         final int redeliveryDelaySeconds = 2;
 
@@ -440,7 +440,7 @@ public class BatchMessageWithBatchIndexLevelTest extends BatchMessageTest {
 
     @Test
     public void testMixIndexAndNonIndexUnAckMessageCount() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/testMixIndexAndNonIndexUnAckMessageCount-";
+        final String topicName = "persistent://tenant/ns-abc/testMixIndexAndNonIndexUnAckMessageCount-";
 
         @Cleanup
         Producer<byte[]> producer = pulsarClient.newProducer()
@@ -475,7 +475,7 @@ public class BatchMessageWithBatchIndexLevelTest extends BatchMessageTest {
 
     @Test
     public void testUnAckMessagesWhenConcurrentDeliveryAndAck() throws Exception {
-        final String topicName = BrokerTestUtil.newUniqueName("persistent://prop/ns-abc/tp");
+        final String topicName = BrokerTestUtil.newUniqueName("persistent://tenant/ns-abc/tp");
         final String subName = "s1";
         final int receiverQueueSize = 500;
         admin.topics().createNonPartitionedTopic(topicName);
@@ -648,7 +648,7 @@ public class BatchMessageWithBatchIndexLevelTest extends BatchMessageTest {
      */
     @Test
     public void testPermitsIfHalfAckBatchMessage() throws Exception {
-        final String topicName = BrokerTestUtil.newUniqueName("persistent://prop/ns-abc/tp");
+        final String topicName = BrokerTestUtil.newUniqueName("persistent://tenant/ns-abc/tp");
         final String subName = "s1";
         final int receiverQueueSize = 1000;
         final int ackedMessagesCountInTheFistStep = 2;

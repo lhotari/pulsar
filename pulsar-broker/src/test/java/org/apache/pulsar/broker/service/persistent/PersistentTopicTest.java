@@ -132,7 +132,7 @@ public class PersistentTopicTest extends BrokerTestBase {
      */
     @Test
     public void testCleanFailedUnloadTopic() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/failedUnload";
+        final String topicName = "persistent://tenant/ns-abc/failedUnload";
 
         // 1. producer connect
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName).enableBatching(false)
@@ -164,7 +164,7 @@ public class PersistentTopicTest extends BrokerTestBase {
      */
     @Test
     public void testUnblockStuckSubscription() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/stuckSubscriptionTopic";
+        final String topicName = "persistent://tenant/ns-abc/stuckSubscriptionTopic";
         final String sharedSubName = "shared";
         final String failoverSubName = "failOver";
 
@@ -231,7 +231,7 @@ public class PersistentTopicTest extends BrokerTestBase {
     @Test
     public void testDeleteNamespaceInfiniteRetry() throws Exception {
         //init namespace
-        final String myNamespace = "prop/ns" + UUID.randomUUID();
+        final String myNamespace = "tenant/ns" + UUID.randomUUID();
         admin.namespaces().createNamespace(myNamespace, Sets.newHashSet("test"));
         final String topic = "persistent://" + myNamespace + "/testDeleteNamespaceInfiniteRetry";
         conf.setForceDeleteNamespaceAllowed(true);
@@ -256,7 +256,7 @@ public class PersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testAccumulativeStats() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/aTopic";
+        final String topicName = "persistent://tenant/ns-abc/aTopic";
         final String sharedSubName = "shared";
         final String failoverSubName = "failOver";
 
@@ -305,8 +305,8 @@ public class PersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testPersistentPartitionedTopicUnload() throws Exception {
-        final String topicName = "persistent://prop/ns/failedUnload";
-        final String ns = "prop/ns";
+        final String topicName = "persistent://tenant/ns/failedUnload";
+        final String ns = "tenant/ns";
         final int partitions = 5;
         final int producers = 1;
         // ensure that the number of bundle is greater than 1
@@ -346,8 +346,8 @@ public class PersistentTopicTest extends BrokerTestBase {
 
     @Test(dataProvider = "closeWithoutWaitingClientDisconnectInFirstBatch")
     public void testConcurrentClose(boolean closeWithoutWaitingClientDisconnectInFirstBatch) throws Exception {
-        final String topicName = "persistent://prop/ns/concurrentClose";
-        final String ns = "prop/ns";
+        final String topicName = "persistent://tenant/ns/concurrentClose";
+        final String ns = "tenant/ns";
         admin.namespaces().createNamespace(ns, 1);
         admin.topics().createNonPartitionedTopic(topicName);
         final Topic topic = pulsar.getBrokerService().getTopicIfExists(topicName).get().get();
@@ -417,8 +417,8 @@ public class PersistentTopicTest extends BrokerTestBase {
     @DataProvider(name = "topicAndMetricsLevel")
     public Object[][] indexPatternTestData() {
         return new Object[][]{
-                new Object[] {"persistent://prop/autoNs/test_delayed_message_metric", true},
-                new Object[] {"persistent://prop/autoNs/test_delayed_message_metric", false},
+                new Object[] {"persistent://tenant/autoNs/test_delayed_message_metric", true},
+                new Object[] {"persistent://tenant/autoNs/test_delayed_message_metric", false},
         };
     }
 
@@ -510,7 +510,7 @@ public class PersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testUpdateCursorLastActive() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/aTopic";
+        final String topicName = "persistent://tenant/ns-abc/aTopic";
         final String sharedSubName = "shared";
         final String failoverSubName = "failOver";
 
@@ -566,7 +566,7 @@ public class PersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testCreateNonExistentPartitions() throws PulsarAdminException, PulsarClientException {
-        final String topicName = "persistent://prop/ns-abc/testCreateNonExistentPartitions";
+        final String topicName = "persistent://tenant/ns-abc/testCreateNonExistentPartitions";
         admin.topics().createPartitionedTopic(topicName, 4);
         TopicName partition = TopicName.get(topicName).getPartition(4);
         try {
@@ -582,7 +582,7 @@ public class PersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testDeleteTopicFail() throws Exception {
-        final String fullyTopicName = "persistent://prop/ns-abc/" + "tp_"
+        final String fullyTopicName = "persistent://tenant/ns-abc/" + "tp_"
                 + UUID.randomUUID().toString().replaceAll("-", "");
         // Mock topic.
         BrokerService brokerService = spy(pulsar.getBrokerService());
@@ -635,7 +635,7 @@ public class PersistentTopicTest extends BrokerTestBase {
 
     @Test(dataProvider = "topicLevelPolicy")
     public void testCreateTopicWithZombieReplicatorCursor(boolean topicLevelPolicy) throws Exception {
-        final String namespace = "prop/ns-abc";
+        final String namespace = "tenant/ns-abc";
         final String topicName = "persistent://" + namespace
                 + "/testCreateTopicWithZombieReplicatorCursor" + topicLevelPolicy;
         final String remoteCluster = "remote";
@@ -647,9 +647,9 @@ public class PersistentTopicTest extends BrokerTestBase {
                 .serviceUrl("http://localhost:11112")
                 .brokerServiceUrl("pulsar://localhost:11111")
                 .build());
-        TenantInfo tenantInfo = admin.tenants().getTenantInfo("prop");
+        TenantInfo tenantInfo = admin.tenants().getTenantInfo("tenant");
         tenantInfo.getAllowedClusters().add(remoteCluster);
-        admin.tenants().updateTenant("prop", tenantInfo);
+        admin.tenants().updateTenant("tenant", tenantInfo);
 
         if (topicLevelPolicy) {
             admin.topics().setReplicationClusters(topicName, Arrays.asList("test", remoteCluster));
@@ -696,7 +696,7 @@ public class PersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testCheckPersistencePolicies() throws Exception {
-        final String myNamespace = "prop/ns";
+        final String myNamespace = "tenant/ns";
         admin.namespaces().createNamespace(myNamespace, Sets.newHashSet("test"));
         final String topic = "persistent://" + myNamespace + "/testConfig" + UUID.randomUUID();
         conf.setForceDeleteNamespaceAllowed(true);
@@ -730,7 +730,7 @@ public class PersistentTopicTest extends BrokerTestBase {
     @Test
     public void testDynamicConfigurationAutoSkipNonRecoverableData() throws Exception {
         pulsar.getConfiguration().setAutoSkipNonRecoverableData(false);
-        final String topicName = "persistent://prop/ns-abc/testAutoSkipNonRecoverableData";
+        final String topicName = "persistent://tenant/ns-abc/testAutoSkipNonRecoverableData";
         final String subName = "test_sub";
 
         Consumer<byte[]> subscribe = pulsarClient.newConsumer().topic(topicName).subscriptionName(subName).subscribe();
@@ -755,7 +755,7 @@ public class PersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testCursorGetConfigAfterTopicPoliciesChanged() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/" + UUID.randomUUID();
         final String subName = "test_sub";
 
         @Cleanup
@@ -779,9 +779,9 @@ public class PersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testAddWaitingCursorsForNonDurable() throws Exception {
-        final String ns = "prop/ns-test";
+        final String ns = "tenant/ns-test";
         admin.namespaces().createNamespace(ns, 2);
-        final String topicName = "persistent://prop/ns-test/testAddWaitingCursors";
+        final String topicName = "persistent://tenant/ns-test/testAddWaitingCursors";
         admin.topics().createNonPartitionedTopic(topicName);
         final Optional<Topic> topic = pulsar.getBrokerService().getTopic(topicName, false).join();
         assertNotNull(topic.get());
@@ -819,9 +819,9 @@ public class PersistentTopicTest extends BrokerTestBase {
 
     @Test
     public void testAddWaitingCursorsForNonDurable2() throws Exception {
-        final String ns = "prop/ns-test";
+        final String ns = "tenant/ns-test";
         admin.namespaces().createNamespace(ns, 2);
-        final String topicName = "persistent://prop/ns-test/testAddWaitingCursors2";
+        final String topicName = "persistent://tenant/ns-test/testAddWaitingCursors2";
         admin.topics().createNonPartitionedTopic(topicName);
         pulsarClient.newConsumer(Schema.STRING).topic(topicName)
                 .subscriptionMode(SubscriptionMode.Durable)

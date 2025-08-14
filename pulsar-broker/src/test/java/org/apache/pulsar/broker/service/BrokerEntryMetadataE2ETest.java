@@ -294,7 +294,7 @@ public class BrokerEntryMetadataE2ETest extends BrokerTestBase {
 
     @Test(timeOut = 20000)
     public void testGetLastMessageId() throws Exception {
-        final String topic = "persistent://prop/ns-abc/topic-test";
+        final String topic = "persistent://tenant/ns-abc/topic-test";
         final String subscription = "my-sub";
 
         @Cleanup

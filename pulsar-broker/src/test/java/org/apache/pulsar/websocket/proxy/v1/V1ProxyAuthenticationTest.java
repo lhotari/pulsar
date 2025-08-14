@@ -115,7 +115,7 @@ public class V1ProxyAuthenticationTest extends V1ProducerConsumerBase {
     }
 
     private void socketTest() throws Exception {
-        final String topic = "prop/use/my-ns/my-topic1";
+        final String topic = "tenant/my-ns/my-topic1";
         final String consumerUri = "ws://localhost:" + proxyServer.getListenPortHTTP().get()
                 + "/ws/consumer/persistent/" + topic + "/my-sub";
         final String producerUri = "ws://localhost:" + proxyServer.getListenPortHTTP().get()
@@ -167,7 +167,7 @@ public class V1ProxyAuthenticationTest extends V1ProducerConsumerBase {
 
     @Test(timeOut = 10000)
     public void statsTest() throws Exception {
-        final String topic = "prop/use/my-ns/my-topic2";
+        final String topic = "tenant/my-ns/my-topic2";
         final String consumerUri = "ws://localhost:" + proxyServer.getListenPortHTTP().get()
                 + "/ws/consumer/persistent/" + topic + "/my-sub";
         final String producerUri = "ws://localhost:" + proxyServer.getListenPortHTTP().get()

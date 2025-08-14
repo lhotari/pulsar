@@ -72,7 +72,7 @@ public class UnAcknowledgedMessagesTimeoutTest extends BrokerTestBase {
     @Test(dataProvider = "variationsRedeliveryTracker")
     public void testExclusiveSingleAckedNormalTopic(boolean isRedeliveryTracker) throws Exception {
         String key = "testExclusiveSingleAckedNormalTopic";
-        final String topicName = "persistent://prop/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;
@@ -139,7 +139,7 @@ public class UnAcknowledgedMessagesTimeoutTest extends BrokerTestBase {
     @Test(dataProvider = "variationsRedeliveryTracker")
     public void testExclusiveCumulativeAckedNormalTopic(boolean isRedeliveryTracker) throws Exception {
         String key = "testExclusiveCumulativeAckedNormalTopic";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;
@@ -195,7 +195,7 @@ public class UnAcknowledgedMessagesTimeoutTest extends BrokerTestBase {
     @Test(dataProvider = "variationsRedeliveryTracker")
     public void testSharedSingleAckedPartitionedTopic(boolean isRedeliveryTracker) throws Exception {
         String key = "testSharedSingleAckedPartitionedTopic";
-        final String topicName = "persistent://prop/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-shared-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 20;
@@ -301,7 +301,7 @@ public class UnAcknowledgedMessagesTimeoutTest extends BrokerTestBase {
     @Test(dataProvider = "variationsRedeliveryTracker")
     public void testFailoverSingleAckedPartitionedTopic(boolean isRedeliveryTracker) throws Exception {
         String key = "testFailoverSingleAckedPartitionedTopic";
-        final String topicName = "persistent://prop/ns-abc/topic-" + key + UUID.randomUUID().toString();
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key + UUID.randomUUID().toString();
         final String subscriptionName = "my-failover-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;
@@ -440,7 +440,7 @@ public class UnAcknowledgedMessagesTimeoutTest extends BrokerTestBase {
     @Test
     public void testCheckUnAcknowledgedMessageTimer() throws PulsarClientException, InterruptedException {
         String key = "testCheckUnAcknowledgedMessageTimer";
-        final String topicName = "persistent://prop/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 3;
@@ -495,7 +495,7 @@ public class UnAcknowledgedMessagesTimeoutTest extends BrokerTestBase {
                                                               long maxDelayMs, int multiplier)
             throws PulsarClientException, InterruptedException {
         String key = "testCheckUnAcknowledgedMessageRedeliveryTimer";
-        final String topicName = "persistent://prop/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 3;
@@ -544,7 +544,7 @@ public class UnAcknowledgedMessagesTimeoutTest extends BrokerTestBase {
 
     @Test
     public void testSingleMessageBatch() throws Exception {
-        String topicName = "prop/ns-abc/topic-estSingleMessageBatch";
+        String topicName = "tenant/ns-abc/topic-estSingleMessageBatch";
 
         Producer<String> producer = pulsarClient.newProducer(Schema.STRING)
                 .topic(topicName)
