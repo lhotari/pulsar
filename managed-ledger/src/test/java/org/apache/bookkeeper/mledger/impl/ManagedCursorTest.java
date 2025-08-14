@@ -2932,7 +2932,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
     }
 
     private static EntryImpl createEntryAndReleaseBuffer(Position p1, ByteBuf buffer) {
-        EntryImpl entry = EntryImpl.create(p1, buffer);
+        EntryImpl entry = EntryImpl.create(p1, buffer, 0);
         buffer.release();
         return entry;
     }

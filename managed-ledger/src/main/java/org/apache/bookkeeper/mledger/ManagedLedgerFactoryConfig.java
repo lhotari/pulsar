@@ -47,9 +47,23 @@ public class ManagedLedgerFactoryConfig {
     private long cacheEvictionIntervalMs = 10;
 
     /**
-     * All entries that have stayed in cache for more than the configured time, will be evicted.
+     * All entries that have stayed in cache for more than the configured time will be evicted.
+     * When cacheEvictionByExpectedReadCount is enabled, this threshold applies only to entries
+     * that have reached their expected read count (i.e., entries that have been read by all
+     * anticipated consumers). Entries with a positive expected read count use
+     * managedLedgerCacheEvictionTimeThresholdMillisMax instead.
      */
     private long cacheEvictionTimeThresholdMillis = 1000;
+
+    /**
+     * Maximum time-to-live in cache for entries that still have pending expected reads.
+     * This setting is only effective when cacheEvictionByExpectedReadCount is enabled.
+     * Entries with a positive expected read count (indicating they are anticipated to be
+     * read by additional consumers) will be retained in cache up to this longer threshold,
+     * helping avoid cache misses for scenarios like Key_Shared subscription replays,
+     * catch-up reads, and consumers that temporarily fall behind the tail.
+     */
+    private long cacheEvictionTimeThresholdMillisMax = 5000;
 
     /**
      * Whether we should make a copy of the entry payloads when inserting in cache.

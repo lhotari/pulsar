@@ -871,4 +871,39 @@ public class ManagedCursorContainerTest {
     private static ManagedCursor createCursor(ManagedCursorContainer container, String name, Position position) {
         return new MockManagedCursor(container, name, position, position, false, true);
     }
+
+    @Test
+    public void testCountNumberOfCursorsAtSamePositionOrBefore() {
+        ManagedCursorContainer container = new ManagedCursorContainer();
+        List<ManagedCursor> cursors = IntStream.rangeClosed(1, 1000)
+                .mapToObj(idx -> createCursor(container, "cursor" + idx, PositionFactory.create(0, idx)))
+                .collect(Collectors.toList());
+        // randomize adding order
+        Collections.shuffle(cursors);
+        cursors.forEach(cursor -> container.add(cursor, cursor.getReadPosition()));
+        for (int i = 1; i <= 1000; i++) {
+            ManagedCursor cursor = container.get("cursor" + i);
+            int numberOfCursorsBefore = container.getNumberOfCursorsAtSamePositionOrBefore(cursor);
+            assertThat(numberOfCursorsBefore).describedAs("cursor:%s", cursor).isEqualTo(i);
+        }
+    }
+
+    @Test
+    public void testCountNumberOfCursorsAtSamePositionOrBefore_SamePosition() {
+        ManagedCursorContainer container = new ManagedCursorContainer();
+        addCursor(container, "cursor1", PositionFactory.create(0, 1));
+        addCursor(container, "cursor2", PositionFactory.create(0, 2));
+        for (int i = 3; i <= 998; i++) {
+            addCursor(container, "cursor" + i, PositionFactory.create(0, 3));
+        }
+        addCursor(container, "cursor999", PositionFactory.create(0, 4));
+        addCursor(container, "cursor1000", PositionFactory.create(0, 5));
+        ManagedCursor cursor = container.get("cursor4");
+        assertThat(container.getNumberOfCursorsAtSamePositionOrBefore(cursor)).isEqualTo(998);
+    }
+
+    private static void addCursor(ManagedCursorContainer container, String name, Position position) {
+        container.add(createCursor(container, name, position), position);
+    }
+
 }
