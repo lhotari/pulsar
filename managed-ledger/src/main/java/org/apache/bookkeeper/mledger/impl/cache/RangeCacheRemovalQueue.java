@@ -19,6 +19,12 @@
 package org.apache.bookkeeper.mledger.impl.cache;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import com.google.common.annotations.VisibleForTesting;
+import java.util.ArrayList;
+import java.util.List;
+import org.apache.bookkeeper.mledger.ReferenceCountedEntry;
+import org.apache.commons.lang3.mutable.MutableInt;
+import org.apache.commons.lang3.mutable.MutableLong;
 import org.apache.commons.lang3.tuple.Pair;
 import org.jctools.queues.MpscUnboundedArrayQueue;
 
@@ -32,13 +38,15 @@ class RangeCacheRemovalQueue {
     private static final int REMOVAL_QUEUE_CHUNK_SIZE = 128 * 1024;
     private final MpscUnboundedArrayQueue<RangeCacheEntryWrapper> removalQueue = new MpscUnboundedArrayQueue<>(
             REMOVAL_QUEUE_CHUNK_SIZE);
+    private final RangeCacheRemovalQueueStash stash = new RangeCacheRemovalQueueStash();
 
     public Pair<Integer, Long> evictLEntriesBeforeTimestamp(long timestampNanos) {
         return evictEntries(
-                (e, c) -> e.timestampNanos < timestampNanos ? EvictionResult.REMOVE : EvictionResult.STOP);
+                (e, c) -> e.timestampNanos < timestampNanos ? EvictionResult.REMOVE : EvictionResult.STOP,
+                true);
     }
 
-    public Pair<Integer, Long> evictLeastAccessedEntries(long sizeToFree) {
+    public Pair<Integer, Long> evictLeastAccessedEntries(long sizeToFree, long timestampNanos) {
         checkArgument(sizeToFree > 0);
         return evictEntries(
                 (e, c) -> {
@@ -46,19 +54,134 @@ class RangeCacheRemovalQueue {
                     if (c.removedSize >= sizeToFree) {
                         return EvictionResult.STOP;
                     }
+                    // stash entries that are not evictable and haven't expired
+                    boolean expired = e.timestampNanos < timestampNanos;
+                    // TODO: entry should copy the EntryReadCountHandler reference to avoid recycling issues
+                    if (e.value.hasExpectedReads() && !expired) {
+                        return EvictionResult.STASH;
+                    }
                     return EvictionResult.REMOVE;
+                }, false);
+    }
+
+    /**
+     * Returns the actual size of the removal queue, including entries in the stash.
+     * This method is used for testing purposes to verify actual size of cached entries.
+     * This has a performance impact, so it should not be used in production code.
+     * @return a pair containing the number of entries and their total size in bytes
+     */
+    @VisibleForTesting
+    public synchronized Pair<Integer, Long> getNonEvictableSize() {
+        final MutableInt entries = new MutableInt(0);
+        final MutableLong bytesSize = new MutableLong(0L);
+        stash.entries.forEach((entry) -> {
+            if (entry != null) {
+                entry.withWriteLock(wrapper -> {
+                    ReferenceCountedEntry value = wrapper.value;
+                    if (value != null && value.hasExpectedReads()) {
+                        entries.increment();
+                        bytesSize.add(value.getLength());
+                    }
+                    return null;
                 });
+            }
+        });
+        removalQueue.drain((entry) -> {
+            if (entry != null) {
+                boolean exists = entry.withWriteLock(wrapper -> {
+                    ReferenceCountedEntry value = wrapper.value;
+                    if (value != null) {
+                        if (value.hasExpectedReads()) {
+                            entries.increment();
+                            bytesSize.add(wrapper.size);
+                        }
+                        return true;
+                    }
+                    return false;
+                });
+                if (exists) {
+                    // Add the entry to the stash to avoid losing it
+                    stash.add(entry);
+                }
+            }
+        });
+        return Pair.of(entries.getValue(), bytesSize.getValue());
     }
 
     public boolean addEntry(RangeCacheEntryWrapper newWrapper) {
         return removalQueue.offer(newWrapper);
     }
 
+    class RangeCacheRemovalQueueStash {
+        // TODO: consider using a more efficient data structure, for example, a linked list of lists
+        // and keeping a pool of lists to recycle
+        List<RangeCacheEntryWrapper> entries = new ArrayList<>();
+        int size = 0;
+        int removed = 0;
+
+        public void add(RangeCacheEntryWrapper entry) {
+            entries.add(entry);
+            size++;
+        }
+
+        public boolean evictEntries(EvictionPredicate evictionPredicate, RangeCacheRemovalCounters counters,
+                                    boolean processAllEntriesInStash) {
+            boolean continueEviction = doEvictEntries(evictionPredicate, counters, processAllEntriesInStash);
+            maybeTrim();
+            return continueEviction;
+        }
+
+        private boolean doEvictEntries(EvictionPredicate evictionPredicate, RangeCacheRemovalCounters counters,
+                                       boolean processAllEntriesInStash) {
+            for (int i = 0; i < entries.size(); i++) {
+                RangeCacheEntryWrapper entry = entries.get(i);
+                if (entry == null) {
+                    continue;
+                }
+                EvictionResult evictionResult = handleEviction(evictionPredicate, entry, counters);
+                if (evictionResult.shouldRemoveFromQueue()) {
+                    // mark the entry as deleted
+                    entries.set(i, null);
+                    // recycle the entry after it has been removed
+                    entry.recycle();
+                    removed++;
+                }
+                if (!processAllEntriesInStash && (!evictionResult.isContinueEviction() || Thread.currentThread()
+                        .isInterrupted())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        void maybeTrim() {
+            if (removed == size) {
+                entries.clear();
+                size = 0;
+                removed = 0;
+            } else if (size > 1000 && removed > size / 2) {
+                List<RangeCacheEntryWrapper> newEntries = new ArrayList<>(size - removed);
+                for (RangeCacheEntryWrapper entry : entries) {
+                    if (entry != null) {
+                        newEntries.add(entry);
+                    }
+                }
+                entries = newEntries;
+                size = entries.size();
+                removed = 0;
+            }
+        }
+    }
+
     enum EvictionResult {
-        REMOVE, MISSING, STOP;
+        REMOVE, STASH, STOP, MISSING;
 
         boolean isContinueEviction() {
             return this != STOP;
+        }
+
+        boolean shouldStash() {
+            return this == STASH;
         }
 
         boolean shouldRemoveFromQueue() {
@@ -78,9 +201,13 @@ class RangeCacheRemovalQueue {
      * @param evictionPredicate the predicate to determine if an entry should be evicted
      * @return the number of entries and the total size removed from the cache
      */
-    private synchronized Pair<Integer, Long> evictEntries(EvictionPredicate evictionPredicate) {
+    private synchronized Pair<Integer, Long> evictEntries(
+            EvictionPredicate evictionPredicate, boolean alwaysProcessAllEntriesInStash) {
         RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
-        handleQueue(evictionPredicate, counters);
+        boolean continueEviction = stash.evictEntries(evictionPredicate, counters, alwaysProcessAllEntriesInStash);
+        if (continueEviction) {
+            handleQueue(evictionPredicate, counters);
+        }
         return handleRemovalResult(counters);
     }
 
@@ -92,7 +219,11 @@ class RangeCacheRemovalQueue {
                 break;
             }
             EvictionResult evictionResult = handleEviction(evictionPredicate, entry, counters);
-            if (evictionResult.shouldRemoveFromQueue()) {
+            if (evictionResult.shouldStash()) {
+                // remove the peeked entry from the queue
+                removalQueue.poll();
+                stash.add(entry);
+            } else if (evictionResult.shouldRemoveFromQueue()) {
                 // remove the peeked entry from the queue
                 removalQueue.poll();
                 // recycle the entry after it has been removed from the queue
