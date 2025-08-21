@@ -44,9 +44,9 @@ public class SequenceIdWithErrorTest extends BkEnsemblesTestBase {
      */
     @Test
     public void testCheckSequenceId() throws Exception {
-        admin.namespaces().createNamespace("prop/my-test", Collections.singleton("usc"));
+        admin.namespaces().createNamespace("tenant/my-test", Collections.singleton("usc"));
 
-        String topicName = "prop/my-test/my-topic";
+        String topicName = "tenant/my-test/my-topic";
         int num = 10;
 
         @Cleanup

@@ -115,7 +115,7 @@ public class BatchMessageTest extends BrokerTestBase {
             throws Exception {
         int numMsgs = 50;
         int numMsgsInBatch = numMsgs / 2;
-        final String topicName = "persistent://prop/ns-abc/testSimpleBatchProducerWithFixedBatchSize-"
+        final String topicName = "persistent://tenant/ns-abc/testSimpleBatchProducerWithFixedBatchSize-"
                 + UUID.randomUUID();
         final String subscriptionName = "sub-1" + compressionType.toString();
 
@@ -163,7 +163,7 @@ public class BatchMessageTest extends BrokerTestBase {
             throws Exception {
         int numMsgs = 50;
         int numBytesInBatch = 600;
-        final String topicName = "persistent://prop/ns-abc/testSimpleBatchProducerWithFixedBatchSize-"
+        final String topicName = "persistent://tenant/ns-abc/testSimpleBatchProducerWithFixedBatchSize-"
                 + UUID.randomUUID();
         final String subscriptionName = "sub-1" + compressionType.toString();
 
@@ -213,7 +213,7 @@ public class BatchMessageTest extends BrokerTestBase {
     public void testSimpleBatchProducerWithFixedBatchTime(CompressionType compressionType, BatcherBuilder builder)
             throws Exception {
         int numMsgs = 100;
-        final String topicName = "persistent://prop/ns-abc/testSimpleBatchProducerWithFixedBatchTime-"
+        final String topicName = "persistent://tenant/ns-abc/testSimpleBatchProducerWithFixedBatchTime-"
                 + UUID.randomUUID();
         final String subscriptionName = "time-sub-1" + compressionType.toString();
 
@@ -251,7 +251,7 @@ public class BatchMessageTest extends BrokerTestBase {
     public void testSimpleBatchProducerWithFixedBatchSizeAndTime(CompressionType compressionType,
                                                                  BatcherBuilder builder) throws Exception {
         int numMsgs = 100;
-        final String topicName = "persistent://prop/ns-abc/testSimpleBatchProducerWithFixedBatchSizeAndTime-"
+        final String topicName = "persistent://tenant/ns-abc/testSimpleBatchProducerWithFixedBatchSizeAndTime-"
                 + UUID.randomUUID();
         final String subscriptionName = "time-size-sub-1" + compressionType.toString();
 
@@ -290,7 +290,7 @@ public class BatchMessageTest extends BrokerTestBase {
             throws Exception {
         int numMsgs = 50;
         int numMsgsInBatch = numMsgs / 2;
-        final String topicName = "persistent://prop/ns-abc/testBatchProducerWithLargeMessage-" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/testBatchProducerWithLargeMessage-" + UUID.randomUUID();
         final String subscriptionName = "large-message-sub-1" + compressionType.toString();
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer()
@@ -352,7 +352,7 @@ public class BatchMessageTest extends BrokerTestBase {
             throws Exception {
         int numMsgs = 500;
         int numMsgsInBatch = numMsgs / 20;
-        final String topicName = "persistent://prop/ns-abc/testSimpleBatchProducerConsumer-" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/testSimpleBatchProducerConsumer-" + UUID.randomUUID();
         final String subscriptionName = "pc-sub-1" + compressionType.toString();
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName(subscriptionName)
@@ -412,7 +412,7 @@ public class BatchMessageTest extends BrokerTestBase {
     public void testSimpleBatchSyncProducerWithFixedBatchSize(BatcherBuilder builder) throws Exception {
         int numMsgs = 10;
         int numMsgsInBatch = numMsgs / 2;
-        final String topicName = "persistent://prop/ns-abc/testSimpleBatchSyncProducerWithFixedBatchSize-"
+        final String topicName = "persistent://tenant/ns-abc/testSimpleBatchSyncProducerWithFixedBatchSize-"
                 + UUID.randomUUID();
         final String subscriptionName = "syncsub-1";
 
@@ -457,7 +457,7 @@ public class BatchMessageTest extends BrokerTestBase {
         // Send enough messages to trigger one batch by size and then have a remaining message in the batch container
         int numMsgs = 3;
         int numMsgsInBatch = 2;
-        final String topicName = "persistent://prop/ns-abc/testSimpleBatchSyncProducerWithFixedBatchSize-"
+        final String topicName = "persistent://tenant/ns-abc/testSimpleBatchSyncProducerWithFixedBatchSize-"
                 + UUID.randomUUID();
         final String subscriptionName = "syncsub-1";
 
@@ -510,7 +510,7 @@ public class BatchMessageTest extends BrokerTestBase {
     public void testSimpleBatchProducerConsumer1kMessages(BatcherBuilder builder) throws Exception {
         int numMsgs = 2000;
         int numMsgsInBatch = 4;
-        final String topicName = "persistent://prop/ns-abc/testSimpleBatchProducerConsumer1kMessages-"
+        final String topicName = "persistent://tenant/ns-abc/testSimpleBatchProducerConsumer1kMessages-"
                 + UUID.randomUUID();
         final String subscriptionName = "pc1k-sub-1";
 
@@ -576,7 +576,7 @@ public class BatchMessageTest extends BrokerTestBase {
     public void testOutOfOrderAcksForBatchMessage() throws Exception {
         int numMsgs = 40;
         int numMsgsInBatch = numMsgs / 4;
-        final String topicName = "persistent://prop/ns-abc/testOutOfOrderAcksForBatchMessage";
+        final String topicName = "persistent://tenant/ns-abc/testOutOfOrderAcksForBatchMessage";
         final String subscriptionName = "oooack-sub-1";
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName(subscriptionName)
@@ -643,7 +643,7 @@ public class BatchMessageTest extends BrokerTestBase {
     public void testNonBatchCumulativeAckAfterBatchPublish(BatcherBuilder builder) throws Exception {
         int numMsgs = 10;
         int numMsgsInBatch = numMsgs;
-        final String topicName = "persistent://prop/ns-abc/testNonBatchCumulativeAckAfterBatchPublish-"
+        final String topicName = "persistent://tenant/ns-abc/testNonBatchCumulativeAckAfterBatchPublish-"
                 + UUID.randomUUID();
         final String subscriptionName = "nbcaabp-sub-1";
 
@@ -697,7 +697,7 @@ public class BatchMessageTest extends BrokerTestBase {
     public void testBatchAndNonBatchCumulativeAcks(BatcherBuilder builder) throws Exception {
         int numMsgs = 50;
         int numMsgsInBatch = numMsgs / 10;
-        final String topicName = "persistent://prop/ns-abc/testBatchAndNonBatchCumulativeAcks-" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/testBatchAndNonBatchCumulativeAcks-" + UUID.randomUUID();
         final String subscriptionName = "bnb-sub-1";
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName(subscriptionName)
@@ -769,7 +769,7 @@ public class BatchMessageTest extends BrokerTestBase {
     @Test(dataProvider = "containerBuilder")
     public void testConcurrentBatchMessageAck(BatcherBuilder builder) throws Exception {
         int numMsgs = 10;
-        final String topicName = "persistent://prop/ns-abc/testConcurrentAck-" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/testConcurrentAck-" + UUID.randomUUID();
         final String subscriptionName = "sub-1";
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName(subscriptionName)
@@ -826,7 +826,7 @@ public class BatchMessageTest extends BrokerTestBase {
     @Test
     public void testOrderingOfKeyBasedBatchMessageContainer()
             throws PulsarClientException, ExecutionException, InterruptedException {
-        final String topicName = "persistent://prop/ns-abc/testKeyBased";
+        final String topicName = "persistent://tenant/ns-abc/testKeyBased";
         final String subscriptionName = "sub-1";
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName)
                 .batchingMaxPublishDelay(5, TimeUnit.SECONDS)
@@ -892,7 +892,7 @@ public class BatchMessageTest extends BrokerTestBase {
 
     @Test(dataProvider = "containerBuilder")
     public void testBatchSendOneMessage(BatcherBuilder builder) throws Exception {
-        final String topicName = "persistent://prop/ns-abc/testBatchSendOneMessage-" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/testBatchSendOneMessage-" + UUID.randomUUID();
         final String subscriptionName = "sub-1";
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName(subscriptionName)
@@ -926,7 +926,7 @@ public class BatchMessageTest extends BrokerTestBase {
     public void testRetrieveSequenceIdGenerated(BatcherBuilder builder) throws Exception {
 
         int numMsgs = 10;
-        final String topicName = "persistent://prop/ns-abc/testRetrieveSequenceIdGenerated-" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/testRetrieveSequenceIdGenerated-" + UUID.randomUUID();
         final String subscriptionName = "sub-1";
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName(subscriptionName)
@@ -959,7 +959,7 @@ public class BatchMessageTest extends BrokerTestBase {
     public void testRetrieveSequenceIdSpecify(BatcherBuilder builder) throws Exception {
 
         int numMsgs = 10;
-        final String topicName = "persistent://prop/ns-abc/testRetrieveSequenceIdSpecify-" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/testRetrieveSequenceIdSpecify-" + UUID.randomUUID();
         final String subscriptionName = "sub-1";
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName(subscriptionName)
@@ -992,7 +992,7 @@ public class BatchMessageTest extends BrokerTestBase {
     public void testSendOverSizeMessage(CompressionType compressionType, BatcherBuilder builder) throws Exception {
 
         final int numMsgs = 10;
-        final String topicName = "persistent://prop/ns-abc/testSendOverSizeMessage-" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/testSendOverSizeMessage-" + UUID.randomUUID();
 
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName)
                 .batchingMaxPublishDelay(1, TimeUnit.MILLISECONDS)
@@ -1021,7 +1021,7 @@ public class BatchMessageTest extends BrokerTestBase {
 
         int numMsgs = 1000;
         int batchMessages = 10;
-        final String topicName = "persistent://prop/ns-abc/testBatchMessageDispatchingAccordingToPermits-"
+        final String topicName = "persistent://tenant/ns-abc/testBatchMessageDispatchingAccordingToPermits-"
                 + UUID.randomUUID();
         final String subscriptionName = "bmdap-sub-1";
 
@@ -1059,7 +1059,7 @@ public class BatchMessageTest extends BrokerTestBase {
     private void testDecreaseUnAckMessageCountWithAckReceipt(SubscriptionType subType,
                                                              boolean enableBatch) throws Exception {
         final int messageCount = 50;
-        final String topicName = "persistent://prop/ns-abc/testDecreaseWithAckReceipt" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/testDecreaseWithAckReceipt" + UUID.randomUUID();
         final String subscriptionName = "sub-batch-1";
         @Cleanup
         ConsumerImpl<byte[]> consumer = (ConsumerImpl<byte[]>) pulsarClient

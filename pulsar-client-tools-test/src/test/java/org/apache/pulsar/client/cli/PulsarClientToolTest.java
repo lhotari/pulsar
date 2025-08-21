@@ -433,7 +433,7 @@ public class PulsarClientToolTest extends BrokerTestBase {
     }
 
     private static String getTopicWithRandomSuffix(String localNameBase) {
-        return String.format("persistent://prop/ns-abc/test/%s-%s", localNameBase, UUID.randomUUID().toString());
+        return String.format("persistent://tenant/ns-abc/test/%s-%s", localNameBase, UUID.randomUUID().toString());
     }
 
 

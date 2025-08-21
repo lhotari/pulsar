@@ -54,7 +54,7 @@ public class BusyWaitServiceTest extends BkEnsemblesTestBase {
                 .enableBusyWait(true)
                 .build();
 
-        String namespace = "prop/busy-wait";
+        String namespace = "tenant/busy-wait";
         admin.namespaces().createNamespace(namespace);
 
         String topic = namespace + "/my-topic-" + UUID.randomUUID();

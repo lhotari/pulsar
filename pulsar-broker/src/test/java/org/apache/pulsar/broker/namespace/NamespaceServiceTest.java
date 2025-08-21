@@ -289,7 +289,7 @@ public class NamespaceServiceTest extends BrokerTestBase {
         ownership.set(pulsar.getNamespaceService(), ownershipCache);
 
         NamespaceService namespaceService = pulsar.getNamespaceService();
-        NamespaceName nsname = NamespaceName.get("prop/use/ns1");
+        NamespaceName nsname = NamespaceName.get("tenant/ns1");
         NamespaceBundles bundles = namespaceService.getNamespaceBundleFactory().getBundles(nsname);
 
         NamespaceBundle bundle = bundles.getBundles().get(0);
@@ -584,7 +584,7 @@ public class NamespaceServiceTest extends BrokerTestBase {
 
     @Test
     public void testSplitLargestBundle() throws Exception {
-        String namespace = "prop/test/ns-abc2";
+        String namespace = "tenant/test/ns-abc2";
         String topic = "persistent://" + namespace + "/t1-";
         int totalTopics = 100;
 
@@ -632,7 +632,7 @@ public class NamespaceServiceTest extends BrokerTestBase {
     public void testSplitBUndleWithNoBundle() throws  Exception {
         conf.setLoadManagerClassName(ModularLoadManagerImpl.class.getName());
         restartBroker();
-        String namespace = "prop/test/ns-abc2";
+        String namespace = "tenant/test/ns-abc2";
 
         BundlesData bundleData = BundlesData.builder().numBundles(10).build();
         admin.namespaces().createNamespace(namespace, bundleData);
@@ -659,7 +659,7 @@ public class NamespaceServiceTest extends BrokerTestBase {
 
         conf.setLoadManagerClassName(ModularLoadManagerImpl.class.getName());
         restartBroker();
-        String namespace = "prop/test/ns-abc2";
+        String namespace = "tenant/test/ns-abc2";
         String topic = "persistent://" + namespace + "/t1-";
         int totalTopics = 100;
 
@@ -778,7 +778,7 @@ public class NamespaceServiceTest extends BrokerTestBase {
 
     @Test
     public void testModularLoadManagerRemoveBundleAndLoad() throws Exception {
-        final String namespace = "prop/ns-abc";
+        final String namespace = "tenant/ns-abc";
         final String bundleName = namespace + "/0x00000000_0xffffffff";
         final String topic1 = "persistent://" + namespace + "/topic1";
         final String topic2 = "persistent://" + namespace + "/topic2";
@@ -962,7 +962,7 @@ public class NamespaceServiceTest extends BrokerTestBase {
 
     @Test(dataProvider = "topicDomain")
     public void checkTopicExistsForNonPartitionedTopic(String topicDomain) throws Exception {
-        TopicName topicName = TopicName.get(topicDomain, "prop", "ns-abc", "topic-" + UUID.randomUUID());
+        TopicName topicName = TopicName.get(topicDomain, "tenant", "ns-abc", "topic-" + UUID.randomUUID());
         admin.topics().createNonPartitionedTopic(topicName.toString());
         CompletableFuture<TopicExistsInfo> result = pulsar.getNamespaceService().checkTopicExistsAsync(topicName);
         assertThat(result)
@@ -977,7 +977,7 @@ public class NamespaceServiceTest extends BrokerTestBase {
 
     @Test(dataProvider = "topicDomain")
     public void checkTopicExistsForPartitionedTopic(String topicDomain) throws Exception {
-        TopicName topicName = TopicName.get(topicDomain, "prop", "ns-abc", "topic-" + UUID.randomUUID());
+        TopicName topicName = TopicName.get(topicDomain, "tenant", "ns-abc", "topic-" + UUID.randomUUID());
         admin.topics().createPartitionedTopic(topicName.toString(), 3);
 
         // Check the topic exists by the partitions.
@@ -1016,7 +1016,7 @@ public class NamespaceServiceTest extends BrokerTestBase {
 
     @Test(dataProvider = "topicDomain")
     public void checkTopicExistsForNonExistentNonPartitionedTopic(String topicDomain) {
-        TopicName topicName = TopicName.get(topicDomain, "prop", "ns-abc", "topic-" + UUID.randomUUID());
+        TopicName topicName = TopicName.get(topicDomain, "tenant", "ns-abc", "topic-" + UUID.randomUUID());
         CompletableFuture<TopicExistsInfo> result = pulsar.getNamespaceService().checkTopicExistsAsync(topicName);
         assertThat(result)
                 .succeedsWithin(3, TimeUnit.SECONDS)
@@ -1033,7 +1033,7 @@ public class NamespaceServiceTest extends BrokerTestBase {
     @Test(dataProvider = "topicDomain")
     public void checkTopicExistsForNonExistentPartitionTopic(String topicDomain) {
         TopicName topicName =
-                TopicName.get(topicDomain, "prop", "ns-abc", "topic-" + UUID.randomUUID() + "-partition-10");
+                TopicName.get(topicDomain, "tenant", "ns-abc", "topic-" + UUID.randomUUID() + "-partition-10");
         CompletableFuture<TopicExistsInfo> result = pulsar.getNamespaceService().checkTopicExistsAsync(topicName);
         assertThat(result)
                 .succeedsWithin(3, TimeUnit.SECONDS)

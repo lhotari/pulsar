@@ -74,7 +74,7 @@ public class MessageTTLTest extends BrokerTestBase {
     @Test
     public void testMessageExpiryAfterTopicUnload() throws Exception {
         int numMsgs = 50;
-        final String topicName = "persistent://prop/ns-abc/testttl";
+        final String topicName = "persistent://tenant/ns-abc/testttl";
         final String subscriptionName = "ttl-sub-1";
 
         pulsarClient.newConsumer()
@@ -124,7 +124,7 @@ public class MessageTTLTest extends BrokerTestBase {
 
     @Test
     public void testTTLPoliciesUpdate() throws Exception {
-        final String namespace = "prop/ns-abc";
+        final String namespace = "tenant/ns-abc";
         final String topicName = "persistent://" + namespace + "/testTTLPoliciesUpdate";
 
         @Cleanup
@@ -148,7 +148,7 @@ public class MessageTTLTest extends BrokerTestBase {
 
     @Test
     public void testTtlFilteredByIgnoreSubscriptions() throws Exception {
-        String topicName = "persistent://prop/ns-abc/testTTLFilteredByIgnoreSubscriptions";
+        String topicName = "persistent://tenant/ns-abc/testTTLFilteredByIgnoreSubscriptions";
         String subName = "__SUB_FILTER";
         cleanup();
         Set<String> ignoredSubscriptions = new HashSet<>();
@@ -194,7 +194,7 @@ public class MessageTTLTest extends BrokerTestBase {
 
     @Test
     public void testTtlWithoutIgnoreSubscriptions() throws Exception {
-        String topicName = "persistent://prop/ns-abc/testTTLWithoutIgnoreSubscriptions";
+        String topicName = "persistent://tenant/ns-abc/testTTLWithoutIgnoreSubscriptions";
         String subName = "__SUB_FILTER";
         cleanup();
         int defaultTtl = 5;

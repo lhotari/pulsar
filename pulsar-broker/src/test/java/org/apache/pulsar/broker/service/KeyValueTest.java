@@ -59,7 +59,7 @@ public class KeyValueTest extends BrokerTestBase {
 
     @Test
     public void keyValueAutoConsumeTest()  throws Exception {
-        String topic = "persistent://prop/ns-abc/kv-record";
+        String topic = "persistent://tenant/ns-abc/kv-record";
         admin.topics().createNonPartitionedTopic(topic);
 
         RecordSchemaBuilder builder = SchemaBuilder

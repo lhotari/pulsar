@@ -82,6 +82,7 @@ import org.apache.http.HttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.pulsar.broker.BrokerTestUtil;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.broker.service.BrokerServiceException.PersistenceException;
@@ -171,11 +172,11 @@ public class BrokerServiceTest extends BrokerTestBase {
         cleanup();
         conf.setDefaultNumberOfNamespaceBundles(bundleNum);
         setup();
-        final String topic = "persistent://prop/ns-abc/successTopic";
+        final String topic = "persistent://tenant/ns-abc/successTopic";
         admin.topics().createPartitionedTopic(topic, 12);
         Producer<byte[]> producer = pulsarClient.newProducer(Schema.BYTES).topic(topic).create();
 
-        BundlesData bundlesData = admin.namespaces().getBundles("prop/ns-abc");
+        BundlesData bundlesData = admin.namespaces().getBundles("tenant/ns-abc");
         assertEquals(bundlesData.getNumBundles(), bundleNum);
         List<String> list = admin.brokers().getActiveBrokers("test");
         assertEquals(list.size(), 1);
@@ -201,7 +202,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testOwnedNsCheck() throws Exception {
-        final String topic = "persistent://prop/ns-abc/successTopic";
+        final String topic = "persistent://tenant/ns-abc/successTopic";
         BrokerService service = pulsar.getBrokerService();
 
         final CountDownLatch latch1 = new CountDownLatch(1);
@@ -238,7 +239,7 @@ public class BrokerServiceTest extends BrokerTestBase {
         // this test might fail if there are stats from other tests
         resetState();
 
-        final String topicName = "persistent://prop/ns-abc/successTopic";
+        final String topicName = "persistent://tenant/ns-abc/successTopic";
         final String subName = "successSub";
 
         TopicStats stats;
@@ -324,7 +325,7 @@ public class BrokerServiceTest extends BrokerTestBase {
         conf.setBrokerMaxConnections(3);
         conf.setBrokerMaxConnectionsPerIp(2);
         setup();
-        final String topicName = "persistent://prop/ns-abc/connection" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/connection" + UUID.randomUUID();
         List<PulsarClient> clients = new ArrayList<>();
         ClientBuilder clientBuilder =
                 PulsarClient.builder().operationTimeout(1, TimeUnit.DAYS)
@@ -358,7 +359,7 @@ public class BrokerServiceTest extends BrokerTestBase {
         conf.setBrokerMaxConnections(0);
         conf.setBrokerMaxConnectionsPerIp(1);
         setup();
-        final String topicName = "persistent://prop/ns-abc/connection" + UUID.randomUUID();
+        final String topicName = "persistent://tenant/ns-abc/connection" + UUID.randomUUID();
         List<PulsarClient> clients = new ArrayList<>();
         ClientBuilder clientBuilder =
                 PulsarClient.builder().operationTimeout(1, TimeUnit.DAYS)
@@ -446,7 +447,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testStatsOfStorageSizeWithSubscription() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/no-subscription";
+        final String topicName = "persistent://tenant/ns-abc/no-subscription";
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName).create();
         PersistentTopic topicRef = (PersistentTopic) pulsar.getBrokerService().getTopicReference(topicName).get();
 
@@ -465,7 +466,7 @@ public class BrokerServiceTest extends BrokerTestBase {
         // this test might fail if there are stats from other tests
         resetState();
 
-        final String topicName = "persistent://prop/ns-abc/successSharedTopic";
+        final String topicName = "persistent://tenant/ns-abc/successSharedTopic";
         final String subName = "successSharedSub";
 
         TopicStats stats;
@@ -554,7 +555,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testBrokerStatsMetrics() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/newTopic";
+        final String topicName = "persistent://tenant/ns-abc/newTopic";
         final String subName = "newSub";
         BrokerStats brokerStatsClient = admin.brokerStats();
 
@@ -586,10 +587,10 @@ public class BrokerServiceTest extends BrokerTestBase {
         for (int i = 0; i < metrics.size(); i++) {
             try {
                 String data = metrics.get(i).getAsJsonObject().get("dimensions").toString();
-                if (!namespaceDimensionFound && data.contains("prop/ns-abc")) {
+                if (!namespaceDimensionFound && data.contains("tenant/ns-abc")) {
                     namespaceDimensionFound = true;
                 }
-                if (!topicLoadTimesDimensionFound && data.contains("prop/ns-abc")) {
+                if (!topicLoadTimesDimensionFound && data.contains("tenant/ns-abc")) {
                     topicLoadTimesDimensionFound = true;
                 }
             } catch (Exception e) {
@@ -608,8 +609,8 @@ public class BrokerServiceTest extends BrokerTestBase {
         resetState();
 
         final int numBundles = 4;
-        final String ns1 = "prop/stats1";
-        final String ns2 = "prop/stats2";
+        final String ns1 = "tenant/stats1";
+        final String ns2 = "tenant/stats2";
 
         List<String> nsList = List.of(ns1, ns2);
         List<Producer<byte[]>> producerList = new ArrayList<>();
@@ -662,7 +663,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testTlsDisabled() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/newTopic";
+        final String topicName = "persistent://tenant/ns-abc/newTopic";
         final String subName = "newSub";
         PulsarClient pulsarClient = null;
 
@@ -702,7 +703,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testTlsEnabled() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/newTopic";
+        final String topicName = "persistent://tenant/ns-abc/newTopic";
         final String subName = "newSub";
 
         conf.setAuthenticationEnabled(false);
@@ -779,7 +780,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testTlsEnabledWithoutNonTlsServicePorts() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/newTopic";
+        final String topicName = "persistent://tenant/ns-abc/newTopic";
         final String subName = "newSub";
 
         conf.setAuthenticationEnabled(false);
@@ -815,7 +816,7 @@ public class BrokerServiceTest extends BrokerTestBase {
     @SuppressWarnings("deprecation")
     @Test
     public void testTlsAuthAllowInsecure() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/newTopic";
+        final String topicName = "persistent://tenant/ns-abc/newTopic";
         final String subName = "newSub";
         Authentication auth;
 
@@ -878,7 +879,7 @@ public class BrokerServiceTest extends BrokerTestBase {
     @SuppressWarnings("deprecation")
     @Test
     public void testTlsAuthDisallowInsecure() throws Exception {
-        final String topicName = "persistent://prop/my-ns/newTopic";
+        final String topicName = "persistent://tenant/my-ns/newTopic";
         final String subName = "newSub";
         Authentication auth;
 
@@ -940,7 +941,7 @@ public class BrokerServiceTest extends BrokerTestBase {
     @SuppressWarnings("deprecation")
     @Test
     public void testTlsAuthUseTrustCert() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/newTopic";
+        final String topicName = "persistent://tenant/ns-abc/newTopic";
         final String subName = "newSub";
         Authentication auth;
 
@@ -1005,7 +1006,7 @@ public class BrokerServiceTest extends BrokerTestBase {
      */
     @Test
     public void testLookupThrottlingForClientByClient() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/newTopic";
+        final String topicName = "persistent://tenant/ns-abc/newTopic";
 
         PulsarServiceNameResolver resolver = new PulsarServiceNameResolver();
         resolver.updateServiceUrl(pulsar.getBrokerServiceUrl());
@@ -1163,7 +1164,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testTopicLoadingOnDisableNamespaceBundle() throws Exception {
-        final String namespace = "prop/disableBundle";
+        final String namespace = "tenant/disableBundle";
         try {
             admin.namespaces().createNamespace(namespace);
         } catch (PulsarAdminException.ConflictException e) {
@@ -1199,7 +1200,7 @@ public class BrokerServiceTest extends BrokerTestBase {
     @Test
     public void testConcurrentLoadTopicExceedLimitShouldNotBeAutoCreated() throws Exception {
         boolean needDeleteTopic = false;
-        final String namespace = "prop/concurrentLoad";
+        final String namespace = "tenant/concurrentLoad";
         try {
             // set up broker disable auto create and set concurrent load to 1 qps.
             cleanup();
@@ -1260,7 +1261,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testCheckInactiveSubscriptionsShouldNotDeleteCompactionCursor() throws Exception {
-        String namespace = "prop/test";
+        String namespace = "tenant/test";
 
         // set up broker set compaction threshold.
         cleanup();
@@ -1276,7 +1277,7 @@ public class BrokerServiceTest extends BrokerTestBase {
         // set enable subscription expiration.
         admin.namespaces().setSubscriptionExpirationTime(namespace, 1);
 
-        String compactionInactiveTestTopic = "persistent://prop/test/testCompactionCursorShouldNotDelete";
+        String compactionInactiveTestTopic = "persistent://tenant/test/testCompactionCursorShouldNotDelete";
 
         admin.topics().createNonPartitionedTopic(compactionInactiveTestTopic);
 
@@ -1323,7 +1324,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testCheckInactiveSubscriptionWhenNoMessageToAck() throws Exception {
-        String namespace = "prop/testInactiveSubscriptionWhenNoMessageToAck";
+        String namespace = "tenant/testInactiveSubscriptionWhenNoMessageToAck";
 
         try {
             admin.namespaces().createNamespace(namespace);
@@ -1389,7 +1390,7 @@ public class BrokerServiceTest extends BrokerTestBase {
      */
     @Test(timeOut = 3000)
     public void testTopicFailureShouldNotHaveDeadLock() {
-        final String namespace = "prop/ns-abc";
+        final String namespace = "tenant/ns-abc";
         final String deadLockTestTopic = "persistent://" + namespace + "/deadLockTestTopic";
 
         // let this broker own this namespace bundle by creating a topic
@@ -1432,7 +1433,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testLedgerOpenFailureShouldNotHaveDeadLock() throws Exception {
-        final String namespace = "prop/ns-abc";
+        final String namespace = "tenant/ns-abc";
         final String deadLockTestTopic = "persistent://" + namespace + "/deadLockTestTopic";
 
         // let this broker own this namespace bundle by creating a topic
@@ -1492,7 +1493,7 @@ public class BrokerServiceTest extends BrokerTestBase {
      */
     @Test
     public void testCreateNamespacePolicy() throws Exception {
-        final String namespace = "prop/testPolicy";
+        final String namespace = "tenant/testPolicy";
         final int totalBundle = 3;
         System.err.println("----------------");
         admin.namespaces().createNamespace(namespace, BundlesData.builder().numBundles(totalBundle).build());
@@ -1512,7 +1513,7 @@ public class BrokerServiceTest extends BrokerTestBase {
      */
     @Test
     public void testStuckTopicUnloading() throws Exception {
-        final String namespace = "prop/ns-abc";
+        final String namespace = "tenant/ns-abc";
         final String topicName = "persistent://" + namespace + "/unoadTopic";
         final String topicMlName = namespace + "/persistent/unoadTopic";
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName("my-subscriber-name")
@@ -1575,7 +1576,7 @@ public class BrokerServiceTest extends BrokerTestBase {
     public void shouldNotPreventCreatingTopicWhenNonexistingTopicIsCached() throws Exception {
         // run multiple iterations to increase the chance of reproducing a race condition in the topic cache
         for (int i = 0; i < 100; i++) {
-            final String topicName = "persistent://prop/ns-abc/topic-caching-test-topic" + i;
+            final String topicName = "persistent://tenant/ns-abc/topic-caching-test-topic" + i;
             CountDownLatch latch = new CountDownLatch(1);
             Thread getStatsThread = new Thread(() -> {
                 try {
@@ -1633,7 +1634,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testGetTopic() throws Exception {
-        final String ns = "prop/ns-test";
+        final String ns = "tenant/ns-test";
         admin.namespaces().createNamespace(ns, 2);
         final String topicName = ns + "/topic-1";
         admin.topics().createNonPartitionedTopic(String.format("persistent://%s", topicName));
@@ -1680,7 +1681,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testMetricsPersistentTopicLoadFails() throws Exception {
-        final String namespace = "prop/" + UUID.randomUUID().toString().replaceAll("-", "");
+        final String namespace = BrokerTestUtil.newUniqueName("tenant/ns");
         String topic = "persistent://" + namespace + "/topic1_" + UUID.randomUUID();
         admin.namespaces().createNamespace(namespace);
         admin.topics().createNonPartitionedTopic(topic);
@@ -1724,7 +1725,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testMetricsNonPersistentTopicLoadFails() throws Exception {
-        final String namespace = "prop/" + UUID.randomUUID().toString().replaceAll("-", "");
+        final String namespace = BrokerTestUtil.newUniqueName("tenant/ns");
         String topic = "non-persistent://" + namespace + "/topic1_" + UUID.randomUUID();
         admin.namespaces().createNamespace(namespace);
 
@@ -1778,10 +1779,10 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testDuplicateAcknowledgement() throws Exception {
-        final String ns = "prop/ns-test";
+        final String ns = "tenant/ns-test";
 
         admin.namespaces().createNamespace(ns, 2);
-        final String topicName = "persistent://prop/ns-test/duplicated-acknowledgement-test";
+        final String topicName = "persistent://tenant/ns-test/duplicated-acknowledgement-test";
         @Cleanup
         Producer<byte[]> producer = pulsarClient.newProducer()
                 .topic(topicName)
@@ -1804,11 +1805,11 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testBlockedConsumerOnUnackedMsgs() throws Exception {
-        final String ns = "prop/ns-test";
+        final String ns = "tenant/ns-test";
         admin.namespaces().createNamespace(ns, 2);
         admin.namespaces().setMaxUnackedMessagesPerConsumer(ns, 1);
 
-        final String topicName = "persistent://prop/ns-test/testBlockedConsumerOnUnackedMsgs";
+        final String topicName = "persistent://tenant/ns-test/testBlockedConsumerOnUnackedMsgs";
         @Cleanup
         Producer<byte[]> producer = pulsarClient.newProducer()
                 .topic(topicName)
@@ -1845,7 +1846,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testUnsubscribeNonDurableSub() throws Exception {
-        final String ns = "prop/ns-test";
+        final String ns = "tenant/ns-test";
         final String topic = ns + "/testUnsubscribeNonDurableSub";
 
         admin.namespaces().createNamespace(ns, 2);
@@ -1936,7 +1937,7 @@ public class BrokerServiceTest extends BrokerTestBase {
         };
 
         final BrokerService brokerService = pulsar.getBrokerService();
-        final String namespace = "prop/" + UUID.randomUUID();
+        final String namespace = BrokerTestUtil.newUniqueName("tenant/ns");
         admin.namespaces().createNamespace(namespace);
         admin.namespaces().setOffloadPolicies(namespace, offloadPolicies);
         Awaitility.await().untilAsserted(() -> {
@@ -1975,7 +1976,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testTlsWithAuthParams() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/newTopic";
+        final String topicName = "persistent://tenant/ns-abc/newTopic";
         final String subName = "newSub";
         Authentication auth;
 
@@ -2018,7 +2019,7 @@ public class BrokerServiceTest extends BrokerTestBase {
 
     @Test
     public void testPulsarMetadataEventSyncProducerCreation() throws Exception {
-        final String topicName = "persistent://prop/usw/my-ns/syncTopic";
+        final String topicName = "persistent://tenant/my-ns/syncTopic";
         pulsar.getConfiguration().setMetadataSyncEventTopic(topicName);
         PulsarMetadataEventSynchronizer sync = new PulsarMetadataEventSynchronizer(pulsar, topicName);
         // set invalid client for retry

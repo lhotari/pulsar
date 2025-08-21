@@ -23,10 +23,10 @@ import static org.mockito.Mockito.spy;
 import static org.testng.Assert.assertTrue;
 import com.google.common.collect.Sets;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.apache.pulsar.broker.BrokerTestUtil;
 import org.apache.pulsar.broker.service.BrokerTestBase;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.PulsarClientException;
@@ -59,7 +59,7 @@ public class NamespaceOwnershipListenerTest extends BrokerTestBase {
         final AtomicBoolean onLoad = new AtomicBoolean(false);
         final AtomicBoolean unLoad = new AtomicBoolean(false);
 
-        final String namespace = "prop/" + UUID.randomUUID().toString();
+        final String namespace = BrokerTestUtil.newUniqueName("tenant/ns");
 
         pulsar.getNamespaceService().addNamespaceBundleOwnershipListener(new NamespaceBundleOwnershipListener() {
 
@@ -82,7 +82,7 @@ public class NamespaceOwnershipListenerTest extends BrokerTestBase {
         });
 
         admin.namespaces().createNamespace(namespace, Sets.newHashSet("test"));
-        assertTrue(admin.namespaces().getNamespaces("prop").contains(namespace));
+        assertTrue(admin.namespaces().getNamespaces("tenant").contains(namespace));
 
         final String topic = "persistent://" + namespace + "/os-0";
 
@@ -123,9 +123,9 @@ public class NamespaceOwnershipListenerTest extends BrokerTestBase {
 
     @Test
     public void testGetAllPartitions() throws Exception {
-        final String namespace = "prop/" + UUID.randomUUID().toString();
+        final String namespace = BrokerTestUtil.newUniqueName("tenant/ns");
         admin.namespaces().createNamespace(namespace, Sets.newHashSet("test"));
-        assertTrue(admin.namespaces().getNamespaces("prop").contains(namespace));
+        assertTrue(admin.namespaces().getNamespaces("tenant").contains(namespace));
 
         final String topicName = "persistent://" + namespace + "/os";
         admin.topics().createPartitionedTopic(topicName, 6);
@@ -149,7 +149,7 @@ public class NamespaceOwnershipListenerTest extends BrokerTestBase {
         final AtomicInteger onLoad = new AtomicInteger(0);
         final AtomicInteger unLoad = new AtomicInteger(0);
 
-        final String namespace = "prop/" + UUID.randomUUID().toString();
+        final String namespace = BrokerTestUtil.newUniqueName("tenant/ns");
 
         pulsar.getNamespaceService().addNamespaceBundleOwnershipListener(new NamespaceBundleOwnershipListener() {
             @Override
@@ -171,7 +171,7 @@ public class NamespaceOwnershipListenerTest extends BrokerTestBase {
         });
 
         admin.namespaces().createNamespace(namespace, Sets.newHashSet("test"));
-        assertTrue(admin.namespaces().getNamespaces("prop").contains(namespace));
+        assertTrue(admin.namespaces().getNamespaces("tenant").contains(namespace));
 
         final String topic = "persistent://" + namespace + "/os-0";
         Producer<byte[]> producer = pulsarClient.newProducer()

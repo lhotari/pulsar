@@ -87,7 +87,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
     @Test(expectedExceptions = PulsarClientException.InvalidConfigurationException.class)
     public void zeroQueueSizeReceiveAsyncInCompatibility() throws PulsarClientException {
         String key = "zeroQueueSizeReceiveAsyncInCompatibility";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName).subscriptionName(subscriptionName)
@@ -98,7 +98,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
     @Test(expectedExceptions = PulsarClientException.class)
     public void zeroQueueSizePartitionedTopicInCompatibility() throws PulsarClientException, PulsarAdminException {
         String key = "zeroQueueSizePartitionedTopicInCompatibility";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         int numberOfPartitions = 3;
         admin.topics().createPartitionedTopic(topicName, numberOfPartitions);
@@ -110,7 +110,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
         String key = "nonZeroQueueSizeNormalConsumer";
 
         // 1. Config
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
 
@@ -147,7 +147,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
         String key = "zeroQueueSizeConsumerListener";
 
         // 1. Config
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
 
@@ -191,7 +191,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
         String key = "zeroQueueSizeSharedSubscription";
 
         // 1. Config
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
 
@@ -232,7 +232,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
         String key = "zeroQueueSizeFailoverSubscription";
 
         // 1. Config
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://tenant/ns-abc/topic-" + key;
         final String subscriptionName = "my-ex-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
 
@@ -324,7 +324,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
 
     @Test
     public void testZeroQueueSizeMessageRedelivery() throws PulsarClientException {
-        final String topic = "persistent://prop/ns-abc/testZeroQueueSizeMessageRedelivery";
+        final String topic = "persistent://tenant/ns-abc/testZeroQueueSizeMessageRedelivery";
         Consumer<Integer> consumer = pulsarClient.newConsumer(Schema.INT32)
             .topic(topic)
             .receiverQueueSize(0)
@@ -356,7 +356,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
 
     @Test
     public void testZeroQueueSizeMessageRedeliveryForListener() throws Exception {
-        final String topic = "persistent://prop/ns-abc/testZeroQueueSizeMessageRedeliveryForListener";
+        final String topic = "persistent://tenant/ns-abc/testZeroQueueSizeMessageRedeliveryForListener";
         final int messages = 10;
         final CountDownLatch latch = new CountDownLatch(messages * 2);
         Set<Integer> receivedMessages = new HashSet<>();
@@ -394,7 +394,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
     @Test
     public void testZeroQueueSizeMessageRedeliveryForAsyncReceive()
             throws PulsarClientException, ExecutionException, InterruptedException {
-        final String topic = "persistent://prop/ns-abc/testZeroQueueSizeMessageRedeliveryForAsyncReceive";
+        final String topic = "persistent://tenant/ns-abc/testZeroQueueSizeMessageRedeliveryForAsyncReceive";
         Consumer<Integer> consumer = pulsarClient.newConsumer(Schema.INT32)
             .topic(topic)
             .receiverQueueSize(0)
@@ -465,7 +465,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
 
     @Test(timeOut = 30000)
     public void testPauseAndResume() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/zero-queue-pause-and-resume";
+        final String topicName = "persistent://tenant/ns-abc/zero-queue-pause-and-resume";
         final String subName = "sub";
 
         AtomicReference<CountDownLatch> latch = new AtomicReference<>(new CountDownLatch(1));
@@ -501,7 +501,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
 
     @Test(timeOut = 30000)
     public void testPauseAndResumeWithUnloading() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/zero-queue-pause-and-resume-with-unloading";
+        final String topicName = "persistent://tenant/ns-abc/zero-queue-pause-and-resume-with-unloading";
         final String subName = "sub";
 
         AtomicReference<CountDownLatch> latch = new AtomicReference<>(new CountDownLatch(1));
@@ -540,7 +540,7 @@ public class ZeroQueueSizeTest extends BrokerTestBase {
 
     @Test(timeOut = 30000)
     public void testPauseAndResumeNoReconnection() throws Exception {
-        final String topicName = "persistent://prop/ns-abc/zero-queue-pause-and-resume-no-reconnection";
+        final String topicName = "persistent://tenant/ns-abc/zero-queue-pause-and-resume-no-reconnection";
         final String subName = "sub";
 
         final Object object = new Object();

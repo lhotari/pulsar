@@ -82,7 +82,7 @@ public class NonPersistentTopicE2ETest extends BrokerTestBase {
     @Test(groups = "broker")
     public void testGCWillDeleteSchema() throws Exception {
         // 1. Simple successful GC
-        final String topicName = "non-persistent://prop/ns-abc/topic-1";
+        final String topicName = "non-persistent://tenant/ns-abc/topic-1";
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName).create();
         producer.close();
 
@@ -105,7 +105,7 @@ public class NonPersistentTopicE2ETest extends BrokerTestBase {
         assertFalse(topicHasSchema(topicName));
 
         // 1a. Topic that add/removes subscription can be GC'd
-        final String topicName2 = "non-persistent://prop/ns-abc/topic-1a";
+        final String topicName2 = "non-persistent://tenant/ns-abc/topic-1a";
         String subName = "sub1";
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName2).subscriptionName(subName).subscribe();
         topic = getTopic(topicName2);
@@ -123,7 +123,7 @@ public class NonPersistentTopicE2ETest extends BrokerTestBase {
         assertFalse(topicHasSchema(topicName2));
 
         // 2. Topic is not GCed with live connection
-        final String topicName3 = "non-persistent://prop/ns-abc/topic-2";
+        final String topicName3 = "non-persistent://tenant/ns-abc/topic-2";
         String subName2 = "sub1";
         consumer = pulsarClient.newConsumer().topic(topicName3).subscriptionName(subName2).subscribe();
         topic = getTopic(topicName3);
@@ -150,7 +150,7 @@ public class NonPersistentTopicE2ETest extends BrokerTestBase {
     @Test
     public void testCloseConsumerWillDeleteSchema() throws Exception {
         // 1. Simple successful GC
-        final String topicName = "non-persistent://prop/ns-abc/topic-1";
+        final String topicName = "non-persistent://tenant/ns-abc/topic-1";
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName).create();
         producer.close();
 
@@ -165,7 +165,7 @@ public class NonPersistentTopicE2ETest extends BrokerTestBase {
                 .user("foo").build();
         topic.get().addSchema(schemaData).join();
 
-        final String topicName3 = "non-persistent://prop/ns-abc/topic-2";
+        final String topicName3 = "non-persistent://tenant/ns-abc/topic-2";
         String subName = "sub1";
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topicName3).subscriptionName(subName).subscribe();
         topic = getTopic(topicName3);
@@ -187,9 +187,9 @@ public class NonPersistentTopicE2ETest extends BrokerTestBase {
     }
     @Test(groups = "broker")
     public void testPatternTopic() throws PulsarClientException, InterruptedException {
-        final String topic1 = "non-persistent://prop/ns-abc/testPatternTopic1-" + UUID.randomUUID().toString();
-        final String topic2 = "non-persistent://prop/ns-abc/testPatternTopic2-" + UUID.randomUUID().toString();
-        Pattern pattern = Pattern.compile("prop/ns-abc/test.*");
+        final String topic1 = "non-persistent://tenant/ns-abc/testPatternTopic1-" + UUID.randomUUID().toString();
+        final String topic2 = "non-persistent://tenant/ns-abc/testPatternTopic2-" + UUID.randomUUID().toString();
+        Pattern pattern = Pattern.compile("tenant/ns-abc/test.*");
         Consumer<String> consumer = pulsarClient.newConsumer(Schema.STRING)
                 .topicsPattern(pattern)
                 .subscriptionName("my-sub")
@@ -225,7 +225,7 @@ public class NonPersistentTopicE2ETest extends BrokerTestBase {
     @Test(groups = "broker")
     public void testGC() throws Exception {
         // 1. Simple successful GC
-        String topicName = "non-persistent://prop/ns-abc/topic-10";
+        String topicName = "non-persistent://tenant/ns-abc/topic-10";
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName).create();
         producer.close();
 
@@ -262,7 +262,7 @@ public class NonPersistentTopicE2ETest extends BrokerTestBase {
         assertTrue(pulsar.getBrokerService().getTopicReference(topicName).isPresent());
 
         // 5. Test for partitioned topic to delete the partitioned metadata
-        String topicGc = "non-persistent://prop/ns-abc/topic-gc";
+        String topicGc = "non-persistent://tenant/ns-abc/topic-gc";
         int partitions = 5;
         admin.topics().createPartitionedTopic(topicGc, partitions);
         Producer<byte[]> producer3 = pulsarClient.newProducer().topic(topicGc).create();
@@ -278,7 +278,7 @@ public class NonPersistentTopicE2ETest extends BrokerTestBase {
     @Test
     public void testCloseConsumerThenRunGC() throws Exception {
         // 1. Simple successful GC
-        String topicName = "non-persistent://prop/ns-abc/topic-10";
+        String topicName = "non-persistent://tenant/ns-abc/topic-10";
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName).create();
         producer.close();
 

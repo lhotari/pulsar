@@ -52,7 +52,7 @@ public final class ServiceUnitUtils {
             Range<Long> range = getHashRange(parts[5]);
             return factory.getBundle(NamespaceName.get(parts[2], parts[3], parts[4]), range);
         } else {
-            // this is a V2 path prop/namespace/hash
+            // this is a V2 path tenant/namespace/hash
             Range<Long> range = getHashRange(parts[4]);
             return factory.getBundle(NamespaceName.get(parts[2], parts[3]), range);
         }

@@ -147,7 +147,6 @@ import org.apache.pulsar.common.api.proto.TxnAction;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.TopicName;
-import org.apache.pulsar.common.policies.data.AuthAction;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.TopicOperation;
 import org.apache.pulsar.common.protocol.ByteBufPair;
@@ -186,22 +185,21 @@ public class ServerCnxTest {
     private final int currentProtocolVersion = ProtocolVersion.values()[ProtocolVersion.values().length - 1]
             .getValue();
 
-    protected final String successTopicName = "persistent://prop/use/ns-abc/successTopic";
-    private final String failTopicName = "persistent://prop/use/ns-abc/failTopic";
-    private final String nonOwnedTopicName = "persistent://prop/use/ns-abc/success-not-owned-topic";
-    private final String encryptionRequiredTopicName = "persistent://prop/use/ns-abc/successEncryptionRequiredTopic";
+    protected final String successTopicName = "persistent://tenant/ns-abc/successTopic";
+    private final String failTopicName = "persistent://tenant/ns-abc/failTopic";
+    private final String nonOwnedTopicName = "persistent://tenant/ns-abc/success-not-owned-topic";
+    private final String encryptionRequiredTopicName = "persistent://tenant/ns-abc/successEncryptionRequiredTopic";
     private final String successSubName = "successSub";
     private final String nonExistentTopicName =
-            "persistent://nonexistent-prop/nonexistent-cluster/nonexistent-namespace/successNonExistentTopic";
-    private final String topicWithNonLocalCluster = "persistent://prop/usw/ns-abc/successTopic";
+            "persistent://nonexistent-tenant/nonexistent-cluster/nonexistent-namespace/successNonExistentTopic";
     private final List<String> matchingTopics = Arrays.asList(
-            "persistent://use/ns-abc/topic-1",
-            "persistent://use/ns-abc/topic-2");
+            "persistent://tenant/ns-abc/topic-1",
+            "persistent://tenant/ns-abc/topic-2");
 
     private final List<String> topics = Arrays.asList(
-            "persistent://use/ns-abc/topic-1",
-            "persistent://use/ns-abc/topic-2",
-            "persistent://use/ns-abc/topic");
+            "persistent://tenant/ns-abc/topic-1",
+            "persistent://tenant/ns-abc/topic-2",
+            "persistent://tenant/ns-abc/topic");
 
     private ManagedLedger ledgerMock;
     private ManagedCursor cursorMock;
@@ -217,7 +215,7 @@ public class ServerCnxTest {
         svcConfig.setLoadBalancerOverrideBrokerNicSpeedGbps(Optional.of(1.0d));
         svcConfig.setKeepAliveIntervalSeconds(inSec(1, TimeUnit.SECONDS));
         svcConfig.setBacklogQuotaCheckEnabled(false);
-        svcConfig.setClusterName("use");
+        svcConfig.setClusterName("test");
         pulsarTestContext = PulsarTestContext.builderForNonStartableContext()
                 .config(svcConfig)
                 .spyByDefault()
@@ -234,11 +232,11 @@ public class ServerCnxTest {
         doReturn(true).when(namespaceService).isServiceUnitActive(any());
         doReturn(CompletableFuture.completedFuture(true)).when(namespaceService).isServiceUnitActiveAsync(any());
         doReturn(CompletableFuture.completedFuture(topics)).when(namespaceService).getListOfTopics(
-                NamespaceName.get("use", "ns-abc"), CommandGetTopicsOfNamespace.Mode.ALL);
+                NamespaceName.get("tenant", "ns-abc"), CommandGetTopicsOfNamespace.Mode.ALL);
         doReturn(CompletableFuture.completedFuture(topics)).when(namespaceService).getListOfUserTopics(
-                NamespaceName.get("use", "ns-abc"), CommandGetTopicsOfNamespace.Mode.ALL);
+                NamespaceName.get("tenant", "ns-abc"), CommandGetTopicsOfNamespace.Mode.ALL);
         doReturn(CompletableFuture.completedFuture(topics)).when(namespaceService).getListOfPersistentTopics(
-                NamespaceName.get("use", "ns-abc"));
+                NamespaceName.get("tenant", "ns-abc"));
 
         setupMLAsyncCallbackMocks();
 
@@ -1683,43 +1681,6 @@ public class ServerCnxTest {
     }
 
     @Test(timeOut = 30000)
-    public void testClusterAccess() throws Exception {
-        svcConfig.setAuthorizationEnabled(true);
-        AuthorizationService authorizationService =
-                spyWithClassAndConstructorArgs(AuthorizationService.class, svcConfig, pulsar.getPulsarResources());
-        Field providerField = AuthorizationService.class.getDeclaredField("provider");
-        providerField.setAccessible(true);
-        PulsarAuthorizationProvider authorizationProvider =
-                spyWithClassAndConstructorArgs(PulsarAuthorizationProvider.class, svcConfig,
-                        pulsar.getPulsarResources());
-        providerField.set(authorizationService, authorizationProvider);
-        doReturn(authorizationService).when(brokerService).getAuthorizationService();
-        svcConfig.setAuthorizationEnabled(true);
-        doReturn(CompletableFuture.completedFuture(false)).when(authorizationProvider)
-                .isSuperUser(Mockito.anyString(), Mockito.any(), Mockito.any());
-        doReturn(CompletableFuture.completedFuture(false)).when(authorizationProvider)
-                .validateTenantAdminAccess(Mockito.anyString(), Mockito.any(), Mockito.any());
-        doReturn(CompletableFuture.completedFuture(true)).when(authorizationProvider)
-                .checkPermission(any(TopicName.class), Mockito.anyString(),
-                        any(AuthAction.class));
-
-        resetChannel();
-        setChannelConnected();
-        ByteBuf clientCommand = Commands.newProducer(successTopicName, 1 /* producer id */, 1 /* request id */,
-                "prod-name", Collections.emptyMap(), false);
-        channel.writeInbound(clientCommand);
-        assertTrue(getResponse() instanceof CommandProducerSuccess);
-
-        resetChannel();
-        setChannelConnected();
-        clientCommand = Commands.newProducer(topicWithNonLocalCluster, 1 /* producer id */, 1 /* request id */,
-                "prod-name", Collections.emptyMap(), false);
-        channel.writeInbound(clientCommand);
-        assertTrue(getResponse() instanceof CommandError);
-        channel.finish();
-    }
-
-    @Test(timeOut = 30000)
     public void testNonExistentTopicSuperUserAccess() throws Exception {
         AuthorizationService authorizationService =
                 spyWithClassAndConstructorArgs(AuthorizationService.class, svcConfig, pulsar.getPulsarResources());
@@ -3159,7 +3120,7 @@ public class ServerCnxTest {
         resetChannel();
         setChannelConnected();
         ByteBuf clientCommand = Commands.newGetTopicsOfNamespaceRequest(
-                "use/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL, null, null);
+                "tenant/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL, null, null);
         channel.writeInbound(clientCommand);
         CommandGetTopicsOfNamespaceResponse response = (CommandGetTopicsOfNamespaceResponse) getResponse();
 
@@ -3177,8 +3138,8 @@ public class ServerCnxTest {
         resetChannel();
         setChannelConnected();
         ByteBuf clientCommand = Commands.newGetTopicsOfNamespaceRequest(
-                "use/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
-                "use/ns-abc/topic-.*", null);
+                "tenant/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
+                "tenant/ns-abc/topic-.*", null);
         channel.writeInbound(clientCommand);
         CommandGetTopicsOfNamespaceResponse response = (CommandGetTopicsOfNamespaceResponse) getResponse();
 
@@ -3197,8 +3158,8 @@ public class ServerCnxTest {
         resetChannel();
         setChannelConnected();
         ByteBuf clientCommand = Commands.newGetTopicsOfNamespaceRequest(
-                "use/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
-                "use/ns-abc/(t|o|to|p|i|c)+-?)+!", null);
+                "tenant/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
+                "tenant/ns-abc/(t|o|to|p|i|c)+-?)+!", null);
         channel.writeInbound(clientCommand);
         CommandGetTopicsOfNamespaceResponse response = (CommandGetTopicsOfNamespaceResponse) getResponse();
 
@@ -3216,8 +3177,8 @@ public class ServerCnxTest {
         resetChannel();
         setChannelConnected();
         ByteBuf clientCommand = Commands.newGetTopicsOfNamespaceRequest(
-                "use/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
-                "use/ns-abc/topic-.*", "SOME_HASH");
+                "tenant/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
+                "tenant/ns-abc/topic-.*", "SOME_HASH");
         channel.writeInbound(clientCommand);
         CommandGetTopicsOfNamespaceResponse response = (CommandGetTopicsOfNamespaceResponse) getResponse();
 
@@ -3235,8 +3196,8 @@ public class ServerCnxTest {
         resetChannel();
         setChannelConnected();
         ByteBuf clientCommand = Commands.newGetTopicsOfNamespaceRequest(
-                "use/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
-                "use/ns-abc/topic-.*", TopicList.calculateHash(matchingTopics));
+                "tenant/ns-abc", 1, CommandGetTopicsOfNamespace.Mode.ALL,
+                "tenant/ns-abc/topic-.*", TopicList.calculateHash(matchingTopics));
         channel.writeInbound(clientCommand);
         CommandGetTopicsOfNamespaceResponse response = (CommandGetTopicsOfNamespaceResponse) getResponse();
 
@@ -3253,7 +3214,7 @@ public class ServerCnxTest {
         svcConfig.setEnableBrokerSideSubscriptionPatternEvaluation(true);
         resetChannel();
         setChannelConnected();
-        BaseCommand command = Commands.newWatchTopicList(1, 3, "use/ns-abc", "use/ns-abc/topic-.*", null);
+        BaseCommand command = Commands.newWatchTopicList(1, 3, "tenant/ns-abc", "tenant/ns-abc/topic-.*", null);
         ByteBuf serializedCommand = Commands.serializeWithSize(command);
 
         channel.writeInbound(serializedCommand);

@@ -59,7 +59,7 @@ public class MessagePublishBufferThrottleTest extends BrokerTestBase {
     public void testMessagePublishBufferThrottleDisabled() throws Exception {
         conf.setMaxMessagePublishBufferSizeInMB(-1);
         super.baseSetup();
-        final String topic = "persistent://prop/ns-abc/testMessagePublishBufferThrottleDisabled";
+        final String topic = "persistent://tenant/ns-abc/testMessagePublishBufferThrottleDisabled";
         Producer<byte[]> producer = pulsarClient.newProducer()
                 .topic(topic)
                 .producerName("producer-name")
@@ -85,7 +85,7 @@ public class MessagePublishBufferThrottleTest extends BrokerTestBase {
         conf.setMaxMessagePublishBufferSizeInMB(1);
         super.baseSetup();
 
-        final String topic = "persistent://prop/ns-abc/testMessagePublishBufferThrottleEnable";
+        final String topic = "persistent://tenant/ns-abc/testMessagePublishBufferThrottleEnable";
         Producer<byte[]> producer = pulsarClient.newProducer()
                 .topic(topic)
                 .producerName("producer-name")
@@ -122,7 +122,7 @@ public class MessagePublishBufferThrottleTest extends BrokerTestBase {
         assertRateLimitCounter(ConnectionRateLimitOperationName.PAUSED, 0);
         assertRateLimitCounter(ConnectionRateLimitOperationName.RESUMED, 0);
 
-        final String topic = "persistent://prop/ns-abc/testBlockByPublishRateLimiting";
+        final String topic = "persistent://tenant/ns-abc/testBlockByPublishRateLimiting";
         Producer<byte[]> producer = pulsarClient.newProducer()
                 .topic(topic)
                 .producerName("producer-name")
@@ -168,7 +168,7 @@ public class MessagePublishBufferThrottleTest extends BrokerTestBase {
     public void testConnectionThrottled() throws Exception {
         super.baseSetup();
 
-        var topic = BrokerTestUtil.newUniqueName("persistent://prop/ns-abc/testSendThrottled");
+        var topic = BrokerTestUtil.newUniqueName("persistent://tenant/ns-abc/testSendThrottled");
 
         assertRateLimitCounter(ConnectionRateLimitOperationName.THROTTLED, 0);
         assertRateLimitCounter(ConnectionRateLimitOperationName.UNTHROTTLED, 0);
