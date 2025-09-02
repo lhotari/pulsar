@@ -99,7 +99,7 @@ public class PulsarProfilingTest extends PulsarTestSuite {
             return DockerUtils.runCommandAsyncWithLogging(getDockerClient(), getContainerId(),
                     "/pulsar/bin/pulsar-perf", "consume", topicName,
                     "-u", "pulsar://" + brokerHostname + ":6650",
-                    "-st", "Shared",
+                    "-st", "Exclusive",
                     "-aq",
                     "-m", String.valueOf(numberOfMessages), "-ml", "400M");
         }
