@@ -126,7 +126,7 @@ public class PulsarProfilingTest extends PulsarTestSuite {
                     "-u", "pulsar://" + brokerHostname + ":6650",
                     "-st", "Exclusive",
                     "-q", "50000",
-                    "--acks-delay-millis", "1",
+                    //"--acks-delay-millis", "1",
                     "-m", String.valueOf(numberOfMessages), "-ml", "400M");
         }
 
