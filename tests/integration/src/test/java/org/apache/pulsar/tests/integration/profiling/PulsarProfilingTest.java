@@ -121,8 +121,9 @@ public class PulsarProfilingTest extends PulsarTestSuite {
             // print out stats and internal stats every 10 seconds
             return DockerUtils.runCommandAsyncWithLogging(getDockerClient(), getContainerId(),
                     "bash", "-c",
-                    String.format("while [ 1 ]; do curl %s/stats | jq; curl %s/internalStats | jq; sleep 10; done",
-                    basePath, basePath));
+                    String.format(
+                            "while [ 1 ]; do curl %s/stats | jq; sleep 1; curl %s/internalStats | jq; sleep 10; done",
+                            basePath, basePath));
         }
     }
 
