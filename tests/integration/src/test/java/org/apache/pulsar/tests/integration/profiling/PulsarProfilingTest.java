@@ -172,8 +172,11 @@ public class PulsarProfilingTest extends PulsarTestSuite {
         brokerEnvs.put("maxPendingPublishRequestsPerConnection", "10000");
         brokerEnvs.put("dispatcherRetryBackoffInitialTimeInMs", "0");
         brokerEnvs.put("dispatcherRetryBackoffMaxTimeInMs", "0");
-        brokerEnvs.put("PULSAR_PREFIX_subscriptionKeySharedUseClassicPersistentImplementation", "true");
-        brokerEnvs.put("PULSAR_PREFIX_subscriptionSharedUseClassicPersistentImplementation", "true");
+        //brokerEnvs.put("PULSAR_PREFIX_subscriptionKeySharedUseClassicPersistentImplementation", "true");
+        //brokerEnvs.put("PULSAR_PREFIX_subscriptionSharedUseClassicPersistentImplementation", "true");
+        brokerEnvs.put("dispatcherMaxReadBatchSize", "1000");
+        brokerEnvs.put("dispatcherDispatchMessagesInSubscriptionThread", "false");
+        brokerEnvs.put("dispatcherMaxRoundRobinBatchSize", "1000");
         specBuilder.brokerEnvs(brokerEnvs);
 
         // Increase memory for bookkeepers and make compaction run more often
