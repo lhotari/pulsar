@@ -18,6 +18,11 @@
  */
 package org.apache.pulsar.tests.integration.profiling;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +36,7 @@ import org.apache.pulsar.tests.integration.containers.PulsarContainer;
 import org.apache.pulsar.tests.integration.suites.PulsarTestSuite;
 import org.apache.pulsar.tests.integration.topologies.PulsarClusterSpec;
 import org.apache.pulsar.tests.integration.utils.DockerUtils;
+import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.GenericContainer;
 import org.testng.annotations.Test;
 
@@ -93,6 +99,25 @@ public class PulsarProfilingTest extends PulsarTestSuite {
             });
             withEnv("PULSAR_MEM", DEFAULT_PULSAR_MEM);
             setCommand("sleep 1000000");
+            File testOutputDir = new File("target");
+            if (!testOutputDir.exists()) {
+                if (!testOutputDir.mkdirs()) {
+                    throw new IllegalArgumentException("Test output directory + '" + testOutputDir.getAbsolutePath()
+                                    + "' doesn't exist and cannot be created.");
+                }
+            }
+            if (!testOutputDir.isDirectory()) {
+                throw new IllegalArgumentException(
+                        "Test output directory '" + testOutputDir.getAbsolutePath() + "' isn't a directory.");
+            }
+            // change access to testOutputDir to allow all access so the the container user can write to it
+            // This matters only on Linux
+            try {
+                Files.setPosixFilePermissions(testOutputDir.toPath(), PosixFilePermissions.fromString("rwxrwxrwx"));
+            } catch (IOException e) {
+                throw new UncheckedIOException("Cannot change access to test output directory", e);
+            }
+            withFileSystemBind(testOutputDir.getAbsolutePath(), "/testoutput", BindMode.READ_WRITE);
         }
 
         public CompletableFuture<Long> consume(String topicName) throws Exception {
@@ -122,7 +147,10 @@ public class PulsarProfilingTest extends PulsarTestSuite {
             return DockerUtils.runCommandAsyncWithLogging(getDockerClient(), getContainerId(),
                     "bash", "-c",
                     String.format(
-                            "while [ 1 ]; do curl %s/stats | jq; sleep 1; curl %s/internalStats | jq; sleep 10; done",
+                            "while [ 1 ]; do "
+                            + "curl %s/stats | jq | tee /testoutput/stats.$(date +%%s).txt; sleep 1; "
+                            + "curl %s/internalStats | jq | tee /testoutput/internal_stats.$(date +%%s).txt; sleep 10; "
+                            + "done",
                             basePath, basePath));
         }
     }
