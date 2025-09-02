@@ -98,6 +98,7 @@ public class PulsarProfilingTest extends PulsarTestSuite {
                 createContainerCmd.withName(clusterName + "-" + hostname);
             });
             withEnv("PULSAR_MEM", DEFAULT_PULSAR_MEM);
+            withEnv("PULSAR_GC", "-XX:+UseZGC -XX:+ZGenerational");
             setCommand("sleep 1000000");
             File testOutputDir = new File("target");
             if (!testOutputDir.exists()) {
