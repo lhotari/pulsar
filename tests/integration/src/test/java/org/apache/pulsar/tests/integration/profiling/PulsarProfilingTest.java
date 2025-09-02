@@ -161,17 +161,20 @@ public class PulsarProfilingTest extends PulsarTestSuite {
         specBuilder.numProxies(0);
 
         // Increase memory for brokers and configure more aggressive rollover
-        specBuilder.brokerEnvs(Map.of("PULSAR_MEM", BROKER_PULSAR_MEM,
-                "managedLedgerMinLedgerRolloverTimeMinutes", "1",
-                "managedLedgerMaxLedgerRolloverTimeMinutes", "5",
-                "managedLedgerMaxSizePerLedgerMbytes", "512",
-                "managedLedgerDefaultEnsembleSize", "1",
-                "managedLedgerDefaultWriteQuorum", "1",
-                "managedLedgerDefaultAckQuorum", "1",
-                "maxPendingPublishRequestsPerConnection", "10000",
-                "dispatcherRetryBackoffInitialTimeInMs", "0",
-                "dispatcherRetryBackoffMaxTimeInMs", "0"
-        ));
+        Map<String, String> brokerEnvs = new HashMap<>();
+        brokerEnvs.put("PULSAR_MEM", BROKER_PULSAR_MEM);
+        brokerEnvs.put("managedLedgerMinLedgerRolloverTimeMinutes", "1");
+        brokerEnvs.put("managedLedgerMaxLedgerRolloverTimeMinutes", "5");
+        brokerEnvs.put("managedLedgerMaxSizePerLedgerMbytes", "512");
+        brokerEnvs.put("managedLedgerDefaultEnsembleSize", "1");
+        brokerEnvs.put("managedLedgerDefaultWriteQuorum", "1");
+        brokerEnvs.put("managedLedgerDefaultAckQuorum", "1");
+        brokerEnvs.put("maxPendingPublishRequestsPerConnection", "10000");
+        brokerEnvs.put("dispatcherRetryBackoffInitialTimeInMs", "0");
+        brokerEnvs.put("dispatcherRetryBackoffMaxTimeInMs", "0");
+        brokerEnvs.put("PULSAR_PREFIX_subscriptionKeySharedUseClassicPersistentImplementation", "true");
+        brokerEnvs.put("PULSAR_PREFIX_subscriptionSharedUseClassicPersistentImplementation", "true");
+        specBuilder.brokerEnvs(brokerEnvs);
 
         // Increase memory for bookkeepers and make compaction run more often
         Map<String, String> bkEnv = new HashMap<>();
