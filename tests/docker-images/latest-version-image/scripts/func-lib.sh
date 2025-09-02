@@ -27,7 +27,6 @@ function run_pulsar_component() {
   local maxMem=$3
   local additionalMemParam=$4
   export PULSAR_MEM="${PULSAR_MEM:-"-Xmx${maxMem} ${additionalMemParam} -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/pulsar -XX:+ExitOnOutOfMemoryError"}"
-  export PULSAR_GC="${PULSAR_GC:-"-XX:+UseZGC"}"
 
   if [[ -f "conf/${component}.conf" ]]; then
     bin/apply-config-from-env.py conf/${component}.conf
