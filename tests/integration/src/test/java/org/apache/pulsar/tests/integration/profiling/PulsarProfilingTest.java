@@ -101,6 +101,7 @@ public class PulsarProfilingTest extends PulsarTestSuite {
                     "-u", "pulsar://" + brokerHostname + ":6650",
                     "-st", "Exclusive",
                     "-aq",
+                    "--acks-delay-millis", "1",
                     "-m", String.valueOf(numberOfMessages), "-ml", "400M");
         }
 
@@ -114,10 +115,20 @@ public class PulsarProfilingTest extends PulsarTestSuite {
                     "-o", "20000",
                     "-m", String.valueOf(numberOfMessages), "-ml", "400M");
         }
+
+        public CompletableFuture<Long> stats(String topicName) throws Exception {
+            String basePath = "http://" + brokerHostname + ":8080/admin/v2/" + topicName.replace("://", "/");
+            // print out stats and internal stats every 10 seconds
+            return DockerUtils.runCommandAsyncWithLogging(getDockerClient(), getContainerId(),
+                    "bash", "-c",
+                    String.format("while [ 1 ]; do curl %s/stats | jq; curl %s/internalStats | jq; sleep 10; done",
+                    basePath, basePath));
+        }
     }
 
     private PulsarPerfContainer perfConsume;
     private PulsarPerfContainer perfProduce;
+    private PulsarPerfContainer printStats;
 
     @Override
     public void setupCluster() throws Exception {
@@ -134,6 +145,10 @@ public class PulsarProfilingTest extends PulsarTestSuite {
         if (perfProduce != null) {
             perfProduce.stop();
             perfProduce = null;
+        }
+        if (printStats != null) {
+            printStats.stop();
+            printStats = null;
         }
         super.tearDownCluster();
     }
@@ -199,9 +214,11 @@ public class PulsarProfilingTest extends PulsarTestSuite {
         String brokerHostname = clusterName + "-pulsar-broker-0";
         perfProduce = new PulsarPerfContainer(clusterName, brokerHostname, "perf-produce");
         perfConsume = new PulsarPerfContainer(clusterName, brokerHostname, "perf-consume");
+        printStats = new PulsarPerfContainer(clusterName, brokerHostname, "print-stats");
         specBuilder.externalServices(Map.of(
                 "pulsar-produce", perfProduce,
-                "pulsar-consume", perfConsume
+                "pulsar-consume", perfConsume,
+                "print-stats", printStats
         ));
 
         return specBuilder;
@@ -213,6 +230,8 @@ public class PulsarProfilingTest extends PulsarTestSuite {
         CompletableFuture<Long> consumeFuture = perfConsume.consume(topicName);
         Thread.sleep(1000);
         CompletableFuture<Long> produceFuture = perfProduce.produce(topicName);
+        Thread.sleep(4000);
+        printStats.stats(topicName);
         FutureUtil.waitForAll(List.of(consumeFuture, produceFuture))
                 .orTimeout(3, TimeUnit.MINUTES)
                 .exceptionally(t -> {
