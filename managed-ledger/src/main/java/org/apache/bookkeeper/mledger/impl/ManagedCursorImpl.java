@@ -1518,10 +1518,10 @@ public class ManagedCursorImpl implements ManagedCursor {
                                         + "cursor {}", ledger.getName(), newReadPosition, oldReadPosition, name);
                     }
                     readPosition = newReadPosition;
-                    ledger.onCursorReadPositionUpdated(ManagedCursorImpl.this, newReadPosition);
                 } finally {
                     lock.writeLock().unlock();
                 }
+                ledger.onCursorReadPositionUpdated(ManagedCursorImpl.this, newReadPosition);
                 synchronized (pendingMarkDeleteOps) {
                     pendingMarkDeleteOps.clear();
                     if (!RESET_CURSOR_IN_PROGRESS_UPDATER.compareAndSet(ManagedCursorImpl.this, TRUE, FALSE)) {
@@ -2075,6 +2075,10 @@ public class ManagedCursorImpl implements ManagedCursor {
         markDeletePosition = newMarkDeletePosition;
         individualDeletedMessages.removeAtMost(markDeletePosition.getLedgerId(), markDeletePosition.getEntryId());
 
+        return newMarkDeletePosition;
+    }
+
+    private void updateReadPositionIfBehindMarkDeletePosition() {
         MutableBoolean readPositionUpdated = new MutableBoolean(false);
         Position updatedReadPosition = READ_POSITION_UPDATER.updateAndGet(this, currentReadPosition -> {
             if (currentReadPosition.compareTo(markDeletePosition) <= 0) {
@@ -2095,8 +2099,6 @@ public class ManagedCursorImpl implements ManagedCursor {
         if (readPositionUpdated.booleanValue()) {
             ledger.onCursorReadPositionUpdated(this, updatedReadPosition);
         }
-
-        return newMarkDeletePosition;
     }
 
     @Override
@@ -2172,6 +2174,8 @@ public class ManagedCursorImpl implements ManagedCursor {
         } finally {
             lock.writeLock().unlock();
         }
+
+        updateReadPositionIfBehindMarkDeletePosition();
 
         // Apply rate limiting to mark-delete operations
         if (markDeleteLimiter != null && !markDeleteLimiter.tryAcquire()) {
@@ -2552,6 +2556,8 @@ public class ManagedCursorImpl implements ManagedCursor {
             }
         }
 
+        updateReadPositionIfBehindMarkDeletePosition();
+
         // Apply rate limiting to mark-delete operations
         if (markDeleteLimiter != null && !markDeleteLimiter.tryAcquire()) {
             isDirty = true;
@@ -2699,18 +2705,19 @@ public class ManagedCursorImpl implements ManagedCursor {
     @Override
     public void rewind(boolean readCompacted) {
         lock.writeLock().lock();
+        Position newReadPosition;
         try {
-            Position newReadPosition =
+            newReadPosition =
                     readCompacted ? markDeletePosition.getNext() : ledger.getNextValidPosition(markDeletePosition);
             Position oldReadPosition = readPosition;
 
             log.info("[{}-{}] Rewind from {} to {}", ledger.getName(), name, oldReadPosition, newReadPosition);
 
             readPosition = newReadPosition;
-            ledger.onCursorReadPositionUpdated(ManagedCursorImpl.this, newReadPosition);
         } finally {
             lock.writeLock().unlock();
         }
+        ledger.onCursorReadPositionUpdated(ManagedCursorImpl.this, newReadPosition);
     }
 
     @Override
@@ -2724,10 +2731,10 @@ public class ManagedCursorImpl implements ManagedCursor {
                 newReadPosition = ledger.getNextValidPosition(markDeletePosition);
             }
             readPosition = newReadPosition;
-            ledger.onCursorReadPositionUpdated(ManagedCursorImpl.this, newReadPosition);
         } finally {
             lock.writeLock().unlock();
         }
+        ledger.onCursorReadPositionUpdated(ManagedCursorImpl.this, newReadPosition);
     }
 
     @VisibleForTesting
