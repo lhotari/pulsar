@@ -110,7 +110,7 @@ public class PulsarProfilingTest extends PulsarTestSuite {
                     "-u", "pulsar://" + brokerHostname + ":6650",
                     "-au", "http://" + brokerHostname + ":8080",
                     "-r", String.valueOf(Integer.MAX_VALUE), // max-rate
-                    "-s", "8192", // 8kB message size
+                    "-s", "128", "-db",
                     "-m", String.valueOf(numberOfMessages), "-ml", "400M");
         }
     }
