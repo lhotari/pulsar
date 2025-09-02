@@ -3926,25 +3926,28 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
 
         isDirty = false;
-        asyncMarkDelete(lastMarkDeleteEntry.newPosition, lastMarkDeleteEntry.properties, new MarkDeleteCallback() {
-            @Override
-            public void markDeleteComplete(Object ctx) {
-                if (log.isDebugEnabled()) {
-                    log.debug("[{}][{}] Flushed dirty mark-delete position", ledger.getName(), name);
-                }
-            }
+        MarkDeleteEntry localLastMarkDeleteEntry = lastMarkDeleteEntry;
+        asyncMarkDelete(localLastMarkDeleteEntry.newPosition, localLastMarkDeleteEntry.properties,
+                new MarkDeleteCallback() {
+                    @Override
+                    public void markDeleteComplete(Object ctx) {
+                        if (log.isDebugEnabled()) {
+                            log.debug("[{}][{}] Flushed dirty mark-delete position", ledger.getName(), name);
+                        }
+                    }
 
-            @Override
-            public void markDeleteFailed(ManagedLedgerException exception, Object ctx) {
-                if (exception.getCause() instanceof MarkDeletingMarkedPosition) {
-                    // this is not actually a problem, we should not log a stacktrace
-                    log.info("[{}][{}] Cannot flush mark-delete position: {}", ledger.getName(),
-                            name, exception.getCause().getMessage());
-                } else {
-                    log.warn("[{}][{}] Failed to flush mark-delete position", ledger.getName(), name, exception);
-                }
-            }
-        }, null);
+                    @Override
+                    public void markDeleteFailed(ManagedLedgerException exception, Object ctx) {
+                        if (exception.getCause() instanceof MarkDeletingMarkedPosition) {
+                            // this is not actually a problem, we should not log a stacktrace
+                            log.info("[{}][{}] Cannot flush mark-delete position: {}", ledger.getName(),
+                                    name, exception.getCause().getMessage());
+                        } else {
+                            log.warn("[{}][{}] Failed to flush mark-delete position", ledger.getName(), name,
+                                    exception);
+                        }
+                    }
+                }, null);
     }
 
     @Override
