@@ -21,12 +21,23 @@
 set -e
 set -o pipefail
 
+function set_pulsar_mem() {
+  local maxMem=$1
+  local additionalMemParam=$2
+  local pulsar_test_mem
+  # set into pulsar_test_mem while trimming whitespace
+  read -r pulsar_test_mem <<< "-Xmx${maxMem} ${additionalMemParam}"
+  # prefer PULSAR_MEM, but always append params to perform a heap dump on OOME
+  export PULSAR_MEM="${PULSAR_MEM:-"${pulsar_test_mem}"} -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/pulsar -XX:+ExitOnOutOfMemoryError"
+}
+
 function run_pulsar_component() {
   local component=$1
   local supervisord_component=$2
   local maxMem=$3
   local additionalMemParam=$4
-  export PULSAR_MEM="${PULSAR_MEM:-"-Xmx${maxMem} ${additionalMemParam} -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/pulsar -XX:+ExitOnOutOfMemoryError"}"
+
+  set_pulsar_mem "$maxMem" "$additionalMemParam"
 
   if [[ -f "conf/${component}.conf" ]]; then
     bin/apply-config-from-env.py conf/${component}.conf
