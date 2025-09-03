@@ -81,7 +81,12 @@ public class PublishRateLimiterImpl implements PublishRateLimiter {
         // schedule unthrottling when the throttling count is incremented to 1
         // this is to avoid scheduling unthrottling multiple times for concurrent producers
         if (throttledProducersCount.incrementAndGet() == 1) {
-            ScheduledExecutorService executor = producer.getCnx().getBrokerService().executor().next();
+            ScheduledExecutorService executor;
+            if (producer.getCnx() instanceof ServerCnx serverCnx) {
+                executor = serverCnx.ctx().executor();
+            } else {
+                executor = producer.getCnx().getBrokerService().executor();
+            }
             scheduleUnthrottling(executor, calculateThrottlingDurationNanos());
         }
     }

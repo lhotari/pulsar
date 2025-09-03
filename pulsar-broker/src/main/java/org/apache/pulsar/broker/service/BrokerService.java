@@ -2760,8 +2760,8 @@ public class BrokerService implements Closeable {
         return pulsar;
     }
 
-    public EventLoopGroup executor() {
-        return workerGroup;
+    public ScheduledExecutorService executor() {
+        return pulsar.getExecutor();
     }
 
     public boolean isAuthenticationEnabled() {
