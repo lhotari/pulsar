@@ -123,23 +123,26 @@ public class PulsarProfilingTest extends PulsarTestSuite {
 
         public CompletableFuture<Long> consume(String topicName) throws Exception {
             return DockerUtils.runCommandAsyncWithLogging(getDockerClient(), getContainerId(),
-                    "/pulsar/bin/pulsar-perf", "consume", topicName,
-                    "-u", "pulsar://" + brokerHostname + ":6650",
-                    "-st", "Exclusive",
-                    "-q", "50000",
-                    //"--acks-delay-millis", "1",
-                    "-m", String.valueOf(numberOfMessages), "-ml", "400M");
+                    "bash", "-c",
+                    "/pulsar/bin/pulsar-perf consume " + topicName + " "
+                            + "-u pulsar://" + brokerHostname + ":6650 "
+                            + "-st Exclusive "
+                            + "-q 50000 "
+                            + "-m " + numberOfMessages + " -ml 400M "
+                            + "2>&1 | tee /testoutput/consume.$(date +%s).txt");
         }
 
         public CompletableFuture<Long> produce(String topicName) throws Exception {
             return DockerUtils.runCommandAsyncWithLogging(getDockerClient(), getContainerId(),
-                    "/pulsar/bin/pulsar-perf", "produce", topicName,
-                    "-u", "pulsar://" + brokerHostname + ":6650",
-                    "-au", "http://" + brokerHostname + ":8080",
-                    "-r", String.valueOf(Integer.MAX_VALUE), // max-rate
-                    "-s", "128", "-db",
-                    "-o", "20000",
-                    "-m", String.valueOf(numberOfMessages), "-ml", "400M");
+                    "bash", "-c",
+                    "/pulsar/bin/pulsar-perf produce " + topicName + " "
+                            + "-u pulsar://" + brokerHostname + ":6650 "
+                            + "-au http://" + brokerHostname + ":8080 "
+                            + "-r " + Integer.MAX_VALUE + " "
+                            + "-s 128 -db "
+                            + "-o 20000 "
+                            + "-m " + numberOfMessages + " -ml 400M "
+                            + "2>&1 | tee /testoutput/produce.$(date +%s).txt");
         }
 
         public CompletableFuture<Long> stats(String topicName) throws Exception {
