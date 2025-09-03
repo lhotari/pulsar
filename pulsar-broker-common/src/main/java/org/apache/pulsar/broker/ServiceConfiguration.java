@@ -309,7 +309,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
             + " update managedLedgerConfig, update topic/subscription/replicator message dispatch rate,"
             + " do leader election etc. Default is set to 20 "
     )
-    private int numExecutorThreadPoolSize = Runtime.getRuntime().availableProcessors();
+    private int numExecutorThreadPoolSize = Math.max(8, 2 * Runtime.getRuntime().availableProcessors());
 
     @FieldContext(
         category = CATEGORY_SERVER,
