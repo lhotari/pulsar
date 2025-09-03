@@ -42,10 +42,9 @@ function run_pulsar_component() {
   if [[ -f "conf/${component}.conf" ]]; then
     bin/apply-config-from-env.py conf/${component}.conf
   fi
-  bin/apply-config-from-env.py conf/pulsar_env.sh
+  bin/apply-config-from-env.py conf/client.conf
 
   if [[ "$component" == "functions_worker" ]]; then
-    bin/apply-config-from-env.py conf/client.conf
     bin/gen-yml-from-env.py conf/functions_worker.yml
   fi
 
@@ -56,7 +55,7 @@ function run_pulsar_component() {
   fi
 
   if [ -z "$NO_AUTOSTART" ]; then
-      sed -i 's/autostart=.*/autostart=true/' /etc/supervisord/conf.d/${supervisord_component}.conf
+    sed -i 's/autostart=.*/autostart=true/' /etc/supervisord/conf.d/${supervisord_component}.conf
   fi
 
   exec /usr/bin/supervisord -c /etc/supervisord.conf
