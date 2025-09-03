@@ -154,10 +154,13 @@ public class PulsarProfilingTest extends PulsarTestSuite {
                     "bash", "-c",
                     String.format("echo $$ > /tmp/command.pid; "
                             + "while [[ 1 ]]; do "
-                            + "curl %s/stats | jq | tee /testoutput/stats.$(date +%%s).txt; sleep 1; "
-                            + "curl %s/internalStats | jq | tee /testoutput/internal_stats.$(date +%%s).txt; sleep 10; "
+                            + "curl -s %s/stats | jq | tee /testoutput/stats.$(date +%%s).txt; "
+                            + "sleep 1; "
+                            + "curl -s %s/internalStats | jq | tee /testoutput/internal_stats.$(date +%%s).txt; "
+                            + "curl -s http://%s:8080/metrics/ > /testoutput/metrics.$(date +%%s).txt; "
+                            + " sleep 10; "
                             + "done",
-                            basePath, basePath));
+                            basePath, basePath, brokerHostname));
         }
 
         public void triggerShutdown() {
