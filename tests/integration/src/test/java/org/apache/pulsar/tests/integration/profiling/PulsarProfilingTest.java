@@ -126,7 +126,7 @@ public class PulsarProfilingTest extends PulsarTestSuite {
                     "bash", "-c", "echo $$ > /tmp/command.pid; "
                             + "/pulsar/bin/pulsar-perf consume " + topicName + " "
                             + "-u pulsar://" + brokerHostname + ":6650 "
-                            + "-st Exclusive "
+                            + "-st Shared "
                             + "-q 50000 "
                             + "-m " + numberOfMessages + " -ml 400M "
                             + "--histogram-file=/testoutput/consume.histogram.$(date +%s).hdr "
@@ -251,15 +251,15 @@ public class PulsarProfilingTest extends PulsarTestSuite {
         brokerEnvs.put("managedLedgerDefaultEnsembleSize", "1");
         brokerEnvs.put("managedLedgerDefaultWriteQuorum", "1");
         brokerEnvs.put("managedLedgerDefaultAckQuorum", "1");
-        brokerEnvs.put("maxPendingPublishRequestsPerConnection", "10000");
+        //brokerEnvs.put("maxPendingPublishRequestsPerConnection", "1000");
         brokerEnvs.put("dispatcherRetryBackoffInitialTimeInMs", "0");
         brokerEnvs.put("dispatcherRetryBackoffMaxTimeInMs", "0");
         //brokerEnvs.put("PULSAR_PREFIX_subscriptionKeySharedUseClassicPersistentImplementation", "true");
         //brokerEnvs.put("PULSAR_PREFIX_subscriptionSharedUseClassicPersistentImplementation", "true");
-        brokerEnvs.put("dispatcherMaxReadBatchSize", "10000");
-        brokerEnvs.put("dispatcherMaxReadSizeBytes", "10000000");
-        brokerEnvs.put("dispatcherDispatchMessagesInSubscriptionThread", "false");
-        brokerEnvs.put("dispatcherMaxRoundRobinBatchSize", "1000");
+        brokerEnvs.put("dispatcherMaxReadBatchSize", "1000");
+        //brokerEnvs.put("dispatcherMaxReadSizeBytes", "10000000");
+        //brokerEnvs.put("dispatcherDispatchMessagesInSubscriptionThread", "false");
+        //brokerEnvs.put("dispatcherMaxRoundRobinBatchSize", "1000");
         specBuilder.brokerEnvs(brokerEnvs);
 
         // Increase memory for bookkeepers and make compaction run more often
