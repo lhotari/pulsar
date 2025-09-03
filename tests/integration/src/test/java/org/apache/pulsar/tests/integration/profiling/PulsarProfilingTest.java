@@ -123,8 +123,8 @@ public class PulsarProfilingTest extends PulsarTestSuite {
 
         public CompletableFuture<Long> consume(String topicName) throws Exception {
             return DockerUtils.runCommandAsyncWithLogging(getDockerClient(), getContainerId(),
-                    "bash", "-c",
-                    "/pulsar/bin/pulsar-perf consume " + topicName + " "
+                    "bash", "-c", "echo $$ > /tmp/command.pid; "
+                            + "/pulsar/bin/pulsar-perf consume " + topicName + " "
                             + "-u pulsar://" + brokerHostname + ":6650 "
                             + "-st Exclusive "
                             + "-q 50000 "
@@ -135,8 +135,8 @@ public class PulsarProfilingTest extends PulsarTestSuite {
 
         public CompletableFuture<Long> produce(String topicName) throws Exception {
             return DockerUtils.runCommandAsyncWithLogging(getDockerClient(), getContainerId(),
-                    "bash", "-c",
-                    "/pulsar/bin/pulsar-perf produce " + topicName + " "
+                    "bash", "-c", "echo $$ > /tmp/command.pid; "
+                            + "/pulsar/bin/pulsar-perf produce " + topicName + " "
                             + "-u pulsar://" + brokerHostname + ":6650 "
                             + "-au http://" + brokerHostname + ":8080 "
                             + "-r " + Integer.MAX_VALUE + " "
@@ -152,12 +152,35 @@ public class PulsarProfilingTest extends PulsarTestSuite {
             // print out stats and internal stats every 10 seconds
             return DockerUtils.runCommandAsyncWithLogging(getDockerClient(), getContainerId(),
                     "bash", "-c",
-                    String.format(
-                            "while [ 1 ]; do "
+                    String.format("echo $$ > /tmp/command.pid; "
+                            + "while [[ 1 ]]; do "
                             + "curl %s/stats | jq | tee /testoutput/stats.$(date +%%s).txt; sleep 1; "
                             + "curl %s/internalStats | jq | tee /testoutput/internal_stats.$(date +%%s).txt; sleep 10; "
                             + "done",
                             basePath, basePath));
+        }
+
+        public void triggerShutdown() {
+            if (isRunning()) {
+                // attempt to stop containers gracefully
+                DockerUtils.runCommandAsyncWithLogging(getDockerClient(), getContainerId(),
+                                "bash", "-c", "pkill java; while pgrep -c java; do "
+                                        + "echo Waiting for java processes to stop.; sleep 1; done; "
+                                        + "kill $(cat /tmp/command.pid)")
+                        .orTimeout(10, TimeUnit.SECONDS)
+                        .exceptionally(t -> null)
+                        .join();
+            }
+        }
+
+        public void stop() {
+            if (isRunning()) {
+                // attempt to stop containers gracefully
+                dockerClient.stopContainerCmd(getContainerId())
+                        .withTimeout(15)
+                        .exec();
+            }
+            super.stop();
         }
     }
 
@@ -173,17 +196,26 @@ public class PulsarProfilingTest extends PulsarTestSuite {
 
     @Override
     public void tearDownCluster() throws Exception {
+        if (printStats != null) {
+            printStats.triggerShutdown();
+        }
+        if (perfProduce != null) {
+            perfProduce.triggerShutdown();
+        }
         if (perfConsume != null) {
-            perfConsume.stop();
-            perfConsume = null;
+            perfConsume.triggerShutdown();
+        }
+        if (printStats != null) {
+            printStats.stop();
+            printStats = null;
         }
         if (perfProduce != null) {
             perfProduce.stop();
             perfProduce = null;
         }
-        if (printStats != null) {
-            printStats.stop();
-            printStats = null;
+        if (perfConsume != null) {
+            perfConsume.stop();
+            perfConsume = null;
         }
         super.tearDownCluster();
     }
@@ -267,13 +299,16 @@ public class PulsarProfilingTest extends PulsarTestSuite {
         Thread.sleep(1000);
         CompletableFuture<Long> produceFuture = perfProduce.produce(topicName);
         Thread.sleep(4000);
-        printStats.stats(topicName);
+        CompletableFuture<Long> statsFuture = printStats.stats(topicName);
         FutureUtil.waitForAll(List.of(consumeFuture, produceFuture))
                 .orTimeout(3, TimeUnit.MINUTES)
                 .exceptionally(t -> {
                     if (FutureUtil.unwrapCompletionException(t) instanceof TimeoutException) {
                         // ignore test timeout
                         log.info("Test timed out, ignoring this in profiling.");
+                        consumeFuture.cancel(true);
+                        produceFuture.cancel(true);
+                        statsFuture.cancel(true);
                         return null;
                     } else {
                         log.error("Failed to run pulsar-perf", t);
