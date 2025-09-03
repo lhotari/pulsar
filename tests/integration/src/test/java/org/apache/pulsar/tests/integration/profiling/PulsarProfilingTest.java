@@ -129,6 +129,7 @@ public class PulsarProfilingTest extends PulsarTestSuite {
                             + "-st Exclusive "
                             + "-q 50000 "
                             + "-m " + numberOfMessages + " -ml 400M "
+                            + "--histogram-file=/testoutput/consume.histogram.$(date +%s).hdr "
                             + "2>&1 | tee /testoutput/consume.$(date +%s).txt");
         }
 
@@ -142,6 +143,7 @@ public class PulsarProfilingTest extends PulsarTestSuite {
                             + "-s 128 -db "
                             + "-o 20000 "
                             + "-m " + numberOfMessages + " -ml 400M "
+                            + "--histogram-file=/testoutput/produce.histogram.$(date +%s).hdr "
                             + "2>&1 | tee /testoutput/produce.$(date +%s).txt");
         }
 
