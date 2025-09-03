@@ -257,6 +257,7 @@ public class PulsarProfilingTest extends PulsarTestSuite {
         //brokerEnvs.put("maxPendingPublishRequestsPerConnection", "1000");
         brokerEnvs.put("dispatcherRetryBackoffInitialTimeInMs", "0");
         brokerEnvs.put("dispatcherRetryBackoffMaxTimeInMs", "0");
+        brokerEnvs.put("preciseDispatcherFlowControl", "true");
         //brokerEnvs.put("PULSAR_PREFIX_subscriptionKeySharedUseClassicPersistentImplementation", "true");
         //brokerEnvs.put("PULSAR_PREFIX_subscriptionSharedUseClassicPersistentImplementation", "true");
         brokerEnvs.put("dispatcherMaxReadBatchSize", "1000");
