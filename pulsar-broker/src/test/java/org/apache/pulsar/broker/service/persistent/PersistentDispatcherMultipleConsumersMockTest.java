@@ -30,7 +30,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.fail;
 import com.google.common.collect.BoundType;
 import com.google.common.collect.Range;
@@ -40,13 +40,22 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.SucceededFuture;
+import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
+import java.util.stream.IntStream;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.common.util.OrderedExecutor;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
 import org.apache.bookkeeper.mledger.Entry;
@@ -65,6 +74,8 @@ import org.apache.pulsar.broker.service.PendingAcksMap;
 import org.apache.pulsar.broker.service.RedeliveryTracker;
 import org.apache.pulsar.broker.service.TransportCnx;
 import org.apache.pulsar.broker.service.plugin.EntryFilterProvider;
+import org.apache.pulsar.common.api.proto.KeySharedMeta;
+import org.apache.pulsar.common.api.proto.KeySharedMode;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.policies.data.HierarchyTopicPolicies;
 import org.apache.pulsar.common.protocol.Commands;
@@ -73,6 +84,7 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
+@Slf4j
 @Test(groups = "broker")
 public class PersistentDispatcherMultipleConsumersMockTest {
 
@@ -84,13 +96,65 @@ public class PersistentDispatcherMultipleConsumersMockTest {
     private PersistentSubscription subscriptionMock;
     private ServiceConfiguration configMock;
     private Future<Void> succeededFuture;
-    private OrderedExecutor orderedExecutor;
 
     private PersistentDispatcherMultipleConsumers dispatcher;
 
     final String topicName = "persistent://public/default/testTopic";
     final String subscriptionName = "testSubscription";
     private AtomicInteger consumerMockAvailablePermits;
+
+    private QueueExecutor topicOrderedExecutor = new QueueExecutor("topicOrderedExecutor");
+    private QueueExecutor brokerExecutor = new QueueExecutor("brokerExecutor");
+
+    static class QueueExecutor implements Executor, Closeable {
+        private final BlockingDeque<Runnable> queue;
+        private final String threadName;
+        private Thread thread;
+
+        public QueueExecutor(String threadName) {
+            this.threadName = threadName;
+            this.queue = new LinkedBlockingDeque<>();
+        }
+        @Override
+        public void execute(Runnable command) {
+            queue.add(command);
+        }
+
+        public void executeInCurrentThread() {
+            if (thread != null && thread.isAlive()) {
+                throw new IllegalStateException("Thread is already running");
+            }
+            while (!queue.isEmpty()) {
+                queue.poll().run();
+            }
+        }
+
+        public void startBackgroundThread(Function<Runnable, Runnable> wrapper) {
+            thread = new Thread(() -> {
+                while (!Thread.currentThread().isInterrupted()) {
+                    try {
+                        wrapper.apply(queue.take()).run();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }, threadName);
+            thread.start();
+        }
+
+        @Override
+        public void close() {
+            if (thread != null) {
+                thread.interrupt();
+                try {
+                    thread.join();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                thread = null;
+            }
+        }
+    }
 
     @BeforeMethod
     public void setup() throws Exception {
@@ -113,13 +177,21 @@ public class PersistentDispatcherMultipleConsumersMockTest {
         HierarchyTopicPolicies topicPolicies = new HierarchyTopicPolicies();
         topicPolicies.getMaxConsumersPerSubscription().updateBrokerValue(0);
 
-        orderedExecutor = OrderedExecutor.newBuilder().build();
+        OrderedExecutor orderedExecutor = mock(OrderedExecutor.class);
         doReturn(orderedExecutor).when(brokerMock).getTopicOrderedExecutor();
+        ExecutorService executorService = mock(ExecutorService.class);
+        doAnswer(invocation -> {
+            Runnable runnable = invocation.getArgument(0);
+            topicOrderedExecutor.execute(runnable);
+            return null;
+        }).when(executorService).execute(any());
+        doReturn(executorService).when(orderedExecutor).chooseThread();
 
         EventLoopGroup eventLoopGroup = mock(EventLoopGroup.class);
         doReturn(eventLoopGroup).when(brokerMock).executor();
         doAnswer(invocation -> {
-            orderedExecutor.execute(invocation.getArgument(0, Runnable.class));
+            Runnable runnable = invocation.getArgument(0);
+            brokerExecutor.execute(runnable);
             return null;
         }).when(eventLoopGroup).execute(any(Runnable.class));
 
@@ -174,7 +246,8 @@ public class PersistentDispatcherMultipleConsumersMockTest {
 
         EventExecutor eventExecutor = mock(EventExecutor.class);
         doAnswer(invocation -> {
-            orderedExecutor.execute(invocation.getArgument(0, Runnable.class));
+            Runnable runnable = invocation.getArgument(0);
+            runnable.run();
             return null;
         }).when(eventExecutor).execute(any(Runnable.class));
         doReturn(false).when(eventExecutor).inEventLoop();
@@ -217,85 +290,135 @@ public class PersistentDispatcherMultipleConsumersMockTest {
 
     @AfterMethod(alwaysRun = true)
     public void cleanup() {
+        if (topicOrderedExecutor != null) {
+            topicOrderedExecutor.close();
+        }
+        if (brokerExecutor != null) {
+            brokerExecutor.close();
+        }
         if (dispatcher != null && !dispatcher.isClosed()) {
             dispatcher.close();
         }
-        if (orderedExecutor != null) {
-            orderedExecutor.shutdownNow();
-            orderedExecutor = null;
-        }
     }
 
-    @Test(timeOut = 10000)
+    @Test(timeOut = 600000)
     public void testReadMoreEntriesWhileSendInProgress() throws Exception {
+        int latchTimeoutSeconds = 600;
         // This test case is to verify the fix for race condition between readMoreEntries and sendInProgress
         // where a call to readMoreEntries could be skipped if a send is in progress.
         // See https://github.com/apache/pulsar/pull/24700 for more details.
 
-        // (1) Setup dispatcher to use a separate thread for dispatching messages
+        // Setup dispatcher to use a separate thread for dispatching messages
         doReturn(true).when(configMock).isDispatcherDispatchMessagesInSubscriptionThread();
-        dispatcher = new PersistentDispatcherMultipleConsumers(topicMock, cursorMock, subscriptionMock);
+        doReturn(100).when(configMock).getDispatcherMinReadBatchSize();
+        doReturn(100).when(configMock).getDispatcherMaxRoundRobinBatchSize();
+        doReturn(5 * 1024 * 1024).when(configMock).getDispatcherMaxReadSizeBytes();
 
-        // (2) Add a consumer and grant some permits
+        // Mock cursor read
+        mockCursorRead(cursorMock);
+
+        // Add a consumer and grant some permits
         final Consumer consumer = createMockConsumer();
-        consumerMockAvailablePermits = new AtomicInteger(10);
+        consumerMockAvailablePermits = new AtomicInteger(0);
         doAnswer(invocation -> consumerMockAvailablePermits.get()).when(consumer).getAvailablePermits();
+        doAnswer(invocation -> {
+            consumerMockAvailablePermits.addAndGet(invocation.getArgument(0));
+            dispatcher.consumerFlow((Consumer) invocation.getMock(), invocation.getArgument(0));
+            return null;
+        }).when(consumer).flowPermits(anyInt());
         doReturn(true).when(consumer).isWritable();
+        AtomicBoolean readMoreEntriesCalled = new AtomicBoolean(false);
+        KeySharedMeta keySharedMeta = new KeySharedMeta();
+        keySharedMeta.setKeySharedMode(KeySharedMode.STICKY);
+        keySharedMeta.setAllowOutOfOrderDelivery(false);
+        dispatcher =
+                new PersistentStickyKeyDispatcherMultipleConsumers(topicMock, cursorMock, subscriptionMock, configMock,
+                        keySharedMeta) {
+            @Override
+            public synchronized void readMoreEntries() {
+                super.readMoreEntries();
+                readMoreEntriesCalled.set(true);
+            }
+        };
         dispatcher.addConsumer(consumer).join();
 
-        // (3) Setup latches to control message sending flow
-        CountDownLatch sendStartedLatch = new CountDownLatch(1);
+
+        AtomicInteger receivedEntries = new AtomicInteger(0);
+        // block until sendInProgressLatch is released
+        mockSendMessages(consumer, entries -> {
+            consumerMockAvailablePermits.addAndGet(-entries.size());
+            receivedEntries.addAndGet(entries.size());
+        });
+
+        // Trigger a read by sending consumer flow. This will call asyncReadEntries, which will call
+        // readEntriesComplete, which will call sendMessages.
+        consumer.flowPermits(10);
+
+        // trigger the first read in the current thread
+        brokerExecutor.executeInCurrentThread();
+
+        // now introduce the race condition
+        AtomicBoolean introduceRaceCondition = new AtomicBoolean(false);
+        AtomicBoolean sendInProgress = new AtomicBoolean(false);
+        CountDownLatch readMoreEntriesLatch = new CountDownLatch(1);
         CountDownLatch sendInProgressLatch = new CountDownLatch(1);
 
-        // (4) Mock sendMessages to block until sendInProgressLatch is released
-        doAnswer(invocation -> {
-            sendStartedLatch.countDown();
-            sendInProgressLatch.await();
-            List<Entry> entries = invocation.getArgument(0);
-            entries.forEach(Entry::release);
-            return succeededFuture;
-        }).when(consumer).sendMessages(
-                anyList(),
-                any(EntryBatchSizes.class),
-                any(EntryBatchIndexesAcks.class),
-                anyInt(),
-                anyLong(),
-                anyLong(),
-                any(RedeliveryTracker.class)
-        );
+        introduceRaceCondition.set(true);
 
-        // (5) Mock cursor read to provide one entry
-        doAnswer(invocation -> {
-            AsyncCallbacks.ReadEntriesCallback callback = invocation.getArgument(2);
-            Object ctx = invocation.getArgument(3);
-            List<Entry> entries = List.of(createEntry(1, 1, "message1", 1));
-            callback.readEntriesComplete(new ArrayList<>(entries), ctx);
-            return null;
-        }).when(cursorMock).asyncReadEntriesWithSkipOrWait(anyInt(), anyLong(), any(), any(), any(), any());
+        // assuming that that topicOrderedExecutor is used solely for this purpose
+        // that is currently the case
+        topicOrderedExecutor.startBackgroundThread(runnable -> {
+            return () -> {
+                if (introduceRaceCondition.get()) {
+                    sendInProgress.set(true);
+                    sendInProgressLatch.countDown();
+                    try {
+                        readMoreEntriesLatch.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    introduceRaceCondition.set(false);
+                }
+                runnable.run();
+            };
+        });
 
-        // (6) Trigger a read by sending consumer flow. This will call asyncReadEntries, which will call
-        // readEntriesComplete, which will call sendMessages.
-        dispatcher.consumerFlow(consumer, 10);
+        sendInProgressLatch.await(latchTimeoutSeconds, TimeUnit.SECONDS);
+        consumer.flowPermits(10);
 
-        // (7) Wait until send operation is in progress
-        assertTrue(sendStartedLatch.await(5, TimeUnit.SECONDS));
-        //Awaitility.await().until(dispatcher::isSendInProgress);
+        // assuming that the broker executor is used to call readMoreEntries asynchronously
+        brokerExecutor.startBackgroundThread(runnable -> {
+            return () -> {
+                readMoreEntriesCalled.set(false);
+                runnable.run();
+                if (readMoreEntriesCalled.get() && sendInProgress.compareAndSet(true, false)) {
+                    readMoreEntriesLatch.countDown();
+                }
+            };
+        });
 
-        // (8) While send is in progress, trigger another consumer flow, which calls readMoreEntries
-        dispatcher.consumerFlow(consumer, 10);
-
-        // (9) Unblock the send operation
-        sendInProgressLatch.countDown();
-
-        // (10) Verify that a new read is scheduled.
-        // `consumerFlow` in step 6 triggers first read.
-        // `consumerFlow` in step 8 calls `readMoreEntries`, which will set the flag and return.
         // After `sendMessages` is unblocked, `handleSendingMessagesAndReadingMore` will call `readMoreEntries`
         // which will trigger the second read.
         Awaitility.await().atMost(5, TimeUnit.SECONDS).untilAsserted(() ->
             verify(cursorMock, times(2)).asyncReadEntriesWithSkipOrWait(
                 anyInt(), anyLong(), any(), any(), any(), any())
         );
+
+        assertEquals(receivedEntries.get(), 20);
+    }
+
+    private void mockCursorRead(ManagedCursorImpl cursorMock) {
+        AtomicInteger readPositionEntryId = new AtomicInteger(0);
+        doAnswer(invocation -> {
+            int maxEntries = invocation.getArgument(0);
+            AsyncCallbacks.ReadEntriesCallback callback = invocation.getArgument(2);
+            Object ctx = invocation.getArgument(3);
+            List<EntryImpl> entries = IntStream.range(0, maxEntries)
+                    .mapToObj(i -> createEntry(1L, readPositionEntryId.getAndIncrement(), "message" + i, i))
+                    .toList();
+            callback.readEntriesComplete(new ArrayList<>(entries), ctx);
+            return null;
+        }).when(cursorMock).asyncReadEntriesWithSkipOrWait(anyInt(), anyLong(), any(), any(), any(), any());
     }
 
     private EntryImpl createEntry(long ledgerId, long entryId, String message, long sequenceId) {
