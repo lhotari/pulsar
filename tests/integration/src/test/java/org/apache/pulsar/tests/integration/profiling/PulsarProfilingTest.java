@@ -46,9 +46,9 @@ import org.testng.annotations.Test;
  * Example usage:
  * # This has been tested on Mac with Orbstack (https://orbstack.dev/) docker
  * # compile integration test dependencies
- * mvn -am -pl tests/integration -DskipTests install
+ * mvn -am -pl tests/integration -Dcheckstyle.skip=true -Dlicense.skip=true -Dspotbugs.skip=true -DskipTests install
  * # compile apachepulsar/java-test-image with async profiler (add "clean" to ensure a clean build with recent changes)
- * ./build/build_java_test_image.sh -Ddocker.install.asyncprofiler=true
+ * ./build/build_java_test_image.sh -Ddocker.install.asyncprofiler=true -Pdocker-wolfi
  * # set environment variables
  * export PULSAR_TEST_IMAGE_NAME=apachepulsar/java-test-image:latest
  * export NETTY_LEAK_DETECTION=off
