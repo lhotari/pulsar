@@ -260,11 +260,20 @@ public class ProxyConfiguration implements PulsarConfiguration {
     private String bindAddress = "0.0.0.0";
 
     @FieldContext(
-        category = CATEGORY_SERVER,
-        doc = "Hostname or IP address the service advertises to the outside world."
-            + " If not set, the value of `InetAddress.getLocalHost().getCanonicalHostName()` is used."
+            category = CATEGORY_SERVER,
+            doc = "Hostname or IP address the service advertises to the outside world."
+                    + " If not set, the value of `InetAddress.getLocalHost().getCanonicalHostName()` is used."
+                    + " Append a dot to a fully-qualified domain name (FQDN) to make it absolute."
+                    + " Since the proxy's advertisedAddress isn't exposed to clients, this currently has"
+                    + " no external impact."
     )
     private String advertisedAddress;
+
+    @FieldContext(category = CATEGORY_SERVER, doc =
+            "When the advertised address is not set, appends a dot to the auto-resolved FQDN to make it"
+                    + " absolute. Since the proxy's advertisedAddress isn't exposed to clients, this currently has"
+                    + " no external impact.")
+    private boolean advertisedAddressAutoResolvedHostNameAsAbsoluteDnsName = false;
 
     @FieldContext(
             category = CATEGORY_SERVER,
@@ -294,6 +303,13 @@ public class ProxyConfiguration implements PulsarConfiguration {
                     + "Defaults to true when either webServiceHaProxyProtocolEnabled or webServiceTrustXForwardedFor "
                     + "is enabled.")
     private Boolean webServiceLogDetailedAddresses;
+
+    @FieldContext(category = CATEGORY_SERVER, doc =
+            "Defines how the broker will anonymize the role and originalAuthRole before logging. "
+                    + "Possible values are: NONE (no anonymization), REDACTED (replaces with '[REDACTED]'), "
+                    + "hash:SHA256 (hashes using SHA-256), and hash:MD5 (hashes using MD5). Default is NONE."
+    )
+    private String authenticationRoleLoggingAnonymizer = "NONE";
 
     @FieldContext(category = CATEGORY_SERVER,
             doc = "Enables zero-copy transport of data across network interfaces using the spice. "

@@ -18,9 +18,10 @@
 #
 
 ARG PULSAR_ALL_IMAGE
+ARG GOLANG_IMAGE
 
 # build go lang examples first in a separate layer
-FROM golang:1.23-alpine as pulsar-function-go
+FROM $GOLANG_IMAGE as pulsar-function-go
 
 COPY target/pulsar-function-go/ /go/src/github.com/apache/pulsar/pulsar-function-go
 RUN cd /go/src/github.com/apache/pulsar/pulsar-function-go && go install ./...
@@ -61,7 +62,7 @@ FROM $PULSAR_ALL_IMAGE
 # However, any processes exec'ing into the containers will run as root, by default.
 USER root
 
-RUN apk add --no-cache supervisor procps curl
+RUN apk add --no-cache supervisor procps curl jq
 
 RUN mkdir -p /var/log/pulsar && mkdir -p /var/run/supervisor/
 
