@@ -87,6 +87,7 @@ import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.mledger.impl.cache.EntryCacheManager;
 import org.apache.bookkeeper.mledger.impl.cache.RangeEntryCacheManagerImpl;
 import org.apache.commons.lang3.RandomUtils;
+import org.apache.commons.lang3.mutable.MutableLong;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.PulsarVersion;
 import org.apache.pulsar.broker.BrokerTestUtil;
@@ -397,6 +398,83 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
             log.info("Received message '{}'.", new String(msg.getValue(), UTF_8));
             assertEquals(1L, msg.getPublishTime());
             assertEquals(100L * (i + 1), msg.getEventTime());
+        }
+    }
+
+    // workaround for setting publish time for published messages
+    static class AssignedClock extends Clock {
+        private final ThreadLocal<MutableLong> millisThreadLocal = ThreadLocal.withInitial(MutableLong::new);
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneId.systemDefault();
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return Instant.ofEpochMilli(millis());
+        }
+
+        @Override
+        public long millis() {
+            return millisThreadLocal.get().longValue();
+        }
+
+        public void setMillis(long millis) {
+            millisThreadLocal.get().setValue(millis);
+        }
+    }
+
+    @Test(timeOut = 100000)
+    public void testPublishWithPublishTime() throws Exception {
+
+        log.info("-- Starting {} test --", methodName);
+
+        AssignedClock clock = new AssignedClock();
+
+        @Cleanup
+        PulsarClient newPulsarClient = PulsarClient.builder()
+                .serviceUrl(lookupUrl.toString())
+                .clock(clock)
+                .build();
+
+        final String topic = "persistent://my-property/my-ns/test-publish-with-publish-time";
+
+        @Cleanup
+        Consumer<byte[]> consumer = newPulsarClient.newConsumer()
+                .topic(topic)
+                .subscriptionName("my-sub")
+                .subscribe();
+
+        final int numMessages = 5;
+
+        @Cleanup
+        Producer<byte[]> producer = newPulsarClient.newProducer()
+                .topic(topic)
+                .enableBatching(false)
+                .create();
+
+        for (int i = 0; i < numMessages; i++) {
+            // clock is used in the Pulsar Java client for publish time
+            clock.setMillis(i);
+            producer.newMessage()
+                    .value(("value-" + i).getBytes(UTF_8))
+                    .sendAsync().exceptionally(e -> {
+                        log.error("Exception in sending", e);
+                        return null;
+                    });
+        }
+        producer.flush();
+
+        for (int i = 0; i < numMessages; i++) {
+            Message<byte[]> msg = consumer.receive(RECEIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            log.info("Received message '{}'.", new String(msg.getValue(), UTF_8));
+            assertEquals(msg.getPublishTime(), i);
         }
     }
 
