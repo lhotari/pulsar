@@ -19,11 +19,25 @@
 package org.apache.pulsar.client.impl;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.Schema;
 
 @Slf4j
-public class TableViewImpl<T> extends AbstractTableViewImpl<T, T> {
-    TableViewImpl(PulsarClientImpl client, Schema<T> schema, TableViewConfigurationData conf) {
+public class MessageTableViewImpl<T> extends AbstractTableViewImpl<T, Message<T>> {
+    MessageTableViewImpl(PulsarClientImpl client, Schema<T> schema, TableViewConfigurationData conf) {
         super(client, schema, conf);
+    }
+
+    @Override
+    protected void maybeReleaseMessage(Message<T> msg) {
+        // don't release the message. Pooling of messages might have to be disabled in the client when using
+        // MessageTableViewImpl.
+    }
+
+    @Override
+    protected Message<T> getValueIfPresent(Message<T> msg) {
+        // return the message as the value for the table view
+        // if the payload is empty, the message is considered a tombstone message and it won't be preserved in the map
+        return msg.size() > 0 ? msg : null;
     }
 }

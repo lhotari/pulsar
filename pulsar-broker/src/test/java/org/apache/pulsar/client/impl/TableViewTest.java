@@ -30,6 +30,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 import com.google.common.collect.Sets;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.HashSet;
@@ -433,15 +434,16 @@ public class TableViewTest extends MockedPulsarServiceBaseTest {
                 .create();
 
         ConsumerBase consumerBase;
+        Field readerField = FieldUtils.getField(tv1.getClass(), "reader", true);
         if (partitionedTopic) {
             MultiTopicsReaderImpl<String> reader =
                     ((CompletableFuture<MultiTopicsReaderImpl<String>>) FieldUtils
-                            .readDeclaredField(tv1, "reader", true)).get();
+                            .readField(readerField, tv1)).get();
             consumerBase = spy(reader.getMultiTopicsConsumer());
             FieldUtils.writeDeclaredField(reader, "multiTopicsConsumer", consumerBase, true);
         } else {
             ReaderImpl<String> reader = ((CompletableFuture<ReaderImpl<String>>) FieldUtils
-                    .readDeclaredField(tv1, "reader", true)).get();
+                    .readField(readerField, tv1)).get();
             consumerBase = spy(reader.getConsumer());
             FieldUtils.writeDeclaredField(reader, "consumer", consumerBase, true);
         }
@@ -546,8 +548,9 @@ public class TableViewTest extends MockedPulsarServiceBaseTest {
                 .create();
 
         // inject failure on consumer.receiveAsync()
+        Field readerField = FieldUtils.getField(tv.getClass(), "reader", true);
         var reader = ((CompletableFuture<Reader<byte[]>>)
-                FieldUtils.readDeclaredField(tv, "reader", true)).join();
+                FieldUtils.readField(readerField, tv)).join();
         var consumer = spy((ConsumerImpl<byte[]>)
                 FieldUtils.readDeclaredField(reader, "consumer", true));
 
@@ -614,7 +617,7 @@ public class TableViewTest extends MockedPulsarServiceBaseTest {
                 .createAsync()
                 .get();
         TableViewImpl<byte[]> mockTableView = spy(tableView);
-        Method readAllExistingMessagesMethod = TableViewImpl.class
+        Method readAllExistingMessagesMethod = TableViewImpl.class.getSuperclass()
                 .getDeclaredMethod("readAllExistingMessages", Reader.class);
         readAllExistingMessagesMethod.setAccessible(true);
         CompletableFuture<Reader<?>> future =
