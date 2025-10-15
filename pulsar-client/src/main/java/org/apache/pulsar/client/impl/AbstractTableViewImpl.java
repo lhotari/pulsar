@@ -46,7 +46,7 @@ import org.apache.pulsar.client.api.TopicMessageId;
 import org.apache.pulsar.common.naming.TopicDomain;
 import org.apache.pulsar.common.topics.TopicCompactionStrategy;
 
-    @Slf4j
+@Slf4j
 abstract class AbstractTableViewImpl<T, V> implements TableView<V> {
 
     private final TableViewConfigurationData conf;
@@ -54,7 +54,7 @@ abstract class AbstractTableViewImpl<T, V> implements TableView<V> {
     private final ConcurrentMap<String, V> data;
     private final Map<String, V> immutableData;
 
-        private final CompletableFuture<Reader<T>> reader;
+    private final CompletableFuture<Reader<T>> reader;
 
     private final List<BiConsumer<String, V>> listeners;
     private final ReentrantLock listenersMutex;

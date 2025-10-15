@@ -19,7 +19,6 @@
 package org.apache.pulsar.client.impl;
 
 import java.util.function.Function;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.Schema;
 
@@ -28,7 +27,6 @@ import org.apache.pulsar.client.api.Schema;
  * @param <T> the message schema type
  * @param <V> the value type returned by the mapper function
  */
-@Slf4j
 public class MessageMapperTableViewImpl<T, V> extends AbstractTableViewImpl<T, V> {
     private final Function<Message<T>, V> mapper;
     private final boolean shouldReleasePooledMessage;

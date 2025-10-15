@@ -18,11 +18,9 @@
  */
 package org.apache.pulsar.client.impl;
 
-import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.Schema;
 
-@Slf4j
 public class TableViewImpl<T> extends AbstractTableViewImpl<T, T> {
     TableViewImpl(PulsarClientImpl client, Schema<T> schema, TableViewConfigurationData conf) {
         super(client, schema, conf);
