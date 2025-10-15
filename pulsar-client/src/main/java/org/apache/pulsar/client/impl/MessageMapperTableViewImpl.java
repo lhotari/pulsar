@@ -18,26 +18,35 @@
  */
 package org.apache.pulsar.client.impl;
 
+import java.util.function.Function;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.Schema;
 
+/**
+ * TableView implementation that applies a mapper function to the messages.
+ * @param <T> the message schema type
+ * @param <V> the value type returned by the mapper function
+ */
 @Slf4j
-public class MessageTableViewImpl<T> extends AbstractTableViewImpl<T, Message<T>> {
-    MessageTableViewImpl(PulsarClientImpl client, Schema<T> schema, TableViewConfigurationData conf) {
+public class MessageMapperTableViewImpl<T, V> extends AbstractTableViewImpl<T, V> {
+    private final Function<Message<T>, V> mapper;
+    private final boolean shouldReleasePooledMessage;
+
+    MessageMapperTableViewImpl(PulsarClientImpl client, Schema<T> schema, TableViewConfigurationData conf,
+                               Function<Message<T>, V> mapper, boolean shouldReleasePooledMessage) {
         super(client, schema, conf);
+        this.mapper = mapper;
+        this.shouldReleasePooledMessage = shouldReleasePooledMessage;
     }
 
     @Override
-    protected void maybeReleaseMessage(Message<T> msg) {
-        // don't release the message. Pooling of messages might have to be disabled in the client when using
-        // MessageTableViewImpl.
+    protected boolean shouldReleasePooledMessage() {
+        return shouldReleasePooledMessage;
     }
 
     @Override
-    protected Message<T> getValueIfPresent(Message<T> msg) {
-        // return the message as the value for the table view
-        // if the payload is empty, the message is considered a tombstone message and it won't be preserved in the map
-        return msg.size() > 0 ? msg : null;
+    protected V getValue(Message<T> msg) {
+        return mapper.apply(msg);
     }
 }

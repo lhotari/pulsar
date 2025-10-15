@@ -257,14 +257,30 @@ abstract class AbstractTableViewImpl<T, V> implements TableView<V> {
         }
     }
 
-    protected void maybeReleaseMessage(Message<T> msg) {
-        msg.release();
+    private void maybeReleaseMessage(Message<T> msg) {
+        if (shouldReleasePooledMessage()) {
+            msg.release();
+        }
     }
 
-    @SuppressWarnings("unchecked")
-    protected V getValueIfPresent(Message<T> msg) {
-        return msg.size() > 0 ? (V) msg.getValue() : null;
+    /**
+     * Implementors should override this method to decide whether a possibly pooled message should be released for
+     * reuse.
+     * @return true if the message should be released, false otherwise.
+     */
+    protected abstract boolean shouldReleasePooledMessage();
+
+    // if the payload is empty, the message is considered a tombstone message, and it won't be preserved in the map
+    private V getValueIfPresent(Message<T> msg) {
+        return msg.size() > 0 ? getValue(msg) : null;
     }
+
+    /**
+     * Implementors should override this method to extract the value from the message.
+     * @param msg the message to extract the value from
+     * @return the value extracted from the message
+     */
+    protected abstract V getValue(Message<T> msg);
 
     @Override
     public CompletableFuture<Void> refreshAsync() {
