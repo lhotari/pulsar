@@ -41,7 +41,7 @@ public class PatternMultiTopicsConsumerImplTest {
     private Consumer<String> mockTopicsHashSetter;
 
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setUp() {
         mockListener = mock(PatternMultiTopicsConsumerImpl.TopicsChangedListener.class);
         when(mockListener.onTopicsAdded(any())).thenReturn(CompletableFuture.completedFuture(null));

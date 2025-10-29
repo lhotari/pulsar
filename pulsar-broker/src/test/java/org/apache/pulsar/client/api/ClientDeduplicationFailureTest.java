@@ -71,7 +71,7 @@ public class ClientDeduplicationFailureTest {
     final String tenant = "external-repl-prop";
     String primaryHost;
 
-    @BeforeMethod(timeOut = 300000, alwaysRun = true)
+    @BeforeMethod(timeOut = 300000)
     void setup(Method method) throws Exception {
         log.info("--- Setting up method {} ---", method.getName());
 
@@ -202,7 +202,7 @@ public class ClientDeduplicationFailureTest {
     }
 
     // TODO: Test disabled since it results in a OOME
-    @Test(timeOut = 300000, groups = "quarantine", enabled = false)
+    @Test(timeOut = 300000, enabled = false)
     public void testClientDeduplicationCorrectnessWithFailure() throws Exception {
         final String namespacePortion = "dedup";
         final String replNamespace = tenant + "/" + namespacePortion;

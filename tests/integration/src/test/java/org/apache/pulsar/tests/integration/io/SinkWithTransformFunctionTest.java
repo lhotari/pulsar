@@ -49,6 +49,7 @@ import org.testng.annotations.Test;
  * Test behaviour of sinks with a transform function.
  */
 @Slf4j
+@Test(groups = "sink")
 public class SinkWithTransformFunctionTest extends PulsarStandaloneTestSuite {
 
     //Use PIP-117 new defaults so that the package management service is enabled.
@@ -73,7 +74,7 @@ public class SinkWithTransformFunctionTest extends PulsarStandaloneTestSuite {
         log.info("public/default namespace policies are {}", result.getStdout());
     }
 
-    @Test(groups = {"sink"})
+    @Test
     public void testSinkWithTransformFunction() throws Exception {
 
         @Cleanup PulsarClient client = PulsarClient.builder()
@@ -130,7 +131,7 @@ public class SinkWithTransformFunctionTest extends PulsarStandaloneTestSuite {
         getSinkInfoNotFound(sinkName);
     }
 
-    @Test(groups = {"sink"})
+    @Test
     public void testGenericObjectSinkWithTransformFunction() throws Exception {
 
         @Cleanup PulsarClient client = PulsarClient.builder()
@@ -210,7 +211,7 @@ public class SinkWithTransformFunctionTest extends PulsarStandaloneTestSuite {
         getSinkInfoNotFound(sinkName);
     }
 
-    @Test(groups = {"sink"})
+    @Test
     public void testKeyValueSinkWithTransformFunction() throws Exception {
 
         @Cleanup PulsarClient client = PulsarClient.builder()

@@ -37,7 +37,7 @@ import org.testng.annotations.Test;
 @Test
 public class PartitionKeywordCompatibilityTest extends BrokerTestBase {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         baseSetup();

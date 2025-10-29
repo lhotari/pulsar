@@ -84,7 +84,7 @@ public abstract class BookKeeperClusterTestCase {
 
     protected String testName;
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void handleTestMethodName(Method method) {
         testName = method.getName();
     }

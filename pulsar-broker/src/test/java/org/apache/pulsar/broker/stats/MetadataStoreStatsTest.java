@@ -48,7 +48,7 @@ import org.testng.annotations.Test;
 @Test(groups = "flaky")
 public class MetadataStoreStatsTest extends BrokerTestBase {
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         super.baseSetup();

@@ -67,7 +67,7 @@ public abstract class ElasticSearchClientTest extends ElasticSearchTestBase {
         super(elasticImageName);
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void initBeforeClass() throws IOException {
         network = Network.newNetwork();
         container = createElasticsearchContainer().withNetwork(network);

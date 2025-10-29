@@ -54,7 +54,7 @@ public class TopicListWatcherTest {
     private CompletableFuture<TopicListWatcher> watcherFuture;
     private TopicsChangedListener listener;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() {
         listener = mock(TopicsChangedListener.class);
         client = mock(PulsarClientImpl.class);

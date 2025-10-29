@@ -62,7 +62,7 @@ public abstract class BaseMetadataStoreTest extends TestRetrySupport {
     private File rocksDbDirectory;
     private boolean running;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     public void setup() throws Exception {
         running = true;

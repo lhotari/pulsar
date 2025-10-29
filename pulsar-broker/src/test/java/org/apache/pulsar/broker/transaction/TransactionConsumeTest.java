@@ -75,7 +75,7 @@ public class TransactionConsumeTest extends TransactionTestBase {
     private static final String NORMAL_MSG_CONTENT = "Normal - ";
     private static final String TXN_MSG_CONTENT = "Txn - ";
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() throws Exception {
         setBrokerCount(1);
         super.internalSetup();

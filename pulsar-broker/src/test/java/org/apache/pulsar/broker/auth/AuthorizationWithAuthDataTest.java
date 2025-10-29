@@ -246,7 +246,7 @@ public class AuthorizationWithAuthDataTest extends MockedPulsarServiceBaseTest {
         clientBuilder.authentication(AuthenticationToken.class.getName(), ADMIN_TOKEN);
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         internalSetup();

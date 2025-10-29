@@ -50,7 +50,7 @@ public class FunctionMetaDataTopicTailerTest {
     private FunctionMetaDataManager fsm;
     private FunctionMetaDataTopicTailer fsc;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void before() throws Exception {
         this.reader = mock(Reader.class);
         this.readerBuilder = mock(ReaderBuilder.class);

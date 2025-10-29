@@ -39,7 +39,7 @@ public class PackagesCliTest extends TestRetrySupport {
     private static final String clusterNamePrefix = "packages-service";
     private PulsarCluster pulsarCluster;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public final void setup() throws Exception {
         incrementSetupNumber();
         PulsarClusterSpec spec = PulsarClusterSpec.builder()

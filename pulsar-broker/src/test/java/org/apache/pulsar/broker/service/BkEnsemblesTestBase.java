@@ -81,7 +81,7 @@ public abstract class BkEnsemblesTestBase extends TestRetrySupport {
     }
 
     @Override
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     protected void setup() throws Exception {
         incrementSetupNumber();
         try {

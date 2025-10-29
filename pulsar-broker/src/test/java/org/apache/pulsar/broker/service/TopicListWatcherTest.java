@@ -50,7 +50,7 @@ public class TopicListWatcherTest {
 
 
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() {
         topicListService = mock(TopicListService.class);
         watcher = new TopicListService.TopicListWatcher(topicListService, ID, PATTERN, INITIAL_TOPIC_LIST);

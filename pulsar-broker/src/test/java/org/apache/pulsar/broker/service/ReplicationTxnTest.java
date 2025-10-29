@@ -66,7 +66,7 @@ public class ReplicationTxnTest extends OneWayReplicatorTestBase {
     private int txnLogPartitions = 4;
 
     @Override
-    @BeforeClass(alwaysRun = true, timeOut = 300000)
+    @BeforeClass(timeOut = 300000)
     public void setup() throws Exception {
         super.setup();
     }

@@ -37,7 +37,7 @@ import org.testng.annotations.Test;
 @Test(groups = "broker-impl")
 public class ConsumerUnsubscribeIntegrationTest extends ProducerConsumerBase {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

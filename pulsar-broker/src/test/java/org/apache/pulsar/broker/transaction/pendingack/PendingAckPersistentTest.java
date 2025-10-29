@@ -104,7 +104,7 @@ public class PendingAckPersistentTest extends TransactionTestBase {
 
     private static final int NUM_PARTITIONS = 16;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() throws Exception {
         setUpBase(1, NUM_PARTITIONS, PENDING_ACK_REPLAY_TOPIC, 0);
     }
@@ -579,6 +579,15 @@ public class PendingAckPersistentTest extends TransactionTestBase {
         assertFalse(topics.contains(MLPendingAckStore.getTransactionPendingAckStoreSuffix(topic, subName1)));
         assertFalse(topics.contains(MLPendingAckStore.getTransactionPendingAckStoreSuffix(topic, subName2)));
         assertFalse(topics.contains(topic));
+    }
+
+    @BeforeMethod(groups = "quarantine", inheritGroups = false)
+    public void setupForQuarantine() throws Exception {
+        // setup method's BeforeMethod annotation will run only for the default group of the class
+        if (!isTestSetupInitialized()) {
+            cleanup();
+            setup();
+        }
     }
 
     @Test(groups = "quarantine")

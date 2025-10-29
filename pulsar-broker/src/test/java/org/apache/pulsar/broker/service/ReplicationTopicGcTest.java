@@ -49,7 +49,7 @@ import org.testng.annotations.Test;
 public class ReplicationTopicGcTest extends OneWayReplicatorTestBase {
 
     @Override
-    @BeforeClass(alwaysRun = true, timeOut = 300000)
+    @BeforeClass(timeOut = 300000)
     public void setup() throws Exception {
         super.setup();
     }

@@ -53,7 +53,7 @@ import org.testng.annotations.Test;
 @Test(groups = "broker-impl")
 public class ProducerConsumerInternalTest extends ProducerConsumerBase {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();
@@ -119,6 +119,15 @@ public class ProducerConsumerInternalTest extends ProducerConsumerBase {
         Awaitility.await().untilAsserted(() -> {
             assertFalse(serverCnx.getProducers().containsKey(serviceProducer.getServiceProducer().getProducerId()));
         });
+    }
+
+    @BeforeClass(groups = "flaky", inheritGroups = false)
+    public void setupForFlaky() throws Exception {
+        // setup method's BeforeClass annotation will run only for the default group of the class
+        if (!isTestSetupInitialized()) {
+            cleanup();
+            setup();
+        }
     }
 
     @Test(groups = "flaky")

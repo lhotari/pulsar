@@ -131,8 +131,12 @@ public class ReplicatorTest extends ReplicatorTestBase {
     protected String methodName;
 
     @BeforeMethod(alwaysRun = true)
-    public void beforeMethod(Method m) throws Exception {
+    public void setTestMethodName(Method m) throws Exception {
         methodName = m.getName();
+    }
+
+    @BeforeMethod
+    public void beforeMethod() throws Exception {
         if (admin1 != null) {
             admin1.namespaces().removeBacklogQuota("pulsar/ns");
             admin1.namespaces().removeBacklogQuota("pulsar/ns1");
@@ -141,7 +145,7 @@ public class ReplicatorTest extends ReplicatorTestBase {
     }
 
     @Override
-    @BeforeClass(alwaysRun = true, timeOut = 300000)
+    @BeforeClass(timeOut = 300000)
     public void setup() throws Exception {
         super.setup();
     }

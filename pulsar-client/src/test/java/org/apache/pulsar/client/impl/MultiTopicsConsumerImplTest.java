@@ -68,7 +68,7 @@ public class MultiTopicsConsumerImplTest {
     private ExecutorProvider executorProvider;
     private ExecutorService internalExecutor;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setUp() {
         executorProvider = new ExecutorProvider(1, "MultiTopicsConsumerImplTest");
         internalExecutor = Executors.newSingleThreadScheduledExecutor();

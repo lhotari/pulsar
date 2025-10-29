@@ -38,7 +38,7 @@ import org.testng.annotations.BeforeMethod;
 public class TlsProducerConsumerBase extends ProducerConsumerBase {
     private final String clusterName = "use";
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         // TLS configuration for Broker

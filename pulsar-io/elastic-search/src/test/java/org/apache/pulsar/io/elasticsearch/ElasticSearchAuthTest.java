@@ -44,7 +44,7 @@ public abstract class ElasticSearchAuthTest extends ElasticSearchTestBase {
         super(elasticImageName);
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void initBeforeClass() {
         container = createElasticsearchContainer()
                 .withEnv("xpack.security.enabled", "true")

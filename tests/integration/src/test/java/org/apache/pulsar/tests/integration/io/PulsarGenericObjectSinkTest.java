@@ -50,6 +50,7 @@ import org.testng.annotations.Test;
  * Test behaviour of simple sinks.
  */
 @Slf4j
+@Test
 public class PulsarGenericObjectSinkTest extends PulsarStandaloneTestSuite {
 
     @Getter
@@ -86,7 +87,7 @@ public class PulsarGenericObjectSinkTest extends PulsarStandaloneTestSuite {
         private String field1;
     }
 
-    @Test(groups = {"sink"})
+    @Test
     public void testGenericObjectSink() throws Exception {
 
         @Cleanup PulsarClient client = PulsarClient.builder()
@@ -184,7 +185,7 @@ public class PulsarGenericObjectSinkTest extends PulsarStandaloneTestSuite {
         }
     }
 
-    @Test(groups = {"sink"})
+    @Test
     public void testGenericObjectSinkWithSchemaChange() throws Exception {
 
         @Cleanup PulsarClient client = PulsarClient.builder()

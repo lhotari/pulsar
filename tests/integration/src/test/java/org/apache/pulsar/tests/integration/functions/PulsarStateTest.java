@@ -149,7 +149,7 @@ public abstract class PulsarStateTest extends PulsarStandaloneTestSuite {
         getFunctionInfoNotFound(functionName);
     }
 
-    @Test(groups = {"python_state", "state", "function", "python_function"})
+    @Test
     public void testPythonWordCountFunction() throws Exception {
         if (PulsarMetadataStateStoreProviderImpl.class.getName().equals(stateStoreProvider)) {
             // python function doesn't support metadata state store yet
@@ -163,7 +163,7 @@ public abstract class PulsarStateTest extends PulsarStandaloneTestSuite {
         doTestPythonWordCountFunction(functionName);
     }
 
-    @Test(groups = {"java_state", "state", "function", "java_function"})
+    @Test
     public void testJavaWordCountFunction() throws Exception {
         String functionName = "test-wordcount-java-fn-" + randomName(8);
         doTestJavaWordCountFunction(functionName);
@@ -174,7 +174,7 @@ public abstract class PulsarStateTest extends PulsarStandaloneTestSuite {
     }
 
 
-    @Test(groups = {"java_state", "state", "function", "java_function"})
+    @Test
     public void testSourceState() throws Exception {
         String outputTopicName = "test-state-source-output-" + randomName(8);
         String sourceName = "test-state-source-" + randomName(8);
@@ -231,7 +231,7 @@ public abstract class PulsarStateTest extends PulsarStandaloneTestSuite {
         getSourceInfoNotFound(sourceName);
     }
 
-    @Test(groups = {"java_state", "state", "function", "java_function"})
+    @Test
     public void testSinkState() throws Exception {
         String inputTopicName = "test-state-sink-input-" + randomName(8);
         String sinkName = "test-state-sink-" + randomName(8);
@@ -299,7 +299,7 @@ public abstract class PulsarStateTest extends PulsarStandaloneTestSuite {
         getSinkInfoNotFound(sinkName);
     }
 
-    @Test(groups = {"python_state", "state", "function", "python_function"})
+    @Test
     public void testNonExistFunction() throws Exception {
         String functionName = "non-exist-function-" + randomName(8);
         try (PulsarAdmin admin = PulsarAdmin.builder().serviceHttpUrl(container.getHttpServiceUrl()).build()) {
@@ -313,14 +313,14 @@ public abstract class PulsarStateTest extends PulsarStandaloneTestSuite {
         }
     }
 
-    @Test(groups = {"java_state", "state", "function", "java_function"})
+    @Test
     public void testBytes2StringNotUTF8() {
         byte[] valueBytes = Base64.getDecoder().decode(VALUE_BASE64);
         assertFalse(Utf8.isWellFormed(valueBytes));
         assertNotEquals(valueBytes, new String(valueBytes, UTF_8).getBytes(UTF_8));
     }
 
-    @Test(groups = {"java_state", "state", "function", "java_function"})
+    @Test
     public void testSourceByteState() throws Exception {
         String outputTopicName = "test-state-source-output-" + randomName(8);
         String sourceName = "test-state-source-" + randomName(8);

@@ -52,7 +52,7 @@ import org.testng.annotations.Test;
 public class TransactionAndSchemaAuthZTest extends AuthZTest {
 
     @SneakyThrows
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() {
         configureTokenAuthentication();
         configureDefaultAuthorization();

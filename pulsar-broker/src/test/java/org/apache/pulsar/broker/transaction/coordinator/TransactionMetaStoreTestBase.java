@@ -48,7 +48,7 @@ public abstract class TransactionMetaStoreTestBase extends TestRetrySupport {
 
     protected TransactionCoordinatorClient transactionCoordinatorClient;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     protected final void setup() throws Exception {
         log.info("---- Initializing {} -----", getClass().getSimpleName());
         // Start local bookkeeper ensemble

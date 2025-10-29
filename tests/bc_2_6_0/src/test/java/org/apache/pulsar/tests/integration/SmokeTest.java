@@ -38,7 +38,7 @@ public class SmokeTest extends TestRetrySupport {
     private PulsarContainer pulsarContainer;
 
     @Override
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public final void setup(){
         incrementSetupNumber();
         pulsarContainer = new PulsarContainer();

@@ -47,7 +47,7 @@ public class TableViewBuilderImplTest {
     private TableViewBuilderImpl tableViewBuilderImpl;
     private CompletableFuture readNextFuture;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() {
         Reader reader = mock(Reader.class);
         readNextFuture = new CompletableFuture();

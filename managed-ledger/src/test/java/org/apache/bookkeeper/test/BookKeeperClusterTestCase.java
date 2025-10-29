@@ -147,7 +147,7 @@ public abstract class BookKeeperClusterTestCase {
         }
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setUp() throws Exception {
         setUp(getLedgersRootPath());
     }

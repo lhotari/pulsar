@@ -42,7 +42,7 @@ public class DnsResolverTest {
     private String originalCachePolicy;
     private String originalNegativeCachePolicy;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void beforeClass() {
         originalCachePolicy = Security.getProperty(CACHE_POLICY_PROP);
         originalNegativeCachePolicy = Security.getProperty(NEGATIVE_CACHE_POLICY_PROP);

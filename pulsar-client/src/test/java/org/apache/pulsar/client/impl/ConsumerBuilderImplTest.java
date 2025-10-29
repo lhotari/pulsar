@@ -76,7 +76,7 @@ public class ConsumerBuilderImplTest {
     private static final String TOPIC_NAME = "testTopicName";
     private ConsumerBuilderImpl consumerBuilderImpl;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() {
         PulsarClientImpl client = mock(PulsarClientImpl.class);
         ConnectionPool connectionPool = mock(ConnectionPool.class);

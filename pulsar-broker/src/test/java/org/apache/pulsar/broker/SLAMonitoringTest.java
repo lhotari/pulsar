@@ -61,7 +61,7 @@ public class SLAMonitoringTest {
     private final PulsarAdmin[] pulsarAdmins = new PulsarAdmin[BROKER_COUNT];
     private final ServiceConfiguration[] configurations = new ServiceConfiguration[BROKER_COUNT];
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     void setup() throws Exception {
         executor =
                 new ThreadPoolExecutor(5,

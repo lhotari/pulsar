@@ -39,7 +39,7 @@ import org.testng.annotations.Test;
 public class BrokerInstallWithEntryMetadataInterceptorsTest extends PulsarClusterTestBase {
     private static final String PREFIX = "PULSAR_PREFIX_";
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     public final void setupCluster() throws Exception {
         incrementSetupNumber();

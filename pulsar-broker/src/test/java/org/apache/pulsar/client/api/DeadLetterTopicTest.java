@@ -63,7 +63,7 @@ public class DeadLetterTopicTest extends ProducerConsumerBase {
 
     private static final Logger log = LoggerFactory.getLogger(DeadLetterTopicTest.class);
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         this.conf.setMaxMessageSize(5 * 1024);
@@ -866,6 +866,15 @@ public class DeadLetterTopicTest extends ProducerConsumerBase {
         assertNull(checkMessage);
 
         checkConsumer.close();
+    }
+
+    @BeforeMethod(groups = "quarantine", inheritGroups = false)
+    public void setupForQuarantine() throws Exception {
+        // setup method's BeforeMethod annotation will run only for the default group of the class
+        if (!isTestSetupInitialized()) {
+            cleanup();
+            setup();
+        }
     }
 
     @Test(groups = "quarantine")

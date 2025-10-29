@@ -237,13 +237,13 @@ public class PulsarFunctionE2ETest extends AbstractPulsarE2ETest {
         testE2EPulsarFunction(fileServer.getUrl("/pulsar-functions-api-examples.nar"));
     }
 
-    @Test(timeOut = 20000, groups = "builtin")
+    @Test(timeOut = 20000)
     public void testPulsarFunctionBuiltin() throws Exception {
         String jarFilePathUrl = String.format("%s://exclamation", Utils.BUILTIN);
         testE2EPulsarFunction(jarFilePathUrl);
     }
 
-    @Test(timeOut = 20000, groups = "builtin", expectedExceptions = {PulsarAdminException.class},
+    @Test(timeOut = 20000, expectedExceptions = {PulsarAdminException.class},
             expectedExceptionsMessageRegExp = "No Function foo found")
     public void testPulsarFunctionBuiltinDoesNotExist() throws Exception {
         String jarFilePathUrl = String.format("%s://foo", Utils.BUILTIN);

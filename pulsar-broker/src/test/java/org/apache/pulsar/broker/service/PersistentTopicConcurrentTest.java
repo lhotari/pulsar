@@ -25,7 +25,6 @@ import static org.mockito.Mockito.mock;
 import static org.testng.Assert.assertFalse;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -35,7 +34,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
-import lombok.Cleanup;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
@@ -46,18 +44,23 @@ import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.namespace.NamespaceService;
+import org.apache.pulsar.broker.resources.PulsarResources;
 import org.apache.pulsar.broker.service.persistent.PersistentSubscription;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
+import org.apache.pulsar.broker.storage.ManagedLedgerStorage;
+import org.apache.pulsar.broker.storage.ManagedLedgerStorageClass;
 import org.apache.pulsar.common.api.proto.CommandSubscribe;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.InitialPosition;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.policies.data.InactiveTopicDeleteMode;
+import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-@Test(groups = "broker")
+// this test is outdated and needs to be updated in order to enable it.
+// org.apache.pulsar.broker.service.PersistentTopicTest could be a useful reference
+@Test(groups = "broker", enabled = false)
 public class PersistentTopicConcurrentTest extends MockedBookKeeperTestCase {
 
     private BrokerService brokerService;
@@ -71,27 +74,35 @@ public class PersistentTopicConcurrentTest extends MockedBookKeeperTestCase {
     final String successTopicName = "persistent://prop/use/ns-abc/successTopic";
     final String successSubName = "successSub";
     private static final Logger log = LoggerFactory.getLogger(PersistentTopicTest.class);
+    private EventLoopGroup eventLoopGroup;
+    private PulsarService pulsar;
 
-    @BeforeMethod
-    public void setup(Method m) throws Exception {
-        super.setUp(m);
+    @Override
+    protected void setUpTestCase() throws Exception {
         ServiceConfiguration svcConfig = new ServiceConfiguration();
         svcConfig.setBrokerShutdownTimeoutMs(0L);
+        svcConfig.setClusterName("test");
         svcConfig.setLoadBalancerOverrideBrokerNicSpeedGbps(Optional.of(1.0d));
-        @Cleanup
-        PulsarService pulsar = spyWithClassAndConstructorArgs(PulsarService.class, svcConfig);
+        pulsar = spyWithClassAndConstructorArgs(PulsarService.class, svcConfig);
         doReturn(svcConfig).when(pulsar).getConfiguration();
+        doReturn(mock(PulsarResources.class)).when(pulsar).getPulsarResources();
+        MetadataStoreExtended metadataStore = mock(MetadataStoreExtended.class);
+        doReturn(metadataStore).when(pulsar).getLocalMetadataStore();
+        doReturn(metadataStore).when(pulsar).getConfigurationMetadataStore();
+        ManagedLedgerStorage managedLedgerStorage = mock(ManagedLedgerStorage.class);
+        doReturn(managedLedgerStorage).when(pulsar).getManagedLedgerStorage();
+        ManagedLedgerStorageClass managedLedgerStorageClass = mock(ManagedLedgerStorageClass.class);
+        doReturn(managedLedgerStorageClass).when(managedLedgerStorage).getDefaultStorageClass();
 
-        @Cleanup(value = "shutdownGracefully")
-        EventLoopGroup eventLoopGroup = new NioEventLoopGroup();
-
+        eventLoopGroup = new NioEventLoopGroup();
         mlFactoryMock = mock(ManagedLedgerFactory.class);
-        ManagedLedgerFactory factory = new ManagedLedgerFactoryImpl(metadataStore, bkc);
+        ManagedLedgerFactory factory = new ManagedLedgerFactoryImpl(this.metadataStore, bkc);
         ManagedLedger ledger = factory.open("my_test_ledger", new ManagedLedgerConfig().setMaxEntriesPerLedger(2));
         cursorMock = ledger.openCursor("c1");
         ledgerMock = ledger;
         mlFactoryMock = factory;
         doReturn(mlFactoryMock).when(pulsar).getDefaultManagedLedgerFactory();
+        doReturn(mlFactoryMock).when(managedLedgerStorageClass).getManagedLedgerFactory();
 
         brokerService = spyWithClassAndConstructorArgs(BrokerService.class, pulsar, eventLoopGroup);
         doReturn(brokerService).when(pulsar).getBrokerService();
@@ -113,7 +124,18 @@ public class PersistentTopicConcurrentTest extends MockedBookKeeperTestCase {
         }
     }
 
-    @Test(enabled = false)
+    protected void cleanUpTestCase() throws Exception {
+        if (eventLoopGroup != null) {
+            eventLoopGroup.shutdownGracefully();
+            eventLoopGroup = null;
+        }
+        if (pulsar != null) {
+            pulsar.close();
+            pulsar = null;
+        }
+    }
+
+    @Test
     public void testConcurrentTopicAndSubscriptionDelete() throws Exception {
         // create topic
         final PersistentTopic topic = (PersistentTopic) brokerService.getOrCreateTopic(successTopicName).get();
@@ -172,7 +194,7 @@ public class PersistentTopicConcurrentTest extends MockedBookKeeperTestCase {
         assertFalse(gotException.get());
     }
 
-    @Test(enabled = false)
+    @Test
     public void testConcurrentTopicGCAndSubscriptionDelete() throws Exception {
         // create topic
         final PersistentTopic topic = (PersistentTopic) brokerService.getOrCreateTopic(successTopicName).get();
@@ -238,7 +260,7 @@ public class PersistentTopicConcurrentTest extends MockedBookKeeperTestCase {
         assertFalse(gotException.get());
     }
 
-    @Test(enabled = false)
+    @Test
     public void testConcurrentTopicDeleteAndUnsubscribe() throws Exception {
         // create topic
         final PersistentTopic topic = (PersistentTopic) brokerService.getOrCreateTopic(successTopicName).get();
@@ -297,7 +319,7 @@ public class PersistentTopicConcurrentTest extends MockedBookKeeperTestCase {
         assertFalse(gotException.get());
     }
 
-    @Test(enabled = false)
+    @Test
     public void testConcurrentTopicDeleteAndSubsUnsubscribe() throws Exception {
         // create topic
         final PersistentTopic topic = (PersistentTopic) brokerService.getOrCreateTopic(successTopicName).get();

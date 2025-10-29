@@ -68,13 +68,13 @@ public class TokenOauth2AuthenticatedProducerConsumerTest extends ProducerConsum
     private static final String CREDENTIALS_FILE = "./src/test/resources/authentication/token/credentials_file.json";
     private static final String audience = "my-pulsar-cluster";
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     protected void setupClass() {
         String clientSecret = "super-secret-client-secret";
         server = new MockOIDCIdentityProvider(clientSecret, audience, 3000);
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         conf.setAuthenticationEnabled(true);

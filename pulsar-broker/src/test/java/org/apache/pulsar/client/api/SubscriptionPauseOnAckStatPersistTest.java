@@ -57,7 +57,7 @@ public class SubscriptionPauseOnAckStatPersistTest extends ProducerConsumerBase 
 
     private static final int MAX_UNACKED_RANGES_TO_PERSIST = 50;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

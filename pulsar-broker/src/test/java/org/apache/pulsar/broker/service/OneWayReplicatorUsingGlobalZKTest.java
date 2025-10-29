@@ -56,7 +56,7 @@ import org.testng.annotations.Test;
 public class OneWayReplicatorUsingGlobalZKTest extends OneWayReplicatorTest {
 
     @Override
-    @BeforeClass(alwaysRun = true, timeOut = 300000)
+    @BeforeClass(timeOut = 300000)
     public void setup() throws Exception {
         super.usingGlobalZK = true;
         super.setup();

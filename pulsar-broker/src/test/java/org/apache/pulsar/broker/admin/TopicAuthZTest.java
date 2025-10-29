@@ -76,7 +76,7 @@ import org.testng.annotations.Test;
 public class TopicAuthZTest extends AuthZTest {
 
     @SneakyThrows
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() {
         configureTokenAuthentication();
         configureDefaultAuthorization();

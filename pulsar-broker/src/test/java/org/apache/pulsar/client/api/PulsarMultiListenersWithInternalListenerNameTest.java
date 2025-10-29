@@ -76,7 +76,7 @@ public class PulsarMultiListenersWithInternalListenerNameTest extends MockedPuls
         this.enableBrokerGateway = true;
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         this.executorService = Executors.newFixedThreadPool(1);

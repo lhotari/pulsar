@@ -33,7 +33,7 @@ public class TopicConsumerBuilderImplTest {
     private TopicConsumerBuilderImpl<String> topicConsumerBuilderImpl;
 
     @SuppressWarnings("unchecked")
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() {
         ConsumerBuilder<String> consumerBuilder = mock(ConsumerBuilder.class);
         topicConsumerConfigurationData = mock(TopicConsumerConfigurationData.class);

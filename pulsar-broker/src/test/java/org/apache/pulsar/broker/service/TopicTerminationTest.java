@@ -91,7 +91,7 @@ public class TopicTerminationTest extends BrokerTestBase {
         }
     }
 
-    @Test(groups = "broker")
+    @Test
     public void testCreateProducerOnTerminatedTopic() throws Exception {
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName)
             .enableBatching(false)
@@ -185,7 +185,7 @@ public class TopicTerminationTest extends BrokerTestBase {
         }
     }
 
-    @Test(groups = "broker")
+    @Test
     public void testDoubleTerminate() throws Exception {
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName)
             .enableBatching(false)
@@ -204,7 +204,7 @@ public class TopicTerminationTest extends BrokerTestBase {
         assertEquals(lastMessageId, msgId3);
     }
 
-    @Test(groups = "broker")
+    @Test
     public void testTerminatePartitionedTopic() throws Exception {
         admin.topics().createPartitionedTopic(topicName, 4);
 

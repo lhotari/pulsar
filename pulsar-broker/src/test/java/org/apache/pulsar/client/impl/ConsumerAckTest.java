@@ -62,7 +62,7 @@ public class ConsumerAckTest extends ProducerConsumerBase {
     private TransactionImpl transaction;
     private PulsarClient clientWithStats;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() throws Exception {
         super.internalSetup();
         super.producerBaseSetup();

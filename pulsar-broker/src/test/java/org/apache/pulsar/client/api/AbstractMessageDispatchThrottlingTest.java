@@ -39,7 +39,7 @@ public abstract class AbstractMessageDispatchThrottlingTest extends ProducerCons
         return result;
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         this.conf.setClusterName("test");

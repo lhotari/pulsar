@@ -35,7 +35,7 @@ import org.testng.annotations.Test;
 public class TransactionMetaStoreAssignmentTest extends TransactionTestBase {
 
     @Override
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     protected void setup() throws Exception {
         setUpBase(3, 16, null, 0);
         pulsarClient.close();

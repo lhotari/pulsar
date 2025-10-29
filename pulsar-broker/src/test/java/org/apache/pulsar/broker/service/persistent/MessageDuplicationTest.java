@@ -482,7 +482,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
         });
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         this.conf.setBrokerDeduplicationEnabled(true);

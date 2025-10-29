@@ -56,7 +56,7 @@ public class NamespaceBundlesTest {
 
     private NamespaceBundleFactory factory;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     protected void initializeFactory() {
         factory = getNamespaceBundleFactory();
     }

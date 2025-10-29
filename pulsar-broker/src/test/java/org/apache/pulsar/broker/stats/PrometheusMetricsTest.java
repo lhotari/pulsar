@@ -112,7 +112,7 @@ import org.testng.annotations.Test;
 @Test(groups = "broker")
 public class PrometheusMetricsTest extends BrokerTestBase {
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         super.baseSetup();

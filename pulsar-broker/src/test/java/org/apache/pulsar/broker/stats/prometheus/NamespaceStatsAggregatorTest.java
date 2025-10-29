@@ -50,7 +50,7 @@ public class NamespaceStatsAggregatorTest {
     private BrokerService broker;
     private Map<String, Map<String, Map<String, Topic>>> multiLayerTopicsMap;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() throws Exception {
         multiLayerTopicsMap = new ConcurrentHashMap<>();
         pulsar = Mockito.mock(PulsarService.class);

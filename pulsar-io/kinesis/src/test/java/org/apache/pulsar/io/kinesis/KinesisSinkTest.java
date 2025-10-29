@@ -61,7 +61,7 @@ public class KinesisSinkTest {
                     .withServices(LocalStackContainer.Service.KINESIS, LocalStackContainer.Service.STS)
                     .withEnv("KINESIS_PROVIDER", "kinesalite");
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void beforeClass() throws Exception {
         LOCAL_STACK_CONTAINER.start();
         createClient().createStream(CreateStreamRequest.builder().streamName(STREAM_NAME).shardCount(1).build()).get();

@@ -74,7 +74,7 @@ public class GetPartitionMetadataTest extends TestRetrySupport {
     protected PulsarClientImpl clientWitBinaryLookup1;
 
     @Override
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     protected void setup() throws Exception {
         incrementSetupNumber();
         bkEnsemble = new LocalBookkeeperEnsemble(3, 0, () -> 0);

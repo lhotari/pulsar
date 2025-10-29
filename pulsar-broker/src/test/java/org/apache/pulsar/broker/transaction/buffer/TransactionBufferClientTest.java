@@ -90,7 +90,7 @@ public class TransactionBufferClientTest extends TransactionTestBase {
     private static final String namespace = "public/test";
 
     @Override
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     protected void setup() throws Exception {
         setBrokerCount(3);
         internalSetup();

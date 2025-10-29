@@ -42,7 +42,7 @@ import org.testng.annotations.Test;
 @Test
 public class TlsWithECCertificateFileTest extends MockedPulsarStandalone {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void suitSetup() {
         loadECTlsCertificateWithFile();
         enableTlsAuthentication();

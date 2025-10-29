@@ -67,7 +67,7 @@ public abstract class MockedBookKeeperTestCase {
         this.numBookies = numBookies;
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setUp(Method method) throws Exception {
         LOG.info(">>>>>> starting {}", method);
         metadataStore = new FaultInjectionMetadataStore(MetadataStoreExtended.create("memory:local",
@@ -98,7 +98,7 @@ public abstract class MockedBookKeeperTestCase {
         }
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setUpClass() {
         executor = OrderedScheduler.newSchedulerBuilder().numThreads(2).name("test").build();
         cachedExecutor = Executors.newCachedThreadPool();

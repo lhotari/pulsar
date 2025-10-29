@@ -52,7 +52,7 @@ public class HealthCheckTest extends TestRetrySupport {
 
     private PulsarCluster pulsarCluster = null;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public final void setup() throws Exception {
         incrementSetupNumber();
         pulsarCluster = PulsarCluster.forSpec(spec);

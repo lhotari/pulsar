@@ -47,7 +47,7 @@ public class ConfigShellTest {
     private String output;
     private StringWriter stringWriter;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void before() throws Exception {
 
         pulsarShell = mock(PulsarShell.class);

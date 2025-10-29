@@ -84,7 +84,7 @@ public class ClusterMetadataTearDownTest extends TestRetrySupport {
     private PulsarAdmin admin;
 
     @Override
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public final void setup() throws Exception {
         incrementSetupNumber();
         Map<String, String> brokerEnvs = new HashMap<>();

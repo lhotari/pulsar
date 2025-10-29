@@ -52,9 +52,10 @@ import org.testng.annotations.Test;
  * and the consumer is able to consume it as AVRO messages, with GenericRecord and with Java Model.
  */
 @Slf4j
+@Test(groups = "source")
 public class GenericRecordSourceTest extends PulsarStandaloneTestSuite {
 
-    @Test(groups = {"source"})
+    @Test
     public void testGenericRecordSource() throws Exception {
         String outputTopicName = "test-state-source-output-" + randomName(8);
         String sourceName = "test-state-source-" + randomName(8);

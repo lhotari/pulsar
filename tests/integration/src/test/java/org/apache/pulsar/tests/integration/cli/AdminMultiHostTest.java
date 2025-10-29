@@ -44,7 +44,7 @@ public class AdminMultiHostTest extends TestRetrySupport {
     private final PulsarClusterSpec spec = PulsarClusterSpec.builder().clusterName(clusterName).numBrokers(3).build();
     private PulsarCluster pulsarCluster = null;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() throws Exception {
         incrementSetupNumber();
         pulsarCluster = PulsarCluster.forSpec(spec);

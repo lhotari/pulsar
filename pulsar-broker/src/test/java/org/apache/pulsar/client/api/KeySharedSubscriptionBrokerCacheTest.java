@@ -78,7 +78,7 @@ public class KeySharedSubscriptionBrokerCacheTest extends ProducerConsumerBase {
         return new Object[]{ implementationType };
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

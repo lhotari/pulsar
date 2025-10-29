@@ -23,18 +23,19 @@ import org.apache.pulsar.tests.integration.functions.utils.CommandGenerator.Runt
 import org.apache.pulsar.tests.integration.topologies.FunctionRuntimeType;
 import org.testng.annotations.Test;
 
+@Test
 public abstract class PulsarFunctionsGoTest extends PulsarFunctionsTest {
 
     PulsarFunctionsGoTest(FunctionRuntimeType functionRuntimeType) {
         super(functionRuntimeType);
     }
 
-    @Test(enabled = false, groups = {"go_function", "function"})
+    @Test(enabled = false)
     public void testGoFunctionLocalRun() throws Exception {
         testFunctionLocalRun(Runtime.GO);
     }
 
-    @Test(groups = {"go_function", "function"})
+    @Test
     public void testGoExclamationMultiInputsFunction() throws Exception {
         testExclamationFunction(Runtime.GO, false, false, true, false);
     }

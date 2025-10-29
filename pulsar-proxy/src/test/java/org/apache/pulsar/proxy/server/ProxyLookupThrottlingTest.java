@@ -55,7 +55,7 @@ public class ProxyLookupThrottlingTest extends MockedPulsarServiceBaseTest {
     private Authentication proxyClientAuthentication;
 
     @Override
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     protected void setup() throws Exception {
         internalSetup();
 
@@ -89,6 +89,15 @@ public class ProxyLookupThrottlingTest extends MockedPulsarServiceBaseTest {
         }
         if (proxyClientAuthentication != null) {
             proxyClientAuthentication.close();
+        }
+    }
+
+    @BeforeMethod(groups = "quarantine", inheritGroups = false)
+    public void setupForQuarantine() throws Exception {
+        // setup method's BeforeMethod annotation will run only for the default group of the class
+        if (!isTestSetupInitialized()) {
+            cleanup();
+            setup();
         }
     }
 

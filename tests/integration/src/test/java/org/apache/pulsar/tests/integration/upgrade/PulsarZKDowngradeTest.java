@@ -45,7 +45,7 @@ public class PulsarZKDowngradeTest extends PulsarClusterTestBase {
 
     protected static final int ENTRIES_PER_LEDGER = 1024;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     public final void setupCluster() throws Exception {
         incrementSetupNumber();

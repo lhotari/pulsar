@@ -126,7 +126,7 @@ public abstract class ExtensibleLoadManagerImplBaseTest extends MockedPulsarServ
     }
 
     @Override
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     protected void setup() throws Exception {
         super.internalSetup(conf);
         pulsar1 = pulsar;
@@ -190,7 +190,7 @@ public abstract class ExtensibleLoadManagerImplBaseTest extends MockedPulsarServ
 
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     protected void initializeState() throws PulsarAdminException, IllegalAccessException {
         admin.namespaces().unload(defaultTestNamespace);
         reset(primaryLoadManager, secondaryLoadManager);

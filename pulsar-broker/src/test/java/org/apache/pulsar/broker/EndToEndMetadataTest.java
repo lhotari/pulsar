@@ -40,7 +40,7 @@ public class EndToEndMetadataTest extends BaseMetadataStoreTest {
 
     private File tempDir;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     public void setup() throws Exception {
         super.setup();

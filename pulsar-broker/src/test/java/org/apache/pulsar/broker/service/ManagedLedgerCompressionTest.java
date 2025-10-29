@@ -34,7 +34,7 @@ import org.testng.annotations.Test;
  * ManagedLedgerInfo compression configuration test.
  */
 
-@Test(groups = {"broker"})
+@Test(groups = "broker")
 public class ManagedLedgerCompressionTest extends BrokerTestBase {
 
     @BeforeClass

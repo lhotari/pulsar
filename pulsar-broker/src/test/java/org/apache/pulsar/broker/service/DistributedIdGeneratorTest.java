@@ -44,7 +44,7 @@ public class DistributedIdGeneratorTest {
     private MetadataStoreExtended store;
     private CoordinationService coordinationService;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() throws Exception {
         store  = MetadataStoreExtended.create("memory:local", MetadataStoreConfig.builder().build());
         coordinationService = new CoordinationServiceImpl(store);

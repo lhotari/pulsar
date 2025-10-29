@@ -52,7 +52,7 @@ public abstract class TestAbstractZooKeeperConfigurationProvider {
     protected TestingServer zkServer;
     protected CuratorFramework client;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setUp() throws Exception {
         // start the instance without the admin server!
         InstanceSpec serverSpec = new InstanceSpec(null, -1, -1, -1, true, -1,

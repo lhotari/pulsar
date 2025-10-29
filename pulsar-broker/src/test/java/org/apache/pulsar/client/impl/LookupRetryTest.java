@@ -85,7 +85,7 @@ public class LookupRetryTest extends MockedPulsarServiceBaseTest {
         super.internalCleanup();
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void reset() {
         connectionsCreated.set(0);
         failureMap.clear();

@@ -62,7 +62,7 @@ public class ClientGetSchemaTest extends ProducerConsumerBase {
         public int age;
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

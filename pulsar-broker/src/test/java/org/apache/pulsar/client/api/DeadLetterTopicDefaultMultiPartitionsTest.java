@@ -41,7 +41,7 @@ import org.testng.annotations.Test;
 @Test(groups = "broker-impl")
 public class DeadLetterTopicDefaultMultiPartitionsTest extends ProducerConsumerBase {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         this.conf.setMaxMessageSize(5 * 1024);

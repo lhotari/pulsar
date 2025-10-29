@@ -41,7 +41,7 @@ import org.testng.annotations.Test;
 public class WebServiceOriginalClientIPTest extends MockedPulsarServiceBaseTest {
     HttpClient httpClient;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

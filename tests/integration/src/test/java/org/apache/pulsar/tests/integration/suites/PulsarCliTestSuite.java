@@ -23,7 +23,7 @@ import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 
 public abstract class PulsarCliTestSuite extends PulsarClusterTestBase {
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void before() throws Exception {
         setup();
     }

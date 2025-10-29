@@ -53,7 +53,7 @@ public class TopicListServiceTest {
     private final TopicsPattern.RegexImplementation topicsPatternImplementation =
             TopicsPattern.RegexImplementation.RE2J_WITH_JDK_FALLBACK;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() throws Exception {
         lookupSemaphore = new Semaphore(1);
         lookupSemaphore.acquire();

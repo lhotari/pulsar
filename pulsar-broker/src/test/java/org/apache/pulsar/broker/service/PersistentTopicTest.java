@@ -150,8 +150,6 @@ import org.mockito.stubbing.Answer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.Assert;
-import org.testng.annotations.AfterMethod;
-import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 @Test(groups = "broker")
@@ -175,8 +173,8 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
     private ManagedLedgerFactory managedLedgerFactory;
     private ChannelHandlerContext ctx;
 
-    @BeforeMethod(alwaysRun = true)
-    public void setup() throws Exception {
+    @Override
+    protected void setUpTestCase() throws Exception {
         ServiceConfiguration svcConfig = new ServiceConfiguration();
         svcConfig.setAdvertisedAddress("localhost");
         svcConfig.setBrokerShutdownTimeoutMs(0L);
@@ -230,8 +228,8 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         setupMLAsyncCallbackMocks();
     }
 
-    @AfterMethod(alwaysRun = true)
-    public void teardown() throws Exception {
+    @Override
+    protected void cleanUpTestCase() throws Exception {
         if (pulsarTestContext != null) {
             pulsarTestContext.close();
             pulsarTestContext = null;

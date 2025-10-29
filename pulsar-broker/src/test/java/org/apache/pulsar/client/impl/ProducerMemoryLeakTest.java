@@ -57,7 +57,7 @@ public class ProducerMemoryLeakTest extends ProducerConsumerBase {
 
     private static final String NAMESPACE_NEVER_COMPATIBLE = "public/schema-never-compatible";
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

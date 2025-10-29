@@ -959,6 +959,15 @@ public class SimpleProducerConsumerTest extends ProducerConsumerBase {
 
     }
 
+    @BeforeClass(groups = "quarantine", inheritGroups = false)
+    public void setupForQuarantine() throws Exception {
+        // setup method's BeforeClass annotation will run only for the default group of the class
+        if (!isTestSetupInitialized()) {
+            cleanup();
+            setup();
+        }
+    }
+
     // This is to test that the flow control counter doesn't get corrupted while concurrent receives during
     // reconnections
     @Test(timeOut = 100_000, dataProvider = "batch", groups = "quarantine")

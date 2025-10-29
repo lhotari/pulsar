@@ -110,7 +110,7 @@ public class PersistentTopicE2ETest extends BrokerTestBase {
         return new Object[][] { { true }, { false } };
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         this.activeCount = new AtomicInteger();

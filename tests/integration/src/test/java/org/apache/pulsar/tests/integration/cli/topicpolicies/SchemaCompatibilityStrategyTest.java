@@ -28,7 +28,7 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 public class SchemaCompatibilityStrategyTest extends PulsarCliTestSuite {
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     public void before() throws Exception {
         enableTopicPolicies();

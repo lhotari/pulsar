@@ -45,7 +45,7 @@ public class ExtensibleLoadManagerCloseTest {
     private final List<PulsarService> brokers = new ArrayList<>();
     private LocalBookkeeperEnsemble bk;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() throws Exception {
         bk = new LocalBookkeeperEnsemble(1, 0, () -> 0);
         bk.start();

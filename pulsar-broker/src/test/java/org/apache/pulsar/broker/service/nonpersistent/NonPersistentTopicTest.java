@@ -50,7 +50,7 @@ import org.testng.annotations.Test;
 @Test(groups = "broker")
 public class NonPersistentTopicTest extends BrokerTestBase {
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         super.baseSetup();

@@ -108,7 +108,7 @@ public abstract class AbstractPulsarE2ETest {
         return new Object[][] { { Boolean.TRUE }, { Boolean.FALSE } };
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup(Method method) throws Exception {
         LOG.info("--- Setting up method {} ---", method.getName());
 

@@ -33,7 +33,7 @@ import org.testng.annotations.Test;
 @Test(groups = "broker")
 public class ManagedLedgerConfigTest extends ProducerConsumerBase {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

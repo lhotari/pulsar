@@ -33,7 +33,7 @@ public class PrometheusMetricStreamsTest {
 
     private PrometheusMetricStreams underTest;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     protected void setup() throws Exception {
         underTest = new PrometheusMetricStreams();
     }

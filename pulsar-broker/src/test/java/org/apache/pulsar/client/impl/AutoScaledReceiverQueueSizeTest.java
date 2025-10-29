@@ -46,7 +46,7 @@ import org.testng.annotations.Test;
 
 @Slf4j
 public class AutoScaledReceiverQueueSizeTest extends MockedPulsarServiceBaseTest {
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

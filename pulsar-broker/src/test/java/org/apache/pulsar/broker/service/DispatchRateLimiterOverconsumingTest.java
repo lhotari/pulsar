@@ -104,7 +104,7 @@ public class DispatchRateLimiterOverconsumingTest extends BrokerTestBase impleme
         return testName;
     }
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void applyTestName(Method method) {
         testName = method.getName() + " with " + implType.name() + " rate limiter implementation";
     }

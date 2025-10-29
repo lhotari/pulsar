@@ -48,7 +48,7 @@ public class ProducerBuilderImplTest {
     private PulsarClientImpl client;
     private ProducerBuilderImpl<byte[]> producerBuilderImpl;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() {
         Producer<?> producer = mock(Producer.class);
         client = mock(PulsarClientImpl.class);

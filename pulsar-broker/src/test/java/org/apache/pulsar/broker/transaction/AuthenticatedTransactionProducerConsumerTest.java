@@ -100,7 +100,7 @@ public class AuthenticatedTransactionProducerConsumerTest extends TransactionTes
                 .compact();
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() throws Exception {
         conf.setAuthenticationEnabled(true);
         conf.setAuthorizationEnabled(true);

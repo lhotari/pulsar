@@ -56,7 +56,7 @@ public class GetPartitionMetadataMultiBrokerTest extends GetPartitionMetadataTes
     private PulsarClientImpl clientWithHttpLookup2;
     private PulsarClientImpl clientWitBinaryLookup2;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     protected void setup() throws Exception {
         super.setup();
     }

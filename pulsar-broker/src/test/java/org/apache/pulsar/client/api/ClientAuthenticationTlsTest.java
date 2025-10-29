@@ -67,7 +67,7 @@ public class ClientAuthenticationTlsTest extends ProducerConsumerBase {
         conf.setBrokerClientTrustCertsFilePath(CA_CERT_FILE_PATH);
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

@@ -65,13 +65,13 @@ public abstract class PulsarWorkerRebalanceDrainTest extends PulsarFunctionsTest
                 pulsarCluster.getAlWorkers().size(), functionRuntimeType);
     }
 
-    @Test(groups = {"java_function", "rebalance_drain", "rebalance"})
+    @Test
     public void testRebalanceWorkers() throws Exception {
         testRebalance();
         log.info("Done with testRebalance");
     }
 
-    @Test(groups = {"java_function", "rebalance_drain", "drain"})
+    @Test
     public void testDrainWorkers() throws Exception {
         testDrain();
         log.info("Done with testDrain");
