@@ -35,7 +35,7 @@ public abstract class PulsarTieredStorageTestSuite extends PulsarClusterTestBase
         return 1024;
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     public final void setupCluster() throws Exception {
         final String clusterName = Stream.of(this.getClass().getSimpleName(), randomName(5))

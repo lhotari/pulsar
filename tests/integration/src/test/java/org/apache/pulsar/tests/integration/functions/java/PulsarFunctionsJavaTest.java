@@ -38,28 +38,29 @@ import org.apache.pulsar.tests.integration.topologies.FunctionRuntimeType;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
 import org.testng.annotations.Test;
 
+@Test
 public abstract class PulsarFunctionsJavaTest extends PulsarFunctionsTest {
 
     PulsarFunctionsJavaTest(FunctionRuntimeType functionRuntimeType) {
         super(functionRuntimeType);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testJavaFunctionLocalRun() throws Exception {
         testFunctionLocalRun(Runtime.JAVA);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testJavaFunctionNegAck() throws Exception {
         testFunctionNegAck(Runtime.JAVA);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testJavaPublishFunction() throws Exception {
         testPublishFunction(Runtime.JAVA);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testSerdeFunction() throws Exception {
         testCustomSerdeFunction();
     }
@@ -105,17 +106,17 @@ public abstract class PulsarFunctionsJavaTest extends PulsarFunctionsTest {
     }
 
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testJavaExclamationFunction() throws Exception {
         testExclamationFunction(Runtime.JAVA, false, false, false, false);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testJavaExclamationTopicPatternFunction() throws Exception {
         testExclamationFunction(Runtime.JAVA, true, false, false, false);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testJavaExclamationCustomBatchingFunction() throws Exception {
         ProducerConfig producerConfig = new ProducerConfig();
         producerConfig.setBatchingConfig(BatchingConfig.builder()
@@ -132,7 +133,7 @@ public abstract class PulsarFunctionsJavaTest extends PulsarFunctionsTest {
                 });
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testJavaExclamationDiableBatchingFunction() throws Exception {
         ProducerConfig producerConfig = new ProducerConfig();
         producerConfig.setBatchingConfig(BatchingConfig.builder()
@@ -144,7 +145,7 @@ public abstract class PulsarFunctionsJavaTest extends PulsarFunctionsTest {
                 });
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testJavaExclamationMessagePayloadProcessor() throws Exception {
         ConsumerConfig consumerConfig = new ConsumerConfig();
         consumerConfig.setMessagePayloadProcessorConfig(
@@ -160,7 +161,7 @@ public abstract class PulsarFunctionsJavaTest extends PulsarFunctionsTest {
     }
 
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testJavaExclamationMessagePayloadProcessorWithConfigs() throws Exception {
         ConsumerConfig consumerConfig = new ConsumerConfig();
         consumerConfig.setMessagePayloadProcessorConfig(
@@ -175,18 +176,18 @@ public abstract class PulsarFunctionsJavaTest extends PulsarFunctionsTest {
                 });
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testJavaLoggingFunction() throws Exception {
         testLoggingFunction(Runtime.JAVA);
     }
 
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testInitFunction() throws Exception {
         testInitFunction(Runtime.JAVA);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testTumblingCountWindowTest() throws Exception {
         String[] expectedResults = {
                 "0,1,2,3,4,5,6,7,8,9",
@@ -204,7 +205,7 @@ public abstract class PulsarFunctionsJavaTest extends PulsarFunctionsTest {
         testWindowFunction("tumbling", expectedResults);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testSlidingCountWindowTest() throws Exception {
         String[] expectedResults = {
                 "0,1,2,3,4",
@@ -232,52 +233,52 @@ public abstract class PulsarFunctionsJavaTest extends PulsarFunctionsTest {
         testWindowFunction("sliding", expectedResults);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testMergeFunctionTest() throws Exception {
         testMergeFunction();
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testGenericObjectFunction() throws Exception {
         testGenericObjectFunction(GENERIC_OBJECT_FUNCTION_JAVA_CLASS, false, false);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testGenericObjectRemoveFieldFunction() throws Exception {
         testGenericObjectFunction(REMOVE_AVRO_FIELD_FUNCTION_JAVA_CLASS, true, false);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testGenericObjectRemoveFieldRecordFunction() throws Exception {
         testGenericObjectFunction(REMOVE_AVRO_FIELD_RECORD_FUNCTION_JAVA_CLASS, true, false);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testGenericObjectFunctionKeyValue() throws Exception {
         testGenericObjectFunction(GENERIC_OBJECT_FUNCTION_JAVA_CLASS, false, true);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testGenericObjectRemoveFieldFunctionKeyValue() throws Exception {
         testGenericObjectFunction(REMOVE_AVRO_FIELD_FUNCTION_JAVA_CLASS, true, true);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testGenericObjectRemoveFieldRecordFunctionKeyValue() throws Exception {
         testGenericObjectFunction(REMOVE_AVRO_FIELD_RECORD_FUNCTION_JAVA_CLASS, true, true);
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testRecordFunctionTest() throws Exception {
         testRecordFunction();
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testAutoSchemaFunctionTest() throws Exception {
         testAutoSchemaFunction();
     }
 
-    @Test(groups = {"java_function", "function"})
+    @Test
     public void testAvroSchemaFunctionTest() throws Exception {
         testAvroSchemaFunction(Runtime.JAVA);
     }

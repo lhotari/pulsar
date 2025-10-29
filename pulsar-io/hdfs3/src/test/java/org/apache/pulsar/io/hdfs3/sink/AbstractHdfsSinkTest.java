@@ -47,7 +47,7 @@ public abstract class AbstractHdfsSinkTest<K, V> {
     protected HdfsAbstractSink<K, V> sink;
 
     @SuppressWarnings("unchecked")
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public final void setUp() throws Exception {
         map = new HashMap<>();
         map.put("hdfsConfigResources", "../pulsar/pulsar-io/hdfs/src/test/resources/hadoop/core-site.xml,"

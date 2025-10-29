@@ -44,7 +44,7 @@ import org.testng.annotations.Test;
 @Test
 public class TlsWithECKeyStoreTest extends MockedPulsarStandalone {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void suitSetup() {
         loadECTlsCertificateWithKeyStore();
         enableTlsAuthentication();

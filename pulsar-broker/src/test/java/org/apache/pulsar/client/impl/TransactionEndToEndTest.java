@@ -97,7 +97,7 @@ public class TransactionEndToEndTest extends TransactionTestBase {
     protected static final int NUM_PARTITIONS = 16;
     private static final int waitTimeForCanReceiveMsgInSec = 5;
     private static final int waitTimeForCannotReceiveMsgInSec = 5;
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     protected void setup() throws Exception {
         setUpBase(1, NUM_PARTITIONS, TOPIC_OUTPUT, TOPIC_PARTITION);
         admin.topics().createPartitionedTopic(TOPIC_MESSAGE_ACK_TEST, 1);
@@ -1678,6 +1678,15 @@ public class TransactionEndToEndTest extends TransactionTestBase {
         producer.close();
         admin.topics().delete(RetryMessageUtil.getDLQTopic(topic, subName), true);
         admin.topics().delete(topic, true);
+    }
+
+    @BeforeClass(groups = "flaky", inheritGroups = false)
+    public void setupForFlaky() throws Exception {
+        // setup method's BeforeClass annotation will run only for the default group of the class
+        if (!isTestSetupInitialized()) {
+            cleanup();
+            setup();
+        }
     }
 
     @Test(groups = "flaky")

@@ -52,7 +52,7 @@ import org.testng.annotations.Test;
 @Test(groups = "broker-replication")
 public class ShadowReplicatorTest extends BrokerTestBase {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.baseSetup();

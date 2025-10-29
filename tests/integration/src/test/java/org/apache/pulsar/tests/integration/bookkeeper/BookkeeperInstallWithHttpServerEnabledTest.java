@@ -36,7 +36,7 @@ import org.testng.annotations.Test;
 @Slf4j
 public class BookkeeperInstallWithHttpServerEnabledTest extends PulsarClusterTestBase {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     public final void setupCluster() throws Exception {
         incrementSetupNumber();

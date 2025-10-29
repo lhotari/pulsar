@@ -50,7 +50,7 @@ public class ConnectionHandlerTest extends ProducerConsumerBase {
             .setMax(3, TimeUnit.SECONDS).create();
     private ExecutorService executor;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

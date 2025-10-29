@@ -64,7 +64,7 @@ public class ConsumerImplTest {
     private ConsumerImpl<byte[]> consumer;
     private ConsumerConfigurationData<byte[]> consumerConf;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setUp() {
         consumerConf = new ConsumerConfigurationData<>();
         createConsumer(consumerConf);

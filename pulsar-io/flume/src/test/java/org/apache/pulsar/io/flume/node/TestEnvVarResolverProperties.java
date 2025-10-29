@@ -31,7 +31,7 @@ public final class TestEnvVarResolverProperties {
 
     private PropertiesFileConfigurationProvider provider;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setUp() {
         provider = new PropertiesFileConfigurationProvider("a1", TEST_FILE);
     }

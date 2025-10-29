@@ -43,8 +43,9 @@ import org.testng.annotations.Test;
  * Source Property related test cases.
  */
 @Slf4j
+@Test
 public class PulsarSourcePropertyTest extends PulsarStandaloneTestSuite {
-    @Test(groups = {"source"})
+    @Test
     public void testSourceProperty() throws Exception {
         String outputTopicName = "test-source-property-input-" + randomName(8);
         String sourceName = "test-source-property-" + randomName(8);

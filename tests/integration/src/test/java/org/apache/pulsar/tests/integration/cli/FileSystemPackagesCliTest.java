@@ -38,7 +38,7 @@ public class FileSystemPackagesCliTest extends TestRetrySupport {
     private static final String clusterNamePrefix = "file-system-packages-service";
     private PulsarCluster pulsarCluster;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public final void setup() throws Exception {
         incrementSetupNumber();
         PulsarClusterSpec spec = PulsarClusterSpec.builder()

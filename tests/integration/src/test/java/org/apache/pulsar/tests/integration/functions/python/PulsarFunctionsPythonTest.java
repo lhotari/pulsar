@@ -23,53 +23,54 @@ import org.apache.pulsar.tests.integration.functions.utils.CommandGenerator.Runt
 import org.apache.pulsar.tests.integration.topologies.FunctionRuntimeType;
 import org.testng.annotations.Test;
 
+@Test
 public abstract class PulsarFunctionsPythonTest extends PulsarFunctionsTest {
 
     PulsarFunctionsPythonTest(FunctionRuntimeType functionRuntimeType) {
         super(functionRuntimeType);
     }
 
-    @Test(groups = {"python_function", "function"})
+    @Test
     public void testPythonFunctionLocalRun() throws Exception {
         testFunctionLocalRun(Runtime.PYTHON);
     }
 
-    @Test(groups = {"python_function", "function"})
+    @Test
     public void testPythonFunctionNegAck() throws Exception {
         testFunctionNegAck(Runtime.PYTHON);
     }
 
-    @Test(groups = {"python_function", "function"})
+    @Test
     public void testPythonPublishFunction() throws Exception {
         testPublishFunction(Runtime.PYTHON);
     }
 
-    @Test(groups = {"python_function", "function"})
+    @Test
     public void testPythonExclamationFunction() throws Exception {
         testExclamationFunction(Runtime.PYTHON, false, false, false, false);
     }
 
-    @Test(groups = {"python_function", "function"})
+    @Test
     public void testPythonExclamationFunctionWithExtraDeps() throws Exception {
         testExclamationFunction(Runtime.PYTHON, false, false, false, true);
     }
 
-    @Test(groups = {"python_function", "function"})
+    @Test
     public void testPythonExclamationZipFunction() throws Exception {
         testExclamationFunction(Runtime.PYTHON, false, true, false, false);
     }
 
-    @Test(groups = {"python_function", "function"})
+    @Test
     public void testPythonExclamationTopicPatternFunction() throws Exception {
         testExclamationFunction(Runtime.PYTHON, true, false, false, false);
     }
 
-    @Test(groups = {"python_function", "function"})
+    @Test
     public void testAvroSchemaFunctionTest() throws Exception {
         testAvroSchemaFunction(Runtime.PYTHON);
     }
 
-    @Test(groups = {"python_function", "function"})
+    @Test
     public void testRetainOrderingTest() throws Exception {
         testExclamationFunction(Runtime.PYTHON, false, false, false,
                 false, null, null, generator -> {
@@ -77,7 +78,7 @@ public abstract class PulsarFunctionsPythonTest extends PulsarFunctionsTest {
                 });
     }
 
-    @Test(groups = {"python_function", "function"})
+    @Test
     public void testRetainKeyOrderingTest() throws Exception {
         testExclamationFunction(Runtime.PYTHON, false, false, false,
                 false, null, null, generator -> {

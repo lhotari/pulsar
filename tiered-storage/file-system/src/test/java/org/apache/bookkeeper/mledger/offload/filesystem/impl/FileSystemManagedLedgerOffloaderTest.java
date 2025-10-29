@@ -91,7 +91,7 @@ public class FileSystemManagedLedgerOffloaderTest extends FileStoreTestBase {
                 .withPassword("foobar".getBytes()).withDigestType(DigestType.CRC32).execute().get();
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     public void start() throws Exception {
         super.start();

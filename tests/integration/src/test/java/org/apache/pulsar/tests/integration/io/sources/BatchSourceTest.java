@@ -48,12 +48,13 @@ import org.testng.annotations.Test;
  * This tests verifies that a batch source can be successfully submitted and run via the pulsar-admin CLI.
  */
 @Slf4j
+@Test(groups = "source")
 public class BatchSourceTest extends PulsarStandaloneTestSuite {
 
     private static final String BATCH_CONFIG = "{\"discoveryTriggererConfig\": {\"__CRON__\": \"* * * * * *\"}, "
             + "\"discoveryTriggererClassName\": \"org.apache.pulsar.io.batchdiscovery.CronTriggerer\"}";
 
-    @Test(groups = {"source"})
+    @Test
     public void testGenericRecordSource() throws Exception {
         String outputTopicName = "test-state-source-output-" + randomName(8);
         String sourceName = "test-state-source-" + randomName(8);

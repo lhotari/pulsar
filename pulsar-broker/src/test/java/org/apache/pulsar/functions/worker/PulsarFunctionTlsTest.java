@@ -92,7 +92,7 @@ public class PulsarFunctionTlsTest {
     private PulsarFunctionTestTemporaryDirectory[] tempDirectories =
             new PulsarFunctionTestTemporaryDirectory[BROKER_COUNT];
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     void setup() throws Exception {
         log.info("---- Initializing TopicOwnerTest -----");
         // Start local bookkeeper ensemble

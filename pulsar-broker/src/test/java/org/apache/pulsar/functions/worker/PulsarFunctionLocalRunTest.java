@@ -104,7 +104,7 @@ import org.testng.annotations.Test;
 /**
  * Test Pulsar sink on function.
  */
-@Test(groups = { "flaky" })
+@Test(groups = "flaky")
 public class PulsarFunctionLocalRunTest {
     LocalBookkeeperEnsemble bkEnsemble;
 
@@ -183,7 +183,7 @@ public class PulsarFunctionLocalRunTest {
         return new Object[][] { { Boolean.TRUE }, { Boolean.FALSE } };
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     void loadPulsarApiExamples() throws MalformedURLException, ClassNotFoundException {
         pulsarApiExamplesClassLoader = new URLClassLoader(new URL[]{getPulsarApiExamplesJar().toURI().toURL()},
                 Thread.currentThread().getContextClassLoader());
@@ -199,7 +199,7 @@ public class PulsarFunctionLocalRunTest {
         }
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     void setup(Method method) throws Exception {
         log.info("--- Setting up method {} ---", method.getName());
 
@@ -782,7 +782,7 @@ public class PulsarFunctionLocalRunTest {
         testE2EPulsarFunctionLocalRun(fileServer.getUrl("/pulsar-functions-api-examples.nar"));
     }
 
-    @Test(timeOut = 20000, groups = "builtin")
+    @Test(timeOut = 20000)
     public void testE2EPulsarFunctionLocalRunBuiltin() throws Exception {
         String jarFilePathUrl = String.format("%s://exclamation", Utils.BUILTIN);
         testE2EPulsarFunctionLocalRun(jarFilePathUrl);
@@ -916,7 +916,7 @@ public class PulsarFunctionLocalRunTest {
         testPulsarSourceLocalRun(jarFilePathUrl, 1);
     }
 
-    @Test(timeOut = 20000, groups = "builtin")
+    @Test(timeOut = 20000)
     public void testPulsarSourceStatsBuiltin() throws Exception {
         testPulsarSourceLocalRun(String.format("%s://data-generator", Utils.BUILTIN));
     }
@@ -1094,7 +1094,7 @@ public class PulsarFunctionLocalRunTest {
         testPulsarSinkLocalRun(jarFilePathUrl, parallelism, null);
     }
 
-    @Test(timeOut = 20000, groups = "builtin")
+    @Test(timeOut = 20000)
     public void testPulsarSinkStatsBuiltin() throws Exception {
         testPulsarSinkLocalRun(String.format("%s://data-generator", Utils.BUILTIN));
     }
@@ -1146,8 +1146,7 @@ public class PulsarFunctionLocalRunTest {
                 StatsNullSink.class.getName()));
     }
 
-    //@Test(timeOut = 20000, groups = "builtin")
-    @Test(groups = "builtin")
+    @Test
     public void testPulsarSinkWithFunction() throws Throwable {
         testPulsarSinkLocalRun(null, 1, StatsNullSink.class.getName(),
                 "builtin://exclamation",

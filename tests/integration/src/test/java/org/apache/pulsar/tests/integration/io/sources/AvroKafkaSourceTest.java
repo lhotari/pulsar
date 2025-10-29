@@ -74,6 +74,7 @@ import org.testng.annotations.Test;
  * but a Pulsar Consumer
  */
 @Slf4j
+@Test(groups = "source")
 public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
     public static final String CONFLUENT_PLATFORM_VERSION = System.getProperty("confluent.version", "7.8.2");
 
@@ -92,7 +93,7 @@ public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
         sourceConfig = new HashMap<>();
     }
 
-    @Test(groups = "source")
+    @Test
     public void test() throws Exception {
         startKafkaContainers(pulsarCluster);
         try {

@@ -37,7 +37,7 @@ public class PulsarVersionTest extends TestRetrySupport {
     private PulsarCluster pulsarCluster;
 
     @Override
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public final void setup() throws Exception {
         incrementSetupNumber();
         PulsarClusterSpec spec = PulsarClusterSpec.builder()

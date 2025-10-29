@@ -46,7 +46,7 @@ public class TestApplication {
 
     private File baseDir;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() throws Exception {
         baseDir = Files.createTempDir();
     }

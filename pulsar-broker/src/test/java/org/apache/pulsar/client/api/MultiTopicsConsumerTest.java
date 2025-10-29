@@ -66,7 +66,7 @@ import org.testng.annotations.Test;
 public class MultiTopicsConsumerTest extends ProducerConsumerBase {
     private ScheduledExecutorService internalExecutorServiceDelegate;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

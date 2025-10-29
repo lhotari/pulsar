@@ -40,7 +40,7 @@ import org.testng.annotations.Test;
 public class ActiveManagedCursorContainerTest implements ITest {
     String testName;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void beforeMethod(Method method, ITestResult result){
         testName = method.getName();
     }

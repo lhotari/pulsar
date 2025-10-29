@@ -195,7 +195,7 @@ public class BacklogQuotaManagerTest {
         }
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     void createNamespaces() throws PulsarAdminException {
         config.setPreciseTimeBasedBacklogQuotaCheck(false);
         admin.namespaces().createNamespace("prop/ns-quota");

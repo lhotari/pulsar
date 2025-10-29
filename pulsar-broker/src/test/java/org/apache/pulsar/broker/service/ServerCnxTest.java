@@ -209,7 +209,7 @@ public class ServerCnxTest {
     private ManagedLedgerFactory managedLedgerFactory;
 
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() throws Exception {
         channelsStoppedAnswerHealthCheck.clear();
         svcConfig = new ServiceConfiguration();

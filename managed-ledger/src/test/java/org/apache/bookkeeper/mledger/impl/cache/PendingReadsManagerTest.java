@@ -76,7 +76,7 @@ public class PendingReadsManagerTest  {
     PendingReadsManagerTest() {
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     void before() {
         orderedExecutor = Executors.newSingleThreadExecutor();
     }
@@ -96,7 +96,7 @@ public class PendingReadsManagerTest  {
     ReadHandle lh;
     ManagedLedgerImpl ml;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     void setupMocks() {
         rangeEntryCache = mock(RangeEntryCacheImpl.class);
         ManagedLedgerConfig config = new ManagedLedgerConfig();

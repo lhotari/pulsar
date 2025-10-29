@@ -201,7 +201,7 @@ public abstract class AbstractBrokerEntryCacheMultiBrokerTest extends MultiBroke
         return false;
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public final void doBeforeMethod() {
         beforeMethod();
     }

@@ -153,6 +153,7 @@ import org.awaitility.reflect.WhiteboxImpl;
 import org.eclipse.jetty.util.BlockingArrayQueue;
 import org.mockito.Mockito;
 import org.testng.Assert;
+import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -3717,6 +3718,16 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         // wait 1100 ms, the ledger should be rolled over.
         Awaitility.await()
                 .until(() -> firstLedgerId != ml.addEntry("test".getBytes()).getLedgerId());
+    }
+
+    @BeforeMethod(groups = "flaky", inheritGroups = false)
+    public void setupForFlaky() throws Exception {
+        setUpClass();
+        // setup method's BeforeMethod annotation will run only for the default group of the class
+        if (!isTestSetupInitialized()) {
+            cleanup();
+            setup();
+        }
     }
 
     @Test(groups = "flaky")

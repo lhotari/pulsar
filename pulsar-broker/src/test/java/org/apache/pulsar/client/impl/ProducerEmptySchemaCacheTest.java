@@ -38,7 +38,7 @@ public class ProducerEmptySchemaCacheTest {
 
     MockBrokerService mockBrokerService;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() {
         mockBrokerService = new MockBrokerService();
         mockBrokerService.start();

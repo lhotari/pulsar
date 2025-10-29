@@ -187,7 +187,7 @@ public class MutualAuthenticationTest extends ProducerConsumerBase {
         }
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         mutualAuth = new MutualAuthentication();

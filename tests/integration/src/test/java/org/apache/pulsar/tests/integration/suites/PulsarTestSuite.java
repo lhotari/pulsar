@@ -25,7 +25,7 @@ import org.testng.annotations.BeforeClass;
 
 public abstract class PulsarTestSuite extends PulsarClusterTestBase {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public final void setupBeforeClass() throws Exception {
         setup();
     }

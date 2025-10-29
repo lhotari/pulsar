@@ -44,7 +44,7 @@ import org.testng.annotations.Test;
 @Slf4j
 public class GeoReplicationTest extends PulsarGeoClusterTestBase {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public final void setupBeforeClass() throws Exception {
         setup();
     }

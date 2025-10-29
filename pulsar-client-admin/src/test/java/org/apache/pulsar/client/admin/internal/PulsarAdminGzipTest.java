@@ -41,7 +41,7 @@ import org.testng.annotations.Test;
 public class PulsarAdminGzipTest {
     WireMockServer server;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     void beforeClass() throws IOException {
         server = new WireMockServer(WireMockConfiguration.wireMockConfig()
                 .port(0));

@@ -59,7 +59,7 @@ public class ServiceUrlQuarantineTest extends ProducerConsumerBase {
     private static final int UNAVAILABLE_NODES = 20;
     private static final int TIMEOUT_MS = 500;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         this.brokerServicePort = nextLockedFreePort();

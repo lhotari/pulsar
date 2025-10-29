@@ -87,7 +87,7 @@ public class ReaderTest extends MockedPulsarServiceBaseTest {
 
     private static final String subscription = "reader-sub";
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

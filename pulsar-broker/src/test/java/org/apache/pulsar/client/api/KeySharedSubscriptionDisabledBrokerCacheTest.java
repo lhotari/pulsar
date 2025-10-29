@@ -87,7 +87,7 @@ public class KeySharedSubscriptionDisabledBrokerCacheTest extends ProducerConsum
         return new Object[]{ implementationType };
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         conf.setSubscriptionKeySharedUseClassicPersistentImplementation(implementationType.classic);

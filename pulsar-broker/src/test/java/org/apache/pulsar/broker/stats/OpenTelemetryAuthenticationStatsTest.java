@@ -49,7 +49,7 @@ public class OpenTelemetryAuthenticationStatsTest extends BrokerTestBase {
     private SecretKey secretKey;
     private AuthenticationProvider provider;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         super.baseSetup();

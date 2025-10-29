@@ -70,7 +70,7 @@ public class PartitionedProducerImplTest {
     private ProducerInterceptors producerInterceptors;
     private CompletableFuture<Producer> producerCreatedFuture;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() {
         client = mock(PulsarClientImpl.class);
         ConnectionPool connectionPool = mock(ConnectionPool.class);

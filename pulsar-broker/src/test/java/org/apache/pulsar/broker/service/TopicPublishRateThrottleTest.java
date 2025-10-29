@@ -32,7 +32,7 @@ import org.testng.annotations.Test;
 
 @Test(groups = "broker")
 public class TopicPublishRateThrottleTest extends BrokerTestBase{
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         // no-op, each test will call baseSetup

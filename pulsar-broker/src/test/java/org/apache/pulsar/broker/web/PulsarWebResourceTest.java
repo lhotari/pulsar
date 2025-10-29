@@ -56,7 +56,7 @@ public abstract class PulsarWebResourceTest extends JerseyTestNg.ContainerPerCla
         set(TestProperties.CONTAINER_PORT, 0);
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     public void setUp() throws Exception {
         super.setUp();

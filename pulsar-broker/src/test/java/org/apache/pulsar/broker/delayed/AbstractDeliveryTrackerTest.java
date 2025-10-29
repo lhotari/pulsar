@@ -52,7 +52,7 @@ public abstract class AbstractDeliveryTrackerTest {
 
     protected AtomicLong clockTime;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void createTimer() {
         timer = new HashedWheelTimer(new DefaultThreadFactory("pulsar-in-memory-delayed-delivery-test"),
                         500, TimeUnit.MILLISECONDS);

@@ -38,6 +38,7 @@ import org.apache.pulsar.tests.integration.topologies.FunctionRuntimeType;
 import org.testng.annotations.Test;
 
 @Slf4j
+@Test(groups = "source")
 public class PulsarDebeziumSourcesTest extends PulsarIOTestBase {
 
     protected final AtomicInteger testId = new AtomicInteger(0);
@@ -46,33 +47,33 @@ public class PulsarDebeziumSourcesTest extends PulsarIOTestBase {
         super(FunctionRuntimeType.PROCESS);
     }
 
-    @Test(groups = "source")
+    @Test
     public void testDebeziumMySqlSourceJson() throws Exception {
         testDebeziumMySqlConnect("org.apache.kafka.connect.json.JsonConverter", true, false);
     }
 
-    @Test(groups = "source")
+    @Test
     public void testDebeziumMySqlSourceJsonWithClientBuilder() throws Exception {
         testDebeziumMySqlConnect("org.apache.kafka.connect.json.JsonConverter", true, true);
     }
 
-    @Test(groups = "source")
+    @Test
     public void testDebeziumMySqlSourceAvro() throws Exception {
         testDebeziumMySqlConnect("io.confluent.connect.avro.AvroConverter", false, false);
     }
 
-    @Test(groups = "source")
+    @Test
     public void testDebeziumPostgreSqlSource() throws Exception {
         testDebeziumPostgreSqlConnect("org.apache.kafka.connect.json.JsonConverter", true);
     }
 
 
-    @Test(groups = "source")
+    @Test
     public void testDebeziumMongoDbSource() throws Exception{
         testDebeziumMongoDbConnect("org.apache.kafka.connect.json.JsonConverter", true);
     }
 
-    @Test(groups = "source")
+    @Test
     public void testDebeziumMsSqlSource() throws Exception{
         testDebeziumMsSqlConnect("org.apache.kafka.connect.json.JsonConverter", true);
     }

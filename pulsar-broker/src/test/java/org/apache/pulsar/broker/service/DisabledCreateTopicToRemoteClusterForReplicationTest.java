@@ -48,7 +48,7 @@ import org.testng.annotations.Test;
 public class DisabledCreateTopicToRemoteClusterForReplicationTest extends OneWayReplicatorTestBase {
 
     @Override
-    @BeforeClass(alwaysRun = true, timeOut = 300000)
+    @BeforeClass(timeOut = 300000)
     public void setup() throws Exception {
         super.setup();
         admin1.namespaces().setRetention(replicatedNamespace, new RetentionPolicies(300, 1024));

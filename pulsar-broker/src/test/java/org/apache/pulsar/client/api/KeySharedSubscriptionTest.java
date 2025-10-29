@@ -164,7 +164,7 @@ public class KeySharedSubscriptionTest extends ProducerConsumerBase {
         });
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         conf.setSubscriptionKeySharedUseClassicPersistentImplementation(implementationType.classic);

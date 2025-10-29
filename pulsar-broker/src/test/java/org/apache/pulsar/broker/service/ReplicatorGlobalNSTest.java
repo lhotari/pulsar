@@ -67,7 +67,7 @@ public class ReplicatorGlobalNSTest extends ReplicatorTestBase {
         this.loadManagerClassName = loadManagerClassName;
     }
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void beforeMethod(Method m) {
         methodName = m.getName();
     }

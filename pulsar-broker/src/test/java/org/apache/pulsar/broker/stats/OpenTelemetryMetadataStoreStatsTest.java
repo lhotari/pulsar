@@ -37,7 +37,7 @@ import org.testng.annotations.Test;
 
 public class OpenTelemetryMetadataStoreStatsTest extends BrokerTestBase {
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         super.baseSetup();

@@ -38,7 +38,7 @@ import org.testng.annotations.Test;
 public class NamespaceBundleTest {
     private NamespaceBundleFactory factory;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     protected void initializeFactory() {
         factory = getNamespaceBundleFactory();
     }

@@ -48,7 +48,7 @@ import org.testng.annotations.Test;
 @Slf4j
 public class ShadowTopicTest extends BrokerTestBase {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         baseSetup();

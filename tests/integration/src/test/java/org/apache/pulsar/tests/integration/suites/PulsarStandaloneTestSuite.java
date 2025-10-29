@@ -44,7 +44,7 @@ public abstract class PulsarStandaloneTestSuite extends PulsarStandaloneTestBase
         super.stopCluster();
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected final void setup() throws Exception {
         setUpCluster();

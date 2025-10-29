@@ -66,7 +66,7 @@ import org.testng.annotations.Test;
 @Slf4j
 public class TransactionMetricsTest extends BrokerTestBase {
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         ServiceConfiguration serviceConfiguration = getDefaultConf();

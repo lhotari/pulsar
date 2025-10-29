@@ -56,7 +56,7 @@ public class SimpleProduceConsumeIoTest extends ProducerConsumerBase {
     private String topic;
     private PulsarClientImpl singleConnectionPerBrokerClient;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

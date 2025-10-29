@@ -51,7 +51,7 @@ public class TransactionPersistentTopicTest extends ProducerConsumerBase {
 
     private static CountDownLatch topicInitSuccessSignal = new CountDownLatch(1);
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         // Intercept when the `topicFuture` is about to complete and wait until the topic close operation finishes.

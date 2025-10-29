@@ -72,7 +72,7 @@ public class TransactionLowWaterMarkTest extends TransactionTestBase {
 
     private static final String TOPIC = "persistent://" + NAMESPACE1 + "/test-topic";
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     protected void setup() throws Exception {
         setUpBase(1, 16, TOPIC, 0);
 

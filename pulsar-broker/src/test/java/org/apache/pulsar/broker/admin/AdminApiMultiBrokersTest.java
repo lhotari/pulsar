@@ -45,6 +45,7 @@ import org.apache.pulsar.common.policies.data.AutoTopicCreationOverride;
 import org.apache.pulsar.common.policies.data.RetentionPolicies;
 import org.apache.pulsar.common.policies.data.TenantInfoImpl;
 import org.testng.Assert;
+import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -128,6 +129,15 @@ public class AdminApiMultiBrokersTest extends MultiBrokerBaseTest {
             }
         }
         Assert.assertEquals(lookupResultSet.size(), 1);
+    }
+
+    @BeforeClass(groups = "flaky", inheritGroups = false)
+    public void setupForFlaky() throws Exception {
+        // setup method's BeforeClass annotation will run only for the default group of the class
+        if (!isTestSetupInitialized()) {
+            cleanup();
+            setup();
+        }
     }
 
     @Test(groups = "flaky")

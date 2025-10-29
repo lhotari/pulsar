@@ -34,6 +34,7 @@ import org.apache.pulsar.tests.integration.topologies.FunctionRuntimeType;
 import org.testng.annotations.Test;
 
 @Slf4j
+@Test(groups = "source")
 public class PulsarDebeziumOracleSourceTest extends PulsarIOTestBase {
 
     protected final AtomicInteger testId = new AtomicInteger(0);
@@ -42,7 +43,7 @@ public class PulsarDebeziumOracleSourceTest extends PulsarIOTestBase {
         super(FunctionRuntimeType.PROCESS);
     }
 
-    @Test(groups = "source", timeOut = 1800000)
+    @Test(timeOut = 1800000)
     public void testDebeziumOracleDbSource() throws Exception{
         testDebeziumOracleDbConnect("org.apache.kafka.connect.json.JsonConverter", true);
     }

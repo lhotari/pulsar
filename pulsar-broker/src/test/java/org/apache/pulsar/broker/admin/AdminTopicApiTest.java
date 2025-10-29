@@ -64,7 +64,7 @@ public class AdminTopicApiTest extends ProducerConsumerBase {
     private static final Logger log = LoggerFactory.getLogger(AdminTopicApiTest.class);
 
     @Override
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     protected void setup() throws Exception {
         super.internalSetup();
         super.producerBaseSetup();

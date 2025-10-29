@@ -95,7 +95,7 @@ public class ExtensibleLoadManagerTest extends TestRetrySupport {
         };
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() throws Exception {
         incrementSetupNumber();
         Map<String, String> brokerEnvs = new HashMap<>();
@@ -133,7 +133,7 @@ public class ExtensibleLoadManagerTest extends TestRetrySupport {
         }
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void startBroker() {
         if (pulsarCluster != null) {
             pulsarCluster.getBrokers().forEach(brokerContainer -> {

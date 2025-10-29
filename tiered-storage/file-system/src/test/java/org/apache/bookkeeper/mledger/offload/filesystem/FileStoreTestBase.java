@@ -44,7 +44,7 @@ public abstract class FileStoreTestBase {
     protected LedgerOffloaderStats offloaderStats;
     private ScheduledExecutorService scheduledExecutorService;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public final void beforeClass() throws Exception {
         init();
     }
@@ -65,7 +65,7 @@ public abstract class FileStoreTestBase {
         }
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void start() throws Exception {
         File baseDir = Files.createTempDirectory(basePath).toFile().getAbsoluteFile();
         Configuration conf = new Configuration();

@@ -44,7 +44,7 @@ import org.testng.annotations.Test;
 @Test(groups = "broker-api")
 public class ProducerReconnectionTest extends ProducerConsumerBase {
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

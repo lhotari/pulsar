@@ -47,14 +47,15 @@ import org.testng.annotations.Test;
  * This tests verifies that a batch source can be successfully submitted and run via the pulsar-admin CLI.
  */
 @Slf4j
+@Test(groups = "source")
 public class DataGeneratorSourceTest extends PulsarStandaloneTestSuite {
 
-    @Test(groups = {"source"})
+    @Test
     public void testSource() throws Exception {
         testGenericRecordSource(null);
     }
 
-    @Test(groups = {"source"})
+    @Test
     public void testSourceCustomBatching() throws Exception {
         BatchingConfig config = BatchingConfig.builder()
                 .enabled(true)
@@ -67,7 +68,7 @@ public class DataGeneratorSourceTest extends PulsarStandaloneTestSuite {
         testGenericRecordSource(config);
     }
 
-    @Test(groups = {"source"})
+    @Test
     public void testSourceDisableBatching() throws Exception {
         BatchingConfig config = BatchingConfig.builder()
                 .enabled(false)
@@ -75,6 +76,7 @@ public class DataGeneratorSourceTest extends PulsarStandaloneTestSuite {
         testGenericRecordSource(config);
     }
 
+    @Test
     public void testGenericRecordSource(BatchingConfig config) throws Exception {
         String outputTopicName = "test-state-source-output-" + randomName(8);
         String sourceName = "test-state-source-" + randomName(8);

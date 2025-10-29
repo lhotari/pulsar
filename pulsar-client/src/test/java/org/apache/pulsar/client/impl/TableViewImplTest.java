@@ -33,7 +33,7 @@ public class TableViewImplTest {
     private PulsarClientImpl client;
     private TableViewConfigurationData data;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() {
         client = mock(PulsarClientImpl.class);
         ConnectionPool connectionPool = mock(ConnectionPool.class);

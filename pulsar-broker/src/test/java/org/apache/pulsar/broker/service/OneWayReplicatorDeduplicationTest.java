@@ -97,7 +97,7 @@ public class OneWayReplicatorDeduplicationTest extends OneWayReplicatorTestBase 
     static final ObjectMapper JACKSON = new ObjectMapper();
 
     @Override
-    @BeforeClass(alwaysRun = true, timeOut = 300000)
+    @BeforeClass(timeOut = 300000)
     public void setup() throws Exception {
         super.setup();
         waitInternalClientCreated();

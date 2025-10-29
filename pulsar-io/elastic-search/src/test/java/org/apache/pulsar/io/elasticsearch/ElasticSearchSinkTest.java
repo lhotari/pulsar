@@ -101,7 +101,7 @@ public abstract class ElasticSearchSinkTest extends ElasticSearchTestBase {
     GenericRecord userProfile;
     String recordKey;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public final void initBeforeClass() {
         container = createElasticsearchContainer();
         container.start();

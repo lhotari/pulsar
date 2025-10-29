@@ -54,7 +54,7 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
     private final String subscriptionName = "s1";
 
     @Override
-    @BeforeClass(alwaysRun = true, timeOut = 300000)
+    @BeforeClass(timeOut = 300000)
     public void setup() throws Exception {
         super.setup();
         createTopics();

@@ -84,7 +84,7 @@ import org.testng.annotations.Test;
 
 public class TopicTransactionBufferTest extends TransactionTestBase {
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     protected void setup() throws Exception {
         setBrokerCount(1);
         setUpBase(1, 16, "persistent://" + NAMESPACE1 + "/test", 0);

@@ -76,7 +76,7 @@ public class SimpleProducerConsumerTest extends TestRetrySupport {
     private PulsarClient pulsarClient;
 
     @Override
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() throws Exception {
         incrementSetupNumber();
         Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());

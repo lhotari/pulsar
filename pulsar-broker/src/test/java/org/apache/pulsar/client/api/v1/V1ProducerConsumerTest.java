@@ -94,7 +94,7 @@ public class V1ProducerConsumerTest extends V1ProducerConsumerBase {
     private static final Logger log = LoggerFactory.getLogger(V1ProducerConsumerTest.class);
     private static final long BATCHING_MAX_PUBLISH_DELAY_THRESHOLD = 1;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         super.internalSetup();
@@ -627,6 +627,15 @@ public class V1ProducerConsumerTest extends V1ProducerConsumerBase {
             }).when(factory).getEntryCacheManager();
             return factory;
         }).when(pulsar).getDefaultManagedLedgerFactory();
+    }
+
+    @BeforeMethod(groups = "quarantine", inheritGroups = false)
+    public void setupForQuarantine() throws Exception {
+        // setup method's BeforeMethod annotation will run only for the default group of the class
+        if (!isTestSetupInitialized()) {
+            cleanup();
+            setup();
+        }
     }
 
     /**

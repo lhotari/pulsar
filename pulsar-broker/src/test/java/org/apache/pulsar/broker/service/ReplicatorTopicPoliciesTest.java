@@ -59,7 +59,7 @@ import org.testng.annotations.Test;
 public class ReplicatorTopicPoliciesTest extends ReplicatorTestBase {
 
     @Override
-    @BeforeClass(alwaysRun = true, timeOut = 300000)
+    @BeforeClass(timeOut = 300000)
     public void setup() throws Exception {
         config1.setDefaultNumberOfNamespaceBundles(1);
         config2.setDefaultNumberOfNamespaceBundles(1);

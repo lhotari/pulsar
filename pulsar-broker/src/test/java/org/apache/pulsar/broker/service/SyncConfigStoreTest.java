@@ -51,7 +51,7 @@ public class SyncConfigStoreTest extends GeoReplicationWithConfigurationSyncTest
             + "/__sync_config_meta";
 
     @Override
-    @BeforeClass(alwaysRun = true, timeOut = 300000)
+    @BeforeClass(timeOut = 300000)
     public void setup() throws Exception {
         super.setup();
         TenantInfoImpl tenantInfo = new TenantInfoImpl();

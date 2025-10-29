@@ -33,7 +33,7 @@ import org.testng.annotations.Test;
 @Test(groups = "broker")
 public class ZooKeeperSessionExpireRecoveryTest extends MockedPulsarServiceBaseTest {
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

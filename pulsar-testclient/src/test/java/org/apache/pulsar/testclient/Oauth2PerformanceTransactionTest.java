@@ -71,7 +71,7 @@ public class Oauth2PerformanceTransactionTest extends ProducerConsumerBase {
     private MockOIDCIdentityProvider server;
     private String authenticationParameters;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         server = new MockOIDCIdentityProvider("a-client-secret", "my-test-audience", 30000);

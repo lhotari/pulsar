@@ -54,7 +54,7 @@ public class ReplicatorRateLimiterTest extends ReplicatorTestBase {
 
     protected String methodName;
 
-    @BeforeMethod
+    @BeforeMethod(alwaysRun = true)
     public void beforeMethod(Method m) throws Exception {
         methodName = m.getName();
     }

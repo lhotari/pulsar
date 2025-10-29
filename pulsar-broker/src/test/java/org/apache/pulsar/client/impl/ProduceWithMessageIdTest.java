@@ -45,7 +45,7 @@ import org.testng.annotations.Test;
 public class ProduceWithMessageIdTest extends ProducerConsumerBase {
     MockBrokerService mockBrokerService;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() throws Exception {
         mockBrokerService = new MockBrokerService();
         mockBrokerService.start();

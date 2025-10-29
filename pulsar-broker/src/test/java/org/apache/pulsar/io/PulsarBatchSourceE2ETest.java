@@ -174,7 +174,7 @@ public class PulsarBatchSourceE2ETest extends AbstractPulsarE2ETest {
         admin.sources().deleteSource(tenant, namespacePortion, sourceName);
     }
 
-    @Test(timeOut = 20000, groups = "builtin")
+    @Test(timeOut = 20000)
     public void testPulsarBatchSourceStatsBuiltin() throws Exception {
         String jarFilePathUrl = String.format("%s://batch-data-generator", Utils.BUILTIN);
         testPulsarBatchSourceStats(jarFilePathUrl);

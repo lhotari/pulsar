@@ -74,7 +74,7 @@ public class SystemTopicBasedTopicPoliciesServiceTest extends MockedPulsarServic
 
     private SystemTopicBasedTopicPoliciesService systemTopicBasedTopicPoliciesService;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

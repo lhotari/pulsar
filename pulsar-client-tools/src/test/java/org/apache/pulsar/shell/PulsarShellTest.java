@@ -133,7 +133,7 @@ public class PulsarShellTest {
         }
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() throws Exception {
         pulsarAdmin = mock(PulsarAdmin.class);
         topics = mock(Topics.class);

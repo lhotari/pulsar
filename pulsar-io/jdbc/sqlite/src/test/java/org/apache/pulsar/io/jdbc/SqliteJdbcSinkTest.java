@@ -83,7 +83,7 @@ public class SqliteJdbcSinkTest {
         private int field3;
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setUp() throws Exception {
         sqliteUtils.setUp();
         sqliteUtils.createTable(

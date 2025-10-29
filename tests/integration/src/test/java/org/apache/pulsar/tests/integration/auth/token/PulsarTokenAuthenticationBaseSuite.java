@@ -70,7 +70,7 @@ public abstract class PulsarTokenAuthenticationBaseSuite extends PulsarClusterTe
 
     protected ZKContainer cmdContainer;
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     public final void setupCluster() throws Exception {
         incrementSetupNumber();

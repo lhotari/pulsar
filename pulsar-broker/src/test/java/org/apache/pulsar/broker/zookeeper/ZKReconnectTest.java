@@ -34,7 +34,7 @@ import org.testng.annotations.Test;
 @Test
 public class ZKReconnectTest extends MockedPulsarServiceBaseTest {
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         this.conf.setZookeeperSessionExpiredPolicy(MetadataSessionExpiredPolicy.reconnect);

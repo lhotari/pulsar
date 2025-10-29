@@ -34,7 +34,7 @@ import org.testng.annotations.Test;
 @Slf4j
 public class MetricsAuthenticationTest extends MockedPulsarServiceBaseTest {
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     @Override
     protected void setup() throws Exception {
         conf.setAuthenticationEnabled(true);

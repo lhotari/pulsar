@@ -34,7 +34,7 @@ public abstract class BlobStoreTestBase {
     protected BlobStoreContext context = null;
     protected BlobStore blobStore = null;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void start() throws Exception {
         if (Boolean.parseBoolean(System.getProperty("testRealAWS", "false"))) {
             log.info("TestReal AWS S3, bucket: {}", BUCKET);

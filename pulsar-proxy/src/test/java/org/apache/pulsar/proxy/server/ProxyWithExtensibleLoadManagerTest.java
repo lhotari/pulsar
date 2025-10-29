@@ -150,7 +150,7 @@ public class ProxyWithExtensibleLoadManagerTest extends MultiBrokerBaseTest {
                 findAny().orElseThrow(() -> new Exception("Could not determine destination broker lookup URL"));
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void proxySetup() throws Exception {
         var proxyConfig = initializeProxyConfig();
         proxyClientAuthentication = AuthenticationFactory.create(proxyConfig.getBrokerClientAuthenticationPlugin(),

@@ -38,7 +38,7 @@ import org.testng.annotations.Test;
 public class TopicPoliciesWithBrokerRestartTest extends MockedPulsarServiceBaseTest {
 
     @Override
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     protected void setup() throws Exception {
         super.internalSetup();
         setupDefaultTenantAndNamespace();

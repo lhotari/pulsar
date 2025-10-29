@@ -43,7 +43,7 @@ import org.testng.annotations.Test;
 public class MessageListenerExecutorTest extends ProducerConsumerBase {
     private static final Logger log = LoggerFactory.getLogger(MessageListenerExecutorTest.class);
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     @Override
     protected void setup() throws Exception {
         super.internalSetup();

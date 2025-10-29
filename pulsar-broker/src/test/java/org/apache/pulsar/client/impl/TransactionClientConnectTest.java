@@ -56,7 +56,7 @@ public class TransactionClientConnectTest extends TransactionTestBase {
 
     private static final String RECONNECT_TOPIC = NAMESPACE1 + "/txn-client-reconnect-test";
     private static final int NUM_PARTITIONS = 1;
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() throws Exception {
         setUpBase(1, NUM_PARTITIONS, RECONNECT_TOPIC, 0);
         admin.topics().createSubscription(RECONNECT_TOPIC, "test", MessageId.latest);

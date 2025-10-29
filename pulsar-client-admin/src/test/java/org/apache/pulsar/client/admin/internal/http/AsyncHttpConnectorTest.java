@@ -126,7 +126,7 @@ public class AsyncHttpConnectorTest {
         }
     }
 
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     void beforeClass() throws IOException {
         server = new WireMockServer(WireMockConfiguration.wireMockConfig()
                 .extensions(new CopyRequestBodyToResponseBodyTransformer(), concurrencyTestTransformer)

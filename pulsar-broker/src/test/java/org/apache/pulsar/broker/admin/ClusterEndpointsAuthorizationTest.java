@@ -57,7 +57,7 @@ public class ClusterEndpointsAuthorizationTest extends MockedPulsarStandalone {
     private PulsarAdmin nobodyAdmin;
 
     @SneakyThrows
-    @BeforeClass(alwaysRun = true)
+    @BeforeClass
     public void setup() {
         configureTokenAuthentication();
         configureDefaultAuthorization();
@@ -72,7 +72,7 @@ public class ClusterEndpointsAuthorizationTest extends MockedPulsarStandalone {
                 .build();
     }
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void before() throws IllegalAccessException {
         orignalAuthorizationService = getPulsarService().getBrokerService().getAuthorizationService();
         spyAuthorizationService = spy(orignalAuthorizationService);

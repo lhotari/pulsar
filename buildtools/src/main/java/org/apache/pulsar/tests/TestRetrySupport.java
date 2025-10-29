@@ -98,6 +98,13 @@ public abstract class TestRetrySupport {
     }
 
     /**
+     * Returns true if setup has run and there haven't been errors and it hasn't been cleaned up.
+     */
+    protected final boolean isTestSetupInitialized() {
+        return currentSetupNumber > 0 && failedSetupNumber == -1 && cleanedUpSetupNumber < currentSetupNumber;
+    }
+
+    /**
      * Initializes the test environment state.
      *
      * The implementation of this method must call incrementSetupNumber method.

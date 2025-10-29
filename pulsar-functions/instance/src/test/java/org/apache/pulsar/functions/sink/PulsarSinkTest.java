@@ -143,7 +143,7 @@ public class PulsarSinkTest {
 
     ProducerCache producerCache;
 
-    @BeforeMethod(alwaysRun = true)
+    @BeforeMethod
     public void setup() {
         producerCache = new ProducerCache();
     }
