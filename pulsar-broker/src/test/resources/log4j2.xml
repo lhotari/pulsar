@@ -44,7 +44,7 @@
     </RollingFile>
   </Appenders>
   <Loggers>
-    <Root level="INFO">
+    <Root level="WARN">
       <!-- by setting -Dpulsar.test.logging.appender=FILE, it's possible to log to file only -->
       <AppenderRef ref="${sys:pulsar.test.logging.appender}"/>
     </Root>

@@ -223,6 +223,8 @@ public class PatternMultiTopicsConsumerImpl<T> extends MultiTopicsConsumerImpl<T
          * @param addedTopics topic names added(contains the partition suffix).
          */
         CompletableFuture<Void> onTopicsAdded(Collection<String> addedTopics);
+
+        CompletableFuture<Void> onTopicsListed(Collection<String> topics, String hash);
     }
 
     private class PatternTopicsChangedListener implements TopicsChangedListener {
@@ -385,6 +387,11 @@ public class PatternMultiTopicsConsumerImpl<T> extends MultiTopicsConsumerImpl<T
                         PatternMultiTopicsConsumerImpl.this.getSubscription(), expendPartitionsForLog, groupedTopics);
             }
             return FutureUtil.waitForAll(futures);
+        }
+
+        @Override
+        public CompletableFuture<Void> onTopicsListed(Collection<String> topics, String hash) {
+            return null;
         }
     }
 

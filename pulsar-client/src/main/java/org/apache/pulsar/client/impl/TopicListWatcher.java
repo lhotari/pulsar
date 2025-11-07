@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.common.api.proto.BaseCommand;
+import org.apache.pulsar.common.api.proto.CommandWatchTopicListSuccess;
 import org.apache.pulsar.common.api.proto.CommandWatchTopicUpdate;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.protocol.Commands;
@@ -158,7 +159,7 @@ public class TopicListWatcher extends HandlerState implements ConnectionHandler.
                             }
                         }
                         this.connectionHandler.resetBackoff();
-
+                        handleCommandWatchTopicListSuccess(response);
                         watcherFuture.complete(this);
                         future.complete(null);
                     }).exceptionally((e) -> {
@@ -291,5 +292,9 @@ public class TopicListWatcher extends HandlerState implements ConnectionHandler.
     public void handleCommandWatchTopicUpdate(CommandWatchTopicUpdate update) {
         patternConsumerUpdateQueue.appendTopicsRemovedOp(update.getDeletedTopicsList());
         patternConsumerUpdateQueue.appendTopicsAddedOp(update.getNewTopicsList());
+    }
+
+    private void handleCommandWatchTopicListSuccess(CommandWatchTopicListSuccess topicListSuccess) {
+        patternConsumerUpdateQueue.appendTopicsList(topicListSuccess.getTopicsList(), topicListSuccess.getTopicsHash());
     }
 }

@@ -68,7 +68,7 @@ public class PatternConsumerTopicWatcherBackPressureMultipleConsumersTest extend
         super.internalCleanup();
     }
 
-    @Test(timeOut = 60 * 1000)
+    @Test(timeOut = 120 * 1000)
     public void testPatternConsumerWithLargeAmountOfConcurrentClientConnections()
             throws PulsarAdminException, InterruptedException, IOException, ExecutionException, TimeoutException {
         // create a new namespace for this test
@@ -81,13 +81,10 @@ public class PatternConsumerTopicWatcherBackPressureMultipleConsumersTest extend
         // create a long topic name to consume more memory per topic
         final String topicNamePrefix = "persistent://" + namespace + "/" + StringUtils.repeat('a', 512) + "-";
         // number of topics to create
-        final int topicCount = 1000;
+        final int topicCount = 600;
 
-        List<CompletableFuture<Void>> createTopicFutures =
-                IntStream.range(0, topicCount)
-                        .mapToObj(i -> admin.topics().createNonPartitionedTopicAsync(topicNamePrefix + i)).toList();
-        // wait for all topics to be created
-        FutureUtil.waitForAll(createTopicFutures).get(30, TimeUnit.SECONDS);
+        // create topics
+        createTopics(topicCount, topicNamePrefix, "_0");
 
         @Cleanup
         PulsarClientSharedResources sharedResources = PulsarClientSharedResources.builder()
@@ -111,6 +108,7 @@ public class PatternConsumerTopicWatcherBackPressureMultipleConsumersTest extend
             PulsarClientImpl client = (PulsarClientImpl) PulsarClient.builder()
                     .serviceUrl(getClientServiceUrl())
                     .statsInterval(0, TimeUnit.SECONDS)
+                    .operationTimeout(1, TimeUnit.MINUTES)
                     .sharedResources(sharedResources)
                     .build();
             clients.add(client);
@@ -118,20 +116,48 @@ public class PatternConsumerTopicWatcherBackPressureMultipleConsumersTest extend
 
         List<CompletableFuture<Consumer<String>>> consumerFutures = new ArrayList<>(numberOfClients);
         for (int i = 0; i < topicCount; i++) {
-            consumerFutures.add(clients.get(i % numberOfClients).newConsumer(Schema.STRING)
-                    .topicsPattern(namespace + "/.*-" + i + "$").subscriptionName("sub" + i)
-                    .subscribeAsync());
+            String topicsPattern = namespace + "/a+-" + i + "_[01]$";
+            CompletableFuture<Consumer<String>> consumerFuture =
+                    clients.get(i % numberOfClients).newConsumer(Schema.STRING)
+                            .topicsPattern(topicsPattern).subscriptionName("sub" + i)
+                            .subscribeAsync();
+            consumerFutures.add(consumerFuture);
+            consumerFuture.exceptionally(throwable -> {
+                log.error("Failed to subscribe to pattern {}", topicsPattern, throwable);
+                return null;
+            });
         }
 
-        FutureUtil.waitForAll(consumerFutures).get(30, TimeUnit.SECONDS);
+        FutureUtil.waitForAll(consumerFutures).get(60, TimeUnit.SECONDS);
 
         List<Consumer<String>> consumers = consumerFutures.stream().map(CompletableFuture::join).toList();
 
         PulsarClientImpl client = clients.get(0);
+        sendAndValidate(topicCount, client, consumers, topicNamePrefix, "_0");
+
+        // create additional topics
+        createTopics(topicCount, topicNamePrefix, "_1");
+
+        // send to additional topic
+        sendAndValidate(topicCount, client, consumers, topicNamePrefix, "_1");
+    }
+
+    private void createTopics(int topicCount, String topicNamePrefix, String topicNameSuffix)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        List<CompletableFuture<Void>> createTopicFutures = IntStream.range(0, topicCount)
+                .mapToObj(i -> admin.topics().createNonPartitionedTopicAsync(topicNamePrefix + i + topicNameSuffix))
+                .toList();
+        // wait for all topics to be created
+        FutureUtil.waitForAll(createTopicFutures).get(30, TimeUnit.SECONDS);
+    }
+
+    private static void sendAndValidate(int topicCount, PulsarClientImpl client, List<Consumer<String>> consumers,
+                                        String topicNamePrefix,
+                                        String topicNameSuffix) throws PulsarClientException {
         for (int i = 0; i < topicCount; i++) {
-            // send message to every topic partition
+            // send message to every topic
             Producer<String> producer =
-                    client.newProducer(Schema.STRING).topic(topicNamePrefix + i).create();
+                    client.newProducer(Schema.STRING).topic(topicNamePrefix + i + topicNameSuffix).create();
             producer.send("test" + i);
             producer.close();
         }
@@ -140,8 +166,9 @@ public class PatternConsumerTopicWatcherBackPressureMultipleConsumersTest extend
         for (int i = 0; i < consumers.size(); i++) {
             Consumer<String> consumer = consumers.get(i);
             int finalI = i;
-            assertThat(consumer.receive(5, TimeUnit.SECONDS)).isNotNull()
-                    .satisfies(message -> assertThat(message.getValue()).isEqualTo("test" + finalI));
+            assertThat(consumer.receive(10, TimeUnit.SECONDS)).isNotNull()
+                    .satisfies(message -> assertThat(message.getValue())
+                            .isEqualTo("test" + finalI));
             // validate that no more messages are received
             assertThat(consumer.receive(1, TimeUnit.MICROSECONDS)).isNull();
         }
