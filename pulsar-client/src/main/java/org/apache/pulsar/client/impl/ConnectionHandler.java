@@ -80,10 +80,14 @@ public class ConnectionHandler {
 
     protected ConnectionHandler(HandlerState state, Backoff backoff, Connection connection) {
         this.state = state;
-        this.randomKeyForSelectConnection = state.client.getCnxPool().genRandomKeyToSelectCon();
         this.connection = connection;
         this.backoff = backoff;
         CLIENT_CNX_UPDATER.set(this, null);
+        this.randomKeyForSelectConnection = getRandomKeyForSelectConnection(state);
+    }
+
+    protected int getRandomKeyForSelectConnection(HandlerState state) {
+        return state.client.getCnxPool().genRandomKeyToSelectCon();
     }
 
     protected void grabCnx() {

@@ -58,6 +58,28 @@ public class TopicListWatcher extends HandlerState implements ConnectionHandler.
 
     private final Runnable recheckTopicsChangeAfterReconnect;
 
+    private static class TopicListWatcherConnectionHandler extends ConnectionHandler {
+        // isolate topic list watcher connections from other connections
+        private static final int TOPIC_LIST_WATCHER_CONNECTION_KEY_OFFSET = 100000;
+
+        public TopicListWatcherConnectionHandler(PulsarClientImpl client, TopicListWatcher topicListWatcher) {
+            super(topicListWatcher, new BackoffBuilder()
+                    .setInitialTime(client.getConfiguration().getInitialBackoffIntervalNanos(),
+                            TimeUnit.NANOSECONDS)
+                    .setMax(client.getConfiguration().getMaxBackoffIntervalNanos(), TimeUnit.NANOSECONDS)
+                    .setMandatoryStop(0, TimeUnit.MILLISECONDS)
+                    .create(), topicListWatcher);
+        }
+
+        @Override
+        protected int getRandomKeyForSelectConnection(HandlerState state) {
+            int randomKey = super.getRandomKeyForSelectConnection(state);
+            if (randomKey != -1) {
+                randomKey -= TOPIC_LIST_WATCHER_CONNECTION_KEY_OFFSET;
+            }
+            return randomKey;
+        }
+    }
 
     /***
      * @param topicsPattern The regexp for the topic name(not contains partition suffix).
@@ -70,14 +92,7 @@ public class TopicListWatcher extends HandlerState implements ConnectionHandler.
         super(client, topicsPattern.topicLookupNameForTopicListWatcherPlacement());
         this.patternConsumerUpdateQueue = patternConsumerUpdateQueue;
         this.name = "Watcher(" + topicsPattern + ")";
-        this.connectionHandler = new ConnectionHandler(this,
-                new BackoffBuilder()
-                        .setInitialTime(client.getConfiguration().getInitialBackoffIntervalNanos(),
-                                TimeUnit.NANOSECONDS)
-                        .setMax(client.getConfiguration().getMaxBackoffIntervalNanos(), TimeUnit.NANOSECONDS)
-                        .setMandatoryStop(0, TimeUnit.MILLISECONDS)
-                        .create(),
-                this);
+        this.connectionHandler = new TopicListWatcherConnectionHandler(client, TopicListWatcher.this);
         this.topicsPattern = topicsPattern;
         this.watcherId = watcherId;
         this.namespace = namespace;
@@ -134,7 +149,6 @@ public class TopicListWatcher extends HandlerState implements ConnectionHandler.
                             topicsPattern.inputPattern(), topicsHash);
 
             cnx.newWatchTopicList(watchRequest, requestId)
-
                     .thenAccept(response -> {
                         synchronized (TopicListWatcher.this) {
                             if (!changeToReadyState()) {
