@@ -84,7 +84,7 @@ public class TopicListWatcherTest {
         watcherFuture = new CompletableFuture<>();
         watcher = new TopicListWatcher(queue, client,
                 TopicsPatternFactory.create(Pattern.compile(topic)), 7,
-                NamespaceName.get("tenant/ns"), null, watcherFuture, () -> {});
+                NamespaceName.get("tenant/ns"), null, watcherFuture);
     }
 
     @Test

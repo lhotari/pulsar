@@ -56,8 +56,6 @@ public class TopicListWatcher extends HandlerState implements ConnectionHandler.
     private final AtomicInteger previousExceptionCount = new AtomicInteger();
     private final AtomicReference<ClientCnx> clientCnxUsedForWatcherRegistration = new AtomicReference<>();
 
-    private final Runnable recheckTopicsChangeAfterReconnect;
-
     private static class TopicListWatcherConnectionHandler extends ConnectionHandler {
         // isolate topic list watcher connections from other connections
         private static final int TOPIC_LIST_WATCHER_CONNECTION_KEY_OFFSET = 100000;
@@ -87,8 +85,7 @@ public class TopicListWatcher extends HandlerState implements ConnectionHandler.
     public TopicListWatcher(PatternConsumerUpdateQueue patternConsumerUpdateQueue,
                             PulsarClientImpl client, TopicsPattern topicsPattern, long watcherId,
                             NamespaceName namespace, String topicsHash,
-                            CompletableFuture<TopicListWatcher> watcherFuture,
-                            Runnable recheckTopicsChangeAfterReconnect) {
+                            CompletableFuture<TopicListWatcher> watcherFuture) {
         super(client, topicsPattern.topicLookupNameForTopicListWatcherPlacement());
         this.patternConsumerUpdateQueue = patternConsumerUpdateQueue;
         this.name = "Watcher(" + topicsPattern + ")";
@@ -98,7 +95,6 @@ public class TopicListWatcher extends HandlerState implements ConnectionHandler.
         this.namespace = namespace;
         this.topicsHash = topicsHash;
         this.watcherFuture = watcherFuture;
-        this.recheckTopicsChangeAfterReconnect = recheckTopicsChangeAfterReconnect;
 
         connectionHandler.grabCnx();
     }
@@ -163,7 +159,6 @@ public class TopicListWatcher extends HandlerState implements ConnectionHandler.
                         }
                         this.connectionHandler.resetBackoff();
 
-                        recheckTopicsChangeAfterReconnect.run();
                         watcherFuture.complete(this);
                         future.complete(null);
                     }).exceptionally((e) -> {

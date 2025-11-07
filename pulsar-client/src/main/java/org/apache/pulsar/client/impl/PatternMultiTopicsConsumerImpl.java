@@ -88,8 +88,9 @@ public class PatternMultiTopicsConsumerImpl<T> extends MultiTopicsConsumerImpl<T
         this.updateTaskQueue = new PatternConsumerUpdateQueue(this);
         if (subscriptionMode == Mode.PERSISTENT) {
             long watcherId = client.newTopicListWatcherId();
-            topicListWatcher = new TopicListWatcher(updateTaskQueue, client, topicsPattern, watcherId,
-                namespaceName, topicsHash, watcherFuture, () -> recheckTopicsChangeAfterReconnect());
+            topicListWatcher =
+                    new TopicListWatcher(updateTaskQueue, client, topicsPattern, watcherId, namespaceName, topicsHash,
+                            watcherFuture);
             watcherFuture
                .exceptionally(ex -> {
                    if (closed) {
