@@ -198,6 +198,7 @@ public abstract class AbstractReplicator implements Replicator {
             builderImpl.getConf().setNonPartitionedTopicExpected(true);
             builderImpl.getConf().setReplProducer(true);
             return producerBuilder.createAsync().thenAccept(producer -> {
+                backOff.reset();
                 setProducerAndTriggerReadEntries(producer);
             });
         }).exceptionally(ex -> {
