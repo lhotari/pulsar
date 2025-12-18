@@ -46,7 +46,7 @@ on:
           - '21'
           - '24'
           - '25'
-        default: '21'
+        default: '25'
       trace_test_resource_cleanup:
         description: 'Collect thread & heap information before exiting a test JVM. When set to "on", thread dump and heap histogram will be collected. When set to "full", a heap dump will also be collected.'
         required: true
@@ -112,8 +112,8 @@ jobs:
             echo "jdk_major_version=17" >> $GITHUB_OUTPUT
             exit 0
           fi
-          # use JDK 21 for build unless overridden with workflow_dispatch input
-          echo "jdk_major_version=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.jdk_major_version || '21'}}" >> $GITHUB_OUTPUT
+          # use JDK 25 for build unless overridden with workflow_dispatch input
+          echo "jdk_major_version=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.jdk_major_version || '25'}}" >> $GITHUB_OUTPUT
 
       - name: checkout
         if: ${{ github.event_name == 'pull_request' }}
