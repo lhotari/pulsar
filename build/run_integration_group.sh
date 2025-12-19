@@ -61,20 +61,7 @@ mvn_run_integration_test() {
       clean_arg="clean"
       shift
   fi
-  local use_fail_fast=1
-  if [[ "$GITHUB_ACTIONS" == "true" && "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
-    use_fail_fast=0
-  fi
-  if [[ "$1" == "--no-fail-fast" ]]; then
-    use_fail_fast=0
-    shift;
-  fi
-  local failfast_args
-  if [ $use_fail_fast -eq 1 ]; then
-    failfast_args="-DtestFailFast=true -DtestFailFastFile=/tmp/test_fail_fast_killswitch.$$.$RANDOM.$(date +%s) --fail-fast"
-  else
-    failfast_args="-DtestFailFast=false --fail-at-end"
-  fi
+  local failfast_args="-DtestFailFast=false --fail-at-end"
   local coverage_args=""
   if [[ "$1" == "--coverage" ]]; then
       if [ ! -d /tmp/jacocoDir ]; then

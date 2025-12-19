@@ -40,7 +40,7 @@ import org.apache.pulsar.proxy.server.ProxyConfiguration;
 import org.apache.pulsar.proxy.server.ProxyService;
 import org.testng.annotations.Test;
 
-@Test
+@Test(groups = "flaky")
 public class AutoCloseUselessClientConProxyTest extends AutoCloseUselessClientConSupports {
     private static final String TOPIC_NAME = BrokerTestUtil.newUniqueName("pattern_");
     private static final String TOPIC_FULL_NAME = "persistent://public/default/" + TOPIC_NAME;

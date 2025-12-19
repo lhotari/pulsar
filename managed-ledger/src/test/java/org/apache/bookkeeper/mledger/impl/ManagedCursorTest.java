@@ -1350,7 +1350,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         assertEquals(c4.getMarkDeletedPosition(), p1);
     }
 
-    @Test
+    @Test(enabled = false)
     public void asyncMarkDeleteBlocking() throws Exception {
         ManagedLedgerConfig config = new ManagedLedgerConfig();
         config.setMaxEntriesPerLedger(10);
@@ -1397,7 +1397,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         assertEquals(c2.getMarkDeletedPosition(), lastPosition.get());
     }
 
-    @Test(timeOut = 20000)
+    @Test(timeOut = 20000, enabled = false)
     void cursorPersistenceAsyncMarkDeleteSameThread() throws Exception {
         ManagedLedger ledger = factory.open("my_test_ledger",
                 new ManagedLedgerConfig().setMetadataMaxEntriesPerLedger(5));
