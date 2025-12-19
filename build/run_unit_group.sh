@@ -42,20 +42,7 @@ function mvn_test() {
       target="install"
       shift
     fi
-    local use_fail_fast=1
-    if [[ "$GITHUB_ACTIONS" == "true" && "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
-      use_fail_fast=0
-    fi
-    if [[ "$1" == "--no-fail-fast" ]]; then
-      use_fail_fast=0
-      shift;
-    fi
-    local failfast_args
-    if [ $use_fail_fast -eq 1 ]; then
-      failfast_args="-DtestFailFast=true -DtestFailFastFile=/tmp/test_fail_fast_killswitch.$$.$RANDOM.$(date +%s) --fail-fast"
-    else
-      failfast_args="-DtestFailFast=false --fail-at-end"
-    fi
+    local failfast_args="-DtestFailFast=false --fail-at-end"
     echo "::group::Run tests for " "$@"
     # use "verify" instead of "test" to workaround MDEP-187 issue in pulsar-functions-worker and pulsar-broker projects with the maven-dependency-plugin's copy goal
     # Error message was "Artifact has not been packaged yet. When used on reactor artifact, copy should be executed after packaging: see MDEP-187"
@@ -147,19 +134,19 @@ function print_testng_failures() {
 function test_group_broker_flaky() {
   echo "::endgroup::"
   echo "::group::Running quarantined tests"
-  mvn_test --no-fail-fast -pl pulsar-broker -Dgroups='quarantine' -DexcludedGroups='flaky' -DfailIfNoTests=false \
+  mvn_test -pl pulsar-broker -Dgroups='quarantine' -DexcludedGroups='flaky' -DfailIfNoTests=false \
     -DtestForkCount=2 ||
     print_testng_failures pulsar-broker/target/surefire-reports/testng-failed.xml "Quarantined test failure in" "Quarantined test failures"
   echo "::endgroup::"
   echo "::group::Running flaky tests"
-  mvn_test --no-fail-fast -pl pulsar-broker -Dgroups='flaky' -DexcludedGroups='quarantine' -DtestForkCount=2
+  mvn_test -pl pulsar-broker -Dgroups='flaky' -DexcludedGroups='quarantine' -DtestForkCount=2
   echo "::endgroup::"
   local modules_with_flaky_tests=$(git grep -l '@Test.*"flaky"' | grep '/src/test/java/' | \
     awk -F '/src/test/java/' '{ print $1 }' | grep -v -E 'pulsar-broker' | sort | uniq | \
     perl -0777 -p -e 's/\n(\S)/,$1/g')
   if [ -n "${modules_with_flaky_tests}" ]; then
     echo "::group::Running flaky tests in modules '${modules_with_flaky_tests}'"
-    mvn_test --no-fail-fast -pl "${modules_with_flaky_tests}" -Dgroups='flaky' -DexcludedGroups='quarantine' -DfailIfNoTests=false
+    mvn_test -pl "${modules_with_flaky_tests}" -Dgroups='flaky' -DexcludedGroups='quarantine' -DfailIfNoTests=false
     echo "::endgroup::"
   fi
 }
@@ -200,7 +187,7 @@ function test_group_other() {
     perl -0777 -p -e 's/\n(\S)/,$1/g')
   if [ -n "${modules_with_quarantined_tests}" ]; then
     echo "::group::Running quarantined tests outside of pulsar-broker & pulsar-proxy (if any)"
-    mvn_test --no-fail-fast -pl "${modules_with_quarantined_tests}" test -Dgroups='quarantine' -DexcludedGroups='flaky' \
+    mvn_test -pl "${modules_with_quarantined_tests}" test -Dgroups='quarantine' -DexcludedGroups='flaky' \
       -DfailIfNoTests=false || \
         echo "::warning::There were test failures in the 'quarantine' test group."
     echo "::endgroup::"
