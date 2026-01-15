@@ -294,7 +294,8 @@ public class ProxyService implements Closeable {
         }
 
         final String hostname =
-                ServiceConfigurationUtils.getDefaultOrConfiguredAddress(proxyConfig.getAdvertisedAddress());
+                ServiceConfigurationUtils.getDefaultOrConfiguredAddress(proxyConfig.getAdvertisedAddress(),
+                        proxyConfig.isAdvertisedAddressAutoResolvedHostNameAsAbsoluteDnsName());
 
         if (proxyConfig.getServicePort().isPresent()) {
             this.serviceUrl = String.format("pulsar://%s:%d/", hostname, getListenPort().get());

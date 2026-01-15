@@ -33,11 +33,16 @@ public class ServiceConfigurationUtils {
 
     private static final Logger LOG = LoggerFactory.getLogger(ServiceConfigurationUtils.class);
 
-    public static String getDefaultOrConfiguredAddress(String configuredAddress) {
+    public static String getDefaultOrConfiguredAddress(String configuredAddress,
+                                                       boolean autoResolvedHostNameAsAbsoluteDnsName) {
         if (isBlank(configuredAddress)) {
-            return unsafeLocalhostResolve();
+            return unsafeLocalhostResolve() + (autoResolvedHostNameAsAbsoluteDnsName ? "." : "");
         }
         return configuredAddress;
+    }
+
+    public static String getDefaultOrConfiguredAddress(String configuredAddress) {
+        return getDefaultOrConfiguredAddress(configuredAddress, false);
     }
 
     public static String unsafeLocalhostResolve() {
@@ -78,7 +83,8 @@ public class ServiceConfigurationUtils {
             }
         }
 
-        return getDefaultOrConfiguredAddress(advertisedAddress);
+        return getDefaultOrConfiguredAddress(advertisedAddress,
+                configuration.isAdvertisedAddressAutoResolvedHostNameAsAbsoluteDnsName());
     }
 
     /**
@@ -101,7 +107,8 @@ public class ServiceConfigurationUtils {
 
         if (internal == null) {
             // synthesize an advertised listener based on legacy configuration properties
-            String host = ServiceConfigurationUtils.getDefaultOrConfiguredAddress(config.getAdvertisedAddress());
+            String host = ServiceConfigurationUtils.getDefaultOrConfiguredAddress(config.getAdvertisedAddress(),
+                    config.isAdvertisedAddressAutoResolvedHostNameAsAbsoluteDnsName());
             internal = AdvertisedListener.builder()
                     .brokerServiceUrl(createUriOrNull("pulsar", host, config.getBrokerServicePort()))
                     .brokerServiceUrlTls(createUriOrNull("pulsar+ssl", host, config.getBrokerServicePortTls()))
@@ -119,7 +126,8 @@ public class ServiceConfigurationUtils {
      * Gets the web service address (hostname).
      */
     public static String getWebServiceAddress(ServiceConfiguration config) {
-        return ServiceConfigurationUtils.getDefaultOrConfiguredAddress(config.getAdvertisedAddress());
+        return ServiceConfigurationUtils.getDefaultOrConfiguredAddress(config.getAdvertisedAddress(),
+                config.isAdvertisedAddressAutoResolvedHostNameAsAbsoluteDnsName());
     }
 
     public static String brokerUrl(String host, int port) {
