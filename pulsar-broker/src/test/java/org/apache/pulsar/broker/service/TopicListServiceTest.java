@@ -65,6 +65,7 @@ import org.apache.pulsar.broker.topiclistlimit.TopicListSizeResultCache;
 import org.apache.pulsar.common.api.proto.CommandWatchTopicListClose;
 import org.apache.pulsar.common.api.proto.ServerError;
 import org.apache.pulsar.common.naming.NamespaceName;
+import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.semaphore.AsyncDualMemoryLimiter;
 import org.apache.pulsar.common.semaphore.AsyncDualMemoryLimiterImpl;
 import org.apache.pulsar.common.semaphore.AsyncSemaphore;
@@ -385,16 +386,16 @@ public class TopicListServiceTest {
         CompletableFuture<Void> completePending = new CompletableFuture<>();
         doReturn(completePending).when(pulsarCommandSender)
                 .sendWatchTopicListUpdate(anyLong(), any(), any(), anyString(), any());
+
         topicListFuture = new CompletableFuture<>();
-
-        // when the queue overflows
-        for (int i = 10; i <= 10 + topicListUpdateMaxQueueSize + 1; i++) {
-            notificationConsumer.accept(
-                    new Notification(NotificationType.Created, "/managed-ledgers/tenant/ns/persistent/topic" + i));
-        }
-
-        // a new listing should be performed. Return 100 topics in the response, simulating that events have been lost
         List<String> updatedTopics = IntStream.range(1, 101).mapToObj(i -> "persistent://tenant/ns/topic" + i).toList();
+        // when the queue overflows
+        for (int i = 1; i < updatedTopics.size(); i++) {
+            TopicName topicName = TopicName.get(updatedTopics.get(i));
+            notificationConsumer.accept(new Notification(NotificationType.Created,
+                    "/managed-ledgers/" + topicName.getPersistenceNamingEncoding()));
+        }
+        // a new listing should be performed
         topicListFuture.complete(updatedTopics);
         // validate that the watcher's matching topics have been updated
         Awaitility.await().untilAsserted(() -> {
@@ -405,4 +406,43 @@ public class TopicListServiceTest {
         });
     }
 
+    @Test
+    public void testCommandWatchSuccessNoTopicsInResponseWhenHashMatches() {
+        List<String> topics = Collections.singletonList("persistent://tenant/ns/topic1");
+        String hash = TopicList.calculateHash(topics);
+        topicListService.handleWatchTopicList(
+                NamespaceName.get("tenant/ns"),
+                13,
+                7,
+                "persistent://tenant/ns/topic\\d",
+                topicsPatternImplementation, hash,
+                lookupSemaphore);
+        doReturn(CompletableFuture.completedFuture(null)).when(pulsarCommandSender)
+                .sendWatchTopicListSuccess(anyLong(), anyLong(), anyString(), any(), any());
+        topicListFuture.complete(topics);
+        assertThat(topicListService.getWatcherFuture(13)).succeedsWithin(Duration.ofSeconds(2));
+        Collection<String> expectedTopics = List.of();
+        verify(connection.getCommandSender(), timeout(2000L).times(1))
+                .sendWatchTopicListSuccess(eq(7L), eq(13L), eq(hash), eq(expectedTopics), any());
+    }
+
+    @Test
+    public void testCommandWatchSuccessTopicsInResponseWhenHashDoesntMatch() {
+        List<String> topics = Collections.singletonList("persistent://tenant/ns/topic1");
+        String hash = TopicList.calculateHash(topics);
+        topicListService.handleWatchTopicList(
+                NamespaceName.get("tenant/ns"),
+                13,
+                7,
+                "persistent://tenant/ns/topic\\d",
+                topicsPatternImplementation, "INVALID_HASH",
+                lookupSemaphore);
+        doReturn(CompletableFuture.completedFuture(null)).when(pulsarCommandSender)
+                .sendWatchTopicListSuccess(anyLong(), anyLong(), anyString(), any(), any());
+        topicListFuture.complete(topics);
+        assertThat(topicListService.getWatcherFuture(13)).succeedsWithin(Duration.ofSeconds(2));
+        Collection<String> expectedTopics = topics;
+        verify(connection.getCommandSender(), timeout(2000L).times(1))
+                .sendWatchTopicListSuccess(eq(7L), eq(13L), eq(hash), eq(expectedTopics), any());
+    }
 }

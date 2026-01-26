@@ -117,7 +117,7 @@ public class TopicListWatcherTest {
             watcher.accept(newTopic, NotificationType.Created);
         }
         verify(topicListService).sendTopicListUpdate(anyLong(), anyString(), any(), any(), any());
-        verify(topicListService).updateTopicListWatcher(any());
+        verify(topicListService).updateTopicListWatcher(any(), eq(null));
         verifyNoMoreInteractions(topicListService);
     }
 }
