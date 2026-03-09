@@ -162,7 +162,7 @@ public class ReplicatedSubscriptionsController implements AutoCloseable, Topic.P
                 request.getSourceCluster(),
                 localCluster,
                 position.getLedgerId(), position.getEntryId());
-        writeMarker(marker);
+        replicator.sendReplicatedSubscriptionsSnapshotResponse(marker);
     }
 
     private void receivedSnapshotResponse(Position position, ReplicatedSubscriptionsSnapshotResponse response) {

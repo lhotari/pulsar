@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker.service;
 
 import com.google.common.annotations.VisibleForTesting;
+import io.netty.buffer.ByteBuf;
 import io.opentelemetry.api.common.Attributes;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -560,5 +561,14 @@ public abstract class AbstractReplicator implements Replicator {
             builder.put(OpenTelemetryAttributes.PULSAR_REPLICATION_REMOTE_CLUSTER_NAME, getRemoteCluster());
             return builder.build();
         });
+    }
+
+    public void sendReplicatedSubscriptionsSnapshotResponse(ByteBuf marker) {
+        if (isTerminated()) {
+            log.info("[{}] Replicator is terminated, skip sending snapshot response", replicatorId);
+            marker.release();
+            return;
+        }
+        ProducerImpl<?> producer = this.producer;
     }
 }

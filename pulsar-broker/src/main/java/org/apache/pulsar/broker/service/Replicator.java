@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.service;
 
+import io.netty.buffer.ByteBuf;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import org.apache.pulsar.broker.service.persistent.DispatchRateLimiter;
@@ -57,4 +58,6 @@ public interface Replicator {
     boolean isTerminated();
 
     ReplicatorStatsImpl getStats();
+
+    void sendReplicatedSubscriptionsSnapshotResponse(ByteBuf marker);
 }
