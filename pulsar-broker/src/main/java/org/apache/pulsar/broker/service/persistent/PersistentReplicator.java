@@ -24,7 +24,6 @@ import static org.apache.pulsar.broker.service.AbstractReplicator.State.Terminat
 import static org.apache.pulsar.broker.service.AbstractReplicator.State.Terminating;
 import static org.apache.pulsar.broker.service.persistent.PersistentTopic.MESSAGE_RATE_BACKOFF_MS;
 import com.google.common.annotations.VisibleForTesting;
-import io.netty.buffer.ByteBuf;
 import io.netty.util.Recycler;
 import io.netty.util.Recycler.Handle;
 import java.time.Duration;
@@ -68,7 +67,6 @@ import org.apache.pulsar.client.impl.OpSendMsgStats;
 import org.apache.pulsar.client.impl.ProducerImpl;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
 import org.apache.pulsar.client.impl.SendCallback;
-import org.apache.pulsar.common.api.proto.MarkerType;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.stats.ReplicatorStatsImpl;
 import org.apache.pulsar.common.schema.SchemaInfo;
@@ -735,35 +733,6 @@ public abstract class PersistentReplicator extends AbstractReplicator
     public void updateRateLimiter() {
         initializeDispatchRateLimiterIfNeeded();
         dispatchRateLimiter.ifPresent(DispatchRateLimiter::updateDispatchRate);
-    }
-
-    protected void checkReplicatedSubscriptionMarker(Position position, MessageImpl<?> msg, ByteBuf payload) {
-        if (!msg.getMessageBuilder().hasMarkerType()) {
-            // No marker is defined
-            return;
-        }
-
-        int markerType = msg.getMessageBuilder().getMarkerType();
-
-        if (!(msg.getMessageBuilder().hasReplicatedFrom()
-                && remoteCluster.equals(msg.getMessageBuilder().getReplicatedFrom()))) {
-            // Only consider markers that are coming from the same cluster that this
-            // replicator instance is assigned to.
-            // All the replicators will see all the markers, but we need to only process
-            // it once.
-            return;
-        }
-
-        switch (markerType) {
-        case MarkerType.REPLICATED_SUBSCRIPTION_SNAPSHOT_REQUEST_VALUE:
-        case MarkerType.REPLICATED_SUBSCRIPTION_SNAPSHOT_RESPONSE_VALUE:
-        case MarkerType.REPLICATED_SUBSCRIPTION_UPDATE_VALUE:
-            topic.receivedReplicatedSubscriptionMarker(position, markerType, payload);
-            break;
-
-        default:
-            // Do nothing
-        }
     }
 
     @Override

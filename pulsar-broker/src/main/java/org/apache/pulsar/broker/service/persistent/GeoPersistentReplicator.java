@@ -192,8 +192,13 @@ public class GeoPersistentReplicator extends PersistentReplicator {
                     }
                 }
 
-                if (isEnableReplicatedSubscriptions) {
-                    checkReplicatedSubscriptionMarker(entry.getPosition(), msg, headersAndPayload);
+                if (Markers.isReplicationMarker(msg.getMessageBuilder())) {
+                    // skip replication markers since they are handled when the message is published
+                    cursor.asyncDelete(entry.getPosition(), this, entry.getPosition());
+                    inFlightTask.incCompletedEntries();
+                    entry.release();
+                    msg.recycle();
+                    continue;
                 }
 
                 if (msg.isReplicated()) {

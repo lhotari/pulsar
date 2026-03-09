@@ -109,6 +109,12 @@ public class Markers {
                 || markerType == REPLICATED_SUBSCRIPTION_UPDATE.getValue();
     }
 
+    public static boolean isReplicationMarker(MessageMetadata msgMetadata) {
+        return msgMetadata != null
+                && msgMetadata.hasMarkerType()
+                && isReplicationMarker(msgMetadata.getMarkerType());
+    }
+
     public static boolean isReplicatedSubscriptionSnapshotMarker(MessageMetadata msgMetadata) {
         return msgMetadata != null
                 && msgMetadata.hasMarkerType()

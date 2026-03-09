@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import org.apache.bookkeeper.mledger.Position;
+import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.intercept.BrokerInterceptor;
 import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
@@ -51,7 +52,9 @@ import org.apache.pulsar.broker.service.Topic.PublishContext;
 import org.apache.pulsar.broker.service.nonpersistent.NonPersistentTopic;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.client.api.transaction.TxnID;
+import org.apache.pulsar.client.impl.MessageImpl;
 import org.apache.pulsar.common.api.proto.CommandTopicMigrated.ResourceType;
+import org.apache.pulsar.common.api.proto.MarkerType;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.api.proto.ProducerAccessMode;
 import org.apache.pulsar.common.api.proto.ServerError;
@@ -288,11 +291,7 @@ public class Producer {
         MessagePublishContext messagePublishContext =
                 MessagePublishContext.get(this, sequenceId, headersAndPayload.readableBytes(),
                         batchSize, isChunked, System.nanoTime(), isMarker, position, isSupportsReplDedupByLidAndEid());
-        if (brokerInterceptor != null) {
-            brokerInterceptor
-                    .onMessagePublish(this, headersAndPayload, messagePublishContext);
-        }
-        topic.publishMessage(headersAndPayload, messagePublishContext);
+        publistMessageToTopic(headersAndPayload, messagePublishContext);
     }
 
     private void publishMessageToTopic(ByteBuf headersAndPayload, long lowestSequenceId, long highestSequenceId,
@@ -300,9 +299,36 @@ public class Producer {
         MessagePublishContext messagePublishContext = MessagePublishContext.get(this, lowestSequenceId,
                 highestSequenceId, headersAndPayload.readableBytes(), batchSize,
                 isChunked, System.nanoTime(), isMarker, position, isSupportsReplDedupByLidAndEid());
+        publistMessageToTopic(headersAndPayload, messagePublishContext);
+    }
+
+    private void publistMessageToTopic(ByteBuf headersAndPayload, MessagePublishContext messagePublishContext) {
         if (brokerInterceptor != null) {
             brokerInterceptor
                     .onMessagePublish(this, headersAndPayload, messagePublishContext);
+        }
+        if (messagePublishContext.isMarkerMessage()) {
+            MessageImpl<?> msg = null;
+            try {
+                msg = MessageImpl.deserializeSkipBrokerEntryMetaData(headersAndPayload);
+            } catch (Throwable t) {
+                log.error("[{}][{}] Failed to deserialize marker message", topic, producerName, t);
+            }
+            if (msg != null) {
+                MessageMetadata messageMetadata = msg.getMessageBuilder();
+                if (messageMetadata.hasMarkerType()) {
+                    switch (messageMetadata.getMarkerType()) {
+                        case MarkerType.REPLICATED_SUBSCRIPTION_SNAPSHOT_REQUEST_VALUE:
+                        case MarkerType.REPLICATED_SUBSCRIPTION_SNAPSHOT_RESPONSE_VALUE:
+                        case MarkerType.REPLICATED_SUBSCRIPTION_UPDATE_VALUE:
+                            messagePublishContext.setReplicationMarkerMessageBuffer(messageMetadata.getMarkerType(),
+                                    headersAndPayload.retainedDuplicate());
+                            break;
+                        default:
+                            // Do nothing
+                    }
+                }
+            }
         }
         topic.publishMessage(headersAndPayload, messagePublishContext);
     }
@@ -405,6 +431,8 @@ public class Producer {
         private long originalHighestSequenceId;
 
         private long entryTimestamp;
+        private ByteBuf replicationMarkerMessageBuffer;
+        private int replicationMarkerType;
 
         @Override
         public long getLedgerId() {
@@ -502,7 +530,10 @@ public class Producer {
         public void completed(Exception exception, long ledgerId, long entryId) {
             if (exception != null) {
                 final ServerError serverError = getServerError(exception);
-
+                if (replicationMarkerMessageBuffer != null) {
+                    replicationMarkerMessageBuffer.release();
+                    replicationMarkerMessageBuffer = null;
+                }
                 producer.cnx.execute(() -> {
                     // if the topic is transferring, we don't send error code to the clients.
                     if (producer.getTopic().isTransferring()) {
@@ -573,6 +604,22 @@ public class Producer {
             if (producer.brokerInterceptor != null) {
                 producer.brokerInterceptor.messageProduced(
                         (ServerCnx) producer.cnx, producer, startTimeNs, ledgerId, entryId, this);
+            }
+            if (replicationMarkerMessageBuffer != null
+                    && producer.getTopic() instanceof PersistentTopic pt) {
+                // Create final variables since these will be referenced in another thread
+                final PersistentTopic finalPersistentTopic = pt;
+                final Position finalPosition = PositionFactory.create(ledgerId, entryId);
+                final int finalReplicationMarkerType = replicationMarkerType;
+                final ByteBuf finalReplicationMarkerMessageBuffer = replicationMarkerMessageBuffer;
+                finalPersistentTopic.getOrderedExecutor().execute(() -> {
+                    try {
+                        finalPersistentTopic.receivedReplicatedSubscriptionMarker(finalPosition,
+                                finalReplicationMarkerType, finalReplicationMarkerMessageBuffer);
+                    } finally {
+                        finalReplicationMarkerMessageBuffer.release();
+                    }
+                });
             }
             recycle();
         }
@@ -702,7 +749,14 @@ public class Producer {
             if (propertyMap != null) {
                 propertyMap.clear();
             }
+            replicationMarkerMessageBuffer = null;
+            replicationMarkerType = -1;
             recyclerHandle.recycle(this);
+        }
+
+        public void setReplicationMarkerMessageBuffer(int markerType, ByteBuf replicationMarkerMessageBuffer) {
+            this.replicationMarkerType = markerType;
+            this.replicationMarkerMessageBuffer = replicationMarkerMessageBuffer;
         }
     }
 

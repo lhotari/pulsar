@@ -4469,7 +4469,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         }
     }
 
-    void receivedReplicatedSubscriptionMarker(Position position, int markerType, ByteBuf payload) {
+    public void receivedReplicatedSubscriptionMarker(Position position, int markerType, ByteBuf payload) {
         ReplicatedSubscriptionsController ctrl = replicatedSubscriptionsController.orElse(null);
         if (ctrl == null) {
             // Force to start the replication controller
