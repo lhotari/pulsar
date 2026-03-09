@@ -1983,7 +1983,9 @@ public class BrokerService implements Closeable {
     }
 
     public CompletableFuture<ManagedLedgerConfig> getManagedLedgerConfig(@NonNull TopicName topicName) {
-        requireNonNull(topicName);
+        if (topicName == null) {
+            return FutureUtil.failedFuture(new NullPointerException("topicName"));
+        }
         NamespaceName namespace = topicName.getNamespaceObject();
         ServiceConfiguration serviceConfig = pulsar.getConfiguration();
 
@@ -3783,7 +3785,9 @@ public class BrokerService implements Closeable {
     }
 
     public @NonNull CompletableFuture<Boolean> isAllowAutoSubscriptionCreationAsync(@NonNull TopicName tpName) {
-        requireNonNull(tpName);
+        if (tpName == null) {
+            return FutureUtil.failedFuture(new NullPointerException("tpName"));
+        }
         // Policies priority: topic level -> namespace level -> broker level
         if (ExtensibleLoadManagerImpl.isInternalTopic(tpName.toString())) {
             return CompletableFuture.completedFuture(true);
