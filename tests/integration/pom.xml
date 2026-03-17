@@ -378,6 +378,7 @@
               <systemPropertyVariables>
                 <confluent.version>${confluent.version}</confluent.version>
                 <jacoco.version>${jacoco-maven-plugin.version}</jacoco.version>
+                <debezium.version>${debezium.version}</debezium.version>
                 <integrationtest.coverage.enabled>${integrationtest.coverage.enabled}</integrationtest.coverage.enabled>
                 <integrationtest.coverage.dir>${integrationtest.coverage.dir}</integrationtest.coverage.dir>
                 <inttest.asyncprofiler.opts>${inttest.asyncprofiler.opts}</inttest.asyncprofiler.opts>
