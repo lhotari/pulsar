@@ -19,6 +19,8 @@
 package org.apache.pulsar.tests.integration.containers;
 
 import org.testcontainers.containers.wait.strategy.HostPortWaitStrategy;
+import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.containers.wait.strategy.WaitAllStrategy;
 
 public class DebeziumMongoDbContainer extends ChaosContainer<DebeziumMongoDbContainer> {
 
@@ -47,6 +49,9 @@ public class DebeziumMongoDbContainer extends ChaosContainer<DebeziumMongoDbCont
                     createContainerCmd.withHostName(NAME);
                     createContainerCmd.withName(getContainerName());
                 })
-                .waitingFor(new HostPortWaitStrategy());
+                .waitingFor(new WaitAllStrategy()
+                        .withStrategy(new HostPortWaitStrategy())
+                        .withStrategy(Wait.forLogMessage(".*MongoDB init process complete.*", 1))
+                );
     }
 }
