@@ -55,7 +55,7 @@ public class KafkaSinkTester extends SinkTester<KafkaContainer> {
         String suffix = randomName(8) + "_" + System.currentTimeMillis();
         this.kafkaTopicName = "kafka_sink_topic_" + suffix;
 
-        sinkConfig.put("bootstrapServers", networkAlias + ":9092");
+        sinkConfig.put("bootstrapServers", networkAlias + ":9093");
         sinkConfig.put("acks", "all");
         sinkConfig.put("batchSize", 1L);
         sinkConfig.put("maxRequestSize", 1048576L);
@@ -77,7 +77,7 @@ public class KafkaSinkTester extends SinkTester<KafkaContainer> {
                 "/opt/kafka/bin/kafka-topics.sh",
                 "--create",
                 "--bootstrap-server",
-                "localhost:9092",
+                "localhost:9093",
                 "--partitions",
                 "1",
                 "--replication-factor",
