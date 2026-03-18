@@ -34,7 +34,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.testcontainers.containers.Container.ExecResult;
-import org.testcontainers.containers.KafkaContainer;
+import org.testcontainers.kafka.KafkaContainer;
 
 /**
  * A tester for testing kafka source.
@@ -73,7 +73,7 @@ public class KafkaSourceTester extends SourceTester<KafkaContainer> {
     @Override
     public void prepareSource() throws Exception {
         ExecResult execResult = kafkaContainer.execInContainer(
-            "/usr/bin/kafka-topics",
+            "/opt/kafka/bin/kafka-topics.sh",
             "--create",
             "--bootstrap-server",
             "localhost:9092",

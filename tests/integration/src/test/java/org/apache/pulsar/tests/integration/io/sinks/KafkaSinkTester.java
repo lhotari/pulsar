@@ -34,7 +34,7 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
 import org.testcontainers.containers.Container.ExecResult;
-import org.testcontainers.containers.KafkaContainer;
+import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
@@ -42,7 +42,7 @@ import org.testcontainers.utility.DockerImageName;
  */
 @Slf4j
 public class KafkaSinkTester extends SinkTester<KafkaContainer> {
-    public static final String CONFLUENT_PLATFORM_VERSION = System.getProperty("confluent.version", "7.8.2");
+    public static final String KAFKA_VERSION = System.getProperty("kafka.version", "4.1.1");
 
     private final String kafkaTopicName;
     private KafkaConsumer<String, String> kafkaConsumer;
@@ -62,11 +62,9 @@ public class KafkaSinkTester extends SinkTester<KafkaContainer> {
         sinkConfig.put("topic", kafkaTopicName);
     }
 
-    @SuppressWarnings("deprecation")
     @Override
     protected KafkaContainer createSinkService(PulsarCluster cluster) {
-        return new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:" + CONFLUENT_PLATFORM_VERSION))
-                .withEmbeddedZookeeper()
+        return new KafkaContainer(DockerImageName.parse("apache/kafka:" + KAFKA_VERSION))
                 .withNetworkAliases(containerName)
                 .withCreateContainerCmdModifier(createContainerCmd -> createContainerCmd
                         .withName(containerName)
@@ -76,7 +74,7 @@ public class KafkaSinkTester extends SinkTester<KafkaContainer> {
     @Override
     public void prepareSink() throws Exception {
         ExecResult execResult = serviceContainer.execInContainer(
-                "/usr/bin/kafka-topics",
+                "/opt/kafka/bin/kafka-topics.sh",
                 "--create",
                 "--bootstrap-server",
                 "localhost:9092",
