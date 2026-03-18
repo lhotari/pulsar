@@ -75,8 +75,7 @@ public class DebeziumMongoDbSourceTester extends SourceTester<DebeziumMongoDbCon
             try {
                 ContainerExecResult result = this.debeziumMongoDbContainer.execCmd(
                         "/bin/bash", "-c",
-                        "mongosh -u debezium -p dbz --authenticationDatabase admin --quiet"
-                                + " --eval 'db.hello().isWritablePrimary' localhost:27017");
+                        "mongosh --quiet --eval 'db.hello().isWritablePrimary' localhost:27017");
                 if (result.getStdout().trim().contains("true")) {
                     log.info("MongoDB replica set primary ready after {} seconds", i);
                     return;
