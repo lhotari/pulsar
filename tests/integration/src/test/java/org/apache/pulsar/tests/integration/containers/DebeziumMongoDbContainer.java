@@ -41,6 +41,8 @@ public class DebeziumMongoDbContainer extends ChaosContainer<DebeziumMongoDbCont
         super.configure();
         this.withNetworkAliases(NAME)
                 .withExposedPorts(PORTS)
+                .withEnv("MONGODB_USER", "debezium")
+                .withEnv("MONGODB_PASSWORD", "dbz")
                 .withCreateContainerCmdModifier(createContainerCmd -> {
                     createContainerCmd.withHostName(NAME);
                     createContainerCmd.withName(getContainerName());
