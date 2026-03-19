@@ -20,13 +20,14 @@ package org.apache.pulsar.client.impl.auth.oauth2;
 
 import java.io.IOException;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.NotImplementedException;
@@ -36,9 +37,8 @@ import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
-import org.apache.pulsar.client.impl.Backoff;
-import org.apache.pulsar.client.impl.BackoffBuilder;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenResult;
+import org.apache.pulsar.common.util.Backoff;
 
 /**
  * Pulsar client authentication provider based on OAuth 2.0.
@@ -75,8 +75,27 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
     public static final int EARLY_TOKEN_REFRESH_PERCENT_DEFAULT = 1; // feature disabled by default
     public static final String AUTH_METHOD_NAME = "token";
     private static final long serialVersionUID = 1L;
-    private final transient ScheduledThreadPoolExecutor scheduler;
-    private final boolean createdScheduler;
+
+    // Shared executor used when the caller does not supply one. Uses daemon threads and lets
+    // idle core threads time out so that the thread is released when no instances are actively
+    // refreshing tokens.
+    private static final ScheduledExecutorService INTERNAL_SCHEDULER = createInternalScheduler();
+
+    private static ScheduledExecutorService createInternalScheduler() {
+        ScheduledExecutorService executor = Executors.newScheduledThreadPool(1,
+                r -> {
+                    Thread t = new Thread(r, "pulsar-oauth2-token-refresher");
+                    t.setDaemon(true);
+                    return t;
+                });
+        ThreadPoolExecutor poolExecutor = (ThreadPoolExecutor) executor;
+        poolExecutor.setKeepAliveTime(10, TimeUnit.SECONDS);
+        poolExecutor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
+
+    private final transient ScheduledExecutorService scheduler;
+    private final boolean ownsScheduler;
     private final double earlyTokenRefreshPercent;
 
     final Clock clock;
@@ -97,14 +116,14 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
 
     AuthenticationOAuth2(Flow flow,
                          double earlyTokenRefreshPercent,
-                         ScheduledThreadPoolExecutor scheduler) {
+                         ScheduledExecutorService scheduler) {
         this(flow, Clock.systemDefaultZone(), earlyTokenRefreshPercent, scheduler);
     }
 
     AuthenticationOAuth2(Flow flow,
                          Clock clock,
                          double earlyTokenRefreshPercent,
-                         ScheduledThreadPoolExecutor scheduler) {
+                         ScheduledExecutorService scheduler) {
         this(clock, earlyTokenRefreshPercent, scheduler);
         this.flow = flow;
     }
@@ -112,23 +131,22 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
     /**
      * @param clock - clock to use when determining token expiration.
      * @param earlyTokenRefreshPercent - see javadoc for {@link AuthenticationOAuth2}. Must be greater than 0.
-     * @param scheduler - The scheduler to use for background refreshes of the token. If null and the
-     *                  {@link #earlyTokenRefreshPercent} is less than 1, the client will create an internal scheduler.
-     *                  Otherwise, it will use the passed in scheduler. If the caller supplies a scheduler, the
-     *                  {@link AuthenticationOAuth2} will not close it.
+     * @param scheduler - The scheduler to use for background token refreshes. If {@code null} and
+     *                  {@link #earlyTokenRefreshPercent} is less than 1, the shared internal daemon-thread
+     *                  scheduler is used. If the caller supplies a scheduler, this class will not shut it down.
      */
-    private AuthenticationOAuth2(Clock clock, double earlyTokenRefreshPercent, ScheduledThreadPoolExecutor scheduler) {
+    private AuthenticationOAuth2(Clock clock, double earlyTokenRefreshPercent, ScheduledExecutorService scheduler) {
         if (earlyTokenRefreshPercent <= 0) {
             throw new IllegalArgumentException("EarlyTokenRefreshPercent must be greater than 0.");
         }
         this.earlyTokenRefreshPercent = earlyTokenRefreshPercent;
         this.clock = clock;
         if (scheduler == null && earlyTokenRefreshPercent < 1) {
-            this.scheduler = new ScheduledThreadPoolExecutor(1, new DaemonThreadFactory());
-            this.createdScheduler = true;
+            this.scheduler = INTERNAL_SCHEDULER;
+            this.ownsScheduler = false;
         } else {
             this.scheduler = scheduler;
-            this.createdScheduler = false;
+            this.ownsScheduler = false;
         }
     }
 
@@ -226,7 +244,7 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
         try {
             this.authenticate();
         } catch (PulsarClientException | RuntimeException e) {
-            long delayMillis = backoff.next();
+            long delayMillis = backoff.next().toMillis();
             log.error("Error refreshing token. Will retry in {} millis.", delayMillis, e);
             scheduleRefresh(delayMillis);
         }
@@ -243,12 +261,12 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
     }
 
     private Backoff buildBackoff(int expiresInSeconds) {
-        return new BackoffBuilder()
-                .setInitialTime(1, TimeUnit.SECONDS)
-                .setMax(10, TimeUnit.MINUTES)
+        return Backoff.builder()
+                .initialDelay(Duration.ofSeconds(1))
+                .maxBackoff(Duration.ofMinutes(10))
                 // Attempt a final token refresh attempt 2 seconds before the token actually expires, if necessary.
-                .setMandatoryStop(expiresInSeconds - 2, TimeUnit.SECONDS)
-                .create();
+                .mandatoryStop(Duration.ofSeconds(Math.max(0, expiresInSeconds - 2)))
+                .build();
     }
 
     @Override
@@ -261,41 +279,18 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
         } catch (Exception e) {
             throw new IOException(e);
         } finally {
-            if (createdScheduler) {
-                this.scheduler.shutdownNow();
-            } else if (scheduler != null) {
-                // Cancel the all subsequent refresh attempts by canceling the next token refresh attempt. By running
+            if (scheduler != null) {
+                // Cancel all subsequent refresh attempts by canceling the next token refresh attempt. By running
                 // this command on the single scheduler thread, we remove the chance for a race condition that could
                 // allow a currently executing refresh attempt to schedule another refresh attempt.
+                // We never shut down the scheduler here because either it is the shared INTERNAL_SCHEDULER,
+                // or it was provided by the caller who manages its own lifecycle.
                 scheduler.execute(() -> {
                     if (nextRefreshAttempt != null) {
                         nextRefreshAttempt.cancel(false);
                     }
                 });
             }
-        }
-    }
-
-    private static class DaemonThreadFactory implements ThreadFactory {
-        private static final AtomicInteger poolNumber = new AtomicInteger(1);
-        private final ThreadGroup group;
-        private final AtomicInteger threadNumber = new AtomicInteger(1);
-        private final String namePrefix;
-
-        DaemonThreadFactory() {
-            SecurityManager s = System.getSecurityManager();
-            group = (s != null) ? s.getThreadGroup() : Thread.currentThread().getThreadGroup();
-            namePrefix = "oauth2-token-refresher-" + poolNumber.getAndIncrement() + "-thread-";
-        }
-
-        @Override
-        public Thread newThread(Runnable r) {
-            Thread t = new Thread(group, r, namePrefix + threadNumber.getAndIncrement(), 0);
-            t.setDaemon(true);
-            if (t.getPriority() != Thread.NORM_PRIORITY) {
-                t.setPriority(Thread.NORM_PRIORITY);
-            }
-            return t;
         }
     }
 

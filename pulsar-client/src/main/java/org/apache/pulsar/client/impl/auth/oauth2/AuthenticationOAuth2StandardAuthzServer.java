@@ -39,7 +39,7 @@ public class AuthenticationOAuth2StandardAuthzServer extends AuthenticationOAuth
     }
 
     AuthenticationOAuth2StandardAuthzServer(Flow flow, Clock clock) {
-        super(flow, clock);
+        super(flow, clock, EARLY_TOKEN_REFRESH_PERCENT_DEFAULT, null);
     }
 
     @Override

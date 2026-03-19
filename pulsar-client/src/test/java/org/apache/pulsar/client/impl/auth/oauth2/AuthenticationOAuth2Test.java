@@ -36,7 +36,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ScheduledExecutorService;
 import lombok.Cleanup;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.PulsarClientException;
@@ -180,7 +180,7 @@ public class AuthenticationOAuth2Test {
     // This test ensures scheduler is used when passed in
     @Test
     public void testEarlyTokenRefreshCallsAuthenticateWithParameterizedScheduler() throws Exception {
-        ScheduledThreadPoolExecutor scheduler = mock(ScheduledThreadPoolExecutor.class);
+        ScheduledExecutorService scheduler = mock(ScheduledExecutorService.class);
         @Cleanup AuthenticationOAuth2 auth = new AuthenticationOAuth2(flow, this.clock, 0.1, scheduler);
         TokenResult tr = TokenResult.builder().accessToken(TEST_ACCESS_TOKEN).expiresIn(1).build();
         doReturn(tr).when(this.flow).authenticate();

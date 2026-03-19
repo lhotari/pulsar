@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,7 +18,7 @@
  */
 package org.apache.pulsar.client.impl.auth.oauth2;
 
-import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ScheduledExecutorService;
 import org.apache.pulsar.client.api.Authentication;
 
 /**
@@ -36,7 +36,7 @@ public final class AuthenticationOAuth2Builder {
     }
 
     private double earlyTokenRefreshPercent = AuthenticationOAuth2.EARLY_TOKEN_REFRESH_PERCENT_DEFAULT;
-    private ScheduledThreadPoolExecutor scheduler;
+    private ScheduledExecutorService scheduler;
     private ClientCredentialsConfiguration clientCredentialsConfiguration;
 
     /**
@@ -73,7 +73,7 @@ public final class AuthenticationOAuth2Builder {
      *                  {@link AuthenticationOAuth2} will not close it.
      * @return builder
      */
-    public AuthenticationOAuth2Builder setEarlyTokenRefreshExecutor(ScheduledThreadPoolExecutor scheduler) {
+    public AuthenticationOAuth2Builder setEarlyTokenRefreshExecutor(ScheduledExecutorService scheduler) {
         this.scheduler = scheduler;
         return this;
     }
