@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.client.impl.auth.oauth2;
 
+import io.netty.util.concurrent.DefaultThreadFactory;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
@@ -83,11 +84,7 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
 
     private static ScheduledExecutorService createInternalScheduler() {
         ScheduledExecutorService executor = Executors.newScheduledThreadPool(1,
-                r -> {
-                    Thread t = new Thread(r, "pulsar-oauth2-token-refresher");
-                    t.setDaemon(true);
-                    return t;
-                });
+                new DefaultThreadFactory("oauth2-token-refresher", true));
         ThreadPoolExecutor poolExecutor = (ThreadPoolExecutor) executor;
         poolExecutor.setKeepAliveTime(10, TimeUnit.SECONDS);
         poolExecutor.allowCoreThreadTimeOut(true);
@@ -95,7 +92,6 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
     }
 
     private final transient ScheduledExecutorService scheduler;
-    private final boolean ownsScheduler;
     private final double earlyTokenRefreshPercent;
 
     final Clock clock;
@@ -143,10 +139,8 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
         this.clock = clock;
         if (scheduler == null && earlyTokenRefreshPercent < 1) {
             this.scheduler = INTERNAL_SCHEDULER;
-            this.ownsScheduler = false;
         } else {
             this.scheduler = scheduler;
-            this.ownsScheduler = false;
         }
     }
 
