@@ -111,6 +111,10 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
         this(Clock.systemDefaultZone(), EARLY_TOKEN_REFRESH_PERCENT_DEFAULT, null);
     }
 
+    AuthenticationOAuth2(Flow flow, Clock clock) {
+        this(flow, clock, EARLY_TOKEN_REFRESH_PERCENT_DEFAULT, null);
+    }
+
     AuthenticationOAuth2(Flow flow,
                          double earlyTokenRefreshPercent,
                          ScheduledExecutorService scheduler) {
@@ -152,6 +156,16 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
 
     @Override
     public void configure(String encodedAuthParamString) {
+        Map<String, String> params = parseAuthParameters(encodedAuthParamString);
+        String type = params.getOrDefault(CONFIG_PARAM_TYPE, TYPE_CLIENT_CREDENTIALS);
+        if (TYPE_CLIENT_CREDENTIALS.equals(type)) {
+            this.flow = ClientCredentialsFlow.fromParameters(params);
+        } else {
+            throw new IllegalArgumentException("Unsupported authentication type: " + type);
+        }
+    }
+
+    protected Map<String, String> parseAuthParameters(String encodedAuthParamString) {
         if (StringUtils.isBlank(encodedAuthParamString)) {
             throw new IllegalArgumentException("No authentication parameters were provided");
         }
@@ -170,13 +184,7 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
                 this.scheduler = INTERNAL_SCHEDULER;
             }
         }
-
-        String type = params.getOrDefault(CONFIG_PARAM_TYPE, TYPE_CLIENT_CREDENTIALS);
-        if (TYPE_CLIENT_CREDENTIALS.equals(type)) {
-            this.flow = ClientCredentialsFlow.fromParameters(params);
-        } else {
-            throw new IllegalArgumentException("Unsupported authentication type: " + type);
-        }
+        return params;
     }
 
     /**
