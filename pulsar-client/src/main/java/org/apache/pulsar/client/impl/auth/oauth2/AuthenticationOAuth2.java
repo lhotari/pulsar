@@ -72,7 +72,7 @@ import org.apache.pulsar.common.util.Backoff;
 public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticationParameterSupport {
 
     public static final String CONFIG_PARAM_TYPE = "type";
-    public static final String CONFIG_PARAM_EARLY_REFRESH_PERCENT = "earlyRefreshPercent";
+    public static final String CONFIG_PARAM_EARLY_TOKEN_REFRESH_PERCENT = "earlyTokenRefreshPercent";
     public static final String TYPE_CLIENT_CREDENTIALS = "client_credentials";
     public static final int EARLY_TOKEN_REFRESH_PERCENT_DEFAULT = 1; // feature disabled by default
     public static final String AUTH_METHOD_NAME = "token";
@@ -176,7 +176,7 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
             throw new IllegalArgumentException("Malformed authentication parameters", e);
         }
 
-        String earlyRefreshPercentStr = params.get(CONFIG_PARAM_EARLY_REFRESH_PERCENT);
+        String earlyRefreshPercentStr = params.get(CONFIG_PARAM_EARLY_TOKEN_REFRESH_PERCENT);
         if (earlyRefreshPercentStr != null) {
             double percent = parseEarlyRefreshPercent(earlyRefreshPercentStr);
             this.earlyTokenRefreshPercent = percent;
@@ -208,12 +208,12 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
             }
             if (percent <= 0) {
                 throw new IllegalArgumentException(
-                        CONFIG_PARAM_EARLY_REFRESH_PERCENT + " must be greater than 0, got: " + value);
+                        CONFIG_PARAM_EARLY_TOKEN_REFRESH_PERCENT + " must be greater than 0, got: " + value);
             }
             return percent;
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException(
-                    "Malformed configuration parameter: " + CONFIG_PARAM_EARLY_REFRESH_PERCENT, e);
+                    "Malformed configuration parameter: " + CONFIG_PARAM_EARLY_TOKEN_REFRESH_PERCENT, e);
         }
     }
 

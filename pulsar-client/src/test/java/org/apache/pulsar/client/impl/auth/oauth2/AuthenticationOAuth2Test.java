@@ -110,29 +110,75 @@ public class AuthenticationOAuth2Test {
         assertNotNull(this.auth.flow);
     }
 
+    // ----- configure() via default constructor -----
+
     @Test
-    public void testConfigureWithEarlyRefreshPercentAsDecimal() throws Exception {
-        Map<String, String> params = new HashMap<>();
-        params.put("type", "client_credentials");
-        params.put("privateKey", "data:base64,e30=");
-        params.put("issuerUrl", "http://localhost");
-        params.put("earlyRefreshPercent", "0.8");
-        ObjectMapper mapper = new ObjectMapper();
-        this.auth.configure(mapper.writeValueAsString(params));
-        assertEquals(this.auth.earlyTokenRefreshPercent, 0.8);
+    public void testConfigureViaDefaultConstructorSetsFlow() throws Exception {
+        AuthenticationOAuth2 auth = new AuthenticationOAuth2();
+        auth.configure(minimalCredentialsJson());
+        assertNotNull(auth.flow);
     }
 
     @Test
-    public void testConfigureWithEarlyRefreshPercentAsInteger() throws Exception {
-        Map<String, String> params = new HashMap<>();
-        params.put("type", "client_credentials");
-        params.put("privateKey", "data:base64,e30=");
-        params.put("issuerUrl", "http://localhost");
-        params.put("earlyRefreshPercent", "80");
-        ObjectMapper mapper = new ObjectMapper();
-        this.auth.configure(mapper.writeValueAsString(params));
-        assertEquals(this.auth.earlyTokenRefreshPercent, 0.8);
+    public void testConfigureViaDefaultConstructorDefaultEarlyRefreshIsDisabled() throws Exception {
+        AuthenticationOAuth2 auth = new AuthenticationOAuth2();
+        auth.configure(minimalCredentialsJson());
+        assertEquals(auth.earlyTokenRefreshPercent, (double) AuthenticationOAuth2.EARLY_TOKEN_REFRESH_PERCENT_DEFAULT);
     }
+
+    @Test
+    public void testConfigureViaDefaultConstructorEarlyRefreshDecimal() throws Exception {
+        AuthenticationOAuth2 auth = new AuthenticationOAuth2();
+        auth.configure(credentialsJsonWithEarlyRefresh("0.8"));
+        assertEquals(auth.earlyTokenRefreshPercent, 0.8);
+    }
+
+    @Test
+    public void testConfigureViaDefaultConstructorEarlyRefreshInteger() throws Exception {
+        AuthenticationOAuth2 auth = new AuthenticationOAuth2();
+        auth.configure(credentialsJsonWithEarlyRefresh("80"));
+        assertEquals(auth.earlyTokenRefreshPercent, 0.8);
+    }
+
+    @Test
+    public void testConfigureViaDefaultConstructorEarlyRefreshIntegerDisabled() throws Exception {
+        // Integer 100 → 1.0, meaning disabled
+        AuthenticationOAuth2 auth = new AuthenticationOAuth2();
+        auth.configure(credentialsJsonWithEarlyRefresh("100"));
+        assertEquals(auth.earlyTokenRefreshPercent, 1.0);
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class)
+    public void testConfigureViaDefaultConstructorEarlyRefreshZero() throws Exception {
+        AuthenticationOAuth2 auth = new AuthenticationOAuth2();
+        auth.configure(credentialsJsonWithEarlyRefresh("0"));
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class)
+    public void testConfigureViaDefaultConstructorEarlyRefreshInvalid() throws Exception {
+        AuthenticationOAuth2 auth = new AuthenticationOAuth2();
+        auth.configure(credentialsJsonWithEarlyRefresh("not-a-number"));
+    }
+
+    @Test
+    public void testConfigureViaDefaultConstructorEarlyRefreshTriggersBackgroundRefresh() throws Exception {
+        // Verify that when early refresh is enabled via configure(), the background scheduler
+        // is activated and actually calls authenticate() before token expiry.
+        AuthenticationOAuth2 auth = new AuthenticationOAuth2();
+        auth.configure(credentialsJsonWithEarlyRefresh("10")); // 10% → refresh at 100ms of a 1s token
+        // Replace the flow with a mock after configure() has set it up
+        auth.flow = this.flow;
+        TokenResult tr = TokenResult.builder().accessToken(TEST_ACCESS_TOKEN).expiresIn(1).build();
+        doReturn(tr).when(this.flow).authenticate();
+
+        auth.getAuthData();
+        // Give the background scheduler time to trigger at least one additional refresh
+        Thread.sleep(500);
+        auth.close();
+        verify(this.flow, atLeast(2)).authenticate();
+    }
+
+    // ----- parseEarlyRefreshPercent -----
 
     @Test
     public void testParseEarlyRefreshPercentDecimal() {
@@ -157,6 +203,25 @@ public class AuthenticationOAuth2Test {
     @Test(expectedExceptions = IllegalArgumentException.class)
     public void testParseEarlyRefreshPercentInvalid() {
         AuthenticationOAuth2.parseEarlyRefreshPercent("not-a-number");
+    }
+
+    // ----- helpers -----
+
+    private static String minimalCredentialsJson() throws Exception {
+        Map<String, String> params = new HashMap<>();
+        params.put("type", "client_credentials");
+        params.put("privateKey", "data:base64,e30=");
+        params.put("issuerUrl", "http://localhost");
+        return new ObjectMapper().writeValueAsString(params);
+    }
+
+    private static String credentialsJsonWithEarlyRefresh(String earlyRefreshValue) throws Exception {
+        Map<String, String> params = new HashMap<>();
+        params.put("type", "client_credentials");
+        params.put("privateKey", "data:base64,e30=");
+        params.put("issuerUrl", "http://localhost");
+        params.put(AuthenticationOAuth2.CONFIG_PARAM_EARLY_TOKEN_REFRESH_PERCENT, earlyRefreshValue);
+        return new ObjectMapper().writeValueAsString(params);
     }
 
     @Test
