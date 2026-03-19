@@ -72,6 +72,7 @@ import org.apache.pulsar.common.util.Backoff;
 public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticationParameterSupport {
 
     public static final String CONFIG_PARAM_TYPE = "type";
+    public static final String CONFIG_PARAM_EARLY_REFRESH_PERCENT = "earlyRefreshPercent";
     public static final String TYPE_CLIENT_CREDENTIALS = "client_credentials";
     public static final int EARLY_TOKEN_REFRESH_PERCENT_DEFAULT = 1; // feature disabled by default
     public static final String AUTH_METHOD_NAME = "token";
@@ -91,8 +92,8 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
         return executor;
     }
 
-    private final transient ScheduledExecutorService scheduler;
-    private final double earlyTokenRefreshPercent;
+    private transient ScheduledExecutorService scheduler;
+    double earlyTokenRefreshPercent;
 
     final Clock clock;
     volatile Flow flow;
@@ -161,11 +162,50 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
             throw new IllegalArgumentException("Malformed authentication parameters", e);
         }
 
+        String earlyRefreshPercentStr = params.get(CONFIG_PARAM_EARLY_REFRESH_PERCENT);
+        if (earlyRefreshPercentStr != null) {
+            double percent = parseEarlyRefreshPercent(earlyRefreshPercentStr);
+            this.earlyTokenRefreshPercent = percent;
+            if (percent < 1 && this.scheduler == null) {
+                this.scheduler = INTERNAL_SCHEDULER;
+            }
+        }
+
         String type = params.getOrDefault(CONFIG_PARAM_TYPE, TYPE_CLIENT_CREDENTIALS);
         if (TYPE_CLIENT_CREDENTIALS.equals(type)) {
             this.flow = ClientCredentialsFlow.fromParameters(params);
         } else {
             throw new IllegalArgumentException("Unsupported authentication type: " + type);
+        }
+    }
+
+    /**
+     * Parses the {@code earlyRefreshPercent} configuration value.
+     *
+     * <p>If the string contains a decimal point it is interpreted as a fractional value in [0, 1]
+     * and used directly (e.g. {@code "0.8"} → 0.8). Otherwise the string is treated as an integer
+     * percentage and divided by 100 (e.g. {@code "80"} → 0.8, {@code "100"} → 1.0).
+     *
+     * @param value the raw string from the configuration map
+     * @return the resolved fractional percent, must be &gt; 0
+     * @throws IllegalArgumentException if the value cannot be parsed or is ≤ 0
+     */
+    static double parseEarlyRefreshPercent(String value) {
+        try {
+            double percent;
+            if (value.contains(".")) {
+                percent = Double.parseDouble(value);
+            } else {
+                percent = Integer.parseInt(value) / 100.0;
+            }
+            if (percent <= 0) {
+                throw new IllegalArgumentException(
+                        CONFIG_PARAM_EARLY_REFRESH_PERCENT + " must be greater than 0, got: " + value);
+            }
+            return percent;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "Malformed configuration parameter: " + CONFIG_PARAM_EARLY_REFRESH_PERCENT, e);
         }
     }
 

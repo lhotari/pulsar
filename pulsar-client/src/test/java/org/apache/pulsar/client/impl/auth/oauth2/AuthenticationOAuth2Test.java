@@ -111,6 +111,55 @@ public class AuthenticationOAuth2Test {
     }
 
     @Test
+    public void testConfigureWithEarlyRefreshPercentAsDecimal() throws Exception {
+        Map<String, String> params = new HashMap<>();
+        params.put("type", "client_credentials");
+        params.put("privateKey", "data:base64,e30=");
+        params.put("issuerUrl", "http://localhost");
+        params.put("earlyRefreshPercent", "0.8");
+        ObjectMapper mapper = new ObjectMapper();
+        this.auth.configure(mapper.writeValueAsString(params));
+        assertEquals(this.auth.earlyTokenRefreshPercent, 0.8);
+    }
+
+    @Test
+    public void testConfigureWithEarlyRefreshPercentAsInteger() throws Exception {
+        Map<String, String> params = new HashMap<>();
+        params.put("type", "client_credentials");
+        params.put("privateKey", "data:base64,e30=");
+        params.put("issuerUrl", "http://localhost");
+        params.put("earlyRefreshPercent", "80");
+        ObjectMapper mapper = new ObjectMapper();
+        this.auth.configure(mapper.writeValueAsString(params));
+        assertEquals(this.auth.earlyTokenRefreshPercent, 0.8);
+    }
+
+    @Test
+    public void testParseEarlyRefreshPercentDecimal() {
+        assertEquals(AuthenticationOAuth2.parseEarlyRefreshPercent("0.8"), 0.8);
+        assertEquals(AuthenticationOAuth2.parseEarlyRefreshPercent("0.5"), 0.5);
+        assertEquals(AuthenticationOAuth2.parseEarlyRefreshPercent("1.0"), 1.0);
+    }
+
+    @Test
+    public void testParseEarlyRefreshPercentInteger() {
+        assertEquals(AuthenticationOAuth2.parseEarlyRefreshPercent("80"), 0.8);
+        assertEquals(AuthenticationOAuth2.parseEarlyRefreshPercent("50"), 0.5);
+        assertEquals(AuthenticationOAuth2.parseEarlyRefreshPercent("100"), 1.0);
+        assertEquals(AuthenticationOAuth2.parseEarlyRefreshPercent("1"), 0.01);
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class)
+    public void testParseEarlyRefreshPercentZeroInteger() {
+        AuthenticationOAuth2.parseEarlyRefreshPercent("0");
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class)
+    public void testParseEarlyRefreshPercentInvalid() {
+        AuthenticationOAuth2.parseEarlyRefreshPercent("not-a-number");
+    }
+
+    @Test
     public void testStart() throws Exception {
         this.auth.start();
         verify(this.flow).initialize();
