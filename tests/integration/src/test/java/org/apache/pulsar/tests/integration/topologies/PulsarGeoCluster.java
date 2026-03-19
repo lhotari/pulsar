@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -36,7 +36,7 @@ public class PulsarGeoCluster {
     private final PulsarCluster[] clusters;
 
     /**
-     * Pulsar Cluster Spec
+     * Pulsar Cluster Spec.
      *
      * @param specs each pulsar cluster spec.
      * @return the built a pulsar cluster with geo replication

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -50,4 +50,20 @@ public class SchemaSerializationException extends RuntimeException {
     public SchemaSerializationException(Throwable cause) {
         super(cause);
     }
+
+    /**
+     * Constructs an {@code SchemaSerializationException} with the specified detail message and cause.
+     *
+     * @param message
+     *        The detail message (which is saved for later retrieval
+     *        by the {@link #getMessage()} method)
+     * @param cause
+     *        The cause (which is saved for later retrieval by the
+     *        {@link #getCause()} method).  (A null value is permitted,
+     *        and indicates that the cause is nonexistent or unknown.)
+     */
+    public SchemaSerializationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
 }

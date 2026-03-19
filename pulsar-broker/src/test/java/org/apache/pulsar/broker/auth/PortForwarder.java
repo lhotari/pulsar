@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -67,10 +67,11 @@ public class PortForwarder implements AutoCloseable {
                     .handler(new LoggingHandler(PortForwarder.class, LogLevel.DEBUG))
                     .childHandler(new Initializer())
                     .childOption(ChannelOption.AUTO_READ, false)
+                    .option(ChannelOption.SO_REUSEADDR, true)
                     .bind(listenAddress).sync().channel();
 
             LOG.info("Started port forwarding service on {}, target: {}", listenAddress, targetAddress);
-        } catch(Exception e) {
+        } catch (Exception e) {
             throw new RuntimeException(String.format("failed to bind to %s: %s", listenAddress, e.getMessage()), e);
         }
     }

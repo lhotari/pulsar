@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,49 +18,52 @@
  */
 package org.apache.pulsar.tests.integration.io.sources;
 
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
+import com.google.common.collect.ImmutableMap;
 import com.google.gson.Gson;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import lombok.Cleanup;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import net.jodah.failsafe.Failsafe;
-import net.jodah.failsafe.RetryPolicy;
 import org.apache.avro.io.DatumWriter;
 import org.apache.avro.io.EncoderFactory;
 import org.apache.avro.io.JsonEncoder;
 import org.apache.avro.reflect.ReflectData;
 import org.apache.avro.reflect.ReflectDatumWriter;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.api.Consumer;
+import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.schema.Field;
 import org.apache.pulsar.client.api.schema.GenericRecord;
+import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.policies.data.SourceStatus;
 import org.apache.pulsar.common.policies.data.SourceStatusUtil;
 import org.apache.pulsar.tests.integration.docker.ContainerExecException;
 import org.apache.pulsar.tests.integration.docker.ContainerExecResult;
 import org.apache.pulsar.tests.integration.functions.PulsarFunctionsTestBase;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
+import org.awaitility.Awaitility;
 import org.testcontainers.containers.Container.ExecResult;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.images.builder.Transferable;
-import org.testcontainers.shaded.com.google.common.collect.ImmutableMap;
+import org.testcontainers.kafka.ConfluentKafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 import org.testng.Assert;
 import org.testng.annotations.Test;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.*;
-import java.util.concurrent.TimeUnit;
-import org.apache.pulsar.client.admin.PulsarAdmin;
-import org.apache.pulsar.client.api.Message;
-import org.apache.pulsar.common.naming.TopicName;
-import org.apache.pulsar.common.policies.data.SourceStatus;
-
-import static org.testng.Assert.*;
 
 /**
  * A tester for testing kafka source with Avro Messages.
@@ -72,16 +75,9 @@ import static org.testng.Assert.*;
  */
 @Slf4j
 public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
+    public static final String CONFLUENT_PLATFORM_VERSION = System.getProperty("confluent.version", "8.1.1");
 
     private static final String SOURCE_TYPE = "kafka";
-
-    final Duration ONE_MINUTE = Duration.ofMinutes(1);
-    final Duration TEN_SECONDS = Duration.ofSeconds(10);
-
-    final RetryPolicy statusRetryPolicy = new RetryPolicy()
-            .withMaxDuration(ONE_MINUTE)
-            .withDelay(TEN_SECONDS)
-            .onRetry(e -> log.error("Retry ... "));
 
     private final String kafkaTopicName = "kafkasourcetopic";
 
@@ -102,7 +98,7 @@ public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
         try {
             testSource();
         } finally {
-            stopKafkaContainers(pulsarCluster);
+            stopKafkaContainers();
         }
     }
 
@@ -130,7 +126,7 @@ public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
         );
     }
 
-    private class EnhancedKafkaContainer extends KafkaContainer {
+    private class EnhancedKafkaContainer extends ConfluentKafkaContainer {
 
         public EnhancedKafkaContainer(DockerImageName dockerImageName) {
             super(dockerImageName);
@@ -142,25 +138,25 @@ public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
             // because we want the Kafka Broker to advertise itself
             // with the docker network address
             // otherwise the Kafka Schema Registry won't work
-            return "PLAINTEXT://" + kafkaContainerName + ":9093";
+            return kafkaContainerName + ":9093";
         }
 
     }
 
     protected EnhancedKafkaContainer createKafkaContainer(PulsarCluster cluster) {
-        return (EnhancedKafkaContainer) new EnhancedKafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:6.0.1"))
-                .withEmbeddedZookeeper()
+        return (EnhancedKafkaContainer) new EnhancedKafkaContainer(
+                DockerImageName.parse("confluentinc/cp-kafka:" + CONFLUENT_PLATFORM_VERSION))
                 .withCreateContainerCmdModifier(createContainerCmd -> createContainerCmd
                         .withName(kafkaContainerName)
                 );
     }
 
-    public void stopKafkaContainers(PulsarCluster cluster) {
+    public void stopKafkaContainers() {
         if (null != schemaRegistryContainer) {
-            cluster.stopService(schemaRegistryContainerName, schemaRegistryContainer);
+            PulsarCluster.stopService(schemaRegistryContainerName, schemaRegistryContainer);
         }
         if (null != kafkaContainer) {
-            cluster.stopService(kafkaContainerName, kafkaContainer);
+            PulsarCluster.stopService(kafkaContainerName, kafkaContainer);
         }
     }
 
@@ -169,8 +165,8 @@ public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
         ExecResult execResult = kafkaContainer.execInContainer(
             "/usr/bin/kafka-topics",
             "--create",
-            "--zookeeper",
-                getZooKeeperAddressInDockerNetwork(),
+            "--bootstrap-server",
+            getBootstrapServersOnDockerNetwork(),
             "--partitions",
             "1",
             "--replication-factor",
@@ -184,7 +180,7 @@ public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
     }
 
     private String getZooKeeperAddressInDockerNetwork() {
-        return kafkaContainerName +":2181";
+        return kafkaContainerName + ":2181";
     }
 
     private void testSource()  throws Exception {
@@ -221,14 +217,34 @@ public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
         getSourceInfoSuccess(tenant, namespace, sourceName);
 
         // get source status
-        Failsafe.with(statusRetryPolicy).run(() -> getSourceStatus(tenant, namespace, sourceName));
-
+        Awaitility.with()
+                .timeout(Duration.ofMinutes(1))
+                .pollInterval(Duration.ofSeconds(10))
+                .until(() -> {
+                    try {
+                        getSourceStatus(tenant, namespace, sourceName);
+                        return true;
+                    } catch (Throwable ex) {
+                        log.error("Error while getting source status, will retry", ex);
+                        return false;
+                    }
+                });
         // produce messages
         List<MyBean> messages = produceSourceMessages(numMessages);
 
         // wait for source to process messages
-        Failsafe.with(statusRetryPolicy).run(() ->
-                waitForProcessingSourceMessages(tenant, namespace, sourceName, numMessages));
+        Awaitility.with()
+                .timeout(Duration.ofMinutes(1))
+                .pollInterval(Duration.ofSeconds(10))
+                .until(() -> {
+                    try {
+                        waitForProcessingSourceMessages(tenant, namespace, sourceName, numMessages);
+                        return true;
+                    } catch (Throwable ex) {
+                        log.error("Error while processing source messages, will retry", ex);
+                        return false;
+                    }
+                });
 
         // validate the source result
        validateSourceResultAvro(consumer, messages);
@@ -258,7 +274,8 @@ public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
         }
 
         Assert.assertEquals(recordsNumber, beans.size());
-        log.info("Stop {} server container. topic: {} has {} records.", kafkaContainerName, consumer.getTopic(), recordsNumber);
+        log.info("Stop {} server container. topic: {} has {} records.", kafkaContainerName, consumer.getTopic(),
+                recordsNumber);
     }
 
     protected void getSourceInfoSuccess(String tenant,
@@ -360,27 +377,32 @@ public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
         // we are writing the serialized values to the stdin of kafka-avro-console-producer
         // the only way to do it with TestContainers is actually to create a bash script
         // and execute it
-        String bashFileTemplate = "echo '"+payload+"' " +
-                "| /usr/bin/kafka-avro-console-producer " +
-                "--broker-list " + getBootstrapServersOnDockerNetwork() + " " +
-                "--property 'value.schema=" + schemaDef + "' " +
-                "--property schema.registry.url="+ getRegistryAddressInDockerNetwork() +" " +
-                "--topic "+kafkaTopicName;
+        String bashFileTemplate = "echo '" + payload + "' "
+                + "| /usr/bin/kafka-avro-console-producer "
+                + "--bootstrap-server " + getBootstrapServersOnDockerNetwork() + " "
+                + "--property 'value.schema=" + schemaDef + "' "
+                + "--property schema.registry.url=" + getRegistryAddressInDockerNetwork() + " "
+                + "--topic " + kafkaTopicName;
         String file = "/home/appuser/produceRecords.sh";
 
         schemaRegistryContainer.copyFileToContainer(Transferable
                         .of(bashFileTemplate.getBytes(StandardCharsets.UTF_8), 0777), file);
 
         ExecResult cat = schemaRegistryContainer.execInContainer("cat", file);
-        log.info("cat results: "+cat.getStdout());
-        log.info("cat stderr: "+cat.getStderr());
+        log.info("cat results: " + cat.getStdout());
+        log.info("cat stderr: " + cat.getStderr());
 
         ExecResult execResult = schemaRegistryContainer.execInContainer("/bin/bash", file);
 
-        log.info("script results: "+execResult.getStdout());
-        log.info("script stderr: "+execResult.getStderr());
-        assertTrue(execResult.getStdout().contains("Closing the Kafka producer"), execResult.getStdout()+" "+execResult.getStderr());
-        assertTrue(execResult.getStderr().isEmpty(), execResult.getStderr());
+        log.info("script results: " + execResult.getStdout());
+        log.info("script stderr: " + execResult.getStderr());
+        assertTrue(execResult.getStdout().contains("Closing the Kafka producer"),
+                execResult.getStdout() + " " + execResult.getStderr());
+        // filter out the SLF4J warnings
+        String stderrFiltered = execResult.getStderr()
+                .replaceAll("(?m)^SLF4J: .*?[\\r\\n]+", "")
+                .trim();
+        assertTrue(stderrFiltered.isEmpty(), stderrFiltered);
 
         log.info("Successfully produced {} messages to kafka topic {}", numMessages, kafkaTopicName);
         return written;
@@ -469,7 +491,6 @@ public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
     }
 
     public class SchemaRegistryContainer extends GenericContainer<SchemaRegistryContainer> {
-        public static final String CONFLUENT_PLATFORM_VERSION = "6.0.1";
         private static final int SCHEMA_REGISTRY_INTERNAL_PORT = 8081;
 
         public SchemaRegistryContainer(String boostrapServers) throws Exception {
@@ -487,7 +508,7 @@ public class AvroKafkaSourceTest extends PulsarFunctionsTestBase {
     }
 
     private String getRegistryAddressInDockerNetwork() {
-        return "http://"+schemaRegistryContainerName + ":8081";
+        return "http://" + schemaRegistryContainerName + ":8081";
     }
 
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,18 +18,17 @@
  */
 package org.apache.pulsar.tests.integration.io.sources.debezium;
 
+import java.util.Map;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.tests.integration.containers.DebeziumMongoDbContainer;
 import org.apache.pulsar.tests.integration.containers.PulsarContainer;
+import org.apache.pulsar.tests.integration.docker.ContainerExecResult;
 import org.apache.pulsar.tests.integration.io.sources.SourceTester;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
 
-import java.io.Closeable;
-import java.util.Map;
-
 @Slf4j
-public class DebeziumMongoDbSourceTester extends SourceTester<DebeziumMongoDbContainer> implements Closeable {
+public class DebeziumMongoDbSourceTester extends SourceTester<DebeziumMongoDbContainer> {
 
     private static final String NAME = "debezium-mongodb";
 
@@ -44,14 +43,16 @@ public class DebeziumMongoDbSourceTester extends SourceTester<DebeziumMongoDbCon
         this.pulsarCluster = cluster;
         pulsarServiceUrl = "pulsar://pulsar-proxy:" + PulsarContainer.BROKER_PORT;
 
-        sourceConfig.put("mongodb.hosts", "rs0/" + DebeziumMongoDbContainer.NAME + ":27017");
-        sourceConfig.put("mongodb.name", "dbserver1");
+        sourceConfig.put("mongodb.connection.string",
+                "mongodb://debezium:dbz@" + DebeziumMongoDbContainer.NAME + ":27017/admin?replicaSet=rs0");
         sourceConfig.put("mongodb.user", "debezium");
         sourceConfig.put("mongodb.password", "dbz");
-        sourceConfig.put("mongodb.task.id","1");
-        sourceConfig.put("database.whitelist", "inventory");
-        sourceConfig.put("database.history.pulsar.service.url", pulsarServiceUrl);
+        sourceConfig.put("mongodb.task.id", "1");
+        sourceConfig.put("topic.prefix", "dbserver1");
+        sourceConfig.put("database.include.list", "inventory");
+        sourceConfig.put("schema.history.internal.pulsar.service.url", pulsarServiceUrl);
         sourceConfig.put("topic.namespace", "debezium/mongodb");
+        sourceConfig.put("capture.mode", "change_streams_update_full");
     }
 
     @Override
@@ -63,45 +64,83 @@ public class DebeziumMongoDbSourceTester extends SourceTester<DebeziumMongoDbCon
 
     @Override
     public void prepareSource() throws Exception {
-        this.debeziumMongoDbContainer.execCmd( "bash", "-c", "/usr/local/bin/init-inventory.sh");
-        log.info("debezium mongodb server already contains preconfigured data.");
+        waitForMongoDbReady();
+        this.debeziumMongoDbContainer.execCmd("bash", "-c", "/usr/local/bin/init-inventory.sh");
+        waitForReplicaSetPrimary();
+    }
+
+    private void waitForMongoDbReady() throws Exception {
+        log.info("Waiting for MongoDB to be ready...");
+        for (int i = 0; i < 50; i++) {
+            try {
+                ContainerExecResult result = this.debeziumMongoDbContainer.execCmd(
+                        "/bin/bash", "-c",
+                        "mongosh --quiet --eval \"db.adminCommand('ping').ok\" localhost:27017 | grep 1");
+                if (result.getExitCode() == 0) {
+                    log.info("MongoDB ready after {} seconds", i);
+                    return;
+                }
+            } catch (Exception e) {
+                log.debug("MongoDB readiness check attempt {} failed: {}", i + 1, e.getMessage());
+            }
+            Thread.sleep(1000);
+        }
+        throw new RuntimeException("MongoDB not ready after 50 seconds");
+    }
+
+    private void waitForReplicaSetPrimary() throws Exception {
+        log.info("Waiting for MongoDB replica set primary to be ready...");
+        for (int i = 0; i < 60; i++) {
+            try {
+                ContainerExecResult result = this.debeziumMongoDbContainer.execCmd("/bin/bash", "-c",
+                        "mongosh --quiet --eval 'db.hello().isWritablePrimary' localhost:27017");
+                if (result.getStdout().trim().contains("true")) {
+                    log.info("MongoDB replica set primary ready after {} seconds", i);
+                    return;
+                }
+            } catch (Exception e) {
+                log.debug("MongoDB primary check attempt {} failed: {}", i + 1, e.getMessage());
+            }
+            Thread.sleep(1000);
+        }
+        throw new RuntimeException("MongoDB replica set primary not ready after 60 seconds");
     }
 
     @Override
     public void prepareInsertEvent() throws Exception {
         this.debeziumMongoDbContainer.execCmd("/bin/bash", "-c",
-                "mongo -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory " +
-                        "--eval 'db.products.find()'");
+                "mongosh -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory "
+                        + "--eval 'db.products.find()'");
         this.debeziumMongoDbContainer.execCmd("/bin/bash", "-c",
-                "mongo -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory " +
-                        "--eval 'db.products.insert({ " +
-                        "_id : NumberLong(\"110\")," +
-                        "name : \"test-debezium\"," +
-                        "description: \"24 inch spare tire\"," +
-                        "weight : 22.2," +
-                        "quantity : NumberInt(\"5\")})'");
+                "mongosh -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory "
+                        + "--eval 'db.products.insert({ "
+                        + "_id : NumberLong(\"110\"),"
+                        + "name : \"test-debezium\","
+                        + "description: \"24 inch spare tire\","
+                        + "weight : 22.2,"
+                        + "quantity : NumberInt(\"5\")})'");
     }
 
     @Override
     public void prepareDeleteEvent() throws Exception {
         this.debeziumMongoDbContainer.execCmd("/bin/bash", "-c",
-                "mongo -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory " +
-                        "--eval 'db.products.find()'");
+                "mongosh -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory "
+                        + "--eval 'db.products.find()'");
         this.debeziumMongoDbContainer.execCmd("/bin/bash", "-c",
-                "mongo -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory " +
-                        "--eval 'db.products.deleteOne({name : \"test-debezium-update\"})'");
+                "mongosh -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory "
+                        + "--eval 'db.products.deleteOne({name : \"test-debezium-update\"})'");
     }
 
     @Override
     public void prepareUpdateEvent() throws Exception {
         this.debeziumMongoDbContainer.execCmd("/bin/bash", "-c",
-                "mongo -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory " +
-                        "--eval 'db.products.find()'");
+                "mongosh -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory "
+                        + "--eval 'db.products.find()'");
         this.debeziumMongoDbContainer.execCmd("/bin/bash", "-c",
-                "mongo -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory " +
-                        "--eval 'db.products.update({" +
-                        "_id : 110}," +
-                        "{$set:{name:\"test-debezium-update\", description: \"this is update description\"}})'");
+                "mongosh -u debezium -p dbz --authenticationDatabase admin localhost:27017/inventory "
+                        + "--eval 'db.products.update({"
+                        + "_id : 110},"
+                        + "{$set:{name:\"test-debezium-update\", description: \"this is update description\"}})'");
     }
 
     @Override
@@ -117,8 +156,9 @@ public class DebeziumMongoDbSourceTester extends SourceTester<DebeziumMongoDbCon
 
     @Override
     public void close() {
-        if (pulsarCluster != null) {
-            pulsarCluster.stopService(DebeziumMongoDbContainer.NAME, debeziumMongoDbContainer);
+        if (debeziumMongoDbContainer != null) {
+            PulsarCluster.stopService(DebeziumMongoDbContainer.NAME, debeziumMongoDbContainer);
+            debeziumMongoDbContainer = null;
         }
     }
 }

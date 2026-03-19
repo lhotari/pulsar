@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -60,10 +60,10 @@ public class ProducerInterceptors implements Closeable {
     public Message beforeSend(Producer producer, Message message) {
         Message interceptorMessage = message;
         for (ProducerInterceptor interceptor : interceptors) {
-            if (!interceptor.eligible(message)) {
-                continue;
-            }
             try {
+                if (!interceptor.eligible(message)) {
+                    continue;
+                }
                 interceptorMessage = interceptor.beforeSend(producer, interceptorMessage);
             } catch (Throwable e) {
                 if (producer != null) {
@@ -93,10 +93,10 @@ public class ProducerInterceptors implements Closeable {
      */
     public void onSendAcknowledgement(Producer producer, Message message, MessageId msgId, Throwable exception) {
         for (ProducerInterceptor interceptor : interceptors) {
-            if (!interceptor.eligible(message)) {
-                continue;
-            }
             try {
+                if (!interceptor.eligible(message)) {
+                    continue;
+                }
                 interceptor.onSendAcknowledgement(producer, message, msgId, exception);
             } catch (Throwable e) {
                 log.warn("Error executing interceptor onSendAcknowledgement callback ", e);

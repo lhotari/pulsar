@@ -82,7 +82,13 @@ public final class AuthenticationOAuth2Builder {
         if (clientCredentialsConfiguration == null) {
             throw new IllegalArgumentException("ClientCredentialsConfiguration must be set.");
         }
-        Flow flow = new ClientCredentialsFlow(clientCredentialsConfiguration);
+        ClientCredentialsConfiguration config = clientCredentialsConfiguration;
+        Flow flow = ClientCredentialsFlow.builder()
+                .issuerUrl(config.getIssuerUrl())
+                .privateKey(config.getKeyFileUrl() == null ? null : config.getKeyFileUrl().toExternalForm())
+                .audience(config.getAudience())
+                .scope(config.getScope())
+                .build();
         return new AuthenticationOAuth2(flow, earlyTokenRefreshPercent, scheduler);
     }
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -26,6 +26,7 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Map;
 import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
@@ -53,7 +54,7 @@ class ClientCredentialsFlow extends FlowBase {
     private static final long serialVersionUID = 1L;
 
     private final String audience;
-    private final String keyFileUrl;
+    private final String privateKey;
     private final String scope;
 
     private transient ClientCredentialsExchanger exchanger;
@@ -64,68 +65,19 @@ class ClientCredentialsFlow extends FlowBase {
      * See {@link ClientCredentialsConfiguration} for field documentation.
      */
     @Builder
-    public ClientCredentialsFlow(URL issuerUrl, String audience, String keyFileUrl, String scope) {
-        super(issuerUrl);
+    public ClientCredentialsFlow(URL issuerUrl, String audience, String privateKey, String scope,
+                                 Duration connectTimeout, Duration readTimeout, String trustCertsFilePath,
+                                 String wellKnownMetadataPath) {
+        super(issuerUrl, connectTimeout, readTimeout, trustCertsFilePath, wellKnownMetadataPath);
         this.audience = audience;
-        this.keyFileUrl = keyFileUrl;
+        this.privateKey = privateKey;
         this.scope = scope;
     }
 
-    /**
-     * Constructor.
-     * @param config - see {@link ClientCredentialsConfiguration}.
-     */
-    public ClientCredentialsFlow(ClientCredentialsConfiguration config) {
-        this(config.getIssuerUrl(), config.getAudience(), config.getKeyFileUrl().toExternalForm(), config.getScope());
-    }
-
-    @Override
-    public void initialize() throws PulsarClientException {
-        super.initialize();
-        assert this.metadata != null;
-
-        URL tokenUrl = this.metadata.getTokenEndpoint();
-        this.exchanger = new TokenClient(tokenUrl);
-        initialized = true;
-    }
-
-    public TokenResult authenticate() throws PulsarClientException {
-        // read the private key from storage
-        KeyFile keyFile;
-        try {
-            keyFile = loadPrivateKey(this.keyFileUrl);
-        } catch (IOException e) {
-            throw new PulsarClientException.AuthenticationException("Unable to read private key: " + e.getMessage());
-        }
-
-        // request an access token using client credentials
-        ClientCredentialsExchangeRequest req = ClientCredentialsExchangeRequest.builder()
-                .clientId(keyFile.getClientId())
-                .clientSecret(keyFile.getClientSecret())
-                .audience(this.audience)
-                .scope(this.scope)
-                .build();
-        TokenResult tr;
-        if (!initialized) {
-            initialize();
-        }
-        try {
-            tr = this.exchanger.exchangeClientCredentials(req);
-        } catch (TokenExchangeException | IOException e) {
-            throw new PulsarClientException.AuthenticationException("Unable to obtain an access token: "
-                                                                    + e.getMessage());
-        }
-
-        return tr;
-    }
-
-    @Override
-    public void close() throws Exception {
-        exchanger.close();
-    }
 
     /**
      * Constructs a {@link ClientCredentialsFlow} from configuration parameters.
+     *
      * @param params
      * @return
      */
@@ -135,16 +87,26 @@ class ClientCredentialsFlow extends FlowBase {
         // These are optional parameters, so we only perform a get
         String scope = params.get(CONFIG_PARAM_SCOPE);
         String audience = params.get(CONFIG_PARAM_AUDIENCE);
+        Duration connectTimeout = parseParameterDuration(params, CONFIG_PARAM_CONNECT_TIMEOUT);
+        Duration readTimeout = parseParameterDuration(params, CONFIG_PARAM_READ_TIMEOUT);
+        String trustCertsFilePath = params.get(CONFIG_PARAM_TRUST_CERTS_FILE_PATH);
+        String wellKnownMetadataPath = params.get(CONFIG_PARAM_WELL_KNOWN_METADATA_PATH);
+
         return ClientCredentialsFlow.builder()
                 .issuerUrl(issuerUrl)
                 .audience(audience)
-                .keyFileUrl(privateKeyUrl)
+                .privateKey(privateKeyUrl)
                 .scope(scope)
+                .connectTimeout(connectTimeout)
+                .readTimeout(readTimeout)
+                .trustCertsFilePath(trustCertsFilePath)
+                .wellKnownMetadataPath(wellKnownMetadataPath)
                 .build();
     }
 
     /**
      * Loads the private key from the given URL.
+     *
      * @param privateKeyURL
      * @return
      * @throws IOException
@@ -170,6 +132,54 @@ class ClientCredentialsFlow extends FlowBase {
             }
         } catch (URISyntaxException | InstantiationException | IllegalAccessException e) {
             throw new IOException("Invalid privateKey format", e);
+        }
+    }
+
+    @Override
+    public void initialize() throws PulsarClientException {
+        super.initialize();
+        assert this.metadata != null;
+
+        URL tokenUrl = this.metadata.getTokenEndpoint();
+        this.exchanger = new TokenClient(tokenUrl, httpClient);
+        initialized = true;
+    }
+
+    public TokenResult authenticate() throws PulsarClientException {
+        // read the private key from storage
+        KeyFile keyFile;
+        try {
+            keyFile = loadPrivateKey(this.privateKey);
+        } catch (IOException e) {
+            throw new PulsarClientException.AuthenticationException("Unable to read private key: " + e.getMessage());
+        }
+
+        // request an access token using client credentials
+        ClientCredentialsExchangeRequest req = ClientCredentialsExchangeRequest.builder()
+                .clientId(keyFile.getClientId())
+                .clientSecret(keyFile.getClientSecret())
+                .audience(this.audience)
+                .scope(this.scope)
+                .build();
+        TokenResult tr;
+        if (!initialized) {
+            initialize();
+        }
+        try {
+            tr = this.exchanger.exchangeClientCredentials(req);
+        } catch (TokenExchangeException | IOException e) {
+            throw new PulsarClientException.AuthenticationException("Unable to obtain an access token: "
+                    + e.getMessage());
+        }
+
+        return tr;
+    }
+
+    @Override
+    public void close() throws Exception {
+        super.close();
+        if (exchanger != null) {
+            exchanger.close();
         }
     }
 }

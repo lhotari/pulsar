@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -39,8 +39,8 @@ public class OwnedBundle {
     private final NamespaceBundle bundle;
 
     /**
-     * {@link #nsLock} is used to protect read/write access to {@link #active} flag and the corresponding code section
-     * based on {@link #active} flag.
+     * {@link #nsLock} is used to protect read/write access to {@link #isActive} flag and the corresponding code section
+     * based on {@link #isActive} flag.
      */
     @ToString.Exclude
     @EqualsAndHashCode.Exclude
@@ -98,8 +98,13 @@ public class OwnedBundle {
      * @throws Exception
      */
     public CompletableFuture<Void> handleUnloadRequest(PulsarService pulsar, long timeout, TimeUnit timeoutUnit) {
+        return handleUnloadRequest(pulsar, timeout, timeoutUnit, true);
+    }
+
+    public CompletableFuture<Void> handleUnloadRequest(PulsarService pulsar, long timeout, TimeUnit timeoutUnit,
+                                                       boolean closeWithoutWaitingClientDisconnect) {
         long unloadBundleStartTime = System.nanoTime();
-        // Need a per namespace RenetrantReadWriteLock
+        // Need a per namespace ReentrantReadWriteLock
         // Here to do a writeLock to set the flag and proceed to check and close connections
         try {
             while (!this.nsLock.writeLock().tryLock(1, TimeUnit.SECONDS)) {
@@ -130,7 +135,8 @@ public class OwnedBundle {
         // close topics forcefully
         return pulsar.getNamespaceService().getOwnershipCache()
                 .updateBundleState(this.bundle, false)
-                .thenCompose(v -> pulsar.getBrokerService().unloadServiceUnit(bundle, true, timeout, timeoutUnit))
+                .thenCompose(v -> pulsar.getBrokerService().unloadServiceUnit(
+                        bundle, true, closeWithoutWaitingClientDisconnect, timeout, timeoutUnit))
                 .handle((numUnloadedTopics, ex) -> {
                     if (ex != null) {
                         // ignore topic-close failure to unload bundle

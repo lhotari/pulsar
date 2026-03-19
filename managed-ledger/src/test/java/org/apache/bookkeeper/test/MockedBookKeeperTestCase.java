@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,8 +22,13 @@ import java.lang.reflect.Method;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import lombok.SneakyThrows;
 import org.apache.bookkeeper.client.PulsarMockBookKeeper;
 import org.apache.bookkeeper.common.util.OrderedScheduler;
+import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
+import org.apache.bookkeeper.mledger.ManagedLedgerException;
+import org.apache.bookkeeper.mledger.ManagedLedgerFactoryConfig;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
 import org.apache.pulsar.metadata.api.MetadataStoreConfig;
 import org.apache.pulsar.metadata.api.MetadataStoreException;
@@ -67,7 +72,8 @@ public abstract class MockedBookKeeperTestCase {
     public final void setUp(Method method) throws Exception {
         LOG.info(">>>>>> starting {}", method);
         metadataStore = new FaultInjectionMetadataStore(
-                MetadataStoreExtended.create("memory://local", MetadataStoreConfig.builder().build()));
+                MetadataStoreExtended.create("memory:local",
+                        MetadataStoreConfig.builder().metadataStoreName("metastore-" + method.getName()).build()));
 
         try {
             // start bookkeeper service
@@ -77,9 +83,24 @@ public abstract class MockedBookKeeperTestCase {
             throw e;
         }
 
-        factory = new ManagedLedgerFactoryImpl(metadataStore, bkc);
+        ManagedLedgerFactoryConfig managedLedgerFactoryConfig = new ManagedLedgerFactoryConfig();
+        initManagedLedgerFactoryConfig(managedLedgerFactoryConfig);
+        ManagedLedgerConfig managedLedgerConfig = new ManagedLedgerConfig();
+        initManagedLedgerConfig(managedLedgerConfig);
+        factory =
+                new ManagedLedgerFactoryImpl(metadataStore, bkc, managedLedgerFactoryConfig, managedLedgerConfig);
 
         setUpTestCase();
+    }
+
+    protected ManagedLedgerConfig initManagedLedgerConfig(ManagedLedgerConfig config) {
+        config.setCacheEvictionByExpectedReadCount(false);
+        return config;
+    }
+
+    protected void initManagedLedgerFactoryConfig(ManagedLedgerFactoryConfig config) {
+        // increase default cache eviction interval so that caching could be tested with less flakyness
+        config.setCacheEvictionIntervalMs(200);
     }
 
     protected void setUpTestCase() throws Exception {
@@ -87,6 +108,7 @@ public abstract class MockedBookKeeperTestCase {
     }
 
     @AfterMethod(alwaysRun = true)
+    @SneakyThrows
     public final void tearDown(Method method) {
         try {
             cleanUpTestCase();
@@ -95,9 +117,19 @@ public abstract class MockedBookKeeperTestCase {
         }
         try {
             LOG.info("@@@@@@@@@ stopping " + method);
-            factory.shutdown();
-            factory = null;
+            if (factory != null) {
+                try {
+                    factory.shutdownAsync().get(10, TimeUnit.SECONDS);
+                } catch (ManagedLedgerException.ManagedLedgerFactoryClosedException e) {
+                    // ignore
+                }
+                factory = null;
+            }
             stopBookKeeper();
+            if (metadataStore != null) {
+                metadataStore.close();
+                metadataStore = null;
+            }
             LOG.info("--------- stopped {}", method);
         } catch (Exception e) {
             LOG.error("tearDown Error", e);
@@ -125,13 +157,13 @@ public abstract class MockedBookKeeperTestCase {
     }
 
     /**
-     * Start cluster
+     * Start cluster.
      *
      * @throws Exception
      */
     protected void startBookKeeper() throws Exception {
         for (int i = 0; i < numBookies; i++) {
-            metadataStore.put( "/ledgers/available/192.168.1.1:" + (5000 + i), new byte[0], Optional.empty()).join();
+            metadataStore.put("/ledgers/available/192.168.1.1:" + (5000 + i), new byte[0], Optional.empty()).join();
         }
 
         metadataStore.put("/ledgers/LAYOUT", "1\nflat:1".getBytes(), Optional.empty()).join();
@@ -140,7 +172,10 @@ public abstract class MockedBookKeeperTestCase {
     }
 
     protected void stopBookKeeper() {
-        bkc.shutdown();
+        if (bkc != null) {
+            bkc.shutdown();
+            bkc = null;
+        }
     }
 
     protected void stopMetadataStore() {

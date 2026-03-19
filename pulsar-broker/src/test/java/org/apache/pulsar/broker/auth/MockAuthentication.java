@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,22 +18,21 @@
  */
 package org.apache.pulsar.broker.auth;
 
-import com.google.common.collect.ImmutableMap;
-
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.PulsarClientException;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class MockAuthentication implements Authentication {
     private static final Logger log = LoggerFactory.getLogger(MockAuthentication.class);
-    private final String user;
+    private String user;
+
+    public MockAuthentication() {
+    }
 
     public MockAuthentication(String user) {
         this.user = user;
@@ -51,12 +50,16 @@ public class MockAuthentication implements Authentication {
     public AuthenticationDataProvider getAuthData() throws PulsarClientException {
         return new AuthenticationDataProvider() {
             @Override
-            public boolean hasDataForHttp() { return true; }
+            public boolean hasDataForHttp() {
+                return true;
+            }
             @Override
-            public String getHttpAuthType() { return "mock"; }
+            public String getHttpAuthType() {
+                return "mock";
+            }
             @Override
             public Set<Map.Entry<String, String>> getHttpHeaders() {
-                return ImmutableMap.of("mockuser", user).entrySet();
+                return Map.of("mockuser", user).entrySet();
             }
             @Override
             public boolean hasDataFromCommand() {
@@ -71,6 +74,7 @@ public class MockAuthentication implements Authentication {
 
     @Override
     public void configure(Map<String, String> authParams) {
+        this.user = authParams.get("user");
     }
 
     @Override

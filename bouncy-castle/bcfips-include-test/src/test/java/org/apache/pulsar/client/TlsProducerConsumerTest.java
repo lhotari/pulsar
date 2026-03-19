@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -34,7 +34,7 @@ public class TlsProducerConsumerTest extends TlsProducerConsumerBase {
 
     /**
      * verifies that messages whose size is larger than 2^14 bytes (max size of single TLS chunk) can be
-     * produced/consumed
+     * produced/consumed.
      *
      * @throws Exception
      */
@@ -42,19 +42,19 @@ public class TlsProducerConsumerTest extends TlsProducerConsumerBase {
     public void testTlsLargeSizeMessage() throws Exception {
         log.info("-- Starting {} test --", methodName);
 
-        final int MESSAGE_SIZE = 16 * 1024 + 1;
-        log.info("-- message size {} --", MESSAGE_SIZE);
+        final int messageSize = 16 * 1024 + 1;
+        log.info("-- message size {} --", messageSize);
 
         internalSetUpForClient(true, pulsar.getBrokerServiceUrlTls());
         internalSetUpForNamespace();
 
-        Consumer<byte[]> consumer = pulsarClient.newConsumer().topic("persistent://my-property/use/my-ns/my-topic1")
+        Consumer<byte[]> consumer = pulsarClient.newConsumer().topic("persistent://my-property/my-ns/my-topic1")
                 .subscriptionName("my-subscriber-name").subscribe();
 
-        Producer<byte[]> producer = pulsarClient.newProducer().topic("persistent://my-property/use/my-ns/my-topic1")
+        Producer<byte[]> producer = pulsarClient.newProducer().topic("persistent://my-property/my-ns/my-topic1")
                 .create();
         for (int i = 0; i < 10; i++) {
-            byte[] message = new byte[MESSAGE_SIZE];
+            byte[] message = new byte[messageSize];
             Arrays.fill(message, (byte) i);
             producer.send(message);
         }
@@ -62,7 +62,7 @@ public class TlsProducerConsumerTest extends TlsProducerConsumerBase {
         Message<byte[]> msg = null;
         for (int i = 0; i < 10; i++) {
             msg = consumer.receive(5, TimeUnit.SECONDS);
-            byte[] expected = new byte[MESSAGE_SIZE];
+            byte[] expected = new byte[messageSize];
             Arrays.fill(expected, (byte) i);
             Assert.assertEquals(expected, msg.getData());
         }
@@ -76,14 +76,14 @@ public class TlsProducerConsumerTest extends TlsProducerConsumerBase {
     public void testTlsClientAuthOverBinaryProtocol() throws Exception {
         log.info("-- Starting {} test --", methodName);
 
-        final int MESSAGE_SIZE = 16 * 1024 + 1;
-        log.info("-- message size {} --", MESSAGE_SIZE);
+        final int messageSize = 16 * 1024 + 1;
+        log.info("-- message size {} --", messageSize);
         internalSetUpForNamespace();
 
         // Test 1 - Using TLS on binary protocol without sending certs - expect failure
         internalSetUpForClient(false, pulsar.getBrokerServiceUrlTls());
         try {
-            pulsarClient.newConsumer().topic("persistent://my-property/use/my-ns/my-topic1")
+            pulsarClient.newConsumer().topic("persistent://my-property/my-ns/my-topic1")
                     .subscriptionName("my-subscriber-name").subscriptionType(SubscriptionType.Exclusive).subscribe();
             Assert.fail("Server should have failed the TLS handshake since client didn't .");
         } catch (Exception ex) {
@@ -94,7 +94,7 @@ public class TlsProducerConsumerTest extends TlsProducerConsumerBase {
         // Test 2 - Using TLS on binary protocol - sending certs
         internalSetUpForClient(true, pulsar.getBrokerServiceUrlTls());
         try {
-            pulsarClient.newConsumer().topic("persistent://my-property/use/my-ns/my-topic1")
+            pulsarClient.newConsumer().topic("persistent://my-property/my-ns/my-topic1")
                     .subscriptionName("my-subscriber-name").subscriptionType(SubscriptionType.Exclusive).subscribe();
             log.info("second test success: with certs set, consumer sub success");
         } catch (Exception ex) {
@@ -106,14 +106,14 @@ public class TlsProducerConsumerTest extends TlsProducerConsumerBase {
     public void testTlsClientAuthOverHTTPProtocol() throws Exception {
         log.info("-- Starting {} test --", methodName);
 
-        final int MESSAGE_SIZE = 16 * 1024 + 1;
-        log.info("-- message size {} --", MESSAGE_SIZE);
+        final int messageSize = 16 * 1024 + 1;
+        log.info("-- message size {} --", messageSize);
         internalSetUpForNamespace();
 
         // Test 1 - Using TLS on https without sending certs - expect failure
         internalSetUpForClient(false, pulsar.getWebServiceAddressTls());
         try {
-            pulsarClient.newConsumer().topic("persistent://my-property/use/my-ns/my-topic1")
+            pulsarClient.newConsumer().topic("persistent://my-property/my-ns/my-topic1")
                     .subscriptionName("my-subscriber-name").subscriptionType(SubscriptionType.Exclusive).subscribe();
             Assert.fail("Server should have failed the TLS handshake since client didn't .");
         } catch (Exception ex) {
@@ -124,7 +124,7 @@ public class TlsProducerConsumerTest extends TlsProducerConsumerBase {
         // Test 2 - Using TLS on https - sending certs
         internalSetUpForClient(true, pulsar.getWebServiceAddressTls());
         try {
-            pulsarClient.newConsumer().topic("persistent://my-property/use/my-ns/my-topic1")
+            pulsarClient.newConsumer().topic("persistent://my-property/my-ns/my-topic1")
                     .subscriptionName("my-subscriber-name").subscriptionType(SubscriptionType.Exclusive).subscribe();
             log.info("second test success: with certs set, consumer sub success");
         } catch (Exception ex) {

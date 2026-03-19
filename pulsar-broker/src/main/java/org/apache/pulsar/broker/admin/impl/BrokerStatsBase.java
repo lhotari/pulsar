@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -124,7 +124,10 @@ public class BrokerStatsBase extends AdminResource {
 
     @GET
     @Path("/bookieops")
-    @ApiOperation(value = "Get pending bookie client op stats by namesapce",
+    @ApiOperation(value = "Get pending bookie client op stats by namespace",
+            notes = "Returns a nested map structure which Swagger does not fully support for display. "
+                    + "Structure: Map<String, Map<String, PendingBookieOpsStats>>."
+                    + " Please refer to this structure for details.",
             response = PendingBookieOpsStats.class,
             // https://github.com/swagger-api/swagger-core/issues/449
             // nested containers are not supported
@@ -136,7 +139,7 @@ public class BrokerStatsBase extends AdminResource {
         try {
             return BookieClientStatsGenerator.generate(pulsar());
         } catch (Exception e) {
-            log.error("[{}] Failed to generate pending bookie ops stats for topicss", clientAppId(), e);
+            log.error("[{}] Failed to generate pending bookie ops stats for topics", clientAppId(), e);
             throw new RestException(e);
         }
     }
@@ -159,6 +162,7 @@ public class BrokerStatsBase extends AdminResource {
 
     protected Map<Long, Collection<ResourceUnit>> internalBrokerResourceAvailability(NamespaceName namespace) {
         try {
+            validateSuperUserAccess();
             LoadManager lm = pulsar().getLoadManager().get();
             if (lm instanceof SimpleLoadManagerImpl) {
                 return ((SimpleLoadManagerImpl) lm).getResourceAvailabilityFor(namespace).asMap();

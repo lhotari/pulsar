@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -38,7 +38,7 @@ import org.apache.bookkeeper.client.api.LedgerMetadata;
 import org.apache.bookkeeper.mledger.offload.jcloud.OffloadIndexBlock;
 import org.apache.bookkeeper.mledger.offload.jcloud.OffloadIndexBlockBuilder;
 import org.apache.bookkeeper.mledger.offload.jcloud.OffloadIndexEntry;
-import org.apache.bookkeeper.mledger.proto.MLDataFormats.ManagedLedgerInfo.LedgerInfo;
+import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo;
 import org.apache.bookkeeper.net.BookieId;
 import org.apache.bookkeeper.net.BookieSocketAddress;
 import org.testng.annotations.Test;
@@ -68,8 +68,11 @@ public class OffloadIndexTest {
     // use mock to setLastEntryId
 //    public static class LedgerMetadataMock extends org.apache.bookkeeper.client.LedgerMetadata {
 //        long lastId = 0;
-//        public LedgerMetadataMock(int ensembleSize, int writeQuorumSize, int ackQuorumSize, org.apache.bookkeeper.client.BookKeeper.DigestType digestType, byte[] password, Map<String, byte[]> customMetadata, boolean storeSystemtimeAsLedgerCreationTime) {
-//            super(ensembleSize, writeQuorumSize, ackQuorumSize, digestType, password, customMetadata, storeSystemtimeAsLedgerCreationTime);
+//        public LedgerMetadataMock(int ensembleSize, int writeQuorumSize, int ackQuorumSize,
+//        org.apache.bookkeeper.client.BookKeeper.DigestType digestType, byte[] password, Map<String,
+//        byte[]> customMetadata, boolean storeSystemtimeAsLedgerCreationTime) {
+//            super(ensembleSize, writeQuorumSize, ackQuorumSize, digestType, password, customMetadata,
+//            storeSystemtimeAsLedgerCreationTime);
 //        }
 //
 //        @Override
@@ -106,7 +109,7 @@ public class OffloadIndexTest {
         metadataCustom.put("key1", "value1".getBytes(UTF_8));
         metadataCustom.put("key7", "value7".getBytes(UTF_8));
 
-        return LedgerInfo.newBuilder().setLedgerId(id).setEntries(5001).setSize(10000).build();
+        return new LedgerInfo().setLedgerId(id).setEntries(5001).setSize(10000);
     }
 
     // prepare metadata, then use builder to build a OffloadIndexBlockImpl
@@ -229,7 +232,7 @@ public class OffloadIndexTest {
         out2.reset();
         byte streamContent[] = new byte[streamLength];
         // stream with all 0, simulate junk data, should throw exception for header magic not match.
-        try(InputStream stream3 = new ByteArrayInputStream(streamContent, 0, streamLength)) {
+        try (InputStream stream3 = new ByteArrayInputStream(streamContent, 0, streamLength)) {
             OffloadIndexBlock indexBlock3 = (OffloadIndexBlock) blockBuilder.fromStream(stream3);
             fail("Should throw IOException");
         } catch (Exception e) {
@@ -239,7 +242,7 @@ public class OffloadIndexTest {
 
         // simulate read header too small, throw EOFException.
         out2.read(streamContent);
-        try(InputStream stream4 =
+        try (InputStream stream4 =
                 new ByteArrayInputStream(streamContent, 0, streamLength - 1)) {
             OffloadIndexBlock indexBlock4 = (OffloadIndexBlock) blockBuilder.fromStream(stream4);
             fail("Should throw EOFException");

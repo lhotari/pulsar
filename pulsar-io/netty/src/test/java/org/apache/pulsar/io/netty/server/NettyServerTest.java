@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,18 +18,16 @@
  */
 package org.apache.pulsar.io.netty.server;
 
+import static org.testng.Assert.assertNotNull;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import org.apache.pulsar.io.netty.NettySource;
 import org.apache.pulsar.io.netty.NettySourceConfig;
 import org.testng.annotations.Test;
 
-import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-
-import static org.testng.Assert.assertNotNull;
-
 /**
- * Tests for Netty Tcp or Udp Server
+ * Tests for Netty Tcp or Udp Server.
  */
 public class NettyServerTest {
 

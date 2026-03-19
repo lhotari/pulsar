@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,20 +20,19 @@ package org.apache.pulsar.broker.service.schema.validator;
 
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.eq;
-import static org.mockito.Mockito.same;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.same;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
-
 import java.util.concurrent.CompletableFuture;
-import org.apache.pulsar.common.policies.data.SchemaCompatibilityStrategy;
 import org.apache.pulsar.broker.service.schema.SchemaRegistry.SchemaAndMetadata;
 import org.apache.pulsar.broker.service.schema.SchemaRegistryService;
 import org.apache.pulsar.broker.service.schema.exceptions.InvalidSchemaDataException;
+import org.apache.pulsar.common.policies.data.SchemaCompatibilityStrategy;
 import org.apache.pulsar.common.protocol.schema.SchemaData;
 import org.apache.pulsar.common.protocol.schema.SchemaVersion;
 import org.apache.pulsar.common.schema.SchemaType;
@@ -80,11 +79,10 @@ public class SchemaRegistryServiceWithSchemaDataValidatorTest {
         String schemaId = "test-schema-id";
         String user = "test-user";
         CompletableFuture<SchemaVersion> deleteFuture = new CompletableFuture<>();
-        when(underlyingService.deleteSchema(eq(schemaId), eq(user)))
-            .thenReturn(deleteFuture);
-        assertSame(deleteFuture, service.deleteSchema(schemaId, user));
-        verify(underlyingService, times(1))
-            .deleteSchema(eq(schemaId), eq(user));
+        when(underlyingService.deleteSchema(eq(schemaId), eq(user), eq(false)))
+                .thenReturn(deleteFuture);
+        assertSame(deleteFuture, service.deleteSchema(schemaId, user, false));
+        verify(underlyingService, times(1)).deleteSchema(eq(schemaId), eq(user), eq(false));
     }
 
     @Test

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,17 +18,20 @@
  */
 package org.apache.bookkeeper.client;
 
-import com.google.common.collect.Lists;
+import com.google.common.annotations.VisibleForTesting;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import java.security.GeneralSecurityException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicLong;
+import lombok.Getter;
 import org.apache.bookkeeper.client.AsyncCallback.AddCallback;
 import org.apache.bookkeeper.client.AsyncCallback.CloseCallback;
 import org.apache.bookkeeper.client.AsyncCallback.ReadCallback;
@@ -51,14 +54,18 @@ import org.slf4j.LoggerFactory;
  */
 public class PulsarMockLedgerHandle extends LedgerHandle {
 
-    final ArrayList<LedgerEntryImpl> entries = Lists.newArrayList();
+    final List<LedgerEntryImpl> entries = Collections.synchronizedList(new ArrayList<>());
     final PulsarMockBookKeeper bk;
     final long id;
     final DigestType digest;
     final byte[] passwd;
     final ReadHandle readHandle;
     long lastEntry = -1;
+    @VisibleForTesting
+    @Getter
     boolean fenced = false;
+    // Count for total length of the entries
+    final AtomicLong totalLengthCounter = new AtomicLong(0);
 
     public PulsarMockLedgerHandle(PulsarMockBookKeeper bk, long id,
                            DigestType digest, byte[] passwd) throws GeneralSecurityException {
@@ -69,7 +76,8 @@ public class PulsarMockLedgerHandle extends LedgerHandle {
         this.digest = digest;
         this.passwd = Arrays.copyOf(passwd, passwd.length);
 
-        readHandle = new PulsarMockReadHandle(bk, id, getLedgerMetadata(), entries);
+        readHandle = new PulsarMockReadHandle(bk, id, getLedgerMetadata(), entries,
+                bk::getReadHandleInterceptor, totalLengthCounter);
     }
 
     @Override
@@ -97,18 +105,26 @@ public class PulsarMockLedgerHandle extends LedgerHandle {
     @Override
     public void asyncReadEntries(final long firstEntry, final long lastEntry, final ReadCallback cb, final Object ctx) {
         bk.getProgrammedFailure().thenComposeAsync((res) -> {
-                log.debug("readEntries: first={} last={} total={}", firstEntry, lastEntry, entries.size());
+                if (log.isDebugEnabled()) {
+                    log.debug("readEntries: first={} last={} total={}", firstEntry, lastEntry, entries.size());
+                }
                 final Queue<LedgerEntry> seq = new ArrayDeque<LedgerEntry>();
                 long entryId = firstEntry;
                 while (entryId <= lastEntry && entryId < entries.size()) {
                     seq.add(new LedgerEntry(entries.get((int) entryId++).duplicate()));
                 }
 
-                log.debug("Entries read: {}", seq);
+                if (log.isDebugEnabled()) {
+                    log.debug("Entries read: {}", seq);
+                }
 
-                try {
-                    Thread.sleep(1);
-                } catch (InterruptedException e) {
+                long readEntriesDelay = bk.getReadEntriesDelayMillis();
+                if (readEntriesDelay > 0) {
+                    try {
+                        Thread.sleep(readEntriesDelay);
+                    } catch (InterruptedException e) {
+                        // ignore
+                    }
                 }
 
                 Enumeration<LedgerEntry> entries = new Enumeration<LedgerEntry>() {
@@ -147,6 +163,7 @@ public class PulsarMockLedgerHandle extends LedgerHandle {
         }
 
         lastEntry = entries.size();
+        totalLengthCounter.addAndGet(data.length);
         entries.add(LedgerEntryImpl.create(ledgerId, lastEntry, data.length, Unpooled.wrappedBuffer(data)));
         return lastEntry;
     }
@@ -164,15 +181,13 @@ public class PulsarMockLedgerHandle extends LedgerHandle {
 
     @Override
     public void asyncAddEntry(final ByteBuf data, final AddCallback cb, final Object ctx) {
-        bk.getProgrammedFailure().thenComposeAsync((res) -> {
-                Long delayMillis = bk.addEntryDelaysMillis.poll();
-                if (delayMillis == null) {
-                    delayMillis = 1L;
-                }
-
-                try {
-                    Thread.sleep(delayMillis);
-                } catch (InterruptedException e) {
+        bk.getAddEntryFailure().thenComposeAsync((res) -> {
+                long delayMillis = bk.getNextAddEntryDelayMillis();
+                if (delayMillis > 0) {
+                    try {
+                        Thread.sleep(delayMillis);
+                    } catch (InterruptedException e) {
+                    }
                 }
 
                 if (fenced) {
@@ -181,6 +196,7 @@ public class PulsarMockLedgerHandle extends LedgerHandle {
                     lastEntry = entries.size();
                     byte[] storedData = new byte[data.readableBytes()];
                     data.readBytes(storedData);
+                    totalLengthCounter.addAndGet(storedData.length);
                     entries.add(LedgerEntryImpl.create(ledgerId, lastEntry,
                                                        storedData.length, Unpooled.wrappedBuffer(storedData)));
                     return FutureUtils.value(lastEntry);
@@ -193,6 +209,13 @@ public class PulsarMockLedgerHandle extends LedgerHandle {
                         cb.addComplete(PulsarMockBookKeeper.getExceptionCode(exception),
                                        PulsarMockLedgerHandle.this, LedgerHandle.INVALID_ENTRY_ID, ctx);
                     } else {
+                        long responseDelayMillis = bk.getNextAddEntryResponseDelayMillis();
+                        if (responseDelayMillis > 0) {
+                            try {
+                                Thread.sleep(responseDelayMillis);
+                            } catch (InterruptedException e) {
+                            }
+                        }
                         cb.addComplete(BKException.Code.OK, PulsarMockLedgerHandle.this, entryId, ctx);
                     }
                 }, bk.executor);
@@ -214,12 +237,7 @@ public class PulsarMockLedgerHandle extends LedgerHandle {
 
     @Override
     public long getLength() {
-        long length = 0;
-        for (LedgerEntryImpl entry : entries) {
-            length += entry.getLength();
-        }
-
-        return length;
+        return totalLengthCounter.get();
     }
 
 

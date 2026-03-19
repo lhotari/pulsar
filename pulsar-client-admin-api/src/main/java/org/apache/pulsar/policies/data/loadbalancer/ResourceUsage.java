@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,25 +19,20 @@
 package org.apache.pulsar.policies.data.loadbalancer;
 
 import lombok.EqualsAndHashCode;
+import lombok.ToString;
 
 /**
  * POJO used to represent any system specific resource usage this is the format that load manager expects it in.
  */
 @EqualsAndHashCode
+@ToString
 public class ResourceUsage {
     public final double usage;
     public final double limit;
-    @EqualsAndHashCode.Exclude
-    private final float percentUsage;
 
     public ResourceUsage(double usage, double limit) {
         this.usage = usage;
         this.limit = limit;
-        float proportion = 0;
-        if (limit > 0) {
-            proportion = ((float) usage) / ((float) limit);
-        }
-        percentUsage = proportion * 100;
     }
 
     public ResourceUsage() {
@@ -57,6 +52,10 @@ public class ResourceUsage {
     }
 
     public float percentUsage() {
-        return percentUsage;
+        float proportion = 0;
+        if (limit > 0) {
+            proportion = ((float) usage) / ((float) limit);
+        }
+        return proportion * 100;
     }
 }

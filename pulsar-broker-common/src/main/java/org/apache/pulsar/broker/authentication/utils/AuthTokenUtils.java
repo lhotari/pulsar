@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -35,6 +35,7 @@ import java.security.PublicKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Date;
+import java.util.Map;
 import java.util.Optional;
 import javax.crypto.SecretKey;
 import lombok.experimental.UtilityClass;
@@ -89,19 +90,28 @@ public class AuthTokenUtils {
         return Encoders.BASE64.encode(key.getEncoded());
     }
 
-    public static String createToken(Key signingKey, String subject, Optional<Date> expiryTime) {
+    public static String createToken(Key signingKey, String subject, Optional<Date> expiryTime,
+                                     Optional<Map<String, Object>> headers) {
         JwtBuilder builder = Jwts.builder()
                 .setSubject(subject)
                 .signWith(signingKey);
 
         expiryTime.ifPresent(builder::setExpiration);
+        headers.ifPresent(builder::setHeaderParams);
 
         return builder.compact();
+    }
+
+    public static String createToken(Key signingKey, String subject, Optional<Date> expiryTime) {
+        return createToken(signingKey, subject, expiryTime, Optional.empty());
     }
 
     public static byte[] readKeyFromUrl(String keyConfUrl) throws IOException {
         if (keyConfUrl.startsWith("data:") || keyConfUrl.startsWith("file:")) {
             try {
+                if (keyConfUrl.startsWith("file:")) {
+                    keyConfUrl = keyConfUrl.trim();
+                }
                 return IOUtils.toByteArray(URL.createURL(keyConfUrl));
             } catch (IOException e) {
                 throw e;

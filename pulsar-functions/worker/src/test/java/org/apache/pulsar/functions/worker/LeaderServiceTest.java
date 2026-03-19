@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -28,12 +28,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
-
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.pulsar.client.api.ConsumerBuilder;
 import org.apache.pulsar.client.api.ConsumerEventListener;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.SubscriptionType;
+import org.apache.pulsar.client.impl.ConnectionPool;
 import org.apache.pulsar.client.impl.ConsumerImpl;
 import org.apache.pulsar.client.impl.MessageIdImpl;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
@@ -43,16 +46,12 @@ import org.apache.pulsar.functions.runtime.thread.ThreadRuntimeFactoryConfig;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicReference;
-
 public class LeaderServiceTest {
 
     private final WorkerConfig workerConfig;
+    AtomicReference<ConsumerEventListener> listenerHolder;
     private LeaderService leaderService;
     private PulsarClientImpl mockClient;
-    AtomicReference<ConsumerEventListener> listenerHolder;
     private ConsumerImpl mockConsumer;
     private FunctionAssignmentTailer functionAssignmentTailer;
     private SchedulerManager schedulerManager;
@@ -68,7 +67,7 @@ public class LeaderServiceTest {
         workerConfig.setWorkerId("worker-1");
         workerConfig.setFunctionRuntimeFactoryClassName(ThreadRuntimeFactory.class.getName());
         workerConfig.setFunctionRuntimeFactoryConfigs(
-                ObjectMapperFactory.getThreadLocal().convertValue(
+                ObjectMapperFactory.getMapper().getObjectMapper().convertValue(
                         new ThreadRuntimeFactoryConfig().setThreadGroupName("test"), Map.class));
         workerConfig.setPulsarServiceUrl("pulsar://localhost:6650");
         workerConfig.setStateStorageServiceUrl("foo");
@@ -78,7 +77,8 @@ public class LeaderServiceTest {
     @BeforeMethod
     public void setup() throws PulsarClientException {
         mockClient = mock(PulsarClientImpl.class);
-
+        ConnectionPool connectionPool = mock(ConnectionPool.class);
+        when(mockClient.getCnxPool()).thenReturn(connectionPool);
         mockConsumer = mock(ConsumerImpl.class);
         ConsumerBuilder<byte[]> mockConsumerBuilder = mock(ConsumerBuilder.class);
 
@@ -93,7 +93,8 @@ public class LeaderServiceTest {
         doReturn(workerConfig).when(workerService).getWorkerConfig();
 
         listenerHolder = new AtomicReference<>();
-        when(mockConsumerBuilder.consumerEventListener(any(ConsumerEventListener.class))).thenAnswer(invocationOnMock -> {
+        when(mockConsumerBuilder.consumerEventListener(any(ConsumerEventListener.class)))
+                .thenAnswer(invocationOnMock -> {
 
             ConsumerEventListener listener = invocationOnMock.getArgument(0);
             listenerHolder.set(listener);
@@ -121,7 +122,7 @@ public class LeaderServiceTest {
         membershipManager = mock(MembershipManager.class);
 
         leaderService = spy(new LeaderService(workerService, mockClient, functionAssignmentTailer, schedulerManager,
-          functionRuntimeManager, functionMetadataManager,  membershipManager, ErrorNotifier.getDefaultImpl()));
+                functionRuntimeManager, functionMetadataManager, membershipManager, ErrorNotifier.getDefaultImpl()));
         leaderService.start();
     }
 

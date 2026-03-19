@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,11 +21,12 @@ package org.apache.pulsar.io;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.apache.pulsar.functions.utils.functioncache.FunctionCacheEntry.JAVA_INSTANCE_JAR_PROPERTY;
 import static org.apache.pulsar.functions.worker.PulsarFunctionLocalRunTest.getPulsarApiExamplesJar;
+import static org.apache.pulsar.functions.worker.PulsarFunctionLocalRunTest.getPulsarApiExamplesNar;
 import static org.apache.pulsar.functions.worker.PulsarFunctionLocalRunTest.getPulsarIOBatchDataGeneratorNar;
 import static org.apache.pulsar.functions.worker.PulsarFunctionLocalRunTest.getPulsarIODataGeneratorNar;
 import static org.mockito.Mockito.spy;
 import static org.testng.Assert.assertTrue;
-
+import com.google.common.collect.Sets;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -34,10 +35,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.ServiceConfigurationUtils;
@@ -52,6 +53,7 @@ import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.impl.auth.AuthenticationTls;
 import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.TenantInfo;
+import org.apache.pulsar.common.policies.data.TopicType;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.functions.runtime.thread.ThreadRuntimeFactory;
@@ -61,6 +63,7 @@ import org.apache.pulsar.functions.worker.PulsarFunctionTestTemporaryDirectory;
 import org.apache.pulsar.functions.worker.PulsarWorkerService;
 import org.apache.pulsar.functions.worker.WorkerConfig;
 import org.apache.pulsar.functions.worker.WorkerService;
+import org.apache.pulsar.utils.ResourceUtils;
 import org.apache.pulsar.zookeeper.LocalBookkeeperEnsemble;
 import org.awaitility.Awaitility;
 import org.slf4j.Logger;
@@ -70,31 +73,34 @@ import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-import com.google.common.collect.Sets;
-
 public abstract class AbstractPulsarE2ETest {
 
-	public static final Logger log = LoggerFactory.getLogger(AbstractPulsarE2ETest.class);
+    public static final Logger LOG = LoggerFactory.getLogger(AbstractPulsarE2ETest.class);
 
-    protected final String TLS_SERVER_CERT_FILE_PATH = "./src/test/resources/authentication/tls/broker-cert.pem";
-    protected final String TLS_SERVER_KEY_FILE_PATH = "./src/test/resources/authentication/tls/broker-key.pem";
-    protected final String TLS_CLIENT_CERT_FILE_PATH = "./src/test/resources/authentication/tls/client-cert.pem";
-    protected final String TLS_CLIENT_KEY_FILE_PATH = "./src/test/resources/authentication/tls/client-key.pem";
-    protected final String TLS_TRUST_CERT_FILE_PATH = "./src/test/resources/authentication/tls/cacert.pem";
+    protected static final String TLS_SERVER_CERT_FILE_PATH =
+            ResourceUtils.getAbsolutePath("certificate-authority/server-keys/broker.cert.pem");
+    protected static final String TLS_SERVER_KEY_FILE_PATH =
+            ResourceUtils.getAbsolutePath("certificate-authority/server-keys/broker.key-pk8.pem");
+    protected static final String TLS_CLIENT_CERT_FILE_PATH =
+            ResourceUtils.getAbsolutePath("certificate-authority/client-keys/admin.cert.pem");
+    protected static final String TLS_CLIENT_KEY_FILE_PATH =
+            ResourceUtils.getAbsolutePath("certificate-authority/client-keys/admin.key-pk8.pem");
+    protected static final String TLS_TRUST_CERT_FILE_PATH =
+            ResourceUtils.getAbsolutePath("certificate-authority/certs/ca.cert.pem");
     protected final String tenant = "external-repl-prop";
 
-	protected LocalBookkeeperEnsemble bkEnsemble;
-	protected ServiceConfiguration config;
-	protected WorkerConfig workerConfig;
-	protected PulsarService pulsar;
-	protected PulsarAdmin admin;
-	protected PulsarClient pulsarClient;
-	protected BrokerStats brokerStatsClient;
-	protected PulsarWorkerService functionsWorkerService;
-	protected String pulsarFunctionsNamespace = tenant + "/pulsar-function-admin";
-	protected String primaryHost;
-	protected String workerId;
-	protected PulsarFunctionTestTemporaryDirectory tempDirectory;
+    protected LocalBookkeeperEnsemble bkEnsemble;
+    protected ServiceConfiguration config;
+    protected WorkerConfig workerConfig;
+    protected PulsarService pulsar;
+    protected PulsarAdmin admin;
+    protected PulsarClient pulsarClient;
+    protected BrokerStats brokerStatsClient;
+    protected PulsarWorkerService functionsWorkerService;
+    protected String pulsarFunctionsNamespace = tenant + "/pulsar-function-admin";
+    protected String primaryHost;
+    protected String workerId;
+    protected PulsarFunctionTestTemporaryDirectory tempDirectory;
     protected FileServer fileServer;
 
     @DataProvider(name = "validRoleName")
@@ -104,20 +110,21 @@ public abstract class AbstractPulsarE2ETest {
 
     @BeforeMethod(alwaysRun = true)
     public void setup(Method method) throws Exception {
-        log.info("--- Setting up method {} ---", method.getName());
+        LOG.info("--- Setting up method {} ---", method.getName());
 
         // Start local bookkeeper ensemble
         bkEnsemble = new LocalBookkeeperEnsemble(3, 0, () -> 0);
         bkEnsemble.start();
 
-        config = spy(ServiceConfiguration.class);
+        config = new ServiceConfiguration();
         config.setClusterName("use");
         Set<String> superUsers = Sets.newHashSet("superUser", "admin");
         config.setSuperUserRoles(superUsers);
         config.setWebServicePort(Optional.of(0));
         config.setWebServicePortTls(Optional.of(0));
-        config.setZookeeperServers("127.0.0.1" + ":" + bkEnsemble.getZookeeperPort());
+        config.setMetadataStoreUrl("zk:127.0.0.1:" + bkEnsemble.getZookeeperPort());
         config.setBrokerShutdownTimeoutMs(0L);
+        config.setLoadBalancerOverrideBrokerNicSpeedGbps(Optional.of(1.0d));
         config.setBrokerServicePort(Optional.of(0));
         config.setBrokerServicePortTls(Optional.of(0));
         config.setLoadManagerClassName(SimpleLoadManagerImpl.class.getName());
@@ -141,7 +148,7 @@ public abstract class AbstractPulsarE2ETest {
                 "tlsCertFile:" + TLS_CLIENT_CERT_FILE_PATH + "," + "tlsKeyFile:" + TLS_CLIENT_KEY_FILE_PATH);
         config.setBrokerClientTrustCertsFilePath(TLS_TRUST_CERT_FILE_PATH);
         config.setBrokerClientTlsEnabled(true);
-        config.setAllowAutoTopicCreationType("non-partitioned");
+        config.setAllowAutoTopicCreationType(TopicType.NON_PARTITIONED);
 
         System.setProperty(JAVA_INSTANCE_JAR_PROPERTY,
                 FutureUtil.class.getProtectionDomain().getCodeSource().getLocation().getPath());
@@ -157,6 +164,11 @@ public abstract class AbstractPulsarE2ETest {
 
             file = getPulsarIOBatchDataGeneratorNar();
             Files.copy(file.toPath(), new File(connectorsDir, file.getName()).toPath());
+
+            File functionsDir = new File(workerConfig.getFunctionsDirectory());
+
+            file = getPulsarApiExamplesNar();
+            Files.copy(file.toPath(), new File(functionsDir, file.getName()).toPath());
         }
 
         Optional<WorkerService> functionWorkerService = Optional.of(functionsWorkerService);
@@ -178,7 +190,12 @@ public abstract class AbstractPulsarE2ETest {
         primaryHost = String.format("http://%s:%d", "localhost", pulsar.getListenPortHTTP().get());
 
         // update cluster metadata
-        ClusterData clusterData = ClusterData.builder().serviceUrl(pulsar.getBrokerServiceUrlTls()).build();
+        ClusterData clusterData = ClusterData.builder()
+                .serviceUrl(pulsar.getWebServiceAddress())
+                .serviceUrlTls(pulsar.getWebServiceAddressTls())
+                .brokerServiceUrl(pulsar.getBrokerServiceUrl())
+                .brokerServiceUrlTls(pulsar.getBrokerServiceUrlTls())
+                .build();
         admin.clusters().updateCluster(config.getClusterName(), clusterData);
 
         ClientBuilder clientBuilder = PulsarClient.builder().serviceUrl(this.workerConfig.getPulsarServiceUrl());
@@ -212,6 +229,7 @@ public abstract class AbstractPulsarE2ETest {
         fileServer.serveFile("/pulsar-io-data-generator.nar", getPulsarIODataGeneratorNar());
         fileServer.serveFile("/pulsar-io-batch-data-generator.nar", getPulsarIOBatchDataGeneratorNar());
         fileServer.serveFile("/pulsar-functions-api-examples.jar", getPulsarApiExamplesJar());
+        fileServer.serveFile("/pulsar-functions-api-examples.nar", getPulsarApiExamplesNar());
         fileServer.start();
 
         Awaitility.await().until(() -> functionsWorkerService.getLeaderService().isLeader());
@@ -219,31 +237,37 @@ public abstract class AbstractPulsarE2ETest {
 
     @AfterMethod(alwaysRun = true)
     void shutdown() throws Exception {
-        log.info("--- Shutting down ---");
+        LOG.info("--- Shutting down ---");
         try {
-        	if (fileServer != null) {
-              fileServer.stop();
-        	}
+            if (fileServer != null) {
+                fileServer.stop();
+                fileServer = null;
+            }
 
-        	if (pulsarClient != null) {
-              pulsarClient.close();
-        	}
+            if (pulsarClient != null) {
+                pulsarClient.close();
+                pulsarClient = null;
+            }
 
-        	if (admin != null) {
-              admin.close();
-        	}
+            if (admin != null) {
+                admin.close();
+                admin = null;
+            }
 
-        	if (functionsWorkerService != null) {
-              functionsWorkerService.stop();
-        	}
+            if (functionsWorkerService != null) {
+                functionsWorkerService.stop();
+                functionsWorkerService = null;
+            }
 
-        	if (pulsar != null) {
-              pulsar.close();
-        	}
+            if (pulsar != null) {
+                pulsar.close();
+                pulsar = null;
+            }
 
-        	if (bkEnsemble != null) {
-              bkEnsemble.stop();
-        	}
+            if (bkEnsemble != null) {
+                bkEnsemble.stop();
+                bkEnsemble = null;
+            }
         } finally {
             if (tempDirectory != null) {
                 tempDirectory.delete();
@@ -263,8 +287,8 @@ public abstract class AbstractPulsarE2ETest {
         workerConfig.setSchedulerClassName(
                 org.apache.pulsar.functions.worker.scheduler.RoundRobinScheduler.class.getName());
         workerConfig.setFunctionRuntimeFactoryClassName(ThreadRuntimeFactory.class.getName());
-        workerConfig.setFunctionRuntimeFactoryConfigs(
-                ObjectMapperFactory.getThreadLocal().convertValue(new ThreadRuntimeFactoryConfig().setThreadGroupName("use"), Map.class));        // worker talks to local broker
+        workerConfig.setFunctionRuntimeFactoryConfigs(ObjectMapperFactory.getMapper().getObjectMapper().convertValue(
+                new ThreadRuntimeFactoryConfig().setThreadGroupName("use"), Map.class)); // worker talks to local broker
         workerConfig.setFailureCheckFreqMs(100);
         workerConfig.setNumFunctionPackageReplicas(1);
         workerConfig.setClusterCoordinationTopicName("coordinate");
@@ -288,8 +312,13 @@ public abstract class AbstractPulsarE2ETest {
         workerConfig.setAuthenticationEnabled(true);
         workerConfig.setAuthorizationEnabled(true);
 
+        List<String> urlPatterns =
+                List.of(getPulsarApiExamplesJar().getParentFile().toURI() + ".*", "http://127\\.0\\.0\\.1:.*",
+                        tempDirectory.getTempDirectory().toURI() + ".*");
+        workerConfig.setAdditionalEnabledConnectorUrlPatterns(urlPatterns);
+        workerConfig.setAdditionalEnabledFunctionsUrlPatterns(urlPatterns);
+
         PulsarWorkerService workerService = new PulsarWorkerService();
-        workerService.init(workerConfig, null, false);
         return workerService;
     }
 }

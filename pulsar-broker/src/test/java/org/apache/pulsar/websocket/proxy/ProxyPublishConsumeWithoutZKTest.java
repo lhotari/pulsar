@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,17 +18,14 @@
  */
 package org.apache.pulsar.websocket.proxy;
 
-import static java.util.concurrent.Executors.newFixedThreadPool;
 import static org.apache.pulsar.broker.BrokerTestUtil.spyWithClassAndConstructorArgs;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import java.net.URI;
 import java.util.Optional;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import lombok.Cleanup;
 import org.apache.pulsar.client.api.ProducerConsumerBase;
 import org.apache.pulsar.metadata.impl.ZKMetadataStore;
 import org.apache.pulsar.websocket.WebSocketService;
@@ -62,7 +59,8 @@ public class ProxyPublishConsumeWithoutZKTest extends ProducerConsumerBase {
         config.setServiceUrl(pulsar.getSafeWebServiceAddress());
         config.setServiceUrlTls(pulsar.getWebServiceAddressTls());
         service = spyWithClassAndConstructorArgs(WebSocketService.class, config);
-        doReturn(new ZKMetadataStore(mockZooKeeper)).when(service).createMetadataStore(anyString(), anyInt());
+        doReturn(registerCloseable(new ZKMetadataStore(mockZooKeeper))).when(service)
+                .createConfigMetadataStore(anyString(), anyInt(), anyBoolean());
         proxyServer = new ProxyServer(config);
         WebSocketServiceStarter.start(proxyServer, service);
         log.info("Proxy Server Started");
@@ -83,8 +81,10 @@ public class ProxyPublishConsumeWithoutZKTest extends ProducerConsumerBase {
     @Test(timeOut = 30000)
     public void socketTest() throws Exception {
 
-        String consumerUri = "ws://localhost:" + proxyServer.getListenPortHTTP().get() + "/ws/v2/consumer/persistent/my-property/my-ns/my-topic/my-sub";
-        String producerUri = "ws://localhost:" + proxyServer.getListenPortHTTP().get() + "/ws/v2/producer/persistent/my-property/my-ns/my-topic/";
+        String consumerUri = "ws://localhost:" + proxyServer.getListenPortHTTP().get()
+                + "/ws/v2/consumer/persistent/my-property/my-ns/my-topic/my-sub";
+        String producerUri = "ws://localhost:" + proxyServer.getListenPortHTTP().get()
+                + "/ws/v2/producer/persistent/my-property/my-ns/my-topic/";
 
         URI consumeUri = URI.create(consumerUri);
         URI produceUri = URI.create(producerUri);
@@ -96,13 +96,13 @@ public class ProxyPublishConsumeWithoutZKTest extends ProducerConsumerBase {
 
         try {
             consumeClient.start();
-            ClientUpgradeRequest consumeRequest = new ClientUpgradeRequest();
-            Future<Session> consumerFuture = consumeClient.connect(consumeSocket, consumeUri, consumeRequest);
+            ClientUpgradeRequest consumeRequest = new ClientUpgradeRequest(consumeUri);
+            Future<Session> consumerFuture = consumeClient.connect(consumeSocket, consumeRequest);
             log.info("Connecting to : {}", consumeUri);
 
-            ClientUpgradeRequest produceRequest = new ClientUpgradeRequest();
+            ClientUpgradeRequest produceRequest = new ClientUpgradeRequest(produceUri);
             produceClient.start();
-            Future<Session> producerFuture = produceClient.connect(produceSocket, produceUri, produceRequest);
+            Future<Session> producerFuture = produceClient.connect(produceSocket, produceRequest);
             // let it connect
             Assert.assertTrue(consumerFuture.get().isOpen());
             Assert.assertTrue(producerFuture.get().isOpen());
@@ -113,18 +113,10 @@ public class ProxyPublishConsumeWithoutZKTest extends ProducerConsumerBase {
             Assert.assertTrue(produceSocket.getBuffer().size() > 0);
             Assert.assertEquals(produceSocket.getBuffer(), consumeSocket.getBuffer());
         } finally {
-            @Cleanup("shutdownNow")
-            ExecutorService executor = newFixedThreadPool(1);
             try {
-                executor.submit(() -> {
-                    try {
-                        consumeClient.stop();
-                        produceClient.stop();
-                        log.info("proxy clients are stopped successfully");
-                    } catch (Exception e) {
-                        log.error(e.getMessage());
-                    }
-                }).get(2, TimeUnit.SECONDS);
+                consumeClient.stop();
+                produceClient.stop();
+                log.info("proxy clients are stopped successfully");
             } catch (Exception e) {
                 log.error("failed to close clients ", e);
             }

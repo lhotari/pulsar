@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -36,6 +36,14 @@ public abstract class BaseKinesisConfig implements Serializable {
     private String awsEndpoint = "";
 
     @FieldDoc(
+            required = false,
+            defaultValue = "",
+            help = "Cloudwatch end-point url. It can be found at "
+                    + "https://docs.aws.amazon.com/general/latest/gr/rande.html"
+    )
+    private String cloudwatchEndpoint = "";
+
+    @FieldDoc(
         required = false,
         defaultValue = "",
         help = "Appropriate aws region. E.g. us-west-1, us-west-2"
@@ -59,7 +67,7 @@ public abstract class BaseKinesisConfig implements Serializable {
     private String awsCredentialPluginName = "";
 
     @FieldDoc(
-        required = false,
+        required = true,
         defaultValue = "",
         sensitive = true,
         help = "json-parameters to initialize `AwsCredentialsProviderPlugin`")

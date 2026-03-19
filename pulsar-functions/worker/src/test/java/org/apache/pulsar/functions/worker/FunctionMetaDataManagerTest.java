@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -69,7 +69,7 @@ public class FunctionMetaDataManagerTest {
         when(messageBuilder.key(anyString())).thenReturn(messageBuilder);
         doAnswer(invocation -> {
             Object arg0 = invocation.getArgument(0);
-            FunctionMetaDataManagerTest.producerByteArray = (byte[])arg0;
+            FunctionMetaDataManagerTest.producerByteArray = (byte[]) arg0;
             return messageBuilder;
         }).when(messageBuilder).value(any());
         when(messageBuilder.property(anyString(), anyString())).thenReturn(messageBuilder);
@@ -145,7 +145,7 @@ public class FunctionMetaDataManagerTest {
                 .setFunctionDetails(Function.FunctionDetails.newBuilder().setName("func-1")).build();
 
         // become leader
-        Producer<byte[]> exclusiveProducer = spy(functionMetaDataManager.acquireExclusiveWrite(() -> true));
+        Producer<byte[]> exclusiveProducer = functionMetaDataManager.acquireExclusiveWrite(() -> true);
         // make sure send msg fail
         functionMetaDataManager.acquireLeadership(exclusiveProducer);
         exclusiveProducer.close();
@@ -301,9 +301,9 @@ public class FunctionMetaDataManagerTest {
         doReturn(true).when(functionMetaDataManager).processUpdate(any(Function.FunctionMetaData.class));
         doReturn(true).when(functionMetaDataManager).processDeregister(any(Function.FunctionMetaData.class));
 
-        Request.ServiceRequest serviceRequest
-                = Request.ServiceRequest.newBuilder().setServiceRequestType(
-                        Request.ServiceRequest.ServiceRequestType.UPDATE).build();
+        Request.ServiceRequest serviceRequest =
+                Request.ServiceRequest.newBuilder().setServiceRequestType(
+                Request.ServiceRequest.ServiceRequestType.UPDATE).build();
         Message msg = mock(Message.class);
         doReturn(serviceRequest.toByteArray()).when(msg).getData();
         functionMetaDataManager.processMetaDataTopicMessage(msg);
@@ -312,14 +312,12 @@ public class FunctionMetaDataManagerTest {
                 (any(Function.FunctionMetaData.class));
         verify(functionMetaDataManager).processUpdate(serviceRequest.getFunctionMetaData());
 
-        serviceRequest
-                = Request.ServiceRequest.newBuilder().setServiceRequestType(
+        serviceRequest = Request.ServiceRequest.newBuilder().setServiceRequestType(
                 Request.ServiceRequest.ServiceRequestType.INITIALIZE).build();
         doReturn(serviceRequest.toByteArray()).when(msg).getData();
         functionMetaDataManager.processMetaDataTopicMessage(msg);
 
-        serviceRequest
-                = Request.ServiceRequest.newBuilder().setServiceRequestType(
+        serviceRequest = Request.ServiceRequest.newBuilder().setServiceRequestType(
                 Request.ServiceRequest.ServiceRequestType.DELETE).build();
         doReturn(serviceRequest.toByteArray()).when(msg).getData();
         functionMetaDataManager.processMetaDataTopicMessage(msg);
@@ -341,7 +339,7 @@ public class FunctionMetaDataManagerTest {
         Function.FunctionMetaData m1 = Function.FunctionMetaData.newBuilder()
                 .setVersion(1)
                 .setFunctionDetails(Function.FunctionDetails.newBuilder().setName("func-1")
-                .setNamespace("namespace-1").setTenant("tenant-1")).build();
+                        .setNamespace("namespace-1").setTenant("tenant-1")).build();
 
         Assert.assertTrue(functionMetaDataManager.processUpdate(m1));
         verify(functionMetaDataManager, times(1))

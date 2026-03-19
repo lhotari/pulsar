@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,14 +19,12 @@
 package org.apache.pulsar.common.naming;
 
 import com.google.common.base.Splitter;
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.CacheLoader;
-import com.google.common.cache.LoadingCache;
-import com.google.common.util.concurrent.UncheckedExecutionException;
+import com.google.re2j.Pattern;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ConcurrentHashMap;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.common.util.Codec;
 
@@ -44,7 +42,6 @@ public class TopicName implements ServiceUnitId {
 
     private final TopicDomain domain;
     private final String tenant;
-    private final String cluster;
     private final String namespacePortion;
     private final String localName;
 
@@ -52,19 +49,17 @@ public class TopicName implements ServiceUnitId {
 
     private final int partitionIndex;
 
-    private static final LoadingCache<String, TopicName> cache = CacheBuilder.newBuilder().maximumSize(100000)
-            .expireAfterAccess(30, TimeUnit.MINUTES).build(new CacheLoader<String, TopicName>() {
-                @Override
-                public TopicName load(String name) throws Exception {
-                    return new TopicName(name);
-                }
-            });
+    private static final ConcurrentHashMap<String, TopicName> cache = new ConcurrentHashMap<>();
 
-    public static final TopicName TRANSACTION_COORDINATOR_ASSIGN = TopicName.get(TopicDomain.persistent.value(),
-            NamespaceName.SYSTEM_NAMESPACE, "transaction_coordinator_assign");
-
-    public static final TopicName TRANSACTION_COORDINATOR_LOG = TopicName.get(TopicDomain.persistent.value(),
-            NamespaceName.SYSTEM_NAMESPACE, "__transaction_log_");
+    public static void clearIfReachedMaxCapacity(int maxCapacity) {
+        if (maxCapacity < 0) {
+            // Unlimited cache.
+            return;
+        }
+        if (cache.size() > maxCapacity) {
+            cache.clear();
+        }
+    }
 
     public static TopicName get(String domain, NamespaceName namespaceName, String topic) {
         String name = domain + "://" + namespaceName.toString() + '/' + topic;
@@ -76,18 +71,12 @@ public class TopicName implements ServiceUnitId {
         return TopicName.get(name);
     }
 
-    public static TopicName get(String domain, String tenant, String cluster, String namespace,
-                                String topic) {
-        String name = domain + "://" + tenant + '/' + cluster + '/' + namespace + '/' + topic;
-        return TopicName.get(name);
-    }
-
     public static TopicName get(String topic) {
-        try {
-            return cache.get(topic);
-        } catch (ExecutionException | UncheckedExecutionException e) {
-            throw (RuntimeException) e.getCause();
+        TopicName tp = cache.get(topic);
+        if (tp != null) {
+            return tp;
         }
+        return cache.computeIfAbsent(topic, k -> new TopicName(k));
     }
 
     public static TopicName getPartitionedTopicName(String topic) {
@@ -107,6 +96,15 @@ public class TopicName implements ServiceUnitId {
         }
     }
 
+    public static String getPartitionPattern(String topic) {
+        return "^" + Pattern.quote(get(topic).getPartitionedTopicName().toString()) + "-partition-[0-9]+$";
+    }
+
+    public static String getPattern(String topic) {
+        return "^" + Pattern.quote(get(topic).getPartitionedTopicName().toString()) + "$";
+    }
+
+    @SuppressFBWarnings("DCN_NULLPOINTER_EXCEPTION")
     private TopicName(String completeTopicName) {
         try {
             // The topic name can be in two different forms, one is fully qualified topic name,
@@ -114,7 +112,7 @@ public class TopicName implements ServiceUnitId {
             if (!completeTopicName.contains("://")) {
                 // The short topic name can be:
                 // - <topic>
-                // - <property>/<namespace>/<topic>
+                // - <tenant>/<namespace>/<topic>
                 String[] parts = StringUtils.split(completeTopicName, '/');
                 if (parts.length == 3) {
                     completeTopicName = TopicDomain.persistent.name() + "://" + completeTopicName;
@@ -128,60 +126,39 @@ public class TopicName implements ServiceUnitId {
                 }
             }
 
-            // The fully qualified topic name can be in two different forms:
-            // new:    persistent://tenant/namespace/topic
-            // legacy: persistent://tenant/cluster/namespace/topic
-
+            // Expected format: persistent://tenant/namespace/topic
             List<String> parts = Splitter.on("://").limit(2).splitToList(completeTopicName);
             this.domain = TopicDomain.getEnum(parts.get(0));
 
             String rest = parts.get(1);
 
-            // The rest of the name can be in different forms:
-            // new:    tenant/namespace/<localName>
-            // legacy: tenant/cluster/namespace/<localName>
-            // Examples of localName:
-            // 1. some, name, xyz
-            // 2. xyz-123, feeder-2
-
-
+            // Expected format: tenant/namespace/<localName>
             parts = Splitter.on("/").limit(4).splitToList(rest);
-            if (parts.size() == 3) {
-                // New topic name without cluster name
+            if (parts.size() == 4) {
+                throw new IllegalArgumentException(
+                        "V1 topic names (with cluster component) are no longer supported. "
+                        + "Please use the V2 format: '<domain>://tenant/namespace/topic'. Got: "
+                        + completeTopicName);
+            } else if (parts.size() == 3) {
                 this.tenant = parts.get(0);
-                this.cluster = null;
                 this.namespacePortion = parts.get(1);
                 this.localName = parts.get(2);
                 this.partitionIndex = getPartitionIndex(completeTopicName);
                 this.namespaceName = NamespaceName.get(tenant, namespacePortion);
-            } else if (parts.size() == 4) {
-                // Legacy topic name that includes cluster name
-                this.tenant = parts.get(0);
-                this.cluster = parts.get(1);
-                this.namespacePortion = parts.get(2);
-                this.localName = parts.get(3);
-                this.partitionIndex = getPartitionIndex(completeTopicName);
-                this.namespaceName = NamespaceName.get(tenant, cluster, namespacePortion);
             } else {
                 throw new IllegalArgumentException("Invalid topic name: " + completeTopicName);
             }
 
-
-            if (localName == null || localName.isEmpty()) {
-                throw new IllegalArgumentException("Invalid topic name: " + completeTopicName);
+            if (StringUtils.isBlank(localName)) {
+                throw new IllegalArgumentException(String.format("Invalid topic name: %s. Topic local name must not"
+                        + " be blank.", completeTopicName));
             }
 
         } catch (NullPointerException e) {
             throw new IllegalArgumentException("Invalid topic name: " + completeTopicName, e);
         }
-        if (isV2()) {
-            this.completeTopicName = String.format("%s://%s/%s/%s",
-                                                   domain, tenant, namespacePortion, localName);
-        } else {
-            this.completeTopicName = String.format("%s://%s/%s/%s/%s",
-                                                   domain, tenant, cluster,
-                                                   namespacePortion, localName);
-        }
+        this.completeTopicName = String.format("%s://%s/%s/%s",
+                                               domain, tenant, namespacePortion, localName);
     }
 
     public boolean isPersistent() {
@@ -190,8 +167,6 @@ public class TopicName implements ServiceUnitId {
 
     /**
      * Extract the namespace portion out of a completeTopicName name.
-     *
-     * <p>Works both with old & new convention.
      *
      * @return the namespace
      */
@@ -217,11 +192,6 @@ public class TopicName implements ServiceUnitId {
         return tenant;
     }
 
-    @Deprecated
-    public String getCluster() {
-        return cluster;
-    }
-
     public String getNamespacePortion() {
         return namespacePortion;
     }
@@ -235,7 +205,7 @@ public class TopicName implements ServiceUnitId {
     }
 
     public TopicName getPartition(int index) {
-        if (index == -1 || this.toString().contains(PARTITIONED_TOPIC_SUFFIX)) {
+        if (index == -1 || this.toString().endsWith(PARTITIONED_TOPIC_SUFFIX + index)) {
             return this;
         }
         String partitionName = this.toString() + PARTITIONED_TOPIC_SUFFIX + index;
@@ -258,9 +228,9 @@ public class TopicName implements ServiceUnitId {
      * For partitions in a topic, return the base partitioned topic name.
      * Eg:
      * <ul>
-     *  <li><code>persistent://prop/cluster/ns/my-topic-partition-1</code> -->
-     *  <code>persistent://prop/cluster/ns/my-topic</code>
-     *  <li><code>persistent://prop/cluster/ns/my-topic</code> --> <code>persistent://prop/cluster/ns/my-topic</code>
+     *  <li><code>persistent://prop/ns/my-topic-partition-1</code> -->
+     *  <code>persistent://prop/ns/my-topic</code>
+     *  <li><code>persistent://prop/ns/my-topic</code> --> <code>persistent://prop/ns/my-topic</code>
      * </ul>
      */
     public String getPartitionedTopicName() {
@@ -297,6 +267,14 @@ public class TopicName implements ServiceUnitId {
     }
 
     /**
+     * A helper method to get a partition name of a topic in String.
+     * @return topic + "-partition-" + partition.
+     */
+    public static String getTopicPartitionNameString(String topic, int partitionIndex) {
+        return topic + PARTITIONED_TOPIC_SUFFIX + partitionIndex;
+    }
+
+    /**
      * Returns the http rest path for use in the admin web service.
      * Eg:
      *   * "persistent/my-tenant/my-namespace/my-topic"
@@ -310,11 +288,7 @@ public class TopicName implements ServiceUnitId {
 
     public String getRestPath(boolean includeDomain) {
         String domainName = includeDomain ? domain + "/" : "";
-        if (isV2()) {
-            return String.format("%s%s/%s/%s", domainName, tenant, namespacePortion, getEncodedLocalName());
-        } else {
-            return String.format("%s%s/%s/%s/%s", domainName, tenant, cluster, namespacePortion, getEncodedLocalName());
-        }
+        return String.format("%s%s/%s/%s", domainName, tenant, namespacePortion, getEncodedLocalName());
     }
 
     /**
@@ -325,13 +299,42 @@ public class TopicName implements ServiceUnitId {
     public String getPersistenceNamingEncoding() {
         // The convention is: domain://tenant/namespace/topic
         // We want to persist in the order: tenant/namespace/domain/topic
+        return String.format("%s/%s/%s/%s", tenant, namespacePortion, domain, getEncodedLocalName());
+    }
 
-        // For legacy naming scheme, the convention is: domain://tenant/cluster/namespace/topic
-        // We want to persist in the order: tenant/cluster/namespace/domain/topic
-        if (isV2()) {
-            return String.format("%s/%s/%s/%s", tenant, namespacePortion, domain, getEncodedLocalName());
+    /**
+     * Get topic full name from managedLedgerName.
+     *
+     * @return the topic full name, format -> domain://tenant/namespace/topic
+     */
+    public static String fromPersistenceNamingEncoding(String mlName) {
+        // The managedLedgerName convention is: tenant/namespace/domain/topic
+        // We want to transform to topic full name in the order: domain://tenant/namespace/topic
+        if (mlName == null || mlName.length() == 0) {
+            return mlName;
+        }
+        List<String> parts = Splitter.on("/").splitToList(mlName);
+        String tenant;
+        String namespacePortion;
+        String domain;
+        String localName;
+        if (parts.size() == 4) {
+            tenant = parts.get(0);
+            namespacePortion = parts.get(1);
+            domain = parts.get(2);
+            localName = Codec.decode(parts.get(3));
+            return String.format("%s://%s/%s/%s", domain, tenant, namespacePortion, localName);
+        } else if (parts.size() == 5) {
+            // Legacy V1 managed ledger name: tenant/cluster/namespace/domain/topic
+            // Convert to V2 format, dropping the cluster component
+            tenant = parts.get(0);
+            // parts.get(1) is the cluster, which we drop
+            namespacePortion = parts.get(2);
+            domain = parts.get(3);
+            localName = Codec.decode(parts.get(4));
+            return String.format("%s://%s/%s/%s", domain, tenant, namespacePortion, localName);
         } else {
-            return String.format("%s/%s/%s/%s/%s", tenant, cluster, namespacePortion, domain, getEncodedLocalName());
+            throw new IllegalArgumentException("Invalid managedLedger name: " + mlName);
         }
     }
 
@@ -340,21 +343,13 @@ public class TopicName implements ServiceUnitId {
      *
      * <p>Example:
      *
-     * <p>persistent://tenant/cluster/namespace/completeTopicName ->
-     *   persistent/tenant/cluster/namespace/completeTopicName
+     * <p>persistent://tenant/namespace/completeTopicName ->
+     *   persistent/tenant/namespace/completeTopicName
      *
      * @return
      */
     public String getLookupName() {
-        if (isV2()) {
-            return String.format("%s/%s/%s/%s", domain, tenant, namespacePortion, getEncodedLocalName());
-        } else {
-            return String.format("%s/%s/%s/%s/%s", domain, tenant, cluster, namespacePortion, getEncodedLocalName());
-        }
-    }
-
-    public boolean isGlobal() {
-        return cluster == null || Constants.GLOBAL_CLUSTER.equalsIgnoreCase(cluster);
+        return String.format("%s/%s/%s/%s", domain, tenant, namespacePortion, getEncodedLocalName());
     }
 
     public String getSchemaName() {
@@ -389,10 +384,74 @@ public class TopicName implements ServiceUnitId {
     }
 
     /**
-     * Returns true if this a V2 topic name prop/ns/topic-name.
-     * @return true if V2
+     * Convert a topic name to a full topic name.
+     * In Pulsar, a full topic name is "<domain>://<tenant>/<namespace>/<local-topic>".
+     * For convenience, clients can pass a short topic name:
+     * - "<local-topic>", which represents "persistent://public/default/<local-topic>"
+     * - "<tenant>/<namespace>/<local-topic>", which represents "persistent://<tenant>/<namespace>/<local-topic>"
+     *
+     * @param topic the topic name from client
+     * @return the full topic name.
      */
-    public boolean isV2() {
-        return cluster == null;
+    public static String toFullTopicName(String topic) {
+        final int index = topic.indexOf("://");
+        if (index >= 0) {
+            TopicDomain.getEnum(topic.substring(0, index));
+            final List<String> parts = splitBySlash(topic.substring(index + "://".length()), 4);
+            if (parts.size() == 4) {
+                throw new IllegalArgumentException(
+                        "V1 topic names (with cluster component) are no longer supported. "
+                        + "Please use the V2 format: '<domain>://tenant/namespace/topic'. Got: " + topic);
+            }
+            if (parts.size() != 3) {
+                throw new IllegalArgumentException(topic + " is invalid. "
+                    + "Expected format: '<domain>://tenant/namespace/topic'");
+            }
+            NamespaceName.validateNamespaceName(parts.get(0), parts.get(1));
+            if (StringUtils.isBlank(parts.get(2))) {
+                throw new IllegalArgumentException(topic + " has blank local topic");
+            }
+            return topic; // it's a valid full topic name
+        } else {
+            List<String> parts = splitBySlash(topic, 0);
+            if (parts.size() != 1 && parts.size() != 3) {
+                throw new IllegalArgumentException(topic + " is invalid");
+            }
+            if (parts.size() == 1) {
+                if (StringUtils.isBlank(parts.get(0))) {
+                    throw new IllegalArgumentException(topic + " has blank local topic");
+                }
+                return "persistent://public/default/" + parts.get(0);
+            } else {
+                NamespaceName.validateNamespaceName(parts.get(0), parts.get(1));
+                if (StringUtils.isBlank(parts.get(2))) {
+                    throw new IllegalArgumentException(topic + " has blank local topic");
+                }
+                return "persistent://" + topic;
+            }
+        }
+    }
+
+    private static List<String> splitBySlash(String topic, int limit) {
+        final List<String> tokens = new ArrayList<>(3);
+        final int loopCount = (limit <= 0) ? Integer.MAX_VALUE : limit - 1;
+        int beginIndex = 0;
+        for (int i = 0; i < loopCount; i++) {
+            final int endIndex = topic.indexOf('/', beginIndex);
+            if (endIndex < 0) {
+                tokens.add(topic.substring(beginIndex));
+                return tokens;
+            } else if (endIndex > beginIndex) {
+                tokens.add(topic.substring(beginIndex, endIndex));
+            } else {
+                throw new IllegalArgumentException("Invalid topic name " + topic);
+            }
+            beginIndex = endIndex + 1;
+        }
+        if (beginIndex >= topic.length()) {
+            throw new IllegalArgumentException("Invalid topic name " + topic);
+        }
+        tokens.add(topic.substring(beginIndex));
+        return tokens;
     }
 }

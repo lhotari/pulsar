@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -31,11 +31,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
-import com.google.common.collect.Sets;
 import com.google.protobuf.InvalidProtocolBufferException;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import java.lang.reflect.Method;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -99,7 +99,7 @@ public class SchedulerManagerTest {
         workerConfig.setWorkerId("worker-1");
         workerConfig.setFunctionRuntimeFactoryClassName(ThreadRuntimeFactory.class.getName());
         workerConfig.setFunctionRuntimeFactoryConfigs(
-                ObjectMapperFactory.getThreadLocal().convertValue(
+                ObjectMapperFactory.getMapper().getObjectMapper().convertValue(
                         new ThreadRuntimeFactoryConfig().setThreadGroupName("test"), Map.class));
         workerConfig.setPulsarServiceUrl("pulsar://localhost:6650");
         workerConfig.setStateStorageServiceUrl("foo");
@@ -148,6 +148,7 @@ public class SchedulerManagerTest {
 
     @AfterMethod(alwaysRun = true)
     public void stop() {
+        schedulerManager.close();
         this.executor.shutdownNow();
     }
 
@@ -365,8 +366,10 @@ public class SchedulerManagerTest {
         // delete assignment message should only have key = full qualified instance id and value = null;
         Assert.assertEquals(0, send.length);
 
-        // make sure we also directly deleted the assignment from the in memory assignment cache in function runtime manager
-        verify(functionRuntimeManager, times(1)).deleteAssignment(eq(FunctionCommon.getFullyQualifiedInstanceId(assignment2.getInstance())));
+        // make sure we also directly deleted the assignment from the in memory assignment cache in
+        // function runtime manager
+        verify(functionRuntimeManager, times(1))
+                .deleteAssignment(eq(FunctionCommon.getFullyQualifiedInstanceId(assignment2.getInstance())));
     }
 
     @Test
@@ -430,7 +433,8 @@ public class SchedulerManagerTest {
         Assert.assertEquals(assignments, assignment2);
 
         // updating assignments
-        currentAssignments.get("worker-1").put(FunctionCommon.getFullyQualifiedInstanceId(assignment2.getInstance()), assignment2);
+        currentAssignments.get("worker-1")
+                .put(FunctionCommon.getFullyQualifiedInstanceId(assignment2.getInstance()), assignment2);
 
         // scale up
 
@@ -466,10 +470,10 @@ public class SchedulerManagerTest {
         invocations = getMethodInvocationDetails(message, TypedMessageBuilder.class.getMethod("value",
                 Object.class));
 
-        Set<Assignment> allAssignments = Sets.newHashSet();
+        Set<Assignment> allAssignments = new HashSet<>();
         invocations.forEach(invocation -> {
             try {
-                allAssignments.add(Assignment.parseFrom((byte[])invocation.getRawArguments()[0]));
+                allAssignments.add(Assignment.parseFrom((byte[]) invocation.getRawArguments()[0]));
             } catch (InvalidProtocolBufferException e) {
                 throw new RuntimeException(e);
             }
@@ -541,45 +545,48 @@ public class SchedulerManagerTest {
             Assert.assertEquals(assignment, expectedAssignment);
         }
 
-        Set<Assignment> allAssignments = Sets.newHashSet();
+        Set<Assignment> allAssignments = new HashSet<>();
         invocations.forEach(invocation -> {
             try {
-                allAssignments.add(Assignment.parseFrom((byte[])invocation.getRawArguments()[0]));
+                allAssignments.add(Assignment.parseFrom((byte[]) invocation.getRawArguments()[0]));
             } catch (InvalidProtocolBufferException e) {
                 throw new RuntimeException(e);
             }
         });
 
-        Function.Assignment assignment2_1 = Function.Assignment.newBuilder()
+        Function.Assignment assignment21 = Function.Assignment.newBuilder()
                 .setWorkerId("worker-1")
                 .setInstance(Function.Instance.newBuilder()
                         .setFunctionMetaData(function2).setInstanceId(0).build())
                 .build();
-        Function.Assignment assignment2_2 = Function.Assignment.newBuilder()
+        Function.Assignment assignment22 = Function.Assignment.newBuilder()
                 .setWorkerId("worker-1")
                 .setInstance(Function.Instance.newBuilder()
                         .setFunctionMetaData(function2).setInstanceId(1).build())
                 .build();
-        Function.Assignment assignment2_3 = Function.Assignment.newBuilder()
+        Function.Assignment assignment23 = Function.Assignment.newBuilder()
                 .setWorkerId("worker-1")
                 .setInstance(Function.Instance.newBuilder()
                         .setFunctionMetaData(function2).setInstanceId(2).build())
                 .build();
 
-        assertTrue(allAssignments.contains(assignment2_1));
-        assertTrue(allAssignments.contains(assignment2_2));
-        assertTrue(allAssignments.contains(assignment2_3));
+        assertTrue(allAssignments.contains(assignment21));
+        assertTrue(allAssignments.contains(assignment22));
+        assertTrue(allAssignments.contains(assignment23));
 
         // make sure we also directly add the assignment to the in memory assignment cache in function runtime manager
         verify(functionRuntimeManager, times(3)).processAssignment(any());
-        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment2_1));
-        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment2_2));
-        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment2_3));
+        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment21));
+        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment22));
+        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment23));
 
         // updating assignments
-        currentAssignments.get("worker-1").put(FunctionCommon.getFullyQualifiedInstanceId(assignment2_1.getInstance()), assignment2_1);
-        currentAssignments.get("worker-1").put(FunctionCommon.getFullyQualifiedInstanceId(assignment2_2.getInstance()), assignment2_2);
-        currentAssignments.get("worker-1").put(FunctionCommon.getFullyQualifiedInstanceId(assignment2_3.getInstance()), assignment2_3);
+        currentAssignments.get("worker-1")
+                .put(FunctionCommon.getFullyQualifiedInstanceId(assignment21.getInstance()), assignment21);
+        currentAssignments.get("worker-1")
+                .put(FunctionCommon.getFullyQualifiedInstanceId(assignment22.getInstance()), assignment22);
+        currentAssignments.get("worker-1")
+                .put(FunctionCommon.getFullyQualifiedInstanceId(assignment23.getInstance()), assignment23);
 
         // scale down
 
@@ -605,10 +612,10 @@ public class SchedulerManagerTest {
         invocations = getMethodInvocationDetails(message, TypedMessageBuilder.class.getMethod("value",
                 Object.class));
 
-        Set<Assignment> allAssignments2 = Sets.newHashSet();
+        Set<Assignment> allAssignments2 = new HashSet<>();
         invocations.forEach(invocation -> {
             try {
-                allAssignments2.add(Assignment.parseFrom((byte[])invocation.getRawArguments()[0]));
+                allAssignments2.add(Assignment.parseFrom((byte[]) invocation.getRawArguments()[0]));
             } catch (InvalidProtocolBufferException e) {
                 throw new RuntimeException(e);
             }
@@ -616,10 +623,13 @@ public class SchedulerManagerTest {
 
         assertTrue(allAssignments2.contains(assignment2Scaled));
 
-        // make sure we also directly removed the assignment from the in memory assignment cache in function runtime manager
+        // make sure we also directly removed the assignment from the in memory assignment cache in
+        // function runtime manager
         verify(functionRuntimeManager, times(2)).deleteAssignment(anyString());
-        verify(functionRuntimeManager, times(1)).deleteAssignment(eq(FunctionCommon.getFullyQualifiedInstanceId(assignment2_2.getInstance())));
-        verify(functionRuntimeManager, times(1)).deleteAssignment(eq(FunctionCommon.getFullyQualifiedInstanceId(assignment2_2.getInstance())));
+        verify(functionRuntimeManager, times(1))
+                .deleteAssignment(eq(FunctionCommon.getFullyQualifiedInstanceId(assignment22.getInstance())));
+        verify(functionRuntimeManager, times(1))
+                .deleteAssignment(eq(FunctionCommon.getFullyQualifiedInstanceId(assignment22.getInstance())));
 
         verify(functionRuntimeManager, times(4)).processAssignment(any());
         verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment2Scaled));
@@ -671,7 +681,7 @@ public class SchedulerManagerTest {
                 Object.class));
         invocations.forEach(invocation -> {
             try {
-                Assignment assignment = Assignment.parseFrom((byte[])invocation.getRawArguments()[0]);
+                Assignment assignment = Assignment.parseFrom((byte[]) invocation.getRawArguments()[0]);
                 String functionName = assignment.getInstance().getFunctionMetaData().getFunctionDetails().getName();
                 String assignedWorkerId = assignment.getWorkerId();
                 Assert.assertEquals(functionName, assignedWorkerId);
@@ -727,17 +737,17 @@ public class SchedulerManagerTest {
 
         callSchedule();
 
-        Function.Assignment assignment2_1 = Function.Assignment.newBuilder()
+        Function.Assignment assignment21 = Function.Assignment.newBuilder()
                 .setWorkerId("worker-1")
                 .setInstance(Function.Instance.newBuilder()
                         .setFunctionMetaData(function2).setInstanceId(0).build())
                 .build();
-        Function.Assignment assignment2_2 = Function.Assignment.newBuilder()
+        Function.Assignment assignment22 = Function.Assignment.newBuilder()
                 .setWorkerId("worker-1")
                 .setInstance(Function.Instance.newBuilder()
                         .setFunctionMetaData(function2).setInstanceId(1).build())
                 .build();
-        Function.Assignment assignment2_3 = Function.Assignment.newBuilder()
+        Function.Assignment assignment23 = Function.Assignment.newBuilder()
                 .setWorkerId("worker-1")
                 .setInstance(Function.Instance.newBuilder()
                         .setFunctionMetaData(function2).setInstanceId(2).build())
@@ -748,30 +758,33 @@ public class SchedulerManagerTest {
         invocations = getMethodInvocationDetails(message, TypedMessageBuilder.class.getMethod("value",
                 Object.class));
 
-        Set<Assignment> allAssignments = Sets.newHashSet();
+        Set<Assignment> allAssignments = new HashSet<>();
         invocations.forEach(invocation -> {
             try {
-                allAssignments.add(Assignment.parseFrom((byte[])invocation.getRawArguments()[0]));
+                allAssignments.add(Assignment.parseFrom((byte[]) invocation.getRawArguments()[0]));
             } catch (InvalidProtocolBufferException e) {
                 throw new RuntimeException(e);
             }
         });
 
         assertEquals(allAssignments.size(), 3);
-        assertTrue(allAssignments.contains(assignment2_1));
-        assertTrue(allAssignments.contains(assignment2_2));
-        assertTrue(allAssignments.contains(assignment2_3));
+        assertTrue(allAssignments.contains(assignment21));
+        assertTrue(allAssignments.contains(assignment22));
+        assertTrue(allAssignments.contains(assignment23));
 
         // make sure we also directly add the assignment to the in memory assignment cache in function runtime manager
         verify(functionRuntimeManager, times(3)).processAssignment(any());
-        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment2_1));
-        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment2_2));
-        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment2_3));
+        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment21));
+        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment22));
+        verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment23));
 
         // updating assignments
-        currentAssignments.get("worker-1").put(FunctionCommon.getFullyQualifiedInstanceId(assignment2_1.getInstance()), assignment2_1);
-        currentAssignments.get("worker-1").put(FunctionCommon.getFullyQualifiedInstanceId(assignment2_2.getInstance()), assignment2_2);
-        currentAssignments.get("worker-1").put(FunctionCommon.getFullyQualifiedInstanceId(assignment2_3.getInstance()), assignment2_3);
+        currentAssignments.get("worker-1")
+                .put(FunctionCommon.getFullyQualifiedInstanceId(assignment21.getInstance()), assignment21);
+        currentAssignments.get("worker-1")
+                .put(FunctionCommon.getFullyQualifiedInstanceId(assignment22.getInstance()), assignment22);
+        currentAssignments.get("worker-1")
+                .put(FunctionCommon.getFullyQualifiedInstanceId(assignment23.getInstance()), assignment23);
 
         // update field
 
@@ -808,10 +821,10 @@ public class SchedulerManagerTest {
         invocations = getMethodInvocationDetails(message, TypedMessageBuilder.class.getMethod("value",
                 Object.class));
 
-        Set<Assignment> allAssignments2 = Sets.newHashSet();
+        Set<Assignment> allAssignments2 = new HashSet<>();
         invocations.forEach(invocation -> {
             try {
-                allAssignments2.add(Assignment.parseFrom((byte[])invocation.getRawArguments()[0]));
+                allAssignments2.add(Assignment.parseFrom((byte[]) invocation.getRawArguments()[0]));
             } catch (InvalidProtocolBufferException e) {
                 throw new RuntimeException(e);
             }
@@ -821,7 +834,8 @@ public class SchedulerManagerTest {
         assertTrue(allAssignments2.contains(assignment2Updated2));
         assertTrue(allAssignments2.contains(assignment2Updated3));
 
-        // make sure we also directly updated the assignment to the in memory assignment cache in function runtime manager
+        // make sure we also directly updated the assignment to the in memory assignment cache in
+        // function runtime manager
         verify(functionRuntimeManager, times(6)).processAssignment(any());
         verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment2Updated1));
         verify(functionRuntimeManager, times(1)).processAssignment(eq(assignment2Updated2));
@@ -982,7 +996,7 @@ public class SchedulerManagerTest {
     }
 
     @Test
-    public void testGetDrainStatus() throws Exception{
+    public void testGetDrainStatus() throws Exception {
         // Clear the drain status map in the SchedulerManager; all other parameters are don't care for a clear.
         callGetDrainStatus(null, DrainOps.ClearDrainMap,
                 SchedulerManager.DrainOpStatus.DrainCompleted);
@@ -1122,6 +1136,7 @@ public class SchedulerManagerTest {
         switch (op) {
             default:
                 Assert.fail("Unexpected drain operation");
+                return null;
             case GetDrainStatus:
                 return schedulerManager.getDrainStatus(workerId);
             case SetDrainStatus:

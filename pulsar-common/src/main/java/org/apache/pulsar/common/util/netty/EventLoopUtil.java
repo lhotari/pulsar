@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -35,47 +35,70 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.incubator.channel.uring.IOUring;
+import io.netty.incubator.channel.uring.IOUringDatagramChannel;
+import io.netty.incubator.channel.uring.IOUringEventLoopGroup;
+import io.netty.incubator.channel.uring.IOUringServerSocketChannel;
+import io.netty.incubator.channel.uring.IOUringSocketChannel;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadFactory;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.common.util.affinity.CpuAffinity;
+import org.apache.commons.lang3.StringUtils;
 
 @SuppressWarnings("checkstyle:JavadocType")
 @Slf4j
 public class EventLoopUtil {
+
+    private static final String ENABLE_IO_URING = "pulsar.enableUring";
 
     /**
      * @return an EventLoopGroup suitable for the current platform
      */
     public static EventLoopGroup newEventLoopGroup(int nThreads, boolean enableBusyWait, ThreadFactory threadFactory) {
         if (Epoll.isAvailable()) {
-            if (!enableBusyWait) {
-                // Regular Epoll based event loop
-                return new EpollEventLoopGroup(nThreads, threadFactory);
+            if (isIoUringEnabledAndAvailable()) {
+                return new IOUringEventLoopGroup(nThreads, threadFactory);
+            } else {
+                if (!enableBusyWait) {
+                    // Regular Epoll based event loop
+                    return new EpollEventLoopGroup(nThreads, threadFactory);
+                }
+
+                // With low latency setting, put the Netty event loop on busy-wait loop to reduce cost of
+                // context switches
+                EpollEventLoopGroup eventLoopGroup = new EpollEventLoopGroup(nThreads, threadFactory,
+                        () -> (selectSupplier, hasTasks) -> SelectStrategy.BUSY_WAIT);
+
+                // Enable CPU affinity on IO threads
+                for (int i = 0; i < nThreads; i++) {
+                    eventLoopGroup.next().submit(() -> {
+                        try {
+                            CpuAffinity.acquireCore();
+                        } catch (Throwable t) {
+                            log.warn("Failed to acquire CPU core for thread {} {}", Thread.currentThread().getName(),
+                                    t.getMessage(), t);
+                        }
+                    });
+                }
+
+                return eventLoopGroup;
             }
-
-            // With low latency setting, put the Netty event loop on busy-wait loop to reduce cost of
-            // context switches
-            EpollEventLoopGroup eventLoopGroup = new EpollEventLoopGroup(nThreads, threadFactory,
-                    () -> (selectSupplier, hasTasks) -> SelectStrategy.BUSY_WAIT);
-
-            // Enable CPU affinity on IO threads
-            for (int i = 0; i < nThreads; i++) {
-                eventLoopGroup.next().submit(() -> {
-                    try {
-                        CpuAffinity.acquireCore();
-                    } catch (Throwable t) {
-                        log.warn("Failed to acquire CPU core for thread {} {}", Thread.currentThread().getName(),
-                                t.getMessage(), t);
-                    }
-                });
-            }
-
-            return eventLoopGroup;
         } else {
             // Fallback to NIO
             return new NioEventLoopGroup(nThreads, threadFactory);
         }
+    }
+
+    private static boolean isIoUringEnabledAndAvailable() {
+        // By default, io_uring will not be enabled, even if available. The environment variable will be used:
+        // enable.io_uring=1
+        boolean ioUringEnabled = StringUtils.equalsAnyIgnoreCase(System.getProperty(ENABLE_IO_URING), "1", "true");
+        if (ioUringEnabled) {
+            // Throw exception if IOUring cannot be used
+            IOUring.ensureAvailability();
+        }
+        return ioUringEnabled;
     }
 
     /**
@@ -85,24 +108,87 @@ public class EventLoopUtil {
      * @return
      */
     public static Class<? extends SocketChannel> getClientSocketChannelClass(EventLoopGroup eventLoopGroup) {
-        if (eventLoopGroup instanceof EpollEventLoopGroup) {
+        if (eventLoopGroup instanceof IOUringEventLoopGroup) {
+            return IOUringSocketChannel.class;
+        } else if (eventLoopGroup instanceof EpollEventLoopGroup) {
             return EpollSocketChannel.class;
         } else {
             return NioSocketChannel.class;
         }
     }
 
+    /**
+     * Returns the most appropriate SocketChannel implementation based on the system's capabilities
+     * and configuration. Precedence:
+     * 1) IO_uring (if available and enabled via 'pulsar.enableUring')
+     * 2) Epoll (if available)
+     * 3) NIO (fallback)
+     */
+    public static Class<? extends SocketChannel> getClientSocketChannelClass() {
+        if (Epoll.isAvailable()) {
+            if (isIoUringEnabledAndAvailable()) {
+                return IOUringSocketChannel.class;
+            } else {
+                return EpollSocketChannel.class;
+            }
+        } else {
+            return NioSocketChannel.class;
+        }
+    }
+
     public static Class<? extends ServerSocketChannel> getServerSocketChannelClass(EventLoopGroup eventLoopGroup) {
-        if (eventLoopGroup instanceof EpollEventLoopGroup) {
+        if (eventLoopGroup instanceof IOUringEventLoopGroup) {
+            return IOUringServerSocketChannel.class;
+        } else if (eventLoopGroup instanceof EpollEventLoopGroup) {
             return EpollServerSocketChannel.class;
         } else {
             return NioServerSocketChannel.class;
         }
     }
 
+    /**
+     * Returns the most appropriate ServerSocketChannel implementation based on the system's capabilities
+     * and configuration. Precedence:
+     * 1) IO_uring (if available and enabled via 'pulsar.enableUring')
+     * 2) Epoll (if available)
+     * 3) NIO (fallback)
+     */
+    public static Class<? extends ServerSocketChannel> getServerSocketChannelClass() {
+        if (Epoll.isAvailable()) {
+            if (isIoUringEnabledAndAvailable()) {
+                return IOUringServerSocketChannel.class;
+            } else {
+                return EpollServerSocketChannel.class;
+            }
+        } else {
+            return NioServerSocketChannel.class;
+        }
+    }
+
     public static Class<? extends DatagramChannel> getDatagramChannelClass(EventLoopGroup eventLoopGroup) {
-        if (eventLoopGroup instanceof EpollEventLoopGroup) {
+        if (eventLoopGroup instanceof IOUringEventLoopGroup) {
+            return IOUringDatagramChannel.class;
+        } else if (eventLoopGroup instanceof EpollEventLoopGroup) {
             return EpollDatagramChannel.class;
+        } else {
+            return NioDatagramChannel.class;
+        }
+    }
+
+    /**
+     * Returns the most appropriate DatagramChannel implementation based on the system's capabilities
+     * and configuration. Precedence:
+     * 1) IO_uring (if available and enabled via 'pulsar.enableUring')
+     * 2) Epoll (if available)
+     * 3) NIO (fallback)
+     */
+    public static Class<? extends DatagramChannel> getDatagramChannelClass() {
+        if (Epoll.isAvailable()) {
+            if (isIoUringEnabledAndAvailable()) {
+                return IOUringDatagramChannel.class;
+            } else {
+                return EpollDatagramChannel.class;
+            }
         } else {
             return NioDatagramChannel.class;
         }

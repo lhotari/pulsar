@@ -24,7 +24,7 @@
   <parent>
     <groupId>org.apache.pulsar</groupId>
     <artifactId>pulsar-io</artifactId>
-    <version>2.10.0-SNAPSHOT</version>
+    <version>4.2.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>pulsar-io-docs</artifactId>
@@ -42,14 +42,24 @@
       <artifactId>reflections</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.beust</groupId>
-      <artifactId>jcommander</artifactId>
+      <groupId>info.picocli</groupId>
+      <artifactId>picocli</artifactId>
     </dependency>
 
     <!-- include connectors -->
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-aerospike</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-io-alluxio</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-io-azuredataexplorer</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
@@ -84,6 +94,16 @@
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-io-debezium-oracle</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-io-debezium-mssql</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-dynamodb</artifactId>
       <version>${project.version}</version>
     </dependency>
@@ -99,17 +119,7 @@
     </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
-      <artifactId>pulsar-io-flume</artifactId>
-      <version>${project.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-hbase</artifactId>
-      <version>${project.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>${project.groupId}</groupId>
-      <artifactId>pulsar-io-hdfs2</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
@@ -140,6 +150,16 @@
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>pulsar-io-jdbc-sqlite</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-io-jdbc-openmldb</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-io-http</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
@@ -187,15 +207,17 @@
       <artifactId>pulsar-io-solr</artifactId>
       <version>${project.version}</version>
     </dependency>
-    <dependency>
-      <groupId>${project.groupId}</groupId>
-      <artifactId>pulsar-io-twitter</artifactId>
-      <version>${project.version}</version>
-    </dependency>
   </dependencies>
 
   <build>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-deploy-plugin</artifactId>
+        <configuration>
+          <skip>${skipDeployConnector}</skip>
+        </configuration>
+      </plugin>
       <plugin>
         <groupId>com.github.spotbugs</groupId>
         <artifactId>spotbugs-maven-plugin</artifactId>
@@ -215,5 +237,31 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <!--
+    The only working way for OWASP dependency checker plugin
+    to exclude module when failBuildOnCVSS is used
+    in the root pom's plugin.
+    -->
+    <profile>
+      <id>owasp-dependency-check</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.owasp</groupId>
+            <artifactId>dependency-check-maven</artifactId>
+            <executions>
+              <execution>
+                <goals>
+                  <goal>aggregate</goal>
+                </goals>
+                <phase>none</phase>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 
 </project>

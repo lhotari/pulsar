@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,8 +19,6 @@
 package org.apache.pulsar.metadata.impl;
 
 import com.google.common.collect.MapMaker;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -38,10 +36,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.common.concurrent.FutureUtils;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.metadata.api.GetResult;
+import org.apache.pulsar.metadata.api.MetadataEventSynchronizer;
+import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.MetadataStoreConfig;
 import org.apache.pulsar.metadata.api.MetadataStoreException;
 import org.apache.pulsar.metadata.api.MetadataStoreException.BadVersionException;
 import org.apache.pulsar.metadata.api.MetadataStoreException.NotFoundException;
+import org.apache.pulsar.metadata.api.MetadataStoreProvider;
 import org.apache.pulsar.metadata.api.Notification;
 import org.apache.pulsar.metadata.api.NotificationType;
 import org.apache.pulsar.metadata.api.Stat;
@@ -50,6 +51,9 @@ import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 
 @Slf4j
 public class LocalMemoryMetadataStore extends AbstractMetadataStore implements MetadataStoreExtended {
+
+    static final String MEMORY_SCHEME = "memory";
+    static final String MEMORY_SCHEME_IDENTIFIER = "memory:";
 
     @Data
     private static class Value {
@@ -62,6 +66,7 @@ public class LocalMemoryMetadataStore extends AbstractMetadataStore implements M
 
     private final NavigableMap<String, Value> map;
     private final AtomicLong sequentialIdGenerator;
+    private MetadataEventSynchronizer synchronizer;
 
     private static final Map<String, NavigableMap<String, Value>> STATIC_MAPS = new MapMaker()
             .weakValues().makeMap();
@@ -73,20 +78,17 @@ public class LocalMemoryMetadataStore extends AbstractMetadataStore implements M
 
     public LocalMemoryMetadataStore(String metadataURL, MetadataStoreConfig metadataStoreConfig)
             throws MetadataStoreException {
-        URI uri;
-        try {
-            uri = new URI(metadataURL);
-        } catch (URISyntaxException e) {
-            throw new MetadataStoreException(e);
-        }
-
+        super(metadataStoreConfig.getMetadataStoreName(), metadataStoreConfig.getOpenTelemetry(),
+                metadataStoreConfig.getNodeSizeStats(), metadataStoreConfig.getNumSerDesThreads());
+        String name = metadataURL.substring(MEMORY_SCHEME_IDENTIFIER.length());
         // Local means a private data set
-        if ("local".equals(uri.getHost())) {
+        // update synchronizer and register sync listener
+        updateMetadataEventSynchronizer(metadataStoreConfig.getSynchronizer());
+        if ("local".equals(name)) {
             map = new TreeMap<>();
             sequentialIdGenerator = new AtomicLong();
         } else {
             // Use a reference from a shared data set
-            String name = uri.getHost();
             map = STATIC_MAPS.computeIfAbsent(name, __ -> new TreeMap<>());
             STATIC_INSTANCE.compute(name, (key, value) -> {
                 if (value == null) {
@@ -130,7 +132,7 @@ public class LocalMemoryMetadataStore extends AbstractMetadataStore implements M
 
             Set<String> children = new TreeSet<>();
             map.subMap(firstKey, false, lastKey, false).forEach((key, value) -> {
-                String relativePath = key.replace(firstKey, "");
+                String relativePath = key.replaceFirst(firstKey, "");
 
                 // Only return first-level children
                 String child = relativePath.split("/", 2)[0];
@@ -168,24 +170,21 @@ public class LocalMemoryMetadataStore extends AbstractMetadataStore implements M
 
             long now = System.currentTimeMillis();
 
-            CompletableFuture<Stat> future = new CompletableFuture<>();
             if (hasVersion && expectedVersion == -1) {
                 Value newValue = new Value(0, data, now, now, options.contains(CreateOption.Ephemeral));
                 Value existingValue = map.putIfAbsent(path, newValue);
                 if (existingValue != null) {
-                    execute(() -> future.completeExceptionally(new BadVersionException("")), future);
+                    return FutureUtils.exception(new BadVersionException(""));
                 } else {
                     receivedNotification(new Notification(NotificationType.Created, path));
                     notifyParentChildrenChanged(path);
-                    String finalPath = path;
-                    execute(() -> future.complete(new Stat(finalPath, 0, now, now, newValue.isEphemeral(),
-                            true)), future);
+                    return FutureUtils.value(new Stat(path, 0, now, now, newValue.isEphemeral(), true));
                 }
             } else {
                 Value existingValue = map.get(path);
                 long existingVersion = existingValue != null ? existingValue.version : -1;
                 if (hasVersion && expectedVersion != existingVersion) {
-                    execute(() -> future.completeExceptionally(new BadVersionException("")), future);
+                    return FutureUtils.exception(new BadVersionException(""));
                 } else {
                     long newVersion = existingValue != null ? existingValue.version + 1 : 0;
                     long createdTimestamp = existingValue != null ? existingValue.createdTimestamp : now;
@@ -199,13 +198,12 @@ public class LocalMemoryMetadataStore extends AbstractMetadataStore implements M
                     if (type == NotificationType.Created) {
                         notifyParentChildrenChanged(path);
                     }
-                    String finalPath = path;
-                    execute(() -> future.complete(new Stat(finalPath, newValue.version, newValue.createdTimestamp,
-                            newValue.modifiedTimestamp,
-                            false, true)), future);
+                    return FutureUtils
+                            .value(new Stat(path, newValue.version, newValue.createdTimestamp,
+                                    newValue.modifiedTimestamp,
+                                    false, true));
                 }
             }
-            return future;
         }
     }
 
@@ -215,20 +213,50 @@ public class LocalMemoryMetadataStore extends AbstractMetadataStore implements M
             return FutureUtil.failedFuture(new MetadataStoreException.InvalidPathException(path));
         }
         synchronized (map) {
-            CompletableFuture<Void> future = new CompletableFuture<>();
             Value value = map.get(path);
             if (value == null) {
-                execute(() -> future.completeExceptionally(new NotFoundException("")), future);
+                return FutureUtils.exception(new NotFoundException(""));
             } else if (optExpectedVersion.isPresent() && optExpectedVersion.get() != value.version) {
-                execute(() -> future.completeExceptionally(new BadVersionException("")), future);
+                return FutureUtils.exception(new BadVersionException(""));
             } else {
                 map.remove(path);
                 receivedNotification(new Notification(NotificationType.Deleted, path));
 
                 notifyParentChildrenChanged(path);
-                execute(() -> future.complete(null), future);
+                return FutureUtils.value(null);
             }
-            return future;
         }
+    }
+
+    @Override
+    public Optional<MetadataEventSynchronizer> getMetadataEventSynchronizer() {
+        return Optional.ofNullable(synchronizer);
+    }
+
+    @Override
+    public void updateMetadataEventSynchronizer(MetadataEventSynchronizer synchronizer) {
+        this.synchronizer = synchronizer;
+        registerSyncListener(Optional.ofNullable(synchronizer));
+    }
+
+    @Override
+    public void close() throws Exception {
+        if (isClosed.compareAndSet(false, true)) {
+            super.close();
+        }
+    }
+}
+
+class MemoryMetadataStoreProvider implements MetadataStoreProvider {
+
+    @Override
+    public String urlScheme() {
+        return LocalMemoryMetadataStore.MEMORY_SCHEME;
+    }
+
+    @Override
+    public MetadataStore create(String metadataURL, MetadataStoreConfig metadataStoreConfig,
+                                boolean enableSessionWatcher) throws MetadataStoreException {
+        return new LocalMemoryMetadataStore(metadataURL, metadataStoreConfig);
     }
 }

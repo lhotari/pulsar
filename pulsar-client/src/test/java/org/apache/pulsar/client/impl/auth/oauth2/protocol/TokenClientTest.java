@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,20 +18,18 @@
  */
 package org.apache.pulsar.client.impl.auth.oauth2.protocol;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.testng.Assert.assertNotNull;
 import com.google.gson.Gson;
+import java.io.IOException;
+import java.net.URL;
+import java.util.concurrent.ExecutionException;
 import org.asynchttpclient.BoundRequestBuilder;
 import org.asynchttpclient.DefaultAsyncHttpClient;
 import org.asynchttpclient.ListenableFuture;
 import org.asynchttpclient.Response;
-import org.junit.Assert;
-import org.junit.Test;
-
-import java.io.IOException;
-import java.net.URL;
-import java.util.concurrent.ExecutionException;
-
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import org.testng.annotations.Test;
 
 /**
  * Token client exchange token mock test.
@@ -57,7 +55,8 @@ public class TokenClientTest {
         ListenableFuture<Response> listenableFuture = mock(ListenableFuture.class);
         when(defaultAsyncHttpClient.preparePost(url.toString())).thenReturn(boundRequestBuilder);
         when(boundRequestBuilder.setHeader("Accept", "application/json")).thenReturn(boundRequestBuilder);
-        when(boundRequestBuilder.setHeader("Content-Type", "application/x-www-form-urlencoded")).thenReturn(boundRequestBuilder);
+        when(boundRequestBuilder.setHeader("Content-Type",
+                "application/x-www-form-urlencoded")).thenReturn(boundRequestBuilder);
         when(boundRequestBuilder.setBody(body)).thenReturn(boundRequestBuilder);
         when(boundRequestBuilder.execute()).thenReturn(listenableFuture);
         when(listenableFuture.get()).thenReturn(response);
@@ -67,7 +66,7 @@ public class TokenClientTest {
         tokenResult.setIdToken("test-id");
         when(response.getResponseBodyAsBytes()).thenReturn(new Gson().toJson(tokenResult).getBytes());
         TokenResult tr = tokenClient.exchangeClientCredentials(request);
-        Assert.assertNotNull(tr);
+        assertNotNull(tr);
     }
 
     @Test
@@ -87,7 +86,8 @@ public class TokenClientTest {
         ListenableFuture<Response> listenableFuture = mock(ListenableFuture.class);
         when(defaultAsyncHttpClient.preparePost(url.toString())).thenReturn(boundRequestBuilder);
         when(boundRequestBuilder.setHeader("Accept", "application/json")).thenReturn(boundRequestBuilder);
-        when(boundRequestBuilder.setHeader("Content-Type", "application/x-www-form-urlencoded")).thenReturn(boundRequestBuilder);
+        when(boundRequestBuilder.setHeader("Content-Type",
+                "application/x-www-form-urlencoded")).thenReturn(boundRequestBuilder);
         when(boundRequestBuilder.setBody(body)).thenReturn(boundRequestBuilder);
         when(boundRequestBuilder.execute()).thenReturn(listenableFuture);
         when(listenableFuture.get()).thenReturn(response);
@@ -97,6 +97,6 @@ public class TokenClientTest {
         tokenResult.setIdToken("test-id");
         when(response.getResponseBodyAsBytes()).thenReturn(new Gson().toJson(tokenResult).getBytes());
         TokenResult tr = tokenClient.exchangeClientCredentials(request);
-        Assert.assertNotNull(tr);
+        assertNotNull(tr);
     }
 }

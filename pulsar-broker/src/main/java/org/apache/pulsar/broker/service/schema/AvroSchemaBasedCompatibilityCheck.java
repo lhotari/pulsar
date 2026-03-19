@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -29,6 +29,7 @@ import org.apache.avro.SchemaValidationException;
 import org.apache.avro.SchemaValidator;
 import org.apache.avro.SchemaValidatorBuilder;
 import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaException;
+import org.apache.pulsar.broker.service.schema.validator.StructSchemaDataValidator;
 import org.apache.pulsar.common.policies.data.SchemaCompatibilityStrategy;
 import org.apache.pulsar.common.protocol.schema.SchemaData;
 
@@ -51,11 +52,12 @@ abstract class AvroSchemaBasedCompatibilityCheck implements SchemaCompatibilityC
         checkArgument(from != null, "check compatibility list is null");
         try {
             for (SchemaData schemaData : from) {
-                Schema.Parser parser = new Schema.Parser();
+                Schema.Parser parser =
+                        new Schema.Parser(StructSchemaDataValidator.COMPATIBLE_NAME_VALIDATOR);
                 parser.setValidateDefaults(false);
                 fromList.addFirst(parser.parse(new String(schemaData.getData(), UTF_8)));
             }
-            Schema.Parser parser = new Schema.Parser();
+            Schema.Parser parser = new Schema.Parser(StructSchemaDataValidator.COMPATIBLE_NAME_VALIDATOR);
             parser.setValidateDefaults(false);
             Schema toSchema = parser.parse(new String(to.getData(), UTF_8));
             SchemaValidator schemaValidator = createSchemaValidator(strategy);
@@ -64,8 +66,10 @@ abstract class AvroSchemaBasedCompatibilityCheck implements SchemaCompatibilityC
             log.warn("Error during schema parsing: {}", e.getMessage());
             throw new IncompatibleSchemaException(e);
         } catch (SchemaValidationException e) {
-            log.warn("Error during schema compatibility check: {}", e.getMessage());
-            throw new IncompatibleSchemaException(e);
+            String msg = String.format("Error during schema compatibility check with strategy %s: %s: %s",
+                    strategy, e.getClass().getName(), e.getMessage());
+            log.warn(msg);
+            throw new IncompatibleSchemaException(msg, e);
         }
     }
 

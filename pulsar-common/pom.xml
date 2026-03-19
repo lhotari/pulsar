@@ -26,8 +26,7 @@
   <parent>
     <groupId>org.apache.pulsar</groupId>
     <artifactId>pulsar</artifactId>
-    <version>2.10.0-SNAPSHOT</version>
-    <relativePath>..</relativePath>
+    <version>4.2.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>pulsar-common</artifactId>
@@ -50,6 +49,7 @@
     <dependency>
       <groupId>io.swagger</groupId>
       <artifactId>swagger-annotations</artifactId>
+      <scope>provided</scope>
     </dependency>
 
     <dependency>
@@ -58,8 +58,23 @@
     </dependency>
 
     <dependency>
-        <groupId>com.fasterxml.jackson.core</groupId>
-        <artifactId>jackson-databind</artifactId>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>com.fasterxml.jackson.module</groupId>
+      <artifactId>jackson-module-parameter-names</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jsr310</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jdk8</artifactId>
     </dependency>
 
     <dependency>
@@ -68,8 +83,28 @@
     </dependency>
 
     <dependency>
+      <groupId>io.prometheus</groupId>
+      <artifactId>simpleclient_caffeine</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.jspecify</groupId>
+      <artifactId>jspecify</artifactId>
+    </dependency>
+
+    <dependency>
       <groupId>io.netty</groupId>
       <artifactId>netty-handler</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-buffer</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-resolver-dns</artifactId>
     </dependency>
 
     <dependency>
@@ -80,17 +115,27 @@
 
     <dependency>
       <groupId>io.netty</groupId>
+      <artifactId>netty-transport-native-epoll</artifactId>
+      <classifier>linux-aarch_64</classifier>
+    </dependency>
+
+    <dependency>
+      <groupId>io.netty</groupId>
       <artifactId>netty-transport-native-unix-common</artifactId>
-      <classifier>linux-x86_64</classifier>
     </dependency>
 
     <dependency>
       <groupId>org.apache.bookkeeper</groupId>
       <artifactId>bookkeeper-common-allocator</artifactId>
       <exclusions>
+        <!-- Exclude dependencies that are not needed in Pulsar, https://github.com/apache/bookkeeper/issues/4647 -->
         <exclusion>
-          <groupId>commons-configuration</groupId>
-          <artifactId>commons-configuration</artifactId>
+          <groupId>org.apache.commons</groupId>
+          <artifactId>commons-configuration2</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>commons-beanutils</groupId>
+          <artifactId>commons-beanutils</artifactId>
         </exclusion>
       </exclusions>
     </dependency>
@@ -98,6 +143,17 @@
     <dependency>
       <groupId>org.apache.bookkeeper</groupId>
       <artifactId>cpu-affinity</artifactId>
+      <exclusions>
+        <!-- Exclude dependencies that are not needed in Pulsar, https://github.com/apache/bookkeeper/issues/4647 -->
+        <exclusion>
+          <groupId>org.apache.commons</groupId>
+          <artifactId>commons-configuration2</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>commons-beanutils</groupId>
+          <artifactId>commons-beanutils</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
 
     <dependency>
@@ -118,6 +174,15 @@
           <groupId>io.netty</groupId>
           <artifactId>netty-common</artifactId>
         </exclusion>
+        <!-- Exclude dependencies that are not needed in Pulsar, https://github.com/apache/bookkeeper/issues/4647 -->
+        <exclusion>
+          <groupId>org.apache.commons</groupId>
+          <artifactId>commons-configuration2</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>commons-beanutils</groupId>
+          <artifactId>commons-beanutils</artifactId>
+        </exclusion>
       </exclusions>
     </dependency>
 
@@ -127,13 +192,25 @@
     </dependency>
 
     <dependency>
-      <groupId>io.netty</groupId>
-      <artifactId>netty-codec-haproxy</artifactId>
+      <groupId>io.netty.incubator</groupId>
+      <artifactId>netty-incubator-transport-classes-io_uring</artifactId>
     </dependency>
 
     <dependency>
-      <groupId>org.eclipse.jetty</groupId>
-      <artifactId>jetty-util</artifactId>
+      <groupId>io.netty.incubator</groupId>
+      <artifactId>netty-incubator-transport-native-io_uring</artifactId>
+      <classifier>linux-x86_64</classifier>
+    </dependency>
+
+    <dependency>
+      <groupId>io.netty.incubator</groupId>
+      <artifactId>netty-incubator-transport-native-io_uring</artifactId>
+      <classifier>linux-aarch_64</classifier>
+    </dependency>
+
+    <dependency>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-codec-haproxy</artifactId>
     </dependency>
 
     <dependency>
@@ -147,8 +224,8 @@
     </dependency>
 
     <dependency>
-      <groupId>javax.ws.rs</groupId>
-      <artifactId>javax.ws.rs-api</artifactId>
+      <groupId>jakarta.ws.rs</groupId>
+      <artifactId>jakarta.ws.rs-api</artifactId>
     </dependency>
 
     <dependency>
@@ -163,85 +240,135 @@
       <optional>true</optional>
     </dependency>
 
-    <!-- test -->
     <dependency>
-      <groupId>org.eclipse.jetty</groupId>
-      <artifactId>jetty-server</artifactId>
-      <scope>test</scope>
+      <groupId>com.google.re2j</groupId>
+      <artifactId>re2j</artifactId>
     </dependency>
 
+    <dependency>
+      <groupId>com.spotify</groupId>
+      <artifactId>completable-futures</artifactId>
+    </dependency>
+
+    <!-- test -->
     <dependency>
       <groupId>org.bouncycastle</groupId>
       <artifactId>bc-fips</artifactId>
-      <version>${bouncycastlefips.version}</version>
+      <version>${bouncycastle.bc-fips.version}</version>
       <scope>test</scope>
     </dependency>
 
     <dependency>
-      <groupId>org.lz4</groupId>
+      <groupId>at.yawk.lz4</groupId>
       <artifactId>lz4-java</artifactId>
-      <version>1.5.0</version>
       <scope>test</scope>
     </dependency>
 
     <dependency>
       <groupId>com.github.luben</groupId>
       <artifactId>zstd-jni</artifactId>
-      <version>1.3.7-3</version>
       <scope>test</scope>
     </dependency>
 
     <dependency>
       <groupId>org.xerial.snappy</groupId>
       <artifactId>snappy-java</artifactId>
-      <version>1.1.7.5</version>
       <scope>test</scope>
     </dependency>
-      <dependency>
-          <groupId>com.google.code.gson</groupId>
-          <artifactId>gson</artifactId>
-      </dependency>
 
     <dependency>
-      <groupId>com.beust</groupId>
-      <artifactId>jcommander</artifactId>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.awaitility</groupId>
+      <artifactId>awaitility</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.skyscreamer</groupId>
+      <artifactId>jsonassert</artifactId>
+      <version>${skyscreamer.version}</version>
+      <scope>test</scope>
     </dependency>
   </dependencies>
 
   <build>
-  <plugins>
-    <plugin>
-      <groupId>org.gaul</groupId>
-      <artifactId>modernizer-maven-plugin</artifactId>
-      <configuration>
-        <failOnViolations>true</failOnViolations>
-        <javaVersion>8</javaVersion>
-      </configuration>
-      <executions>
-        <execution>
-          <id>modernizer</id>
-          <phase>verify</phase>
-          <goals>
-            <goal>modernizer</goal>
-          </goals>
-        </execution>
-      </executions>
-    </plugin>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <release>${pulsar.client.compiler.release}</release>
+        </configuration>
+      </plugin>
 
-	<plugin>
-		<groupId>com.github.splunk.lightproto</groupId>
-		<artifactId>lightproto-maven-plugin</artifactId>
-		<version>${lightproto-maven-plugin.version}</version>
-		<executions>
-			<execution>
-				<goals>
-					<goal>generate</goal>
-				</goals>
-			</execution>
-		</executions>
-	</plugin>
+      <plugin>
+        <groupId>org.gaul</groupId>
+        <artifactId>modernizer-maven-plugin</artifactId>
+        <configuration>
+          <failOnViolations>true</failOnViolations>
+          <javaVersion>17</javaVersion>
+        </configuration>
+        <executions>
+          <execution>
+            <id>modernizer</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>modernizer</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
 
-    <plugin>
+      <plugin>
+        <groupId>io.streamnative.lightproto</groupId>
+        <artifactId>lightproto-maven-plugin</artifactId>
+        <version>${lightproto-maven-plugin.version}</version>
+        <executions>
+          <execution>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>build-helper-maven-plugin</artifactId>
+        <version>${build-helper-maven-plugin.version}</version>
+        <executions>
+          <execution>
+            <id>add-source</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>add-source</goal>
+            </goals>
+            <configuration>
+              <sources>
+                <source>target/generated-sources/protobuf/java</source>
+              </sources>
+            </configuration>
+          </execution>
+          <execution>
+            <id>add-test-source</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>add-test-source</goal>
+            </goals>
+            <configuration>
+              <sources>
+                <source>target/generated-test-sources/protobuf/java</source>
+              </sources>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+
+      <plugin>
         <groupId>pl.project13.maven</groupId>
         <artifactId>git-commit-id-plugin</artifactId>
         <executions>
@@ -253,6 +380,7 @@
           </execution>
         </executions>
         <configuration>
+          <skip>false</skip>
           <useNativeGit>true</useNativeGit>
           <prefix>git</prefix>
           <verbose>false</verbose>
@@ -263,51 +391,73 @@
             <skip>true</skip>
           </gitDescribe>
         </configuration>
-    </plugin>
+      </plugin>
 
-    <plugin>
-      <groupId>org.codehaus.mojo</groupId>
-      <artifactId>templating-maven-plugin</artifactId>
-      <version>1.0.0</version>
-      <executions>
-        <execution>
-          <id>filtering-java-templates</id>
-          <goals>
-            <goal>filter-sources</goal>
-          </goals>
-        </execution>
-      </executions>
-    </plugin>
-    <plugin>
-      <groupId>com.github.spotbugs</groupId>
-      <artifactId>spotbugs-maven-plugin</artifactId>
-      <version>${spotbugs-maven-plugin.version}</version>
-      <executions>
-        <execution>
-          <id>spotbugs</id>
-          <phase>verify</phase>
-          <goals>
-            <goal>check</goal>
-          </goals>
-        </execution>
-      </executions>
-      <configuration>
-        <excludeFilterFile>${basedir}/src/main/resources/findbugsExclude.xml</excludeFilterFile>
-      </configuration>
-    </plugin>
-    <plugin>
-      <groupId>org.apache.maven.plugins</groupId>
-      <artifactId>maven-checkstyle-plugin</artifactId>
-      <executions>
-        <execution>
-          <id>checkstyle</id>
-          <phase>verify</phase>
-          <goals>
-            <goal>check</goal>
-          </goals>
-        </execution>
-      </executions>
-    </plugin>
-  </plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>templating-maven-plugin</artifactId>
+        <version>1.0.0</version>
+        <executions>
+          <execution>
+            <id>filtering-java-templates</id>
+            <goals>
+              <goal>filter-sources</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+        <version>${spotbugs-maven-plugin.version}</version>
+        <executions>
+          <execution>
+            <id>spotbugs</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <excludeFilterFile>${basedir}/src/main/resources/findbugsExclude.xml</excludeFilterFile>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>checkstyle</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <artifactId>maven-resources-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>copy-resources</id>
+            <phase>test-compile</phase>
+            <goals>
+              <goal>copy-resources</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.testOutputDirectory}/certificate-authority</outputDirectory>
+              <overwrite>true</overwrite>
+              <resources>
+                <resource>
+                  <directory>${project.parent.basedir}/tests/certificate-authority</directory>
+                  <filtering>false</filtering>
+                </resource>
+              </resources>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
   </build>
 </project>

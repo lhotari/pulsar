@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -31,12 +31,6 @@ public class ResourceQuotaCalculatorImpl implements ResourceQuotaCalculator {
         // ToDo: work out the initial conditions: we may allow a small number of "first few iterations" to go
         // unchecked as we get some history of usage, or follow some other "TBD" method.
 
-        long totalUsage = 0;
-
-        for (long usage : allUsages) {
-            totalUsage += usage;
-        }
-
         if (confUsage < 0) {
             // This can happen if the RG is not configured with this particular limit (message or byte count) yet.
             val retVal = -1;
@@ -45,6 +39,11 @@ public class ResourceQuotaCalculatorImpl implements ResourceQuotaCalculator {
                         confUsage, retVal);
             }
             return retVal;
+        }
+
+        long totalUsage = 0;
+        for (long usage : allUsages) {
+            totalUsage += usage;
         }
 
         if (myUsage < 0 || totalUsage < 0) {
@@ -85,8 +84,10 @@ public class ResourceQuotaCalculatorImpl implements ResourceQuotaCalculator {
         float calculatedQuota = max(myUsage + residual * myUsageFraction, 1);
 
         val longCalculatedQuota = (long) calculatedQuota;
-        log.info("computeLocalQuota: myUsage={}, totalUsage={}, myFraction={}; newQuota returned={} [long: {}]",
-                myUsage, totalUsage, myUsageFraction, calculatedQuota, longCalculatedQuota);
+        if (log.isDebugEnabled()) {
+            log.debug("computeLocalQuota: myUsage={}, totalUsage={}, myFraction={}; newQuota returned={} [long: {}]",
+                    myUsage, totalUsage, myUsageFraction, calculatedQuota, longCalculatedQuota);
+        }
 
         return longCalculatedQuota;
     }
@@ -108,7 +109,7 @@ public class ResourceQuotaCalculatorImpl implements ResourceQuotaCalculator {
         final float toleratedDriftPercentage = ResourceGroupService.UsageReportSuppressionTolerancePercentage;
         if (currentBytesUsed > 0) {
             long diff = abs(currentBytesUsed - lastReportedBytes);
-            float diffPercentage = (diff / currentBytesUsed) * 100;
+            float diffPercentage = (float) diff * 100 / lastReportedBytes;
             if (diffPercentage > toleratedDriftPercentage) {
                 return true;
             }
@@ -116,7 +117,7 @@ public class ResourceQuotaCalculatorImpl implements ResourceQuotaCalculator {
 
         if (currentMessagesUsed > 0) {
             long diff = abs(currentMessagesUsed - lastReportedMessages);
-            float diffPercentage = (diff / currentMessagesUsed) * 100;
+            float diffPercentage = (float) diff * 100 / lastReportedMessages;
             if (diffPercentage > toleratedDriftPercentage) {
                 return true;
             }

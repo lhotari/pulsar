@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,14 +23,17 @@ import io.swagger.annotations.ApiOperation;
 import io.swagger.annotations.ApiParam;
 import io.swagger.annotations.ApiResponse;
 import io.swagger.annotations.ApiResponses;
-import java.time.Duration;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 import javax.ws.rs.DELETE;
+import javax.ws.rs.DefaultValue;
 import javax.ws.rs.GET;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
@@ -40,42 +43,36 @@ import javax.ws.rs.container.AsyncResponse;
 import javax.ws.rs.container.Suspended;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.Status;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.PulsarVersion;
-import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.PulsarService.State;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.broker.admin.AdminResource;
 import org.apache.pulsar.broker.loadbalance.LeaderBroker;
-import org.apache.pulsar.broker.namespace.NamespaceService;
-import org.apache.pulsar.broker.service.BrokerService;
-import org.apache.pulsar.broker.web.PulsarWebResource;
 import org.apache.pulsar.broker.web.RestException;
-import org.apache.pulsar.client.api.Message;
-import org.apache.pulsar.client.api.MessageId;
-import org.apache.pulsar.client.api.Producer;
-import org.apache.pulsar.client.api.PulsarClient;
-import org.apache.pulsar.client.api.Reader;
-import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.common.conf.InternalConfigurationData;
-import org.apache.pulsar.common.naming.NamespaceName;
-import org.apache.pulsar.common.naming.TopicVersion;
 import org.apache.pulsar.common.policies.data.BrokerInfo;
+import org.apache.pulsar.common.policies.data.BrokerOperation;
 import org.apache.pulsar.common.policies.data.NamespaceOwnershipStatus;
 import org.apache.pulsar.common.util.FutureUtil;
+import org.apache.pulsar.common.util.ThreadDumpUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Broker admin base.
  */
-public class BrokersBase extends PulsarWebResource {
+public class BrokersBase extends AdminResource {
     private static final Logger LOG = LoggerFactory.getLogger(BrokersBase.class);
-    private static final Duration HEALTHCHECK_READ_TIMEOUT = Duration.ofSeconds(10);
-    public static final String HEALTH_CHECK_TOPIC_SUFFIX = "healthcheck";
+    // log a full thread dump when a deadlock is detected in healthcheck once every 10 minutes
+    // to prevent excessive logging
+    private static final long LOG_THREADDUMP_INTERVAL_WHEN_DEADLOCK_DETECTED = 600000L;
+    private static volatile long threadDumpLoggedTimestamp;
 
     @GET
     @Path("/{cluster}")
     @ApiOperation(
-        value = "Get the list of active brokers (web service addresses) in the cluster."
+        value = "Get the list of active brokers (broker ids) in the cluster."
                 + "If authorization is not enabled, any cluster name is valid.",
         response = String.class,
         responseContainer = "Set")
@@ -85,16 +82,37 @@ public class BrokersBase extends PulsarWebResource {
             @ApiResponse(code = 401, message = "Authentication required"),
             @ApiResponse(code = 403, message = "This operation requires super-user access"),
             @ApiResponse(code = 404, message = "Cluster does not exist: cluster={clustername}") })
-    public Set<String> getActiveBrokers(@PathParam("cluster") String cluster) throws Exception {
-        validateSuperUserAccess();
-        validateClusterOwnership(cluster);
+    public void getActiveBrokers(@Suspended final AsyncResponse asyncResponse,
+                                 @PathParam("cluster") String cluster) {
+        validateBothSuperuserAndBrokerOperation(cluster == null ? pulsar().getConfiguration().getClusterName()
+                        : cluster, pulsar().getBrokerId(), BrokerOperation.LIST_BROKERS)
+                .thenCompose(__ -> validateClusterOwnershipAsync(cluster))
+                .thenCompose(__ -> pulsar().getLoadManager().get().getAvailableBrokersAsync())
+                .thenAccept(activeBrokers -> {
+                    LOG.info("[{}] Successfully to get active brokers, cluster={}", clientAppId(), cluster);
+                    asyncResponse.resume(activeBrokers);
+                }).exceptionally(ex -> {
+                    // If the exception is not redirect exception we need to log it.
+                    if (!isRedirectException(ex)) {
+                        LOG.error("[{}] Fail to get active brokers, cluster={}", clientAppId(), cluster, ex);
+                    }
+                    resumeAsyncResponseExceptionally(asyncResponse, ex);
+                    return null;
+                });
+    }
 
-        try {
-            return pulsar().getLoadManager().get().getAvailableBrokers();
-        } catch (Exception e) {
-            LOG.error("[{}] Failed to get active broker list: cluster={}", clientAppId(), cluster, e);
-            throw new RestException(e);
-        }
+    @GET
+    @ApiOperation(
+            value = "Get the list of active brokers (broker ids) in the local cluster."
+                    + "If authorization is not enabled",
+            response = String.class,
+            responseContainer = "Set")
+    @ApiResponses(
+            value = {
+                    @ApiResponse(code = 401, message = "Authentication required"),
+                    @ApiResponse(code = 403, message = "This operation requires super-user access") })
+    public void getActiveBrokers(@Suspended final AsyncResponse asyncResponse) throws Exception {
+        getActiveBrokers(asyncResponse, null);
     }
 
     @GET
@@ -107,41 +125,51 @@ public class BrokersBase extends PulsarWebResource {
                     @ApiResponse(code = 401, message = "Authentication required"),
                     @ApiResponse(code = 403, message = "This operation requires super-user access"),
                     @ApiResponse(code = 404, message = "Leader broker not found") })
-    public BrokerInfo getLeaderBroker() throws Exception {
-        validateSuperUserAccess();
-
-        try {
-            LeaderBroker leaderBroker = pulsar().getLeaderElectionService().getCurrentLeader()
-                    .orElseThrow(() -> new RestException(Status.NOT_FOUND, "Couldn't find leader broker"));
-            return BrokerInfo.builder().serviceUrl(leaderBroker.getServiceUrl()).build();
-        } catch (Exception e) {
-            LOG.error("[{}] Failed to get the information of the leader broker.", clientAppId(), e);
-            throw new RestException(e);
-        }
+    public void getLeaderBroker(@Suspended final AsyncResponse asyncResponse) {
+        validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(),
+                pulsar().getBrokerId(), BrokerOperation.GET_LEADER_BROKER)
+                .thenAccept(__ -> {
+                    LeaderBroker leaderBroker = pulsar().getLeaderElectionService().getCurrentLeader()
+                            .orElseThrow(() -> new RestException(Status.NOT_FOUND, "Couldn't find leader broker"));
+                    BrokerInfo brokerInfo = BrokerInfo.builder()
+                            .serviceUrl(leaderBroker.getServiceUrl())
+                            .brokerId(leaderBroker.getBrokerId()).build();
+                    LOG.info("[{}] Successfully to get the information of the leader broker.", clientAppId());
+                    asyncResponse.resume(brokerInfo);
+                })
+                .exceptionally(ex -> {
+                    LOG.error("[{}] Failed to get the information of the leader broker.", clientAppId(), ex);
+                    resumeAsyncResponseExceptionally(asyncResponse, ex);
+                    return null;
+                });
     }
 
     @GET
-    @Path("/{clusterName}/{broker-webserviceurl}/ownedNamespaces")
-    @ApiOperation(value = "Get the list of namespaces served by the specific broker",
+    @Path("/{clusterName}/{brokerId}/ownedNamespaces")
+    @ApiOperation(value = "Get the list of namespaces served by the specific broker id",
             response = NamespaceOwnershipStatus.class, responseContainer = "Map")
     @ApiResponses(value = {
             @ApiResponse(code = 307, message = "Current broker doesn't serve the cluster"),
             @ApiResponse(code = 403, message = "Don't have admin permission"),
             @ApiResponse(code = 404, message = "Cluster doesn't exist") })
-    public Map<String, NamespaceOwnershipStatus> getOwnedNamespaces(@PathParam("clusterName") String cluster,
-            @PathParam("broker-webserviceurl") String broker) throws Exception {
-        validateSuperUserAccess();
-        validateClusterOwnership(cluster);
-        validateBrokerName(broker);
-
-        try {
-            // now we validated that this is the broker specified in the request
-            return pulsar().getNamespaceService().getOwnedNameSpacesStatus();
-        } catch (Exception e) {
-            LOG.error("[{}] Failed to get the namespace ownership status. cluster={}, broker={}", clientAppId(),
-                    cluster, broker);
-            throw new RestException(e);
-        }
+    public void getOwnedNamespaces(@Suspended final AsyncResponse asyncResponse,
+                                   @PathParam("clusterName") String cluster,
+                                   @PathParam("brokerId") String brokerId) {
+        validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(),
+                pulsar().getBrokerId(), BrokerOperation.LIST_OWNED_NAMESPACES)
+                .thenCompose(__ -> maybeRedirectToBroker(brokerId))
+                .thenCompose(__ -> validateClusterOwnershipAsync(cluster))
+                .thenCompose(__ -> pulsar().getNamespaceService().getOwnedNameSpacesStatusAsync())
+                .thenAccept(asyncResponse::resume)
+                .exceptionally(ex -> {
+                    // If the exception is not redirect exception we need to log it.
+                    if (!isRedirectException(ex)) {
+                        LOG.error("[{}] Failed to get the namespace ownership status. cluster={}, broker={}",
+                                clientAppId(), cluster, brokerId);
+                    }
+                    resumeAsyncResponseExceptionally(asyncResponse, ex);
+                    return null;
+                });
     }
 
     @POST
@@ -154,62 +182,98 @@ public class BrokersBase extends PulsarWebResource {
             @ApiResponse(code = 404, message = "Configuration not found"),
             @ApiResponse(code = 412, message = "Invalid dynamic-config value"),
             @ApiResponse(code = 500, message = "Internal server error") })
-    public void updateDynamicConfiguration(@PathParam("configName") String configName,
-                                           @PathParam("configValue") String configValue) throws Exception {
-        validateSuperUserAccess();
-        persistDynamicConfiguration(configName, configValue);
+    public void updateDynamicConfiguration(@Suspended AsyncResponse asyncResponse,
+                                           @PathParam("configName") String configName,
+                                           @PathParam("configValue") String configValue) {
+        validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(), pulsar().getBrokerId(),
+                BrokerOperation.UPDATE_DYNAMIC_CONFIGURATION)
+                .thenCompose(__ -> persistDynamicConfigurationAsync(configName, configValue))
+                .thenAccept(__ -> {
+                    LOG.info("[{}] Updated Service configuration {}/{}", clientAppId(), configName, configValue);
+                    asyncResponse.resume(Response.ok().build());
+                }).exceptionally(ex -> {
+                    LOG.error("[{}] Failed to update configuration {}/{}", clientAppId(), configName, configValue, ex);
+                    resumeAsyncResponseExceptionally(asyncResponse, ex);
+                    return null;
+                });
     }
 
     @DELETE
     @Path("/configuration/{configName}")
     @ApiOperation(value =
-            "Delete dynamic serviceconfiguration into zk only. This operation requires Pulsar super-user privileges.")
-    @ApiResponses(value = { @ApiResponse(code = 204, message = "Service configuration updated successfully"),
+            "Delete dynamic ServiceConfiguration into metadata only."
+                    + " This operation requires Pulsar super-user privileges.")
+    @ApiResponses(value = { @ApiResponse(code = 204, message = "Service configuration delete successfully"),
             @ApiResponse(code = 403, message = "You don't have admin permission to update service-configuration"),
             @ApiResponse(code = 412, message = "Invalid dynamic-config value"),
             @ApiResponse(code = 500, message = "Internal server error") })
-    public void deleteDynamicConfiguration(@PathParam("configName") String configName) throws Exception {
-        validateSuperUserAccess();
-        deleteDynamicConfigurationOnZk(configName);
+    public void deleteDynamicConfiguration(
+            @Suspended AsyncResponse asyncResponse,
+            @PathParam("configName") String configName) {
+        validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(), pulsar().getBrokerId(),
+                BrokerOperation.DELETE_DYNAMIC_CONFIGURATION)
+                .thenCompose(__ -> internalDeleteDynamicConfigurationOnMetadataAsync(configName))
+                .thenAccept(__ -> {
+                    LOG.info("[{}] Successfully to delete dynamic configuration {}", clientAppId(), configName);
+                    asyncResponse.resume(Response.ok().build());
+                }).exceptionally(ex -> {
+                    LOG.error("[{}] Failed to delete dynamic configuration {}", clientAppId(), configName, ex);
+                    resumeAsyncResponseExceptionally(asyncResponse, ex);
+                    return null;
+                });
     }
 
     @GET
     @Path("/configuration/values")
-    @ApiOperation(value = "Get value of all dynamic configurations' value overridden on local config")
+    @ApiOperation(value = "Get value of all dynamic configurations' value overridden on local config",
+            response = String.class, responseContainer = "Map")
     @ApiResponses(value = {
         @ApiResponse(code = 403, message = "You don't have admin permission to view configuration"),
         @ApiResponse(code = 404, message = "Configuration not found"),
         @ApiResponse(code = 500, message = "Internal server error")})
-    public Map<String, String> getAllDynamicConfigurations() throws Exception {
-        validateSuperUserAccess();
-        try {
-            return dynamicConfigurationResources().getDynamicConfiguration().orElseGet(Collections::emptyMap);
-        } catch (RestException e) {
-            LOG.error("[{}] couldn't find any configuration in zk {}", clientAppId(), e.getMessage(), e);
-            throw e;
-        } catch (Exception e) {
-            LOG.error("[{}] Failed to retrieve configuration from zk {}", clientAppId(), e.getMessage(), e);
-            throw new RestException(e);
-        }
+    public void getAllDynamicConfigurations(@Suspended AsyncResponse asyncResponse) {
+        validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(), pulsar().getBrokerId(),
+                BrokerOperation.LIST_DYNAMIC_CONFIGURATIONS)
+                .thenCompose(__ -> dynamicConfigurationResources().getDynamicConfigurationAsync())
+                .thenAccept(configOpt -> asyncResponse.resume(configOpt.orElseGet(Collections::emptyMap)))
+                .exceptionally(ex -> {
+                    LOG.error("[{}] Failed to get all dynamic configuration.", clientAppId(), ex);
+                    resumeAsyncResponseExceptionally(asyncResponse, ex);
+                    return null;
+                });
     }
 
     @GET
     @Path("/configuration")
-    @ApiOperation(value = "Get all updatable dynamic configurations's name")
+    @ApiOperation(value = "Get all updatable dynamic configurations's name",
+            response = String.class, responseContainer = "List")
     @ApiResponses(value = {
             @ApiResponse(code = 403, message = "You don't have admin permission to get configuration")})
-    public List<String> getDynamicConfigurationName() {
-        validateSuperUserAccess();
-        return BrokerService.getDynamicConfiguration();
+    public void getDynamicConfigurationName(@Suspended AsyncResponse asyncResponse) {
+        validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(), pulsar().getBrokerId(),
+                BrokerOperation.LIST_DYNAMIC_CONFIGURATIONS)
+                .thenAccept(__ -> asyncResponse.resume(pulsar().getBrokerService().getDynamicConfiguration()))
+                .exceptionally(ex -> {
+                    LOG.error("[{}] Failed to get all dynamic configuration names.", clientAppId(), ex);
+                    resumeAsyncResponseExceptionally(asyncResponse, ex);
+                    return null;
+                });
     }
 
     @GET
     @Path("/configuration/runtime")
-    @ApiOperation(value = "Get all runtime configurations. This operation requires Pulsar super-user privileges.")
+    @ApiOperation(value = "Get all runtime configurations. This operation requires Pulsar super-user privileges.",
+            response = String.class, responseContainer = "Map")
     @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission") })
-    public Map<String, String> getRuntimeConfiguration() {
-        validateSuperUserAccess();
-        return pulsar().getBrokerService().getRuntimeConfiguration();
+    public void getRuntimeConfiguration(@Suspended AsyncResponse asyncResponse) {
+        validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(), pulsar().getBrokerId(),
+                BrokerOperation.LIST_RUNTIME_CONFIGURATIONS)
+                .thenAccept(__ -> asyncResponse.resume(pulsar().getBrokerService().getRuntimeConfiguration()))
+                .exceptionally(ex -> {
+                    LOG.error("[{}] Failed to get runtime configuration.", clientAppId(), ex);
+                    resumeAsyncResponseExceptionally(asyncResponse, ex);
+                    return null;
+                });
     }
 
     /**
@@ -221,31 +285,21 @@ public class BrokersBase extends PulsarWebResource {
      * @param configValue
      *            : configuration value
      */
-    private synchronized void persistDynamicConfiguration(String configName, String configValue) {
-        try {
-            if (!BrokerService.validateDynamicConfiguration(configName, configValue)) {
-                throw new RestException(Status.PRECONDITION_FAILED, " Invalid dynamic-config value");
-            }
-            if (BrokerService.isDynamicConfiguration(configName)) {
-                dynamicConfigurationResources().setDynamicConfigurationWithCreate(old -> {
-                    Map<String, String> configurationMap = old.isPresent() ? old.get() : Maps.newHashMap();
-                    configurationMap.put(configName, configValue);
-                    return configurationMap;
-                });
-                LOG.info("[{}] Updated Service configuration {}/{}", clientAppId(), configName, configValue);
-            } else {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("[{}] Can't update non-dynamic configuration {}/{}", clientAppId(), configName,
-                            configValue);
-                }
-                throw new RestException(Status.PRECONDITION_FAILED, " Can't update non-dynamic configuration");
-            }
-        } catch (RestException re) {
-            throw re;
-        } catch (Exception ie) {
-            LOG.error("[{}] Failed to update configuration {}/{}, {}", clientAppId(), configName, configValue,
-                    ie.getMessage(), ie);
-            throw new RestException(ie);
+    private synchronized CompletableFuture<Void> persistDynamicConfigurationAsync(
+            String configName, String configValue) {
+        if (!pulsar().getBrokerService().validateDynamicConfiguration(configName, configValue)) {
+            return FutureUtil
+                    .failedFuture(new RestException(Status.PRECONDITION_FAILED, " Invalid dynamic-config value"));
+        }
+        if (pulsar().getBrokerService().isDynamicConfiguration(configName)) {
+            return dynamicConfigurationResources().setDynamicConfigurationWithCreateAsync(old -> {
+                Map<String, String> configurationMap = old.orElseGet(Maps::newHashMap);
+                configurationMap.put(configName, configValue);
+                return configurationMap;
+            });
+        } else {
+            return FutureUtil.failedFuture(new RestException(Status.PRECONDITION_FAILED,
+                    "Can't update non-dynamic configuration"));
         }
     }
 
@@ -253,29 +307,36 @@ public class BrokersBase extends PulsarWebResource {
     @Path("/internal-configuration")
     @ApiOperation(value = "Get the internal configuration data", response = InternalConfigurationData.class)
     @ApiResponses(value = { @ApiResponse(code = 403, message = "Don't have admin permission") })
-    public InternalConfigurationData getInternalConfigurationData() {
-        validateSuperUserAccess();
-        return pulsar().getInternalConfigurationData();
+    public void getInternalConfigurationData(@Suspended AsyncResponse asyncResponse) {
+        validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(), pulsar().getBrokerId(),
+                BrokerOperation.GET_INTERNAL_CONFIGURATION_DATA)
+                .thenAccept(__ -> asyncResponse.resume(pulsar().getInternalConfigurationData()))
+                .exceptionally(ex -> {
+                    LOG.error("[{}] Failed to get internal configuration data.", clientAppId(), ex);
+                    resumeAsyncResponseExceptionally(asyncResponse, ex);
+                    return null;
+                });
     }
 
     @GET
     @Path("/backlog-quota-check")
     @ApiOperation(value = "An REST endpoint to trigger backlogQuotaCheck")
     @ApiResponses(value = {
-            @ApiResponse(code = 200, message = "Everything is OK"),
+            @ApiResponse(code = 204, message = "Everything is OK"),
             @ApiResponse(code = 403, message = "Don't have admin permission"),
             @ApiResponse(code = 500, message = "Internal server error")})
     public void backlogQuotaCheck(@Suspended AsyncResponse asyncResponse) {
-        validateSuperUserAccess();
-        pulsar().getBrokerService().executor().execute(()->{
-            try {
-                pulsar().getBrokerService().monitorBacklogQuota();
-                asyncResponse.resume(Response.noContent().build());
-            } catch (Exception e) {
-                LOG.error("trigger backlogQuotaCheck fail", e);
-                asyncResponse.resume(new RestException(e));
-            }
-        });
+        validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(), pulsar().getBrokerId(),
+                BrokerOperation.CHECK_BACKLOG_QUOTA)
+                .thenAcceptAsync(__ -> {
+                    pulsar().getBrokerService().monitorBacklogQuota();
+                    asyncResponse.resume(Response.noContent().build());
+                } , pulsar().getBrokerService().getBacklogQuotaChecker())
+                .exceptionally(ex -> {
+                    LOG.error("[{}] Failed to trigger backlog quota check.", clientAppId(), ex);
+                    resumeAsyncResponseExceptionally(asyncResponse, ex);
+                    return null;
+                });
     }
 
     @GET
@@ -294,146 +355,77 @@ public class BrokersBase extends PulsarWebResource {
 
     @GET
     @Path("/health")
-    @ApiOperation(value = "Run a healthcheck against the broker")
+    @ApiOperation(value = "Run a healthCheck against the broker")
     @ApiResponses(value = {
         @ApiResponse(code = 200, message = "Everything is OK"),
+        @ApiResponse(code = 307, message = "Current broker is not the target broker"),
         @ApiResponse(code = 403, message = "Don't have admin permission"),
         @ApiResponse(code = 404, message = "Cluster doesn't exist"),
-        @ApiResponse(code = 500, message = "Internal server error")})
-    @ApiParam(value = "Topic Version")
-    public void healthcheck(@Suspended AsyncResponse asyncResponse,
-                            @QueryParam("topicVersion") TopicVersion topicVersion) throws Exception {
-        String topic;
-        PulsarClient client;
-        try {
-            validateSuperUserAccess();
-            NamespaceName heartbeatNamespace = (topicVersion == TopicVersion.V2)
-                    ?
-                    NamespaceService.getHeartbeatNamespaceV2(
-                            pulsar().getAdvertisedAddress(),
-                            pulsar().getConfiguration())
-                    :
-                    NamespaceService.getHeartbeatNamespace(
-                            pulsar().getAdvertisedAddress(),
-                            pulsar().getConfiguration());
-
-
-            topic = String.format("persistent://%s/%s", heartbeatNamespace, HEALTH_CHECK_TOPIC_SUFFIX);
-
-            LOG.info("Running healthCheck with topic={}", topic);
-
-            client = pulsar().getClient();
-        } catch (Exception e) {
-            LOG.error("Error getting heathcheck topic info", e);
-            throw new PulsarServerException(e);
+        @ApiResponse(code = 500, message = "Internal server error"),
+        @ApiResponse(code = 503, message = "Service unavailable")})
+    public void healthCheck(@Suspended AsyncResponse asyncResponse,
+                            @QueryParam("brokerId") String brokerId) {
+        if (pulsar().getState() == State.Closed || pulsar().getState() == State.Closing) {
+            asyncResponse.resume(Response.status(Status.SERVICE_UNAVAILABLE).build());
+            return;
         }
-
-        String messageStr = UUID.randomUUID().toString();
-        // create non-partitioned topic manually and close the previous reader if present.
-        try {
-            pulsar().getBrokerService().getTopic(topic, true).get().ifPresent(t -> {
-                t.getSubscriptions().forEach((__, value) -> {
-                    try {
-                        value.deleteForcefully();
-                    } catch (Exception e) {
-                        LOG.warn("Failed to delete previous subscription {} for health check", value.getName(), e);
+        validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(), StringUtils.isBlank(brokerId)
+                ? pulsar().getBrokerId() : brokerId, BrokerOperation.HEALTH_CHECK)
+                .thenCompose(__ -> maybeRedirectToBroker(
+                        StringUtils.isBlank(brokerId) ? pulsar().getBrokerId() : brokerId))
+                .thenAccept(__ -> checkDeadlockedThreads())
+                .thenCompose(__ -> internalRunHealthCheck())
+                .thenAccept(__ -> {
+                    LOG.info("[{}] Successfully run health check.", clientAppId());
+                    asyncResponse.resume(Response.ok("ok").build());
+                }).exceptionally(ex -> {
+                    if (!isRedirectException(ex)) {
+                        if (isNotFoundException(ex)) {
+                            LOG.warn("[{}] Failed to run health check: {}", clientAppId(), ex.getMessage());
+                        } else {
+                            LOG.error("[{}] Failed to run health check.", clientAppId(), ex);
+                        }
                     }
+                    resumeAsyncResponseExceptionally(asyncResponse, ex);
+                    return null;
                 });
-            });
-        } catch (Exception e) {
-            LOG.warn("Failed to try to delete subscriptions for health check", e);
-        }
+    }
 
-        CompletableFuture<Producer<String>> producerFuture =
-                client.newProducer(Schema.STRING).topic(topic).createAsync();
-        CompletableFuture<Reader<String>> readerFuture = client.newReader(Schema.STRING)
-                .topic(topic).startMessageId(MessageId.latest).createAsync();
-
-        CompletableFuture<Void> completePromise = new CompletableFuture<>();
-
-        CompletableFuture.allOf(producerFuture, readerFuture).whenComplete(
-                (ignore, exception) -> {
-                    if (exception != null) {
-                        completePromise.completeExceptionally(exception);
-                    } else {
-                        producerFuture.thenCompose((producer) -> producer.sendAsync(messageStr))
-                                .whenComplete((ignore2, exception2) -> {
-                                    if (exception2 != null) {
-                                        completePromise.completeExceptionally(exception2);
-                                    }
-                                });
-
-                        healthcheckReadLoop(readerFuture, completePromise, messageStr);
-
-                        // timeout read loop after 10 seconds
-                        FutureUtil.addTimeoutHandling(completePromise,
-                                HEALTHCHECK_READ_TIMEOUT, pulsar().getExecutor(),
-                                () -> FutureUtil.createTimeoutException("Timed out reading", getClass(),
-                                        "healthcheck(...)"));
-                    }
-                });
-
-        completePromise.whenComplete((ignore, exception) -> {
-            producerFuture.thenAccept((producer) -> {
-                producer.closeAsync().whenComplete((ignore2, exception2) -> {
-                    if (exception2 != null) {
-                        LOG.warn("Error closing producer for healthcheck", exception2);
-                    }
-                });
-            });
-            readerFuture.thenAccept((reader) -> {
-                reader.closeAsync().whenComplete((ignore2, exception2) -> {
-                    if (exception2 != null) {
-                        LOG.warn("Error closing reader for healthcheck", exception2);
-                    }
-                });
-            });
-            if (exception != null) {
-                asyncResponse.resume(new RestException(exception));
+    private void checkDeadlockedThreads() {
+        ThreadMXBean threadBean = ManagementFactory.getThreadMXBean();
+        long[] threadIds = threadBean.findDeadlockedThreads();
+        if (threadIds != null && threadIds.length > 0) {
+            ThreadInfo[] threadInfos = threadBean.getThreadInfo(threadIds, false, false);
+            String threadNames = Arrays.stream(threadInfos)
+                    .map(threadInfo -> threadInfo.getThreadName() + "(tid=" + threadInfo.getThreadId() + ")").collect(
+                            Collectors.joining(", "));
+            if (System.currentTimeMillis() - threadDumpLoggedTimestamp
+                    > LOG_THREADDUMP_INTERVAL_WHEN_DEADLOCK_DETECTED) {
+                threadDumpLoggedTimestamp = System.currentTimeMillis();
+                LOG.error("Deadlocked threads detected. {}\n{}", threadNames,
+                        ThreadDumpUtil.buildThreadDiagnosticString());
             } else {
-                asyncResponse.resume("ok");
+                LOG.error("Deadlocked threads detected. {}", threadNames);
             }
-        });
+            throw new IllegalStateException("Deadlocked threads detected. " + threadNames);
+        }
     }
 
-    private void healthcheckReadLoop(CompletableFuture<Reader<String>> readerFuture,
-                                     CompletableFuture<?> completablePromise,
-                                     String messageStr) {
-        readerFuture.thenAccept((reader) -> {
-                CompletableFuture<Message<String>> readFuture = reader.readNextAsync()
-                    .whenComplete((m, exception) -> {
-                            if (exception != null) {
-                                completablePromise.completeExceptionally(exception);
-                            } else if (m.getValue().equals(messageStr)) {
-                                completablePromise.complete(null);
-                            } else {
-                                healthcheckReadLoop(readerFuture, completablePromise, messageStr);
-                            }
-                        });
-            });
+    private CompletableFuture<Void> internalRunHealthCheck() {
+        return pulsar().runHealthCheck(clientAppId());
     }
 
-    private synchronized void deleteDynamicConfigurationOnZk(String configName) {
-        try {
-            if (BrokerService.isDynamicConfiguration(configName)) {
-                dynamicConfigurationResources().setDynamicConfiguration(old -> {
-                    if (old != null) {
-                        old.remove(configName);
-                    }
-                    return old;
-                });
-                LOG.info("[{}] Deleted Service configuration {}", clientAppId(), configName);
-            } else {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("[{}] Can't update non-dynamic configuration {}", clientAppId(), configName);
+    private CompletableFuture<Void> internalDeleteDynamicConfigurationOnMetadataAsync(String configName) {
+        if (!pulsar().getBrokerService().isDynamicConfiguration(configName)) {
+            return FutureUtil.failedFuture(
+                    new RestException(Status.PRECONDITION_FAILED, "Can't delete non-dynamic configuration"));
+        } else {
+            return dynamicConfigurationResources().setDynamicConfigurationAsync(old -> {
+                if (old != null) {
+                    old.remove(configName);
                 }
-                throw new RestException(Status.PRECONDITION_FAILED, " Can't update non-dynamic configuration");
-            }
-        } catch (RestException re) {
-            throw re;
-        } catch (Exception ie) {
-            LOG.error("[{}] Failed to update configuration {}, {}", clientAppId(), configName, ie.getMessage(), ie);
-            throw new RestException(ie);
+                return old;
+            });
         }
     }
 
@@ -441,10 +433,104 @@ public class BrokersBase extends PulsarWebResource {
     @Path("/version")
     @ApiOperation(value = "Get version of current broker")
     @ApiResponses(value = {
-            @ApiResponse(code = 200, message = "Everything is OK"),
+            @ApiResponse(code = 200, message = "The Pulsar version", response = String.class),
             @ApiResponse(code = 500, message = "Internal server error")})
     public String version() throws Exception {
         return PulsarVersion.getVersion();
     }
-}
 
+    @POST
+    @Path("/shutdown")
+    @ApiOperation(value =
+            "Shutdown broker gracefully.")
+    @ApiResponses(value = {
+            @ApiResponse(code = 204, message = "Execute shutdown command successfully"),
+            @ApiResponse(code = 403, message = "You don't have admin permission to update service-configuration"),
+            @ApiResponse(code = 500, message = "Internal server error")})
+    public void shutDownBrokerGracefully(
+            @ApiParam(name = "maxConcurrentUnloadPerSec",
+                    value = "if the value absent(value=0) means no concurrent limitation.")
+            @QueryParam("maxConcurrentUnloadPerSec") int maxConcurrentUnloadPerSec,
+            @QueryParam("forcedTerminateTopic") @DefaultValue("true") boolean forcedTerminateTopic,
+            @Suspended final AsyncResponse asyncResponse
+    ) {
+        validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(), pulsar().getBrokerId(),
+                BrokerOperation.SHUTDOWN)
+                .thenCompose(__ -> doShutDownBrokerGracefullyAsync(maxConcurrentUnloadPerSec, forcedTerminateTopic))
+                .thenAccept(__ -> {
+                    LOG.info("[{}] Successfully shutdown broker gracefully", clientAppId());
+                    asyncResponse.resume(Response.noContent().build());
+                })
+                .exceptionally(ex -> {
+            LOG.error("[{}] Failed to shutdown broker gracefully", clientAppId(), ex);
+            resumeAsyncResponseExceptionally(asyncResponse, ex);
+            return null;
+        });
+    }
+
+    private CompletableFuture<Void> doShutDownBrokerGracefullyAsync(int maxConcurrentUnloadPerSec,
+                                                                    boolean forcedTerminateTopic) {
+        pulsar().getBrokerService().unloadNamespaceBundlesGracefully(maxConcurrentUnloadPerSec, forcedTerminateTopic);
+        return pulsar().closeAsync(false);
+    }
+
+
+    private CompletableFuture<Void> validateBothSuperuserAndBrokerOperation(String cluster, String brokerId,
+                                                                            BrokerOperation operation) {
+        final var superUserAccessValidation = validateSuperUserAccessAsync();
+        final var brokerOperationValidation = validateBrokerOperationAsync(cluster, brokerId, operation);
+        return FutureUtil.waitForAll(List.of(superUserAccessValidation, brokerOperationValidation))
+                .handle((result, err) -> {
+                    if (!superUserAccessValidation.isCompletedExceptionally()
+                        || !brokerOperationValidation.isCompletedExceptionally()) {
+                        return null;
+                    }
+                    if (LOG.isDebugEnabled()) {
+                        Throwable superUserValidationException = null;
+                        try {
+                            superUserAccessValidation.join();
+                        } catch (Throwable ex) {
+                            superUserValidationException = FutureUtil.unwrapCompletionException(ex);
+                        }
+                        Throwable brokerOperationValidationException = null;
+                        try {
+                            brokerOperationValidation.join();
+                        } catch (Throwable ex) {
+                            brokerOperationValidationException = FutureUtil.unwrapCompletionException(ex);
+                        }
+                        LOG.debug("validateBothSuperuserAndBrokerOperation failed."
+                                  + " originalPrincipal={} clientAppId={} operation={} broker={} "
+                                  + "superuserValidationError={} brokerOperationValidationError={}",
+                                originalPrincipal(), clientAppId(), operation.toString(), brokerId,
+                                superUserValidationException, brokerOperationValidationException);
+                    }
+                    throw new RestException(Status.UNAUTHORIZED,
+                            String.format("Unauthorized to validateBothSuperuserAndBrokerOperation for"
+                                          + " originalPrincipal [%s] and clientAppId [%s] "
+                                          + "about operation [%s] on broker [%s]",
+                                    originalPrincipal(), clientAppId(), operation.toString(), brokerId));
+                });
+    }
+
+
+    private CompletableFuture<Void> validateBrokerOperationAsync(String cluster, String brokerId,
+                                                                 BrokerOperation operation) {
+        final var pulsar = pulsar();
+        if (pulsar.getBrokerService().isAuthenticationEnabled()
+            && pulsar.getBrokerService().isAuthorizationEnabled()) {
+            return pulsar.getBrokerService().getAuthorizationService()
+                    .allowBrokerOperationAsync(cluster, brokerId, operation, originalPrincipal(),
+                            clientAppId(), clientAuthData())
+                    .thenAccept(isAuthorized -> {
+                        if (!isAuthorized) {
+                            throw new RestException(Status.UNAUTHORIZED,
+                                    String.format("Unauthorized to validateBrokerOperation for"
+                                                  + " originalPrincipal [%s] and clientAppId [%s] "
+                                                  + "about operation [%s] on broker [%s]",
+                                            originalPrincipal(), clientAppId(), operation.toString(), brokerId));
+                        }
+                    });
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+}

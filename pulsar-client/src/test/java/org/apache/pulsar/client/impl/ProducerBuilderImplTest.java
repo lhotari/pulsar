@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,6 +18,18 @@
  */
 package org.apache.pulsar.client.impl;
 
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageRouter;
 import org.apache.pulsar.client.api.MessageRoutingMode;
@@ -25,20 +37,11 @@ import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.TopicMetadata;
+import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.conf.ProducerConfigurationData;
-import org.testng.annotations.BeforeTest;
+import org.apache.pulsar.client.impl.crypto.MessageCryptoBc;
+import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
-
-import java.util.HashMap;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-
-import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-import static org.testng.Assert.assertNotNull;
 
 /**
  * Unit tests of {@link ProducerBuilderImpl}.
@@ -47,13 +50,16 @@ public class ProducerBuilderImplTest {
 
     private static final String TOPIC_NAME = "testTopicName";
     private PulsarClientImpl client;
-    private ProducerBuilderImpl producerBuilderImpl;
+    private ProducerBuilderImpl<byte[]> producerBuilderImpl;
 
-    @BeforeTest
+    @BeforeClass(alwaysRun = true)
     public void setup() {
-        Producer producer = mock(Producer.class);
+        Producer<?> producer = mock(Producer.class);
         client = mock(PulsarClientImpl.class);
-        producerBuilderImpl = new ProducerBuilderImpl(client, Schema.BYTES);
+        ConnectionPool connectionPool = mock(ConnectionPool.class);
+        when(client.getCnxPool()).thenReturn(connectionPool);
+        when(client.getConfiguration()).thenReturn(new ClientConfigurationData());
+        producerBuilderImpl = new ProducerBuilderImpl<>(client, Schema.BYTES);
         when(client.newProducer()).thenReturn(producerBuilderImpl);
 
         when(client.createProducerAsync(
@@ -66,8 +72,8 @@ public class ProducerBuilderImplTest {
         Map<String, String> properties = new HashMap<>();
         properties.put("Test-Key2", "Test-Value2");
 
-        producerBuilderImpl = new ProducerBuilderImpl(client, Schema.BYTES);
-        Producer producer = producerBuilderImpl.topic(TOPIC_NAME)
+        producerBuilderImpl = new ProducerBuilderImpl<>(client, Schema.BYTES);
+        Producer<?> producer = producerBuilderImpl.topic(TOPIC_NAME)
                 .producerName("Test-Producer")
                 .maxPendingMessages(2)
                 .addEncryptionKey("Test-EncryptionKey")
@@ -76,6 +82,14 @@ public class ProducerBuilderImplTest {
                 .create();
 
         assertNotNull(producer);
+    }
+
+    @Test
+    public void testProducerBuilderImplWhenMessageCryptoSet() throws PulsarClientException {
+        producerBuilderImpl = new ProducerBuilderImpl<>(client, Schema.BYTES);
+        producerBuilderImpl.topic(TOPIC_NAME).messageCrypto(new MessageCryptoBc("ctx1", true));
+        assertNotNull(producerBuilderImpl.create());
+        assertNotNull(producerBuilderImpl.getConf().getMessageCrypto());
     }
 
     @Test
@@ -121,6 +135,17 @@ public class ProducerBuilderImplTest {
                 .messageRouter(new CustomMessageRouter())
                 .create();
         assertNotNull(producer);
+    }
+
+    @Test(expectedExceptions = PulsarClientException.class,
+        expectedExceptionsMessageRegExp =
+            ".*When 'messageRoutingMode' is CustomPartition, 'messageRouter' should be set")
+    public void testProducerBuilderImplWhenMessageRoutingIsCustomPartitionAndMessageRouterNotSet()
+        throws PulsarClientException {
+        producerBuilderImpl = new ProducerBuilderImpl(client, Schema.BYTES);
+        producerBuilderImpl.topic(TOPIC_NAME)
+            .messageRoutingMode(MessageRoutingMode.CustomPartition)
+            .create();
     }
 
     @Test(expectedExceptions = PulsarClientException.class)
@@ -324,7 +349,7 @@ public class ProducerBuilderImplTest {
                 .create();
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class)
+    @Test
     public void testProducerBuilderImplWhenPropertiesIsEmpty() throws PulsarClientException {
         Map<String, String> properties = new HashMap<>();
 
@@ -349,7 +374,8 @@ public class ProducerBuilderImplTest {
         producerBuilderImpl.maxPendingMessagesAcrossPartitions(-1);
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class, expectedExceptionsMessageRegExp = "maxPendingMessagesAcrossPartitions needs to be >= maxPendingMessages")
+    @Test(expectedExceptions = IllegalArgumentException.class, expectedExceptionsMessageRegExp =
+            "maxPendingMessagesAcrossPartitions needs to be >= maxPendingMessages")
     public void testProducerBuilderImplWhenMaxPendingMessagesAcrossPartitionsPropertyIsInvalidErrorMessages() {
         producerBuilderImpl.maxPendingMessagesAcrossPartitions(-1);
     }
@@ -360,6 +386,23 @@ public class ProducerBuilderImplTest {
         producerBuilderImpl.batchingMaxMessages(2);
         producerBuilderImpl.sendTimeout(1, TimeUnit.SECONDS);
         producerBuilderImpl.maxPendingMessagesAcrossPartitions(1000);
+    }
+
+    @Test
+    public void testCreateAsyncFailsWhenBatchingAndChunkingEnabled() {
+        producerBuilderImpl = new ProducerBuilderImpl<>(client, Schema.BYTES);
+        CompletableFuture<Producer<byte[]>> future = producerBuilderImpl.topic(TOPIC_NAME)
+                .enableBatching(true)
+                .enableChunking(true)
+                .createAsync();
+
+        assertTrue(future.isCompletedExceptionally());
+        try {
+            future.join();
+            fail("Expected IllegalArgumentException");
+        } catch (CompletionException e) {
+            assertTrue(e.getCause() instanceof IllegalArgumentException);
+        }
     }
 
     private class CustomMessageRouter implements MessageRouter {

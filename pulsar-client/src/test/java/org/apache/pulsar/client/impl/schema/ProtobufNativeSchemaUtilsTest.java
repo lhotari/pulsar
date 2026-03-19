@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -26,7 +26,8 @@ public class ProtobufNativeSchemaUtilsTest {
 
     @Test
     public static void testSerialize() {
-        byte[] data =  ProtobufNativeSchemaUtils.serialize(org.apache.pulsar.client.schema.proto.Test.TestMessage.getDescriptor());
+        byte[] data =  ProtobufNativeSchemaUtils.serialize(org.apache.pulsar.client.schema.proto.Test
+                .TestMessage.getDescriptor());
         Descriptors.Descriptor descriptor =  ProtobufNativeSchemaUtils.deserialize(data);
         Assert.assertNotNull(descriptor);
         Assert.assertNotNull(descriptor.findFieldByName("nestedField").getMessageType());

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,16 +18,17 @@
  */
 package org.apache.pulsar.broker.service;
 
+import com.google.common.collect.Sets;
+import java.util.Random;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest;
+import org.apache.pulsar.common.naming.SystemTopicNames;
+import org.apache.pulsar.common.partition.PartitionedTopicMetadata;
 import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.TenantInfoImpl;
+import org.apache.pulsar.metadata.api.MetadataStoreException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.google.common.collect.Sets;
-
-import java.util.Random;
 
 public abstract class BrokerTestBase extends MockedPulsarServiceBaseTest {
     protected static final int ASYNC_EVENT_COMPLETION_WAIT = 100;
@@ -35,11 +36,17 @@ public abstract class BrokerTestBase extends MockedPulsarServiceBaseTest {
     public void baseSetup() throws Exception {
         super.internalSetup();
         baseSetupCommon();
+        afterSetup();
     }
 
     public void baseSetup(ServiceConfiguration serviceConfiguration) throws Exception {
         super.internalSetup(serviceConfiguration);
         baseSetupCommon();
+        afterSetup();
+    }
+
+    protected void afterSetup() throws Exception {
+        // NOP
     }
 
     private void baseSetupCommon() throws Exception {
@@ -47,7 +54,24 @@ public abstract class BrokerTestBase extends MockedPulsarServiceBaseTest {
         admin.tenants().createTenant("prop",
                 new TenantInfoImpl(Sets.newHashSet("appid1"), Sets.newHashSet("test")));
         admin.namespaces().createNamespace("prop/ns-abc");
-        admin.namespaces().setNamespaceReplicationClusters("prop/ns-abc", Sets.newHashSet("test"));
+        admin.namespaces().setNamespaceReplicationClusters("prop/ns-abc", Sets.newHashSet("test"), false);
+
+        admin.tenants().createTenant("my-property",
+                new TenantInfoImpl(Sets.newHashSet("appid1", "appid2"), Sets.newHashSet("test")));
+        admin.namespaces().createNamespace("my-property/my-ns");
+        admin.namespaces().setNamespaceReplicationClusters("my-property/my-ns", Sets.newHashSet("test"), false);
+    }
+
+    protected void createTransactionCoordinatorAssign() throws MetadataStoreException {
+        createTransactionCoordinatorAssign(1);
+    }
+
+    protected void createTransactionCoordinatorAssign(int partitions) throws MetadataStoreException {
+        pulsar.getPulsarResources()
+                .getNamespaceResources()
+                .getPartitionedTopicResources()
+                .createPartitionedTopic(SystemTopicNames.TRANSACTION_COORDINATOR_ASSIGN,
+                        new PartitionedTopicMetadata(partitions));
     }
 
     void rolloverPerIntervalStats() {
@@ -58,7 +82,7 @@ public abstract class BrokerTestBase extends MockedPulsarServiceBaseTest {
         }
     }
 
-    void runGC() {
+    protected void runGC() {
         try {
             pulsar.getBrokerService().forEachTopic(topic -> {
                 if (topic instanceof AbstractTopic) {

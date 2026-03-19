@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,19 +16,17 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 package org.apache.pulsar.io.elasticsearch.testcontainers;
-
-import lombok.extern.slf4j.Slf4j;
-import org.testcontainers.containers.Network;
-import org.testcontainers.containers.ToxiproxyContainer;
-import org.testcontainers.elasticsearch.ElasticsearchContainer;
-import org.testcontainers.utility.DockerImageName;
 
 import java.io.IOException;
 import java.util.Objects;
 import java.util.Timer;
 import java.util.TimerTask;
+import lombok.extern.slf4j.Slf4j;
+import org.testcontainers.containers.Network;
+import org.testcontainers.containers.ToxiproxyContainer;
+import org.testcontainers.elasticsearch.ElasticsearchContainer;
+import org.testcontainers.utility.DockerImageName;
 
 @Slf4j
 // Toxiproxy container, which will be used as a TCP proxy

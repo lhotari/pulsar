@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,14 +21,24 @@ package org.apache.pulsar.io.elasticsearch;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
+import com.google.common.hash.Hasher;
+import com.google.common.hash.Hashing;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.client.api.Message;
@@ -56,16 +66,32 @@ public class ElasticSearchSink implements Sink<GenericObject> {
 
     private ElasticSearchConfig elasticSearchConfig;
     private ElasticSearchClient elasticsearchClient;
-    private ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private ObjectMapper sortedObjectMapper;
     private List<String> primaryFields = null;
+    private final Pattern nonPrintableCharactersPattern = Pattern.compile("[\\p{C}]");
+    private final Base64.Encoder base64Encoder = Base64.getEncoder().withoutPadding();
 
     @Override
     public void open(Map<String, Object> config, SinkContext sinkContext) throws Exception {
-        elasticSearchConfig = ElasticSearchConfig.load(config);
+        elasticSearchConfig = ElasticSearchConfig.load(config, sinkContext);
         elasticSearchConfig.validate();
-        elasticsearchClient = new ElasticSearchClient(elasticSearchConfig);
+        elasticsearchClient = new ElasticSearchClient(elasticSearchConfig, sinkContext);
         if (!Strings.isNullOrEmpty(elasticSearchConfig.getPrimaryFields())) {
             primaryFields = Arrays.asList(elasticSearchConfig.getPrimaryFields().split(","));
+        }
+        if (elasticSearchConfig.isCanonicalKeyFields()) {
+            sortedObjectMapper = JsonMapper
+                    .builder()
+                            .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true)
+                    .nodeFactory(new JsonNodeFactory() {
+                        @Override
+                        public ObjectNode objectNode() {
+                            return new ObjectNode(this, new TreeMap<String, JsonNode>());
+                        }
+
+                    })
+                    .build();
         }
     }
 
@@ -77,62 +103,62 @@ public class ElasticSearchSink implements Sink<GenericObject> {
         }
     }
 
+    @VisibleForTesting
+    void setElasticsearchClient(ElasticSearchClient elasticsearchClient) {
+        this.elasticsearchClient = elasticsearchClient;
+    }
+
     @Override
     public void write(Record<GenericObject> record) throws Exception {
-        if (!elasticsearchClient.isFailed()) {
-            Pair<String, String> idAndDoc = extractIdAndDocument(record);
-            try {
-                if (log.isDebugEnabled()) {
-                    log.debug("index doc {} {}", idAndDoc.getLeft(), idAndDoc.getRight());
-                }
-                if (idAndDoc.getRight() == null) {
-                    switch (elasticSearchConfig.getNullValueAction()) {
-                        case DELETE:
-                            if (idAndDoc.getLeft() != null) {
-                                if (elasticSearchConfig.isBulkEnabled()) {
-                                    elasticsearchClient.bulkDelete(record, idAndDoc.getLeft());
-                                } else {
-                                    elasticsearchClient.deleteDocument(record, idAndDoc.getLeft());
-                                }
+        Pair<String, String> idAndDoc = extractIdAndDocument(record);
+        try {
+            if (log.isDebugEnabled()) {
+                log.debug("index doc {} {}", idAndDoc.getLeft(), idAndDoc.getRight());
+            }
+            if (idAndDoc.getRight() == null) {
+                switch (elasticSearchConfig.getNullValueAction()) {
+                    case DELETE:
+                        if (idAndDoc.getLeft() != null) {
+                            if (elasticSearchConfig.isBulkEnabled()) {
+                                elasticsearchClient.bulkDelete(record, idAndDoc.getLeft());
+                            } else {
+                                elasticsearchClient.deleteDocument(record, idAndDoc.getLeft());
                             }
-                            break;
-                        case IGNORE:
-                            break;
-                        case FAIL:
-                            elasticsearchClient.failed(
-                                    new PulsarClientException.InvalidMessageException("Unexpected null message value"));
-                            throw elasticsearchClient.irrecoverableError.get();
-                    }
-                } else {
-                    if (elasticSearchConfig.isBulkEnabled()) {
-                        elasticsearchClient.bulkIndex(record, idAndDoc);
-                    } else {
-                        elasticsearchClient.indexDocument(record, idAndDoc);
-                    }
-                }
-            } catch (JsonProcessingException jsonProcessingException) {
-                switch (elasticSearchConfig.getMalformedDocAction()) {
+                        }
+                        break;
                     case IGNORE:
                         break;
-                    case WARN:
-                        log.warn("Ignoring malformed document messageId={}",
-                                record.getMessage().map(Message::getMessageId).orElse(null),
-                                jsonProcessingException);
-                        elasticsearchClient.failed(jsonProcessingException);
-                        throw jsonProcessingException;
                     case FAIL:
-                        log.error("Malformed document messageId={}",
-                                record.getMessage().map(Message::getMessageId).orElse(null),
-                                jsonProcessingException);
-                        elasticsearchClient.failed(jsonProcessingException);
-                        throw jsonProcessingException;
+                        elasticsearchClient.failed(
+                                new PulsarClientException.InvalidMessageException("Unexpected null message value"));
                 }
-            } catch (Exception e) {
-                log.error("write error for {} {}:", idAndDoc.getLeft(), idAndDoc.getRight(), e);
-                throw e;
+            } else {
+                if (elasticSearchConfig.isBulkEnabled()) {
+                    elasticsearchClient.bulkIndex(record, idAndDoc);
+                } else {
+                    elasticsearchClient.indexDocument(record, idAndDoc);
+                }
             }
-        } else {
-            throw new IllegalStateException("Elasticsearch client is in FAILED status");
+        } catch (JsonProcessingException jsonProcessingException) {
+            switch (elasticSearchConfig.getMalformedDocAction()) {
+                case IGNORE:
+                    break;
+                case WARN:
+                    log.warn("Ignoring malformed document messageId={}",
+                            record.getMessage().map(Message::getMessageId).orElse(null),
+                            jsonProcessingException);
+                    elasticsearchClient.failed(jsonProcessingException);
+                    break;
+                case FAIL:
+                    log.error("Malformed document messageId={}",
+                            record.getMessage().map(Message::getMessageId).orElse(null),
+                            jsonProcessingException);
+                    elasticsearchClient.failed(jsonProcessingException);
+                    break;
+            }
+        } catch (Exception e) {
+            log.error("write error for {} {}:", idAndDoc.getLeft(), idAndDoc.getRight(), e);
+            throw e;
         }
     }
 
@@ -164,18 +190,30 @@ public class ElasticSearchSink implements Sink<GenericObject> {
             } else {
                 key = record.getKey().orElse(null);
                 valueSchema = record.getSchema();
-                value = record.getValue();
+                value = getGenericObjectFromRecord(record);
             }
 
             String id = null;
-            if (!elasticSearchConfig.isKeyIgnore() && key != null && keySchema != null) {
-                id = stringifyKey(keySchema, key);
+            if (!elasticSearchConfig.isKeyIgnore() && key != null) {
+                if (keySchema != null){
+                    id = stringifyKey(keySchema, key);
+                } else {
+                    id = key.toString();
+                }
             }
 
             String doc = null;
             if (value != null) {
                 if (valueSchema != null) {
-                    doc = stringifyValue(valueSchema, value);
+                    if (elasticSearchConfig.isCopyKeyFields()
+                            && (keySchema.getSchemaInfo().getType().equals(SchemaType.AVRO)
+                            || keySchema.getSchemaInfo().getType().equals(SchemaType.JSON))) {
+                        JsonNode keyNode = extractJsonNode(keySchema, key);
+                        JsonNode valueNode = extractJsonNode(valueSchema, value);
+                        doc = stringify(JsonConverter.topLevelMerge(keyNode, valueNode));
+                    } else {
+                        doc = stringifyValue(valueSchema, value);
+                    }
                 } else {
                     if (value.getNativeObject() instanceof byte[]) {
                         // for BWC with the ES-Sink
@@ -197,6 +235,35 @@ public class ElasticSearchSink implements Sink<GenericObject> {
                 }
             }
 
+            final ElasticSearchConfig.IdHashingAlgorithm idHashingAlgorithm =
+                    elasticSearchConfig.getIdHashingAlgorithm();
+            if (id != null
+                    && idHashingAlgorithm != null
+                    && idHashingAlgorithm != ElasticSearchConfig.IdHashingAlgorithm.NONE) {
+                final byte[] idBytes = id.getBytes(StandardCharsets.UTF_8);
+
+                boolean performHashing = true;
+                if (elasticSearchConfig.isConditionalIdHashing() && idBytes.length <= 512) {
+                    performHashing = false;
+                }
+                if (performHashing) {
+                    Hasher hasher;
+                    switch (idHashingAlgorithm) {
+                        case SHA256:
+                            hasher = Hashing.sha256().newHasher();
+                            break;
+                        case SHA512:
+                            hasher = Hashing.sha512().newHasher();
+                            break;
+                        default:
+                            throw new UnsupportedOperationException("Unsupported IdHashingAlgorithm: "
+                                    + idHashingAlgorithm);
+                    }
+                    hasher.putBytes(idBytes);
+                    id = base64Encoder.encodeToString(hasher.hash().asBytes());
+                }
+            }
+
             if (log.isDebugEnabled()) {
                 SchemaType schemaType = null;
                 if (record.getSchema() != null && record.getSchema().getSchemaInfo() != null) {
@@ -208,13 +275,51 @@ public class ElasticSearchSink implements Sink<GenericObject> {
                         id,
                         doc);
             }
+            doc = sanitizeValue(doc);
             return Pair.of(id, doc);
     } else {
-        return Pair.of(null, new String(
-                record.getMessage()
-                        .orElseThrow(() -> new IllegalArgumentException("Record does not carry message information"))
-                        .getData(), StandardCharsets.UTF_8));
+            Message message = record.getMessage().orElse(null);
+            final String rawData;
+            if (message != null) {
+                rawData = new String(message.getData(), StandardCharsets.UTF_8);
+            } else {
+                GenericObject recordObject = getGenericObjectFromRecord(record);
+                rawData = stringifyValue(record.getSchema(), recordObject);
+            }
+            if (rawData == null || rawData.length() == 0){
+                throw new IllegalArgumentException("Record does not carry message information.");
+            }
+            String key = elasticSearchConfig.isKeyIgnore() ? null : record.getKey().map(Object::toString).orElse(null);
+            return Pair.of(key, sanitizeValue(rawData));
         }
+    }
+
+    private GenericObject getGenericObjectFromRecord(Record record){
+        if (record.getValue() == null) {
+            return null;
+        }
+        if (record.getValue() instanceof GenericObject){
+            return (GenericObject) record.getValue();
+        }
+        return new GenericObject() {
+            @Override
+            public SchemaType getSchemaType() {
+                return record.getSchema().getSchemaInfo().getType();
+            }
+
+            @Override
+            public Object getNativeObject() {
+                return record.getValue();
+            }
+        };
+    }
+
+    private String sanitizeValue(String value) {
+        if (value == null || !elasticSearchConfig.isStripNonPrintableCharacters()) {
+            return value;
+        }
+        return nonPrintableCharactersPattern.matcher(value).replaceAll("");
+
     }
 
     public String stringifyKey(Schema<?> schema, Object val) throws JsonProcessingException {
@@ -238,9 +343,11 @@ public class ElasticSearchSink implements Sink<GenericObject> {
         }
     }
 
+
     /**
      * Convert a JsonNode to an Elasticsearch id.
      */
+
     public String stringifyKey(JsonNode jsonNode) throws JsonProcessingException {
         List<String> fields = new ArrayList<>();
         jsonNode.fieldNames().forEachRemaining(fields::add);
@@ -248,19 +355,32 @@ public class ElasticSearchSink implements Sink<GenericObject> {
     }
 
     public String stringifyKey(JsonNode jsonNode, List<String> fields) throws JsonProcessingException {
+        JsonNode toConvert;
         if (fields.size() == 1) {
-            JsonNode singleNode = jsonNode.get(fields.get(0));
-            String id = objectMapper.writeValueAsString(singleNode);
-            return (id.startsWith("\"") && id.endsWith("\""))
-                    ? id.substring(1, id.length() - 1)  // remove double quotes
-                    : id;
+            toConvert = jsonNode.get(fields.get(0));
         } else {
-            return JsonConverter.toJsonArray(jsonNode, fields).toString();
+            toConvert = JsonConverter.toJsonArray(jsonNode, fields);
         }
+
+        String serializedId;
+        if (elasticSearchConfig.isCanonicalKeyFields()) {
+            final Object obj = sortedObjectMapper.treeToValue(toConvert, Object.class);
+            serializedId = sortedObjectMapper.writeValueAsString(obj);
+        } else {
+            serializedId = objectMapper.writeValueAsString(toConvert);
+        }
+
+        return (serializedId.startsWith("\"") && serializedId.endsWith("\""))
+                ? serializedId.substring(1, serializedId.length() - 1)  // remove double quotes
+                : serializedId;
     }
 
     public String stringifyValue(Schema<?> schema, Object val) throws JsonProcessingException {
         JsonNode jsonNode = extractJsonNode(schema, val);
+        return stringify(jsonNode);
+    }
+
+    public String stringify(JsonNode jsonNode) throws JsonProcessingException {
         return elasticSearchConfig.isStripNulls()
                 ? objectMapper.writeValueAsString(stripNullNodes(jsonNode))
                 : objectMapper.writeValueAsString(jsonNode);
@@ -279,14 +399,38 @@ public class ElasticSearchSink implements Sink<GenericObject> {
         return node;
     }
 
-    public static JsonNode extractJsonNode(Schema<?> schema, Object val) {
+    public JsonNode extractJsonNode(Schema<?> schema, Object val) throws JsonProcessingException {
+        if (val == null) {
+            return null;
+        }
         switch (schema.getSchemaInfo().getType()) {
             case JSON:
-                return (JsonNode) ((GenericRecord) val).getNativeObject();
+                Object nativeObject = ((GenericRecord) val).getNativeObject();
+                if (nativeObject instanceof String) {
+                    try {
+                        return objectMapper.readTree((String) nativeObject);
+                    } catch (JsonProcessingException e) {
+                        log.error("Failed to read JSON string: {}", nativeObject, e);
+                        throw e;
+                    }
+                }
+                return (JsonNode) nativeObject;
             case AVRO:
                 org.apache.avro.generic.GenericRecord node = (org.apache.avro.generic.GenericRecord)
                         ((GenericRecord) val).getNativeObject();
                 return JsonConverter.toJson(node);
+            case STRING:
+                try {
+                    return objectMapper.readTree((String) ((GenericObject) val).getNativeObject());
+                } catch (JsonProcessingException e) {
+                    throw new RuntimeException("Error parsing string as JSON.", e);
+                }
+            case BYTES:
+                try {
+                    return objectMapper.readTree((byte[]) ((GenericObject) val).getNativeObject());
+                } catch (IOException e) {
+                    throw new RuntimeException("Error parsing byte[] as JSON.", e);
+                }
             default:
                 throw new UnsupportedOperationException("Unsupported value schemaType="
                         + schema.getSchemaInfo().getType());

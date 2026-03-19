@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,7 +18,7 @@
  */
 package org.apache.pulsar.broker.admin;
 
-import com.google.common.collect.Sets;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest;
 import org.apache.pulsar.client.admin.PulsarAdminException;
@@ -51,14 +51,13 @@ public class TopicPoliciesDisableTest extends MockedPulsarServiceBaseTest {
     @BeforeMethod
     @Override
     protected void setup() throws Exception {
-        this.conf.setSystemTopicEnabled(true);
         this.conf.setTopicLevelPoliciesEnabled(false);
         super.internalSetup();
 
         admin.clusters().createCluster("test", ClusterData.builder().serviceUrl(pulsar.getWebServiceAddress()).build());
-        TenantInfoImpl tenantInfo = new TenantInfoImpl(Sets.newHashSet("role1", "role2"), Sets.newHashSet("test"));
+        TenantInfoImpl tenantInfo = new TenantInfoImpl(Set.of("role1", "role2"), Set.of("test"));
         admin.tenants().createTenant(this.testTenant, tenantInfo);
-        admin.namespaces().createNamespace(testTenant + "/" + testNamespace, Sets.newHashSet("test"));
+        admin.namespaces().createNamespace(testTenant + "/" + testNamespace, Set.of("test"));
         admin.topics().createPartitionedTopic(testTopic, 2);
     }
 
@@ -162,7 +161,7 @@ public class TopicPoliciesDisableTest extends MockedPulsarServiceBaseTest {
     public void testSubscriptionDispatchRateDisabled() throws Exception {
         DispatchRate dispatchRate = DispatchRate.builder()
                 .dispatchThrottlingRateInMsg(1000)
-                .dispatchThrottlingRateInMsg(1020*1024)
+                .dispatchThrottlingRateInMsg(1020 * 1024)
                 .ratePeriodInSecond(1)
                 .build();
         log.info("Dispatch Rate: {} will set to the topic: {}", dispatchRate, testTopic);
@@ -223,6 +222,33 @@ public class TopicPoliciesDisableTest extends MockedPulsarServiceBaseTest {
 
         try {
             admin.topics().removeMaxConsumersPerSubscription(testTopic);
+            Assert.fail();
+        } catch (PulsarAdminException e) {
+            Assert.assertEquals(e.getStatusCode(), HttpStatus.METHOD_NOT_ALLOWED_405);
+        }
+    }
+
+    @Test
+    public void testSubscriptionExpirationTimeDisabled() throws Exception {
+        int subscriptionExpirationTime = 10;
+        log.info("SubscriptionExpirationTime: {} will set to the topic: {}", subscriptionExpirationTime, testTopic);
+
+        try {
+            admin.topicPolicies().setSubscriptionExpirationTime(testTopic, subscriptionExpirationTime);
+            Assert.fail();
+        } catch (PulsarAdminException e) {
+            Assert.assertEquals(e.getStatusCode(), HttpStatus.METHOD_NOT_ALLOWED_405);
+        }
+
+        try {
+            admin.topicPolicies().getSubscriptionExpirationTime(testTopic);
+            Assert.fail();
+        } catch (PulsarAdminException e) {
+            Assert.assertEquals(e.getStatusCode(), HttpStatus.METHOD_NOT_ALLOWED_405);
+        }
+
+        try {
+            admin.topicPolicies().removeSubscriptionExpirationTime(testTopic);
             Assert.fail();
         } catch (PulsarAdminException e) {
             Assert.assertEquals(e.getStatusCode(), HttpStatus.METHOD_NOT_ALLOWED_405);

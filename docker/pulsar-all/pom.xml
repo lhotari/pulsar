@@ -23,12 +23,16 @@
   <parent>
     <groupId>org.apache.pulsar</groupId>
     <artifactId>docker-images</artifactId>
-    <version>2.10.0-SNAPSHOT</version>
+    <version>4.2.0-SNAPSHOT</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>pulsar-all-docker-image</artifactId>
   <name>Apache Pulsar :: Docker Images :: Pulsar Latest Version (Include All Components)</name>
   <packaging>pom</packaging>
+
+  <properties>
+    <docker.dockerfile>Dockerfile</docker.dockerfile>
+  </properties>
 
   <dependencies>
     <dependency>
@@ -67,14 +71,36 @@
 
   <profiles>
     <profile>
+      <id>git-commit-id-no-git</id>
+      <activation>
+        <file>
+          <missing>${basedir}/../../.git</missing>
+        </file>
+      </activation>
+      <properties>
+        <git.commit.id.abbrev>no-git</git.commit.id.abbrev>
+      </properties>
+    </profile>
+    <profile>
       <id>docker</id>
       <!-- include the docker image only when docker profile is active -->
+      <properties>
+        <!-- reference to the image built from docker/kinesis-producer-alpine/Dockerfile -->
+        <PULSAR_IO_KINESIS_KPL_IMAGE>apachepulsar/pulsar-io-kinesis-sink-kinesis_producer:1.0.4</PULSAR_IO_KINESIS_KPL_IMAGE>
+      </properties>
       <dependencies>
         <dependency>
           <groupId>${project.groupId}</groupId>
           <artifactId>pulsar-docker-image</artifactId>
           <version>${project.version}</version>
-          <classifier>docker-info</classifier>
+          <type>pom</type>
+          <scope>provided</scope>
+          <exclusions>
+            <exclusion>
+              <groupId>*</groupId>
+              <artifactId>*</artifactId>
+            </exclusion>
+          </exclusions>
         </dependency>
       </dependencies>
       <build>
@@ -119,60 +145,60 @@
             </executions>
           </plugin>
           <plugin>
-            <groupId>com.spotify</groupId>
-            <artifactId>dockerfile-maven-plugin</artifactId>
-            <version>${dockerfile-maven.version}</version>
+            <groupId>io.fabric8</groupId>
+            <artifactId>docker-maven-plugin</artifactId>
             <executions>
               <execution>
                 <id>default</id>
+                <phase>package</phase>
                 <goals>
                   <goal>build</goal>
-                </goals>
-              </execution>
-              <execution>
-                <id>add-no-repo-and-version</id>
-                <goals>
-                  <goal>tag</goal>
-                </goals>
-                <configuration>
-                  <repository>pulsar-all</repository>
-                  <tag>${project.version}</tag>
-                </configuration>
-              </execution>
-              <execution>
-                <id>add-no-repo-and-latest</id>
-                <goals>
-                  <goal>tag</goal>
-                </goals>
-                <configuration>
-                  <repository>pulsar-all</repository>
-                  <tag>latest</tag>
-                </configuration>
-              </execution>
-              <execution>
-                <id>tag-and-push-latest</id>
-                <goals>
-                  <goal>tag</goal>
                   <goal>push</goal>
                 </goals>
                 <configuration>
-                  <repository>${docker.organization}/pulsar-all</repository>
-                  <tag>latest</tag>
+                  <images>
+                    <image>
+                      <name>${docker.organization}/${docker.image}-all:${docker.tag}</name>
+                      <build>
+                        <dockerFile>${docker.dockerfile}</dockerFile>
+                        <contextDir>${project.basedir}</contextDir>
+                        <skipTag>${docker.skip.tag}</skipTag>
+                        <tags>
+                          <tag>${project.version}-${git.commit.id.abbrev}</tag>
+                        </tags>
+                        <args>
+                          <PULSAR_IO_DIR>target/apache-pulsar-io-connectors-${project.version}-bin</PULSAR_IO_DIR>
+                          <PULSAR_OFFLOADER_TARBALL>target/pulsar-offloader-distribution-${project.version}-bin.tar.gz</PULSAR_OFFLOADER_TARBALL>
+                          <PULSAR_IMAGE>${docker.organization}/${docker.image}:${project.version}-${git.commit.id.abbrev}</PULSAR_IMAGE>
+                          <PULSAR_IO_KINESIS_KPL_IMAGE>${PULSAR_IO_KINESIS_KPL_IMAGE}</PULSAR_IO_KINESIS_KPL_IMAGE>
+                        </args>
+                        <buildx>
+                          <platforms>
+                            <platform>${docker.platforms}</platform>
+                          </platforms>
+                        </buildx>
+                      </build>
+                    </image>
+                  </images>
                 </configuration>
               </execution>
             </executions>
-            <configuration>
-              <repository>${docker.organization}/pulsar-all</repository>
-              <pullNewerImage>false</pullNewerImage>
-              <tag>${project.version}</tag>
-              <buildArgs>
-                <PULSAR_IO_DIR>target/apache-pulsar-io-connectors-${project.version}-bin</PULSAR_IO_DIR>
-                <PULSAR_OFFLOADER_TARBALL>target/pulsar-offloader-distribution-${project.version}-bin.tar.gz</PULSAR_OFFLOADER_TARBALL>
-              </buildArgs>
-            </configuration>
           </plugin>
         </plugins>
       </build>
+    </profile>
+    <profile>
+      <id>docker-wolfi</id>
+      <properties>
+        <docker.dockerfile>Dockerfile.wolfi</docker.dockerfile>
+      </properties>
+    </profile>
+    <profile>
+      <id>docker-push</id>
+      <properties>
+        <docker.skip.push>false</docker.skip.push>
+        <docker.platforms>linux/amd64,linux/arm64</docker.platforms>
+      </properties>
     </profile>
   </profiles>
 </project>

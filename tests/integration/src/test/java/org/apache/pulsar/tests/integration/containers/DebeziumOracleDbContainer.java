@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,11 +18,9 @@
  */
 package org.apache.pulsar.tests.integration.containers;
 
-
-import org.testcontainers.containers.wait.strategy.HostPortWaitStrategy;
-
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
+import org.testcontainers.containers.wait.strategy.HostPortWaitStrategy;
 
 public class DebeziumOracleDbContainer extends ChaosContainer<DebeziumOracleDbContainer> {
 

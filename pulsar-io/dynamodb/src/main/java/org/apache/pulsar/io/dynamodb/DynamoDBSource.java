@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -65,7 +65,7 @@ public class DynamoDBSource extends AbstractAwsConnector implements Source<byte[
 
     @Override
     public void open(Map<String, Object> config, SourceContext sourceContext) throws Exception {
-        this.dynamodbSourceConfig = DynamoDBSourceConfig.load(config);
+        this.dynamodbSourceConfig = DynamoDBSourceConfig.load(config, sourceContext);
         checkArgument(isNotBlank(dynamodbSourceConfig.getAwsDynamodbStreamArn()),
                 "empty dynamo-stream arn");
         // Even if the endpoint is set, it seems to require a region to go with it

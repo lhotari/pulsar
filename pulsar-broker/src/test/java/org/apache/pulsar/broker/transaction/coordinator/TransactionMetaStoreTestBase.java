@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -42,7 +42,7 @@ public abstract class TransactionMetaStoreTestBase extends TestRetrySupport {
     LocalBookkeeperEnsemble bkEnsemble;
     protected PulsarAdmin[] pulsarAdmins = new PulsarAdmin[BROKER_COUNT];
     protected PulsarClient pulsarClient;
-    protected static int BROKER_COUNT = 5;
+    protected static final int BROKER_COUNT = 5;
     protected ServiceConfiguration[] configurations = new ServiceConfiguration[BROKER_COUNT];
     protected PulsarService[] pulsarServices = new PulsarService[BROKER_COUNT];
 
@@ -66,14 +66,14 @@ public abstract class TransactionMetaStoreTestBase extends TestRetrySupport {
         for (int i = 0; i < BROKER_COUNT; i++) {
             ServiceConfiguration config = new ServiceConfiguration();
             config.setBrokerShutdownTimeoutMs(0L);
+            config.setLoadBalancerOverrideBrokerNicSpeedGbps(Optional.of(1.0d));
             config.setBrokerServicePort(Optional.of(0));
             config.setClusterName("my-cluster");
             config.setAdvertisedAddress("localhost");
             config.setWebServicePort(Optional.of(0));
-            config.setZookeeperServers("127.0.0.1" + ":" + bkEnsemble.getZookeeperPort());
+            config.setMetadataStoreUrl("zk:127.0.0.1:" + bkEnsemble.getZookeeperPort());
             config.setDefaultNumberOfNamespaceBundles(1);
             config.setLoadBalancerEnabled(false);
-            config.setAcknowledgmentAtBatchIndexLevelEnabled(true);
             config.setTransactionCoordinatorEnabled(true);
             configurations[i] = config;
 
@@ -119,18 +119,29 @@ public abstract class TransactionMetaStoreTestBase extends TestRetrySupport {
 
     @Override
     protected void cleanup() throws Exception {
-        for (PulsarAdmin admin : pulsarAdmins) {
-            if (admin != null) {
-                admin.close();
+        if (transactionCoordinatorClient != null) {
+            transactionCoordinatorClient.close();
+            transactionCoordinatorClient = null;
+        }
+        for (int i = 0; i < BROKER_COUNT; i++) {
+            if (pulsarAdmins[i] != null) {
+                pulsarAdmins[i].close();
+                pulsarAdmins[i] = null;
             }
         }
         if (pulsarClient != null) {
             pulsarClient.close();
+            pulsarClient = null;
         }
-        for (PulsarService service : pulsarServices) {
-            if (service != null) {
-                service.close();
+        for (int i = 0; i < BROKER_COUNT; i++) {
+            if (pulsarServices[i] != null) {
+                pulsarServices[i].close();
+                pulsarServices[i] = null;
             }
+        }
+        if (bkEnsemble != null) {
+            bkEnsemble.stop();
+            bkEnsemble = null;
         }
         Mockito.reset();
     }

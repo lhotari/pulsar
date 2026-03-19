@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,6 +18,12 @@
  */
 package org.apache.pulsar.functions.source;
 
+import java.security.Security;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.ConsumerBuilder;
 import org.apache.pulsar.client.api.DeadLetterPolicy;
@@ -26,19 +32,14 @@ import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.impl.MessageImpl;
 import org.apache.pulsar.client.impl.TopicMessageImpl;
+import org.apache.pulsar.client.impl.schema.AutoConsumeSchema;
 import org.apache.pulsar.common.functions.ConsumerConfig;
 import org.apache.pulsar.common.functions.FunctionConfig;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.functions.utils.CryptoUtils;
+import org.apache.pulsar.functions.utils.MessagePayloadProcessorUtils;
 import org.apache.pulsar.io.core.Source;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
-
-import java.security.Security;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 public abstract class PulsarSource<T> implements Source<T> {
     protected final PulsarClient pulsarClient;
@@ -53,7 +54,7 @@ public abstract class PulsarSource<T> implements Source<T> {
                            ClassLoader functionClassLoader) {
         this.pulsarClient = pulsarClient;
         this.pulsarSourceConfig = pulsarSourceConfig;
-        this.topicSchema = new TopicSchema(pulsarClient);
+        this.topicSchema = new TopicSchema(pulsarClient, functionClassLoader);
         this.properties = properties;
         this.functionClassLoader = functionClassLoader;
     }
@@ -81,6 +82,9 @@ public abstract class PulsarSource<T> implements Source<T> {
         }
         if (conf.getCryptoKeyReader() != null) {
             cb = cb.cryptoKeyReader(conf.getCryptoKeyReader());
+        }
+        if (conf.getMessagePayloadProcessor() != null) {
+            cb = cb.messagePayloadProcessor(conf.getMessagePayloadProcessor());
         }
         if (conf.getConsumerCryptoFailureAction() != null) {
             cb = cb.cryptoFailureAction(conf.getConsumerCryptoFailureAction());
@@ -118,26 +122,40 @@ public abstract class PulsarSource<T> implements Source<T> {
             TopicMessageImpl impl = (TopicMessageImpl) message;
             schema = impl.getSchemaInternal();
         }
+
+        // we don't want the Function/Sink to see AutoConsumeSchema
+        if (schema instanceof AutoConsumeSchema) {
+            AutoConsumeSchema autoConsumeSchema = (AutoConsumeSchema) schema;
+            // we cannot use atSchemaVersion, because atSchemaVersion is only
+            // able to decode data, here we want a Schema that
+            // is able to re-encode the payload when needed.
+            schema = (Schema<T>) autoConsumeSchema
+                    .unwrapInternalSchema(message.getSchemaVersion());
+        }
         return PulsarRecord.<T>builder()
                 .message(message)
                 .schema(schema)
                 .topicName(message.getTopicName())
+                .customAckFunction(cumulative -> {
+                    if (cumulative) {
+                        consumer.acknowledgeCumulativeAsync(message)
+                                .whenComplete((unused, throwable) -> message.release());
+                    } else {
+                        consumer.acknowledgeAsync(message).whenComplete((unused, throwable) -> message.release());
+                    }
+                })
                 .ackFunction(() -> {
-                    try {
-                        if (pulsarSourceConfig
-                                .getProcessingGuarantees() == FunctionConfig.ProcessingGuarantees.EFFECTIVELY_ONCE) {
-                            consumer.acknowledgeCumulativeAsync(message);
-                        } else {
-                            consumer.acknowledgeAsync(message);
-                        }
-                    } finally {
-                        // don't need to check if message pooling is set
-                        // client will automatically check
-                        message.release();
+                    if (pulsarSourceConfig
+                            .getProcessingGuarantees() == FunctionConfig.ProcessingGuarantees.EFFECTIVELY_ONCE) {
+                        consumer.acknowledgeCumulativeAsync(message)
+                                .whenComplete((unused, throwable) -> message.release());
+                    } else {
+                        consumer.acknowledgeAsync(message).whenComplete((unused, throwable) -> message.release());
                     }
                 }).failFunction(() -> {
                     try {
-                        if (pulsarSourceConfig.getProcessingGuarantees() == FunctionConfig.ProcessingGuarantees.EFFECTIVELY_ONCE) {
+                        if (pulsarSourceConfig.getProcessingGuarantees()
+                                == FunctionConfig.ProcessingGuarantees.EFFECTIVELY_ONCE) {
                             throw new RuntimeException("Failed to process message: " + message.getMessageId());
                         }
                         consumer.negativeAcknowledge(message);
@@ -150,11 +168,12 @@ public abstract class PulsarSource<T> implements Source<T> {
                 .build();
     }
 
-    protected PulsarSourceConsumerConfig<T> buildPulsarSourceConsumerConfig(String topic, ConsumerConfig conf, Class<?> typeArg) {
-        PulsarSourceConsumerConfig.PulsarSourceConsumerConfigBuilder<T> consumerConfBuilder
-                = PulsarSourceConsumerConfig.<T>builder().isRegexPattern(conf.isRegexPattern())
-                .receiverQueueSize(conf.getReceiverQueueSize())
-                .consumerProperties(conf.getConsumerProperties());
+    protected PulsarSourceConsumerConfig<T> buildPulsarSourceConsumerConfig(String topic, ConsumerConfig conf,
+                                                                            Class<?> typeArg) {
+        PulsarSourceConsumerConfig.PulsarSourceConsumerConfigBuilder<T> consumerConfBuilder =
+                PulsarSourceConsumerConfig.<T>builder().isRegexPattern(conf.isRegexPattern())
+                        .receiverQueueSize(conf.getReceiverQueueSize())
+                        .consumerProperties(conf.getConsumerProperties());
 
         Schema<T> schema;
         if (conf.getSerdeClassName() != null && !conf.getSerdeClassName().isEmpty()) {
@@ -174,6 +193,11 @@ public abstract class PulsarSource<T> implements Source<T> {
             consumerConfBuilder.cryptoKeyReader(CryptoUtils.getCryptoKeyReaderInstance(
                     conf.getCryptoConfig().getCryptoKeyReaderClassName(),
                     conf.getCryptoConfig().getCryptoKeyReaderConfig(), functionClassLoader));
+        }
+        if (conf.getMessagePayloadProcessorConfig() != null) {
+            consumerConfBuilder.messagePayloadProcessor(MessagePayloadProcessorUtils.getMessagePayloadProcessorInstance(
+                    conf.getMessagePayloadProcessorConfig().getClassName(),
+                    conf.getMessagePayloadProcessorConfig().getConfig(), functionClassLoader));
         }
         consumerConfBuilder.poolMessages(conf.isPoolMessages());
         return consumerConfBuilder.build();

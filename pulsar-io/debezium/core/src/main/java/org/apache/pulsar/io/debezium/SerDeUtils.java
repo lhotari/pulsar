@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,7 +16,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 package org.apache.pulsar.io.debezium;
 
 import java.io.ByteArrayInputStream;
@@ -38,7 +37,7 @@ public class SerDeUtils {
            return ois.readObject();
         } catch (Exception e) {
             throw new RuntimeException(
-                    "Failed to initialize the pulsar client to store debezium database history", e);
+                    "Failed to initialize the pulsar client to store debezium schema history", e);
         }
     }
 

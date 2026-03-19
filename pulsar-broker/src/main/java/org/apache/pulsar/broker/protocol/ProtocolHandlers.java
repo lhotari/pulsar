@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,13 +19,14 @@
 package org.apache.pulsar.broker.protocol;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -51,6 +52,9 @@ public class ProtocolHandlers implements AutoCloseable {
      * @return the collection of protocol handlers
      */
     public static ProtocolHandlers load(ServiceConfiguration conf) throws IOException {
+        if (conf.getMessagingProtocols().isEmpty()) {
+            return new ProtocolHandlers(Collections.emptyMap());
+        }
         ProtocolHandlerDefinitions definitions =
                 ProtocolHandlerUtils.searchForHandlers(
                         conf.getProtocolHandlerDirectory(), conf.getNarExtractionDirectory());
@@ -122,8 +126,8 @@ public class ProtocolHandlers implements AutoCloseable {
     }
 
     public Map<String, Map<InetSocketAddress, ChannelInitializer<SocketChannel>>> newChannelInitializers() {
-        Map<String, Map<InetSocketAddress, ChannelInitializer<SocketChannel>>> channelInitializers = Maps.newHashMap();
-        Set<InetSocketAddress> addresses = Sets.newHashSet();
+        Map<String, Map<InetSocketAddress, ChannelInitializer<SocketChannel>>> channelInitializers = new HashMap<>();
+        Set<InetSocketAddress> addresses = new HashSet<>();
 
         for (Map.Entry<String, ProtocolHandlerWithClassLoader> handler : handlers.entrySet()) {
             Map<InetSocketAddress, ChannelInitializer<SocketChannel>> initializers =

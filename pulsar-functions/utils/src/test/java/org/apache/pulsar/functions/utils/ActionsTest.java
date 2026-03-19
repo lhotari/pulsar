@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,11 +18,6 @@
  */
 package org.apache.pulsar.functions.utils;
 
-import org.apache.pulsar.functions.utils.Actions;
-import org.testng.annotations.Test;
-
-import java.util.function.Supplier;
-
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -30,6 +25,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import java.util.function.Supplier;
+import org.testng.annotations.Test;
 
 public class ActionsTest {
 
@@ -44,7 +41,7 @@ public class ActionsTest {
         when(supplier2.get()).thenReturn(Actions.ActionResult.builder().success(true).build());
 
         java.util.function.Consumer<Actions.ActionResult> onFail = mock(java.util.function.Consumer.class);
-        java.util.function.Consumer<Actions.ActionResult> onSucess = mock(java.util.function.Consumer.class);
+        java.util.function.Consumer<Actions.ActionResult> onSuccess = mock(java.util.function.Consumer.class);
 
         Actions.Action action1 = spy(
             Actions.Action.builder()
@@ -54,7 +51,7 @@ public class ActionsTest {
                 .supplier(supplier1)
                 .continueOn(true)
                 .onFail(onFail)
-                .onSuccess(onSucess)
+                .onSuccess(onSuccess)
                 .build());
 
         Actions.Action action2 = spy(
@@ -73,7 +70,7 @@ public class ActionsTest {
         assertEquals(actions.numActions(), 2);
         verify(supplier1, times(1)).get();
         verify(onFail, times(0)).accept(any());
-        verify(onSucess, times(1)).accept(any());
+        verify(onSuccess, times(1)).accept(any());
         verify(supplier2, times(1)).get();
     }
 
@@ -88,7 +85,7 @@ public class ActionsTest {
         when(supplier2.get()).thenReturn(Actions.ActionResult.builder().success(true).build());
 
         java.util.function.Consumer<Actions.ActionResult> onFail = mock(java.util.function.Consumer.class);
-        java.util.function.Consumer<Actions.ActionResult> onSucess = mock(java.util.function.Consumer.class);
+        java.util.function.Consumer<Actions.ActionResult> onSuccess = mock(java.util.function.Consumer.class);
 
         Actions.Action action1 = spy(
             Actions.Action.builder()
@@ -98,7 +95,7 @@ public class ActionsTest {
                 .supplier(supplier1)
                 .continueOn(false)
                 .onFail(onFail)
-                .onSuccess(onSucess)
+                .onSuccess(onSuccess)
                 .build());
         Actions.Action action2 = spy(
             Actions.Action.builder()
@@ -107,7 +104,7 @@ public class ActionsTest {
                 .sleepBetweenInvocationsMs(200)
                 .supplier(supplier2)
                 .onFail(onFail)
-                .onSuccess(onSucess)
+                .onSuccess(onSuccess)
                 .build());
 
         Actions actions = Actions.newBuilder()
@@ -118,7 +115,7 @@ public class ActionsTest {
         assertEquals(actions.numActions(), 2);
         verify(supplier1, times(1)).get();
         verify(onFail, times(0)).accept(any());
-        verify(onSucess, times(1)).accept(any());
+        verify(onSuccess, times(1)).accept(any());
         verify(supplier2, times(0)).get();
     }
 
@@ -134,7 +131,7 @@ public class ActionsTest {
         when(supplier2.get()).thenReturn(Actions.ActionResult.builder().success(true).build());
 
         java.util.function.Consumer<Actions.ActionResult> onFail = mock(java.util.function.Consumer.class);
-        java.util.function.Consumer<Actions.ActionResult> onSucess = mock(java.util.function.Consumer.class);
+        java.util.function.Consumer<Actions.ActionResult> onSuccess = mock(java.util.function.Consumer.class);
 
         Actions.Action action1 = spy(
             Actions.Action.builder()
@@ -144,7 +141,7 @@ public class ActionsTest {
                 .supplier(supplier1)
                 .continueOn(false)
                 .onFail(onFail)
-                .onSuccess(onSucess)
+                .onSuccess(onSuccess)
                 .build());
 
         Actions.Action action2 = spy(
@@ -163,7 +160,7 @@ public class ActionsTest {
         assertEquals(actions.numActions(), 2);
         verify(supplier1, times(11)).get();
         verify(onFail, times(1)).accept(any());
-        verify(onSucess, times(0)).accept(any());
+        verify(onSuccess, times(0)).accept(any());
         verify(supplier2, times(1)).get();
     }
 
@@ -177,7 +174,7 @@ public class ActionsTest {
       when(supplier2.get()).thenReturn(Actions.ActionResult.builder().success(true).build());
 
       java.util.function.Consumer<Actions.ActionResult> onFail = mock(java.util.function.Consumer.class);
-      java.util.function.Consumer<Actions.ActionResult> onSucess = mock(java.util.function.Consumer.class);
+      java.util.function.Consumer<Actions.ActionResult> onSuccess = mock(java.util.function.Consumer.class);
 
       Actions.Action action1 = spy(
           Actions.Action.builder()
@@ -186,7 +183,7 @@ public class ActionsTest {
               .sleepBetweenInvocationsMs(100)
               .supplier(supplier1)
               .onFail(onFail)
-              .onSuccess(onSucess)
+              .onSuccess(onSuccess)
               .build());
 
       Actions.Action action2 = spy(
@@ -205,7 +202,7 @@ public class ActionsTest {
       assertEquals(actions.numActions(), 2);
       verify(supplier1, times(1)).get();
       verify(onFail, times(0)).accept(any());
-      verify(onSucess, times(1)).accept(any());
+      verify(onSuccess, times(1)).accept(any());
       verify(supplier2, times(1)).get();
     }
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,7 +23,7 @@ import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
-
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -31,8 +31,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.pulsar.broker.service.persistent.PersistentSubscription;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.client.admin.PulsarAdminException;
@@ -48,8 +47,8 @@ import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.client.impl.ConsumerImpl;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
 import org.apache.pulsar.common.policies.data.ConsumerStats;
-import org.apache.pulsar.common.policies.data.TopicStats;
 import org.apache.pulsar.common.policies.data.SubscriptionStats;
+import org.apache.pulsar.common.policies.data.TopicStats;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.awaitility.Awaitility;
 import org.eclipse.jetty.util.BlockingArrayQueue;
@@ -58,8 +57,6 @@ import org.slf4j.LoggerFactory;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
-
-import com.google.common.collect.Lists;
 
 @Test(groups = "broker")
 public class PersistentQueueE2ETest extends BrokerTestBase {
@@ -88,7 +85,7 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
 
     @Test
     public void testSimpleConsumerEvents() throws Exception {
-        final String topicName = "persistent://prop/use/ns-abc/shared-topic1";
+        final String topicName = "persistent://prop/ns-abc/shared-topic1";
         final String subName = "sub1";
         final int numMsgs = 100;
 
@@ -96,7 +93,7 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
         Consumer<byte[]> consumer1 = pulsarClient.newConsumer().topic(topicName).subscriptionName(subName)
                 .subscriptionType(SubscriptionType.Shared).subscribe();
 
-        PulsarClient newPulsarClient = newPulsarClient(lookupUrl.toString(), 0);// Creates new client connection
+        PulsarClient newPulsarClient = newPulsarClient(lookupUrl.toString(), 0); // Creates new client connection
         Consumer<byte[]> consumer2 = newPulsarClient.newConsumer().topic(topicName).subscriptionName(subName)
                 .subscriptionType(SubscriptionType.Shared).subscribe();
 
@@ -110,7 +107,7 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
         assertTrue(subRef.getDispatcher().isConsumerConnected());
         assertEquals(subRef.getDispatcher().getType(), SubType.Shared);
 
-        List<CompletableFuture<MessageId>> futures = Lists.newArrayListWithCapacity(numMsgs * 2);
+        List<CompletableFuture<MessageId>> futures = new ArrayList<>(numMsgs * 2);
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName)
             .enableBatching(false)
             .messageRoutingMode(MessageRoutingMode.SinglePartition)
@@ -189,11 +186,11 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
 
     @Test
     public void testReplayOnConsumerDisconnect() throws Exception {
-        final String topicName = "persistent://prop/use/ns-abc/shared-topic3";
+        final String topicName = "persistent://prop/ns-abc/shared-topic3";
         final String subName = "sub3";
         final int numMsgs = 100;
 
-        final List<String> messagesProduced = Lists.newArrayListWithCapacity(numMsgs);
+        final List<String> messagesProduced = new ArrayList<>(numMsgs);
         final List<String> messagesConsumed = new BlockingArrayQueue<>(numMsgs);
 
         Consumer<byte[]> consumer1 = pulsarClient.newConsumer().topic(topicName).subscriptionName(subName)
@@ -207,13 +204,13 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
                 }).subscribe();
 
         // consumer2 does not ack messages
-        PulsarClient newPulsarClient = newPulsarClient(lookupUrl.toString(), 0);// Creates new client connection
+        PulsarClient newPulsarClient = newPulsarClient(lookupUrl.toString(), 0); // Creates new client connection
         Consumer<byte[]> consumer2 = newPulsarClient.newConsumer().topic(topicName).subscriptionName(subName)
                 .subscriptionType(SubscriptionType.Shared).messageListener((consumer, msg) -> {
                     // do nothing
                 }).subscribe();
 
-        List<CompletableFuture<MessageId>> futures = Lists.newArrayListWithCapacity(numMsgs * 2);
+        List<CompletableFuture<MessageId>> futures = new ArrayList<>(numMsgs * 2);
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName).create();
         for (int i = 0; i < numMsgs; i++) {
             String message = "msg-" + i;
@@ -243,7 +240,7 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
     // how the round robin distribution algorithm is behaving
     @Test(enabled = false)
     public void testRoundRobinBatchDistribution() throws Exception {
-        final String topicName = "persistent://prop/use/ns-abc/shared-topic5";
+        final String topicName = "persistent://prop/ns-abc/shared-topic5";
         final String subName = "sub5";
         final int numMsgs = 137; /* some random number different than default batch size of 100 */
 
@@ -286,7 +283,7 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
             }
         }).subscribe();
 
-        List<CompletableFuture<MessageId>> futures = Lists.newArrayListWithCapacity(numMsgs);
+        List<CompletableFuture<MessageId>> futures = new ArrayList<>(numMsgs);
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName).create();
         for (int i = 0; i < numMsgs * 3; i++) {
             String message = "msg-" + i;
@@ -302,8 +299,8 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
          * i.e. each consumer will get 130 messages. In the 14th round, the balance is 411 - 130*3 = 21. Two consumers
          * will get another batch of 10 messages (Total: 140) and the 3rd one will get the last one (Total: 131)
          */
-        assertTrue(CollectionUtils.subtract(Lists.newArrayList(140, 140, 131),
-                Lists.newArrayList(counter1.get(), counter2.get(), counter3.get())).isEmpty());
+        assertTrue(CollectionUtils.subtract(List.of(140, 140, 131),
+                List.of(counter1.get(), counter2.get(), counter3.get())).isEmpty());
 
         consumer1.close();
         consumer2.close();
@@ -315,7 +312,7 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
     @Test(timeOut = 300000)
     public void testSharedSingleAckedNormalTopic() throws Exception {
         String key = "test1";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://prop/ns-abc/topic-" + key;
         final String subscriptionName = "my-shared-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 50;
@@ -331,7 +328,7 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
                 .subscriptionName(subscriptionName).receiverQueueSize(10).subscriptionType(SubscriptionType.Shared);
         Consumer<byte[]> consumer1 = consumerBuilder1.subscribe();
 
-        PulsarClient newPulsarClient = newPulsarClient(lookupUrl.toString(), 0);// Creates new client connection
+        PulsarClient newPulsarClient = newPulsarClient(lookupUrl.toString(), 0); // Creates new client connection
         ConsumerBuilder<byte[]> consumerBuilder2 = newPulsarClient.newConsumer().topic(topicName)
                 .subscriptionName(subscriptionName).receiverQueueSize(10).subscriptionType(SubscriptionType.Shared);
         Consumer<byte[]> consumer2 = consumerBuilder2.subscribe();
@@ -386,7 +383,7 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
     @Test(timeOut = 60000)
     public void testCancelReadRequestOnLastDisconnect() throws Exception {
         String key = "testCancelReadRequestOnLastDisconnect";
-        final String topicName = "persistent://prop/use/ns-abc/topic-" + key;
+        final String topicName = "persistent://prop/ns-abc/topic-" + key;
         final String subscriptionName = "my-shared-subscription-" + key;
         final String messagePredicate = "my-message-" + key + "-";
         final int totalMessages = 10;
@@ -462,7 +459,7 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
 
     @Test
     public void testUnackedCountWithRedeliveries() throws Exception {
-        final String topicName = "persistent://prop/use/ns-abc/testUnackedCountWithRedeliveries";
+        final String topicName = "persistent://prop/ns-abc/testUnackedCountWithRedeliveries";
         final String subName = "sub3";
         final int numMsgs = 10;
 
@@ -477,25 +474,25 @@ public class PersistentQueueE2ETest extends BrokerTestBase {
             producer.send(("hello-" + i).getBytes());
         }
 
-        Set<MessageId> c1_receivedMessages = new HashSet<>();
+        Set<MessageId> c1ReceivedMessages = new HashSet<>();
 
         // C-1 gets all messages but doesn't ack
         for (int i = 0; i < numMsgs; i++) {
-            c1_receivedMessages.add(consumer1.receive().getMessageId());
+            c1ReceivedMessages.add(consumer1.receive().getMessageId());
         }
 
         // C-2 will not get any message initially, since everything went to C-1 already
         Consumer<byte[]> consumer2 = consumerBuilder.subscribe();
 
         // Trigger C-1 to redeliver everything, half will go C-1 again and the other half to C-2
-        consumer1.redeliverUnacknowledgedMessages(c1_receivedMessages);
+        consumer1.redeliverUnacknowledgedMessages(c1ReceivedMessages);
 
         // Consumer 2 will also receive all message but not ack
         for (int i = 0; i < numMsgs; i++) {
             consumer2.receive();
         }
 
-        for (MessageId msgId : c1_receivedMessages) {
+        for (MessageId msgId : c1ReceivedMessages) {
             consumer1.acknowledge(msgId);
         }
 

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,7 +21,7 @@ package org.apache.pulsar.common.naming;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotEquals;
-import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 import org.apache.pulsar.common.util.Codec;
@@ -29,7 +29,6 @@ import org.testng.annotations.Test;
 
 public class TopicNameTest {
 
-    @SuppressWarnings("deprecation")
     @Test
     public void topic() {
         try {
@@ -39,34 +38,30 @@ public class TopicNameTest {
             // Expected
         }
 
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic").getNamespace(),
-                "tenant/cluster/namespace");
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic").getNamespace(),
-                "tenant/cluster/namespace");
+        // V2 format: persistent://tenant/namespace/topic
+        assertEquals(TopicName.get("persistent://tenant/namespace/topic").getNamespace(),
+                "tenant/namespace");
 
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic"),
-                TopicName.get("persistent", "tenant", "cluster", "namespace", "topic"));
+        assertEquals(TopicName.get("persistent://tenant/namespace/topic"),
+                TopicName.get("persistent", "tenant", "namespace", "topic"));
 
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic").hashCode(),
-                TopicName.get("persistent", "tenant", "cluster", "namespace", "topic").hashCode());
+        assertEquals(TopicName.get("persistent://tenant/namespace/topic").hashCode(),
+                TopicName.get("persistent", "tenant", "namespace", "topic").hashCode());
 
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic").toString(),
-                "persistent://tenant/cluster/namespace/topic");
+        assertEquals(TopicName.get("persistent://tenant/namespace/topic").toString(),
+                "persistent://tenant/namespace/topic");
+        assertEquals(TopicName.toFullTopicName("persistent://tenant/namespace/topic"),
+                "persistent://tenant/namespace/topic");
 
-        assertNotEquals(TopicName.get("persistent://tenant/cluster/namespace/topic"),
-            "persistent://tenant/cluster/namespace/topic");
-
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic").getDomain(),
+        assertEquals(TopicName.get("persistent://tenant/namespace/topic").getDomain(),
                 TopicDomain.persistent);
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic").getTenant(),
+        assertEquals(TopicName.get("persistent://tenant/namespace/topic").getTenant(),
                 "tenant");
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic").getCluster(),
-                "cluster");
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic").getNamespacePortion(),
+        assertEquals(TopicName.get("persistent://tenant/namespace/topic").getNamespacePortion(),
                 "namespace");
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic").getNamespace(),
-                "tenant/cluster/namespace");
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic").getLocalName(),
+        assertEquals(TopicName.get("persistent://tenant/namespace/topic").getNamespace(),
+                "tenant/namespace");
+        assertEquals(TopicName.get("persistent://tenant/namespace/topic").getLocalName(),
                 "topic");
 
         try {
@@ -78,13 +73,6 @@ public class TopicNameTest {
 
         try {
             TopicName.get("://tenant.namespace:my-topic").getTenant();
-            fail("Should have raised exception");
-        } catch (IllegalArgumentException e) {
-            // Ok
-        }
-
-        try {
-            TopicName.get("://tenant.namespace:my-topic").getCluster();
             fail("Should have raised exception");
         } catch (IllegalArgumentException e) {
             // Ok
@@ -103,6 +91,7 @@ public class TopicNameTest {
         } catch (IllegalArgumentException e) {
             // Ok
         }
+        assertThrows(IllegalArgumentException.class, () -> TopicName.toFullTopicName("://tenant.namespace:my-topic"));
 
         try {
             TopicName.get("://tenant.namespace");
@@ -110,58 +99,45 @@ public class TopicNameTest {
         } catch (IllegalArgumentException e) {
             // Ok
         }
+        assertThrows(IllegalArgumentException.class, () -> TopicName.toFullTopicName("://tenant.namespace"));
 
         try {
-            TopicName.get("invalid://tenant/cluster/namespace/topic");
+            TopicName.get("invalid://tenant/namespace/topic");
             fail("Should have raied exception");
         } catch (IllegalArgumentException e) {
             // Ok
         }
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.toFullTopicName("invalid://tenant/namespace/topic"));
+
+        // V1 topic names (with cluster component) are no longer supported
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.get("persistent://tenant/cluster/namespace/topic"));
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.get("non-persistent://tenant/cluster/namespace/topic"));
+
+        // 4-part short topic names (without domain) are not supported
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.get("tenant/cluster/namespace/topic"));
+        assertThrows(IllegalArgumentException.class, () -> TopicName.toFullTopicName("tenant/cluster/namespace/topic"));
 
         try {
-            TopicName.get("tenant/cluster/namespace/topic");
+            TopicName.get("persistent:///namespace/mydest-1");
             fail("Should have raised exception");
         } catch (IllegalArgumentException e) {
             // Ok
         }
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.toFullTopicName("persistent:///namespace/mydest-1"));
 
         try {
-            TopicName.get("persistent:///cluster/namespace/mydest-1");
+            TopicName.get("persistent://pulsar//mydest-1");
             fail("Should have raised exception");
         } catch (IllegalArgumentException e) {
             // Ok
         }
-
-        try {
-            TopicName.get("persistent://pulsar//namespace/mydest-1");
-            fail("Should have raised exception");
-        } catch (IllegalArgumentException e) {
-            // Ok
-        }
-
-        try {
-            TopicName.get("persistent://pulsar/cluster//mydest-1");
-            fail("Should have raised exception");
-        } catch (IllegalArgumentException e) {
-            // Ok
-        }
-
-        try {
-            TopicName.get("persistent://pulsar/cluster/namespace/");
-            fail("Should have raised exception");
-        } catch (IllegalArgumentException e) {
-            // Ok
-        }
-
-        try {
-            TopicName.get("://pulsar/cluster/namespace/");
-            fail("Should have raised exception");
-        } catch (IllegalArgumentException e) {
-            // Ok
-        }
-
-        assertEquals(TopicName.get("persistent://tenant/cluster/namespace/topic")
-                .getPersistenceNamingEncoding(), "tenant/cluster/namespace/persistent/topic");
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.toFullTopicName("persistent://pulsar//mydest-1"));
 
         try {
             TopicName.get("://tenant.namespace");
@@ -169,37 +145,32 @@ public class TopicNameTest {
         } catch (IllegalArgumentException e) {
             // Ok
         }
+        assertThrows(IllegalArgumentException.class, () -> TopicName.toFullTopicName("://tenant.namespace"));
 
         try {
-            TopicName.get("://tenant/cluster/namespace");
-            fail("Should have raied exception");
+            TopicName.get(" ");
+            fail("Should have raised exception");
         } catch (IllegalArgumentException e) {
             // Ok
         }
+        assertThrows(IllegalArgumentException.class, () -> TopicName.toFullTopicName(" "));
 
-        TopicName nameWithSlash = TopicName.get("persistent://tenant/cluster/namespace/ns-abc/table/1");
-        assertEquals(nameWithSlash.getEncodedLocalName(), Codec.encode("ns-abc/table/1"));
+        // V2 topic names do not allow '/' in local names (V1 did)
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.get("persistent://tenant/namespace/ns-abc/table/1"));
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.get("persistent://tenant/namespace/ns-abc/table/1/"));
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.get("persistent://tenant/namespace/$#3rpa/table/1"));
 
-        TopicName nameEndingInSlash = TopicName
-                .get("persistent://tenant/cluster/namespace/ns-abc/table/1/");
-        assertEquals(nameEndingInSlash.getEncodedLocalName(), Codec.encode("ns-abc/table/1/"));
+        TopicName topicName = TopicName.get("persistent://myprop/myns/mytopic");
+        assertEquals(topicName.getPartition(0).toString(), "persistent://myprop/myns/mytopic-partition-0");
 
-        TopicName nameWithTwoSlashes = TopicName
-                .get("persistent://tenant/cluster/namespace//ns-abc//table//1//");
-        assertEquals(nameWithTwoSlashes.getEncodedLocalName(), Codec.encode("/ns-abc//table//1//"));
-
-        TopicName nameWithRandomCharacters = TopicName
-                .get("persistent://tenant/cluster/namespace/$#3rpa/table/1");
-        assertEquals(nameWithRandomCharacters.getEncodedLocalName(), Codec.encode("$#3rpa/table/1"));
-
-        TopicName topicName = TopicName.get("persistent://myprop/mycolo/myns/mytopic");
-        assertEquals(topicName.getPartition(0).toString(), "persistent://myprop/mycolo/myns/mytopic-partition-0");
-
-        TopicName partitionedDn = TopicName.get("persistent://myprop/mycolo/myns/mytopic").getPartition(2);
+        TopicName partitionedDn = TopicName.get("persistent://myprop/myns/mytopic").getPartition(2);
         assertEquals(partitionedDn.getPartitionIndex(), 2);
         assertEquals(topicName.getPartitionIndex(), -1);
 
-        assertEquals(TopicName.getPartitionIndex("persistent://myprop/mycolo/myns/mytopic-partition-4"), 4);
+        assertEquals(TopicName.getPartitionIndex("persistent://myprop/myns/mytopic-partition-4"), 4);
 
         // Following behavior is not right actually, none partitioned topic, partition index is -1
         assertEquals(TopicName.getPartitionIndex("mytopic-partition--1"), -1);
@@ -223,22 +194,59 @@ public class TopicNameTest {
 
     @Test
     public void testDecodeEncode() throws Exception {
-        String encodedName = "a%3Aen-in_in_business_content_item_20150312173022_https%5C%3A%2F%2Fin.news.example.com%2Fr";
-        String rawName = "a:en-in_in_business_content_item_20150312173022_https\\://in.news.example.com/r";
+        String encodedName = "a%3Aen-in_in_business_content_item_20150312173022_https%5C%3A";
+        String rawName = "a:en-in_in_business_content_item_20150312173022_https\\:";
         assertEquals(Codec.decode(encodedName), rawName);
         assertEquals(Codec.encode(rawName), encodedName);
 
-        String topicName = "persistent://prop/colo/ns/" + rawName;
+        String topicName = "persistent://prop/ns/" + rawName;
         TopicName name = TopicName.get(topicName);
 
         assertEquals(name.getLocalName(), rawName);
         assertEquals(name.getEncodedLocalName(), encodedName);
-        assertEquals(name.getPersistenceNamingEncoding(), "prop/colo/ns/persistent/" + encodedName);
+        assertEquals(name.getPersistenceNamingEncoding(), "prop/ns/persistent/" + encodedName);
     }
 
-    @SuppressWarnings("deprecation")
     @Test
-    public void testTopicNameWithoutCluster() throws Exception {
+    public void testFromPersistenceNamingEncoding() {
+        // case1: V2 (4-part ML name: tenant/namespace/persistent/topic)
+        String mlName1 = "public_tenant/default_namespace/persistent/test_topic";
+        String expectedTopicName1 = "persistent://public_tenant/default_namespace/test_topic";
+
+        TopicName name1 = TopicName.get(expectedTopicName1);
+        assertEquals(name1.getPersistenceNamingEncoding(), mlName1);
+        assertEquals(TopicName.fromPersistenceNamingEncoding(mlName1), expectedTopicName1);
+
+        // case2: 5-part ML name (legacy V1 format: tenant/cluster/namespace/persistent/topic)
+        // Now produces V2 output with cluster dropped
+        String mlName2 = "public_tenant/my_cluster/default_namespace/persistent/test_topic";
+        String expectedTopicName2 = "persistent://public_tenant/default_namespace/test_topic";
+        assertEquals(TopicName.fromPersistenceNamingEncoding(mlName2), expectedTopicName2);
+
+        // case3: empty
+        String mlName3 = "";
+        String expectedTopicName3 = "";
+        assertEquals(expectedTopicName3, TopicName.fromPersistenceNamingEncoding(mlName3));
+
+        // case4: Invalid name (6-part)
+        try {
+            String mlName4 = "public_tenant/my_cluster/default_namespace/persistent/test_topic/sub_topic";
+            TopicName.fromPersistenceNamingEncoding(mlName4);
+            fail("Should have raised exception");
+        } catch (IllegalArgumentException e) {
+            // Exception is expected.
+        }
+
+        // case5: local name with special characters e.g. a:b:c
+        String topicName = "persistent://tenant/namespace/a:b:c";
+        String persistentNamingEncoding = "tenant/namespace/persistent/a%3Ab%3Ac";
+        assertEquals(TopicName.get(topicName).getPersistenceNamingEncoding(), persistentNamingEncoding);
+        assertEquals(TopicName.fromPersistenceNamingEncoding(persistentNamingEncoding), topicName);
+    }
+
+
+    @Test
+    public void testTopicNameProperties() throws Exception {
         TopicName topicName = TopicName.get("persistent://tenant/namespace/topic");
 
         assertEquals(topicName.getNamespace(), "tenant/namespace");
@@ -251,7 +259,6 @@ public class TopicNameTest {
         assertEquals(topicName.toString(), "persistent://tenant/namespace/topic");
         assertEquals(topicName.getDomain(), TopicDomain.persistent);
         assertEquals(topicName.getTenant(), "tenant");
-        assertNull(topicName.getCluster());
         assertEquals(topicName.getNamespacePortion(), "namespace");
         assertEquals(topicName.getNamespace(), "tenant/namespace");
         assertEquals(topicName.getLocalName(), "topic");
@@ -275,18 +282,34 @@ public class TopicNameTest {
         assertEquals("test-namespace", tn.getNamespacePortion());
         assertEquals("test-short-topic", tn.getLocalName());
 
-        try {
-            TopicName.get("pulsar/cluster/namespace/test");
-            fail("Should have raised exception");
-        } catch (IllegalArgumentException e) {
-            // Ok
-        }
+        // 4-part V1 names are no longer supported
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.get("pulsar/cluster/namespace/test"));
 
-        try {
-            TopicName.get("pulsar/cluster");
-            fail("Should have raised exception");
-        } catch (IllegalArgumentException e) {
-            // Ok
-        }
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.get("pulsar/cluster"));
+    }
+
+    @Test
+    public void testTwoKeyWordPartition(){
+        TopicName tp1 = TopicName.get("tenant1/namespace1/tp1-partition-0-DLQ");
+        TopicName tp2 = tp1.getPartition(0);
+        assertNotEquals(tp2.toString(), tp1.toString());
+        assertEquals(tp2.toString(), "persistent://tenant1/namespace1/tp1-partition-0-DLQ-partition-0");
+    }
+
+    @Test
+    public void testToFullTopicName() {
+        // There is no constraint for local topic name
+        assertEquals("persistent://public/default/tp???xx=", TopicName.toFullTopicName("tp???xx="));
+        assertEquals("persistent://tenant/ns/tp???xx=", TopicName.toFullTopicName("tenant/ns/tp???xx="));
+        assertEquals("persistent://tenant/ns/test", TopicName.toFullTopicName("persistent://tenant/ns/test"));
+        assertThrows(IllegalArgumentException.class, () -> TopicName.toFullTopicName("ns/topic"));
+        // v1 format is not supported
+        assertThrows(IllegalArgumentException.class, () -> TopicName.toFullTopicName("tenant/cluster/ns/topic"));
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.toFullTopicName("persistent://tenant/cluster/ns/topic"));
+        assertThrows(IllegalArgumentException.class,
+                () -> TopicName.toFullTopicName("non-persistent://tenant/cluster/ns/topic"));
     }
 }

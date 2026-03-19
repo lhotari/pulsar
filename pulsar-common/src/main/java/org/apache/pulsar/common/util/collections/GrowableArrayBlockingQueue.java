@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -30,7 +30,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.StampedLock;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
+import org.jspecify.annotations.Nullable;
 
 /**
  * This implements a {@link BlockingQueue} backed by an array with no fixed capacity.
@@ -42,7 +45,7 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
     private final ReentrantLock headLock = new ReentrantLock();
     private final PaddedInt headIndex = new PaddedInt();
     private final PaddedInt tailIndex = new PaddedInt();
-    private final ReentrantLock tailLock = new ReentrantLock();
+    private final StampedLock tailLock = new StampedLock();
     private final Condition isNotEmpty = headLock.newCondition();
 
     private T[] data;
@@ -51,6 +54,10 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
     private static final AtomicIntegerFieldUpdater<GrowableArrayBlockingQueue> SIZE_UPDATER = AtomicIntegerFieldUpdater
             .newUpdater(GrowableArrayBlockingQueue.class, "size");
     private volatile int size = 0;
+
+    private volatile boolean terminated = false;
+
+    private volatile Consumer<T> itemAfterTerminatedHandler;
 
     public GrowableArrayBlockingQueue() {
         this(64);
@@ -77,10 +84,17 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
 
     @Override
     public T poll() {
+        return pollIf(v -> true);
+    }
+
+    public T pollIf(Predicate<T> predicate) {
         headLock.lock();
         try {
             if (SIZE_UPDATER.get(this) > 0) {
                 T item = data[headIndex.value];
+                if (!predicate.test(item)) {
+                    return null;
+                }
                 data[headIndex.value] = null;
                 headIndex.value = (headIndex.value + 1) & (data.length - 1);
                 SIZE_UPDATER.decrementAndGet(this);
@@ -126,11 +140,18 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
 
     @Override
     public void put(T e) {
-        tailLock.lock();
+        long stamp = tailLock.writeLock();
 
         boolean wasEmpty = false;
 
         try {
+            if (terminated){
+                if (itemAfterTerminatedHandler != null) {
+                    itemAfterTerminatedHandler.accept(e);
+                }
+                return;
+            }
+
             if (SIZE_UPDATER.get(this) == data.length) {
                 expandArray();
             }
@@ -141,7 +162,7 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
                 wasEmpty = true;
             }
         } finally {
-            tailLock.unlock();
+            tailLock.unlockWrite(stamp);
         }
 
         if (wasEmpty) {
@@ -173,6 +194,9 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
 
         try {
             while (SIZE_UPDATER.get(this) == 0) {
+                if (terminated) {
+                    throw new InterruptedException("Queue is terminated");
+                }
                 isNotEmpty.await();
             }
 
@@ -197,6 +221,9 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
             long timeoutNanos = unit.toNanos(timeout);
             while (SIZE_UPDATER.get(this) == 0) {
                 if (timeoutNanos <= 0) {
+                    return null;
+                }
+                if (terminated) {
                     return null;
                 }
 
@@ -278,7 +305,7 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
 
     @Override
     public boolean remove(Object o) {
-        tailLock.lock();
+        long stamp = tailLock.writeLock();
         headLock.lock();
 
         try {
@@ -297,7 +324,7 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
             }
         } finally {
             headLock.unlock();
-            tailLock.unlock();
+            tailLock.unlockWrite(stamp);
         }
 
         return false;
@@ -347,7 +374,7 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
 
     @Override
     public void forEach(Consumer<? super T> action) {
-        tailLock.lock();
+        long stamp = tailLock.writeLock();
         headLock.lock();
 
         try {
@@ -364,7 +391,7 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
 
         } finally {
             headLock.unlock();
-            tailLock.unlock();
+            tailLock.unlockWrite(stamp);
         }
     }
 
@@ -372,7 +399,7 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
     public String toString() {
         StringBuilder sb = new StringBuilder();
 
-        tailLock.lock();
+        long stamp = tailLock.writeLock();
         headLock.lock();
 
         try {
@@ -395,9 +422,39 @@ public class GrowableArrayBlockingQueue<T> extends AbstractQueue<T> implements B
             sb.append(']');
         } finally {
             headLock.unlock();
-            tailLock.unlock();
+            tailLock.unlockWrite(stamp);
         }
         return sb.toString();
+    }
+
+    /**
+     * Make the queue not accept new items and waking up blocked consume.
+     * if there are still new data trying to enter the queue, it will be handed
+     * by {@param itemAfterTerminatedHandler}.
+     */
+    public void terminate(@Nullable Consumer<T> itemAfterTerminatedHandler) {
+        // After wait for the in-flight item enqueue, it means the operation of terminate is finished.
+        long stamp = tailLock.writeLock();
+        try {
+            terminated = true;
+            if (itemAfterTerminatedHandler != null) {
+                this.itemAfterTerminatedHandler = itemAfterTerminatedHandler;
+            }
+        } finally {
+            tailLock.unlockWrite(stamp);
+        }
+
+        // Signal waiting consumer threads to prevent indefinite blocking after termination
+        headLock.lock();
+        try {
+            isNotEmpty.signalAll();
+        } finally {
+            headLock.unlock();
+        }
+    }
+
+    public boolean isTerminated() {
+        return terminated;
     }
 
     @SuppressWarnings("unchecked")

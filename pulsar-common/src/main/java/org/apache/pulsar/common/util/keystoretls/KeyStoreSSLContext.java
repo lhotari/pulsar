@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -34,11 +34,11 @@ import javax.net.ssl.KeyManager;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
+import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.common.util.SecurityUtility;
-import org.eclipse.jetty.util.ssl.SslContextFactory;
 
 /**
  * KeyStoreSSLContext that mainly wrap a SSLContext to provide SSL context for both webservice and netty.
@@ -129,8 +129,10 @@ public class KeyStoreSSLContext {
 
     public SSLContext createSSLContext() throws GeneralSecurityException, IOException {
         SSLContext sslContext;
-        if (sslProviderString != null) {
-            sslContext = SSLContext.getInstance(protocol, sslProviderString);
+
+        Provider provider = SecurityUtility.resolveProvider(sslProviderString);
+        if (provider != null) {
+            sslContext = SSLContext.getInstance(protocol, provider);
         } else {
             sslContext = SSLContext.getInstance(protocol);
         }
@@ -149,25 +151,30 @@ public class KeyStoreSSLContext {
         }
 
         // trust store
-        TrustManagerFactory trustManagerFactory;
+        TrustManagerFactory trustManagerFactory = null;
         if (this.allowInsecureConnection) {
             trustManagerFactory = InsecureTrustManagerFactory.INSTANCE;
         } else {
-            trustManagerFactory = sslProviderString != null
-                    ? TrustManagerFactory.getInstance(tmfAlgorithm, sslProviderString)
-                    : TrustManagerFactory.getInstance(tmfAlgorithm);
-            KeyStore trustStore = KeyStore.getInstance(trustStoreTypeString);
-            char[] passwordChars = trustStorePassword.toCharArray();
-            try (FileInputStream inputStream = new FileInputStream(trustStorePath)) {
-                trustStore.load(inputStream, passwordChars);
+            if (!Strings.isNullOrEmpty(trustStorePath)) {
+                trustManagerFactory = provider != null
+                        ? TrustManagerFactory.getInstance(tmfAlgorithm, provider)
+                        : TrustManagerFactory.getInstance(tmfAlgorithm);
+                KeyStore trustStore = KeyStore.getInstance(trustStoreTypeString);
+                char[] passwordChars = trustStorePassword.toCharArray();
+                try (FileInputStream inputStream = new FileInputStream(trustStorePath)) {
+                    trustStore.load(inputStream, passwordChars);
+                }
+                trustManagerFactory.init(trustStore);
             }
-            trustManagerFactory.init(trustStore);
+        }
+
+        TrustManager[] trustManagers = null;
+        if (trustManagerFactory != null) {
+            trustManagers = SecurityUtility.processConscryptTrustManagers(trustManagerFactory.getTrustManagers());
         }
 
         // init
-        sslContext.init(keyManagers, SecurityUtility
-                        .processConscryptTrustManagers(trustManagerFactory.getTrustManagers()),
-                new SecureRandom());
+        sslContext.init(keyManagers, trustManagers, new SecureRandom());
         this.sslContext = sslContext;
         return sslContext;
     }
@@ -194,7 +201,11 @@ public class KeyStoreSSLContext {
         }
 
         if (this.mode == Mode.SERVER) {
-            sslEngine.setNeedClientAuth(this.needClientAuth);
+            if (needClientAuth) {
+                sslEngine.setNeedClientAuth(true);
+            } else {
+                sslEngine.setWantClientAuth(true);
+            }
             sslEngine.setUseClientMode(false);
         } else {
             sslEngine.setUseClientMode(true);
@@ -338,51 +349,4 @@ public class KeyStoreSSLContext {
 
         return keyStoreSSLContext.createSSLContext();
     }
-
-    // for web server. autoRefresh is default true.
-    public static SslContextFactory.Server createSslContextFactory(String sslProviderString,
-                                                                   String keyStoreTypeString,
-                                                                   String keyStore,
-                                                                   String keyStorePassword,
-                                                                   boolean allowInsecureConnection,
-                                                                   String trustStoreTypeString,
-                                                                   String trustStore,
-                                                                   String trustStorePassword,
-                                                                   boolean requireTrustedClientCertOnConnect,
-                                                                   Set<String> ciphers,
-                                                                   Set<String> protocols,
-                                                                   long certRefreshInSec) {
-        SslContextFactory.Server sslCtxFactory;
-
-        if (sslProviderString == null) {
-            Provider provider = SecurityUtility.CONSCRYPT_PROVIDER;
-            if (provider != null) {
-                sslProviderString = provider.getName();
-            }
-        }
-
-        sslCtxFactory = new JettySslContextFactoryWithAutoRefresh(
-                sslProviderString,
-                keyStoreTypeString,
-                keyStore,
-                keyStorePassword,
-                allowInsecureConnection,
-                trustStoreTypeString,
-                trustStore,
-                trustStorePassword,
-                requireTrustedClientCertOnConnect,
-                ciphers,
-                protocols,
-                certRefreshInSec);
-
-        if (requireTrustedClientCertOnConnect) {
-            sslCtxFactory.setNeedClientAuth(true);
-        } else {
-            sslCtxFactory.setWantClientAuth(true);
-        }
-        sslCtxFactory.setTrustAll(true);
-
-        return sslCtxFactory;
-    }
 }
-

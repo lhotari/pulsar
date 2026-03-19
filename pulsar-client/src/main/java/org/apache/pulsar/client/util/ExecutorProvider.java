@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,15 +19,16 @@
 package org.apache.pulsar.client.util;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import com.google.common.annotations.VisibleForTesting;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiFunction;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.tuple.Pair;
@@ -41,35 +42,53 @@ public class ExecutorProvider {
     private final String poolName;
     private volatile boolean isShutdown;
 
-    private static class ExtendedThreadFactory extends DefaultThreadFactory {
-
+    public static class ExtendedThreadFactory extends DefaultThreadFactory {
         @Getter
-        private Thread thread;
+        private volatile Thread thread;
+        public ExtendedThreadFactory(String poolName) {
+            super(poolName, false);
+        }
         public ExtendedThreadFactory(String poolName, boolean daemon) {
             super(poolName, daemon);
         }
 
         @Override
         public Thread newThread(Runnable r) {
-            thread = super.newThread(r);
+            Thread thread = super.newThread(r);
+            thread.setUncaughtExceptionHandler((t, e) ->
+                    log.error("Thread {} got uncaught Exception", t.getName(), e));
+            this.thread = thread;
             return thread;
         }
     }
 
-
     public ExecutorProvider(int numThreads, String poolName) {
+        this(numThreads, poolName, Thread.currentThread().isDaemon());
+    }
+
+    public ExecutorProvider(int numThreads, String poolName, boolean daemon) {
+        this(numThreads, poolName, daemon, ExtendedThreadFactory::new);
+    }
+
+    @VisibleForTesting
+    public ExecutorProvider(
+            int numThreads, String poolName, boolean daemon,
+            BiFunction<String/* poolName */, Boolean/* daemon */, ExtendedThreadFactory> threadFactoryCreator) {
         checkArgument(numThreads > 0);
         this.numThreads = numThreads;
         Objects.requireNonNull(poolName);
         executors = new ArrayList<>(numThreads);
         for (int i = 0; i < numThreads; i++) {
-            ExtendedThreadFactory threadFactory = new ExtendedThreadFactory(
-                    poolName, Thread.currentThread().isDaemon());
-            ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(threadFactory);
+            ExtendedThreadFactory threadFactory = threadFactoryCreator.apply(poolName, daemon);
+            ExecutorService executor = createExecutor(threadFactory);
             executors.add(Pair.of(executor, threadFactory));
         }
         isShutdown = false;
         this.poolName = poolName;
+    }
+
+    protected ExecutorService createExecutor(ExtendedThreadFactory threadFactory) {
+       return Executors.newSingleThreadExecutor(threadFactory);
     }
 
     public ExecutorService getExecutor() {

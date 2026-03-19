@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,10 +16,9 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 package org.apache.pulsar.functions.utils;
 
-import static org.apache.commons.lang.StringUtils.isEmpty;
+import static org.apache.commons.lang3.StringUtils.isEmpty;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import java.lang.reflect.Constructor;
@@ -82,7 +81,8 @@ public final class CryptoUtils {
         return bldr.build();
     }
 
-    public static CryptoKeyReader getCryptoKeyReaderInstance(String className, Map<String, Object> configs, ClassLoader classLoader) {
+    public static CryptoKeyReader getCryptoKeyReaderInstance(String className, Map<String, Object> configs,
+                                                             ClassLoader classLoader) {
         Class<?> cryptoClass;
         try {
             cryptoClass = ClassLoaderUtils.loadClass(className, classLoader);
@@ -108,7 +108,8 @@ public final class CryptoUtils {
             case SEND:
                 return ProducerCryptoFailureAction.SEND;
             default:
-                throw new RuntimeException("Unknown producer protobuf failure action " + action.getValueDescriptor().getName());
+                throw new RuntimeException(
+                        "Unknown producer protobuf failure action " + action.getValueDescriptor().getName());
         }
     }
 
@@ -121,7 +122,8 @@ public final class CryptoUtils {
             case CONSUME:
                 return ConsumerCryptoFailureAction.CONSUME;
             default:
-                throw new RuntimeException("Unknown consumer protobuf failure action " + action.getValueDescriptor().getName());
+                throw new RuntimeException(
+                        "Unknown consumer protobuf failure action " + action.getValueDescriptor().getName());
         }
     }
 

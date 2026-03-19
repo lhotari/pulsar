@@ -23,16 +23,12 @@
   <parent>
     <groupId>org.apache.pulsar</groupId>
     <artifactId>pulsar-io</artifactId>
-    <version>2.10.0-SNAPSHOT</version>
+    <version>4.2.0-SNAPSHOT</version>
   </parent>
   <artifactId>pulsar-io-elastic-search</artifactId>
   <name>Pulsar IO :: ElasticSearch</name>
 
   <properties>
-    <!--
-     Work-around for "Container exited with code 137" (OOM)
-    -->
-    <testReuseFork>false</testReuseFork>
     <testForkCount>1</testForkCount>
   </properties>
 
@@ -58,9 +54,14 @@
     </dependency>
 
     <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>pulsar-io-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
-      <version>${jackson.databind.version}</version>
     </dependency>
 
     <dependency>
@@ -89,6 +90,11 @@
     </dependency>
 
     <dependency>
+      <groupId>co.elastic.clients</groupId>
+      <artifactId>elasticsearch-java</artifactId>
+    </dependency>
+
+    <dependency>
       <groupId>org.testcontainers</groupId>
       <artifactId>elasticsearch</artifactId>
       <scope>test</scope>
@@ -99,10 +105,24 @@
       <scope>test</scope>
     </dependency>
 
+    <dependency>
+      <groupId>org.skyscreamer</groupId>
+      <artifactId>jsonassert</artifactId>
+      <version>${skyscreamer.version}</version>
+      <scope>test</scope>
+    </dependency>
+
   </dependencies>
 
   <build>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-deploy-plugin</artifactId>
+        <configuration>
+          <skip>${skipDeployConnector}</skip>
+        </configuration>
+      </plugin>
       <plugin>
         <groupId>org.apache.nifi</groupId>
         <artifactId>nifi-nar-maven-plugin</artifactId>

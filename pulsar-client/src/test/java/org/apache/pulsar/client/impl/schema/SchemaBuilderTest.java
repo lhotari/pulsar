@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,11 +20,15 @@ package org.apache.pulsar.client.impl.schema;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.testng.Assert.assertEquals;
-
 import lombok.Data;
 import org.apache.avro.reflect.Nullable;
 import org.apache.pulsar.client.api.Schema;
-import org.apache.pulsar.client.api.schema.*;
+import org.apache.pulsar.client.api.schema.GenericRecord;
+import org.apache.pulsar.client.api.schema.GenericRecordBuilder;
+import org.apache.pulsar.client.api.schema.GenericSchema;
+import org.apache.pulsar.client.api.schema.RecordSchemaBuilder;
+import org.apache.pulsar.client.api.schema.SchemaBuilder;
+import org.apache.pulsar.client.api.schema.SchemaDefinition;
 import org.apache.pulsar.client.impl.schema.reader.MultiVersionAvroReader;
 import org.apache.pulsar.common.schema.SchemaInfo;
 import org.apache.pulsar.common.schema.SchemaType;
@@ -278,17 +282,17 @@ public class SchemaBuilderTest {
 
         assertEquals(people.getFields(), peopleRecord.getFields());
         assertEquals((people.getField("name")), peopleRecord.getField("name"));
-        assertEquals(((GenericRecord)people.getField("people1")).getField("age"),
+        assertEquals(((GenericRecord) people.getField("people1")).getField("age"),
                 people1GenericRecord.getField("age"));
-        assertEquals(((GenericRecord)people.getField("people1")).getField("height"),
+        assertEquals(((GenericRecord) people.getField("people1")).getField("height"),
                 people1GenericRecord.getField("height"));
-        assertEquals(((GenericRecord)people.getField("people1")).getField("name"),
+        assertEquals(((GenericRecord) people.getField("people1")).getField("name"),
                 people1GenericRecord.getField("name"));
-        assertEquals(((GenericRecord)people.getField("people2")).getField("age"),
+        assertEquals(((GenericRecord) people.getField("people2")).getField("age"),
                 people2GenericRecord.getField("age"));
-        assertEquals(((GenericRecord)people.getField("people2")).getField("height"),
+        assertEquals(((GenericRecord) people.getField("people2")).getField("height"),
                 people2GenericRecord.getField("height"));
-        assertEquals(((GenericRecord)people.getField("people2")).getField("name"),
+        assertEquals(((GenericRecord) people.getField("people2")).getField("name"),
                 people2GenericRecord.getField("name"));
 
     }
@@ -412,17 +416,17 @@ public class SchemaBuilderTest {
 
         assertEquals(people.getFields(), peopleRecord.getFields());
         assertEquals((people.getField("name")), peopleRecord.getField("name"));
-        assertEquals(((GenericRecord)people.getField("people1")).getField("age"),
+        assertEquals(((GenericRecord) people.getField("people1")).getField("age"),
                 people1GenericRecord.getField("age"));
-        assertEquals(((GenericRecord)people.getField("people1")).getField("height"),
+        assertEquals(((GenericRecord) people.getField("people1")).getField("height"),
                 people1GenericRecord.getField("height"));
-        assertEquals(((GenericRecord)people.getField("people1")).getField("name"),
+        assertEquals(((GenericRecord) people.getField("people1")).getField("name"),
                 people1GenericRecord.getField("name"));
-        assertEquals(((GenericRecord)people.getField("people2")).getField("age"),
+        assertEquals(((GenericRecord) people.getField("people2")).getField("age"),
                 people2GenericRecord.getField("age"));
-        assertEquals(((GenericRecord)people.getField("people2")).getField("height"),
+        assertEquals(((GenericRecord) people.getField("people2")).getField("height"),
                 people2GenericRecord.getField("height"));
-        assertEquals(((GenericRecord)people.getField("people2")).getField("name"),
+        assertEquals(((GenericRecord) people.getField("people2")).getField("name"),
                 people2GenericRecord.getField("name"));
 
     }
@@ -499,7 +503,7 @@ public class SchemaBuilderTest {
      * @param decoder the schema used for reading
      * @param writer the schema used for writing
      */
-    private static final void injectWriterSchema(Schema decoder, Schema writer) {
+    private static void injectWriterSchema(Schema decoder, Schema writer) {
         AvroSchema<?> avroSchema = (AvroSchema<?>) decoder;
         avroSchema.setReader(new MultiVersionAvroReader<>(
                 AvroSchema.of(SchemaDefinition.

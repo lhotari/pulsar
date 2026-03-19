@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -21,7 +21,10 @@ package org.apache.pulsar.packages.management.core.impl;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import org.apache.pulsar.packages.management.core.MockedPackagesStorageProvider;
 import org.apache.pulsar.packages.management.core.PackagesManagement;
@@ -32,17 +35,18 @@ import org.apache.pulsar.packages.management.core.common.PackageMetadataUtil;
 import org.apache.pulsar.packages.management.core.common.PackageName;
 import org.apache.pulsar.packages.management.core.exceptions.PackagesManagementException;
 import org.testng.Assert;
-import org.testng.annotations.AfterClass;
-import org.testng.annotations.BeforeClass;
+import org.testng.annotations.AfterMethod;
+import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 public class PackagesManagementImplTest {
     private static PackagesStorage storage;
     private static PackagesManagement packagesManagement;
 
-    @BeforeClass
+    @BeforeMethod
     public static void setup() throws IOException {
-        PackagesStorageProvider storageProvider = PackagesStorageProvider.newProvider(MockedPackagesStorageProvider.class.getName());
+        PackagesStorageProvider storageProvider =
+                PackagesStorageProvider.newProvider(MockedPackagesStorageProvider.class.getName());
         DefaultPackagesStorageConfiguration packagesStorageConfiguration = new DefaultPackagesStorageConfiguration();
         storage = storageProvider.getStorage(packagesStorageConfiguration);
 
@@ -50,7 +54,7 @@ public class PackagesManagementImplTest {
         packagesManagement.initialize(storage);
     }
 
-    @AfterClass(alwaysRun = true)
+    @AfterMethod(alwaysRun = true)
     public static void teardown() throws ExecutionException, InterruptedException {
         storage.closeAsync().get();
     }
@@ -108,7 +112,8 @@ public class PackagesManagementImplTest {
 
         // list the packages in a non-existent namespace should fail
         try {
-            packagesManagement.list(packageName.getPkgType(), packageName.getTenant(), packageName.getNamespace()).get();
+            packagesManagement.list(packageName.getPkgType(), packageName.getTenant(),
+                    packageName.getNamespace()).get();
         } catch (Exception e) {
             if (!(e.getCause() instanceof PackagesManagementException.NotFoundException)) {
                 Assert.fail("should not throw any exception");
@@ -120,7 +125,7 @@ public class PackagesManagementImplTest {
             .contact("test@apache.org")
             .description("A mocked test package")
             .createTime(System.currentTimeMillis()).build();
-        try (ByteArrayInputStream inputStream= new ByteArrayInputStream(PackageMetadataUtil.toBytes(metadata))) {
+        try (ByteArrayInputStream inputStream = new ByteArrayInputStream(PackageMetadataUtil.toBytes(metadata))) {
             packagesManagement.upload(packageName, metadata, inputStream).get();
         } catch (Exception e) {
             Assert.fail("should not throw any exception");
@@ -191,5 +196,63 @@ public class PackagesManagementImplTest {
         } catch (Exception e) {
             Assert.fail("should not throw any exception");
         }
+    }
+
+    @Test
+    public void testPackagePath() {
+        PackagesManagementImpl impl = (PackagesManagementImpl) packagesManagement;
+        PackageName pn = PackageName.get("function://public/default/test@v1");
+        String metaPath = impl.metadataPath(pn);
+        Assert.assertEquals(metaPath, "function/public/default/test/v1/meta");
+        String dataPath = impl.packagePath(pn);
+        Assert.assertEquals(dataPath, "function/public/default/test/v1");
+
+        impl.initialize(new PackagesStorage() {
+            @Override
+            public void initialize() {
+
+            }
+
+            @Override
+            public CompletableFuture<Void> writeAsync(String path, InputStream inputStream) {
+                return null;
+            }
+
+            @Override
+            public CompletableFuture<Void> readAsync(String path, OutputStream outputStream) {
+                return null;
+            }
+
+            @Override
+            public CompletableFuture<Void> deleteAsync(String path) {
+                return null;
+            }
+
+            @Override
+            public CompletableFuture<List<String>> listAsync(String path) {
+                return null;
+            }
+
+            @Override
+            public CompletableFuture<Boolean> existAsync(String path) {
+                return null;
+            }
+
+            @Override
+            public CompletableFuture<Void> closeAsync() {
+                return null;
+            }
+
+            @Override
+            public String dataPath() {
+                return "/tmp";
+            }
+        });
+
+
+        metaPath = impl.metadataPath(pn);
+        Assert.assertEquals(metaPath, "function/public/default/test/v1/meta");
+        dataPath = impl.packagePath(pn);
+        Assert.assertEquals(dataPath, "function/public/default/test/v1/tmp");
     }
 }

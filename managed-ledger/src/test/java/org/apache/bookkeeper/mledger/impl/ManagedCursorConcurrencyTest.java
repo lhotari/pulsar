@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,12 +18,11 @@
  */
 package org.apache.bookkeeper.mledger.impl;
 
-import static org.apache.bookkeeper.mledger.util.SafeRun.safeRun;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNull;
-
 import com.google.common.collect.Lists;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -50,7 +49,7 @@ import org.testng.annotations.Test;
 public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
 
     private static final Logger log = LoggerFactory.getLogger(ManagedCursorConcurrencyTest.class);
-    
+
     @DataProvider(name = "useOpenRangeSet")
     public static Object[][] useOpenRangeSet() {
         return new Object[][] { { Boolean.TRUE }, { Boolean.FALSE } };
@@ -76,7 +75,7 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
 
         final ManagedCursor cursor = ledger.openCursor("c1");
 
-        final List<Position> addedEntries = Lists.newArrayList();
+        final List<Position> addedEntries = new ArrayList();
 
         for (int i = 0; i < 1000; i++) {
             Position pos = ledger.addEntry("entry".getBytes());
@@ -87,41 +86,37 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
         final CountDownLatch counter = new CountDownLatch(2);
         final AtomicBoolean gotException = new AtomicBoolean(false);
 
-        Thread deleter = new Thread() {
-            public void run() {
-                try {
-                    barrier.await();
+        Thread deleter = new Thread(() -> {
+            try {
+                barrier.await();
 
-                    for (Position position : addedEntries) {
-                        cursor.markDelete(position);
-                    }
-
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    gotException.set(true);
-                } finally {
-                    counter.countDown();
+                for (Position position : addedEntries) {
+                    cursor.markDelete(position);
                 }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                gotException.set(true);
+            } finally {
+                counter.countDown();
             }
-        };
+        });
 
-        Thread reader = new Thread() {
-            public void run() {
-                try {
-                    barrier.await();
+        Thread reader = new Thread(() -> {
+            try {
+                barrier.await();
 
-                    for (int i = 0; i < 1000; i++) {
-                        cursor.readEntries(1).forEach(e -> e.release());
-                    }
-
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    gotException.set(true);
-                } finally {
-                    counter.countDown();
+                for (int i = 0; i < 1000; i++) {
+                    cursor.readEntries(1).forEach(Entry::release);
                 }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                gotException.set(true);
+            } finally {
+                counter.countDown();
             }
-        };
+        });
 
         deleter.start();
         reader.start();
@@ -138,9 +133,9 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
 
         final ManagedCursor cursor = ledger.openCursor("c1");
         final CompletableFuture<String> closeFuture = new CompletableFuture<>();
-        final String CLOSED = "closed";
+        final String closed = "closed";
 
-        final List<Position> addedEntries = Lists.newArrayList();
+        final List<Position> addedEntries = new ArrayList();
 
         for (int i = 0; i < 1000; i++) {
             Position pos = ledger.addEntry("entry".getBytes());
@@ -151,61 +146,57 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
         final CountDownLatch counter = new CountDownLatch(2);
         final AtomicBoolean gotException = new AtomicBoolean(false);
 
-        Thread deleter = new Thread() {
-            public void run() {
-                try {
-                    barrier.await();
+        Thread deleter = new Thread(() -> {
+            try {
+                barrier.await();
 
-                    for (Position position : addedEntries) {
-                        cursor.markDelete(position);
-                        Thread.sleep(1);
-                    }
-                } catch (ManagedLedgerException e) {
-                    if (!(e instanceof ManagedLedgerException.CursorAlreadyClosedException)) {
-                        gotException.set(true);
-                    }
-
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    gotException.set(true);
-                } finally {
-                    counter.countDown();
+                for (Position position : addedEntries) {
+                    cursor.markDelete(position);
+                    Thread.sleep(1);
                 }
-            }
-        };
-
-        Thread reader = new Thread() {
-            public void run() {
-                try {
-                    barrier.await();
-
-                    for (int i = 0; i < 1000; i++) {
-                        cursor.readEntries(1).forEach(e -> e.release());
-                        // Thread.sleep(2,200);
-                        Thread.sleep(2, 195);
-                    }
-                    cursor.asyncClose(new AsyncCallbacks.CloseCallback() {
-                        @Override
-                        public void closeComplete(Object ctx) {
-                            log.info("Successfully closed cursor ledger");
-                            closeFuture.complete(CLOSED);
-                        }
-
-                        @Override
-                        public void closeFailed(ManagedLedgerException exception, Object ctx) {
-                            log.error("Error closing cursor: ", exception);
-                            closeFuture.completeExceptionally(new Exception(exception));
-                        }
-                    }, null);
-
-                } catch (Exception e) {
-                    e.printStackTrace();
+            } catch (ManagedLedgerException e) {
+                if (!(e instanceof ManagedLedgerException.CursorAlreadyClosedException)) {
                     gotException.set(true);
-                } finally {
-                    counter.countDown();
                 }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                gotException.set(true);
+            } finally {
+                counter.countDown();
             }
-        };
+        });
+
+        Thread reader = new Thread(() -> {
+            try {
+                barrier.await();
+
+                for (int i = 0; i < 1000; i++) {
+                    cursor.readEntries(1).forEach(Entry::release);
+                    // Thread.sleep(2,200);
+                    Thread.sleep(2, 195);
+                }
+                cursor.asyncClose(new AsyncCallbacks.CloseCallback() {
+                    @Override
+                    public void closeComplete(Object ctx) {
+                        log.info("Successfully closed cursor ledger");
+                        closeFuture.complete(closed);
+                    }
+
+                    @Override
+                    public void closeFailed(ManagedLedgerException exception, Object ctx) {
+                        log.error("Error closing cursor: ", exception);
+                        closeFuture.completeExceptionally(new Exception(exception));
+                    }
+                }, null);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                gotException.set(true);
+            } finally {
+                counter.countDown();
+            }
+        });
 
         deleter.start();
         reader.start();
@@ -213,7 +204,7 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
         counter.await();
 
         assertFalse(gotException.get());
-        assertEquals(closeFuture.get(), CLOSED);
+        assertEquals(closeFuture.get(), closed);
     }
 
     @Test(timeOut = 30000)
@@ -223,7 +214,7 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
 
         final ManagedCursor cursor = ledger.openCursor("c1");
 
-        final List<Position> addedEntries = Lists.newArrayList();
+        final List<Position> addedEntries = new ArrayList();
 
         for (int i = 0; i < 1000; i++) {
             Position pos = ledger.addEntry("entry".getBytes());
@@ -256,7 +247,7 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
                 barrier.await();
 
                 for (int i = 0; i < 1000; i++) {
-                    cursor.readEntries(1).forEach(e -> e.release());
+                    cursor.readEntries(1).forEach(Entry::release);
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -277,27 +268,27 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
 
         final ManagedCursor cursor = ledger.openCursor("c1");
 
-        final int N = 1000;
-        final List<Position> addedEntries = Lists.newArrayListWithExpectedSize(N);
+        final int num = 1000;
+        final List<Position> addedEntries = Lists.newArrayListWithExpectedSize(num);
 
-        for (int i = 0; i < N; i++) {
+        for (int i = 0; i < num; i++) {
             Position pos = ledger.addEntry("entry".getBytes());
             addedEntries.add(pos);
         }
 
-        final int Threads = 10;
-        final CyclicBarrier barrier = new CyclicBarrier(Threads);
-        final CountDownLatch counter = new CountDownLatch(Threads);
+        final int threads = 10;
+        final CyclicBarrier barrier = new CyclicBarrier(threads);
+        final CountDownLatch counter = new CountDownLatch(threads);
         final AtomicBoolean gotException = new AtomicBoolean(false);
 
-        for (int thread = 0; thread < Threads; thread++) {
+        for (int thread = 0; thread < threads; thread++) {
             final int myThread = thread;
             cachedExecutor.execute(() -> {
                 try {
                     barrier.await();
 
-                    for (int i = 0; i < N; i++) {
-                        int threadId = i % Threads;
+                    for (int i = 0; i < num; i++) {
+                        int threadId = i % threads;
                         if (threadId == myThread) {
                             cursor.delete(addedEntries.get(i));
                         }
@@ -318,21 +309,21 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
         assertEquals(cursor.getMarkDeletedPosition(), addedEntries.get(addedEntries.size() - 1));
     }
 
-    @Test(timeOut = 30000)
+    @Test(timeOut = 30000, invocationCount = 10)
     public void testConcurrentReadOfSameEntry() throws Exception {
         ManagedLedger ledger = factory.open("testConcurrentReadOfSameEntry", new ManagedLedgerConfig());
-        final int numCursors = 5;
-        final List<ManagedCursor> cursors = Lists.newArrayList();
+        final int numCursors = 20;
+        final List<ManagedCursor> cursors = new ArrayList();
         for (int i = 0; i < numCursors; i++) {
             final ManagedCursor cursor = ledger.openCursor("c" + i);
             cursors.add(cursor);
         }
 
-        final int N = 100;
-        for (int i = 0; i < N; i++) {
+        final int num = 100;
+        for (int i = 0; i < num; i++) {
             ledger.addEntry(("entry" + i).getBytes());
         }
-        long currentLedger = ((PositionImpl) cursors.get(0).getMarkDeletedPosition()).getLedgerId();
+        long currentLedger = cursors.get(0).getMarkDeletedPosition().getLedgerId();
 
         // empty the cache
         ((ManagedLedgerImpl) ledger).entryCache.invalidateAllEntries(currentLedger);
@@ -348,7 +339,7 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
             cachedExecutor.execute(() -> {
                 try {
                     barrier.await();
-                    for (int j = 0; j < N; j++) {
+                    for (int j = 0; j < num; j++) {
                         String expected = "entry" + j;
                         String data = new String(cursor.readEntries(1).get(0).getDataAndRelease());
                         if ((!expected.equals(data)) && result.get() == null) {
@@ -375,10 +366,10 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
 
         final ManagedCursor cursor = ledger.openCursor("c1");
 
-        final int N = 1000;
-        final List<Position> addedEntries = Lists.newArrayListWithExpectedSize(N);
+        final int num = 1000;
+        final List<Position> addedEntries = Lists.newArrayListWithExpectedSize(num);
 
-        for (int i = 0; i < N; i++) {
+        for (int i = 0; i < num; i++) {
             Position pos = ledger.addEntry("entry".getBytes());
             addedEntries.add(pos);
         }
@@ -389,7 +380,7 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
         final AtomicInteger iteration = new AtomicInteger(0);
 
         for (int i = 0; i < deleteEntries; i++) {
-            executor.submit(safeRun(() -> {
+            executor.submit(() -> {
                 try {
                     cursor.asyncDelete(addedEntries.get(iteration.getAndIncrement()), new DeleteCallback() {
                         @Override
@@ -409,12 +400,12 @@ public class ManagedCursorConcurrencyTest extends MockedBookKeeperTestCase {
                 } finally {
                     counter.countDown();
                 }
-            }));
+            });
         }
 
         counter.await();
 
-        final int readEntries = N - deleteEntries;
+        final int readEntries = num - deleteEntries;
         final CountDownLatch readCounter = new CountDownLatch(readEntries);
         final AtomicInteger successReadEntries = new AtomicInteger(0);
         for (int i = 1; i <= readEntries; i++) {

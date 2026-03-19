@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,31 +19,40 @@
 package org.apache.pulsar.client.impl;
 
 import com.google.common.collect.Lists;
+import java.util.HashSet;
+import java.util.Set;
+import org.apache.pulsar.broker.service.SharedPulsarBaseTest;
+import org.apache.pulsar.broker.service.SharedPulsarCluster;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.Producer;
-import org.apache.pulsar.client.api.ProducerConsumerBase;
+import org.apache.pulsar.common.policies.data.TenantInfoImpl;
 import org.testng.Assert;
-import org.testng.annotations.AfterMethod;
-import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 @Test(groups = "broker-impl")
-public class TopicFromMessageTest extends ProducerConsumerBase {
+public class TopicFromMessageTest extends SharedPulsarBaseTest {
 
     private static final long TEST_TIMEOUT = 90000; // 1.5 min
     private static final int BATCHING_MAX_MESSAGES_THRESHOLD = 2;
 
     @Override
-    @BeforeMethod
-    public void setup() throws Exception {
-        super.internalSetup();
-        super.producerBaseSetup();
-    }
-
-    @Override
-    @AfterMethod(alwaysRun = true)
-    public void cleanup() throws Exception {
-        super.internalCleanup();
+    @BeforeClass(alwaysRun = true)
+    public void setupSharedCluster() throws Exception {
+        super.setupSharedCluster();
+        // These tests use short topic names (e.g. "topic1") which resolve to public/default
+        try {
+            admin.tenants().createTenant("public",
+                    new TenantInfoImpl(Set.of(), Set.of(SharedPulsarCluster.CLUSTER_NAME)));
+        } catch (Exception e) {
+            // tenant may already exist
+        }
+        try {
+            admin.namespaces().createNamespace("public/default",
+                    Set.of(SharedPulsarCluster.CLUSTER_NAME));
+        } catch (Exception e) {
+            // namespace may already exist
+        }
     }
 
     @Test(timeOut = TEST_TIMEOUT)
@@ -59,12 +68,13 @@ public class TopicFromMessageTest extends ProducerConsumerBase {
 
     @Test(timeOut = TEST_TIMEOUT)
     public void testSingleTopicConsumerNoBatchFullName() throws Exception {
+        final String topic = newTopicName();
         try (Consumer<byte[]> consumer = pulsarClient.newConsumer()
-                .topic("my-property/my-ns/topic1").subscriptionName("sub1").subscribe();
+                .topic(topic).subscriptionName("sub1").subscribe();
              Producer<byte[]> producer = pulsarClient.newProducer()
-                .topic("my-property/my-ns/topic1").enableBatching(false).create()) {
+                .topic(topic).enableBatching(false).create()) {
             producer.send("foobar".getBytes());
-            Assert.assertEquals(consumer.receive().getTopicName(), "persistent://my-property/my-ns/topic1");
+            Assert.assertEquals(consumer.receive().getTopicName(), topic);
         }
     }
 
@@ -76,10 +86,14 @@ public class TopicFromMessageTest extends ProducerConsumerBase {
                 .topic("topic1").enableBatching(false).create();
              Producer<byte[]> producer2 = pulsarClient.newProducer()
                 .topic("topic2").enableBatching(false).create()) {
+
+            Set<String> topicSet = new HashSet<>();
+            topicSet.add("persistent://public/default/topic1");
+            topicSet.add("persistent://public/default/topic2");
             producer1.send("foobar".getBytes());
             producer2.send("foobar".getBytes());
-            Assert.assertEquals(consumer.receive().getTopicName(), "persistent://public/default/topic1");
-            Assert.assertEquals(consumer.receive().getTopicName(), "persistent://public/default/topic2");
+            Assert.assertTrue(topicSet.remove(consumer.receive().getTopicName()));
+            Assert.assertTrue(topicSet.remove(consumer.receive().getTopicName()));
         }
     }
 
@@ -111,7 +125,8 @@ public class TopicFromMessageTest extends ProducerConsumerBase {
             String topicNameX = consumer.receive().getTopicName();
             String topicNameY = consumer.receive().getTopicName();
             Object[] actualTopicNames = new Object[]{topicNameX, topicNameY};
-            Object[] expectedTopicNames = new Object[]{"persistent://public/default/topic1", "persistent://public/default/topic2"};
+            Object[] expectedTopicNames =
+                    new Object[]{"persistent://public/default/topic1", "persistent://public/default/topic2"};
             Assert.assertEqualsNoOrder(actualTopicNames, expectedTopicNames);
         }
     }

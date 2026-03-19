@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,10 +18,13 @@
  */
 package org.apache.bookkeeper.mledger.offload.jcloud.impl;
 
-import com.google.common.base.Predicate;
+import com.google.common.collect.Range;
 import io.netty.buffer.ByteBuf;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Predicate;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
 import org.apache.bookkeeper.mledger.Entry;
@@ -31,8 +34,9 @@ import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.ManagedLedgerMXBean;
 import org.apache.bookkeeper.mledger.Position;
+import org.apache.bookkeeper.mledger.PositionBound;
 import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
-import org.apache.bookkeeper.mledger.proto.MLDataFormats.ManagedLedgerInfo.LedgerInfo;
+import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo;
 import org.apache.pulsar.common.api.proto.CommandSubscribe;
 import org.apache.pulsar.common.policies.data.ManagedLedgerInternalStats;
 
@@ -105,7 +109,8 @@ public class MockManagedLedger implements ManagedLedger {
 
     @Override
     public ManagedCursor openCursor(String name, CommandSubscribe.InitialPosition initialPosition,
-                                    Map<String, Long> properties) throws InterruptedException, ManagedLedgerException {
+                                    Map<String, Long> properties, Map<String, String> cursorProperties)
+            throws InterruptedException, ManagedLedgerException {
         return null;
     }
 
@@ -138,6 +143,11 @@ public class MockManagedLedger implements ManagedLedger {
     }
 
     @Override
+    public void removeWaitingCursor(ManagedCursor cursor) {
+
+    }
+
+    @Override
     public void asyncOpenCursor(String name, AsyncCallbacks.OpenCursorCallback callback, Object ctx) {
 
     }
@@ -150,7 +160,8 @@ public class MockManagedLedger implements ManagedLedger {
 
     @Override
     public void asyncOpenCursor(String name, CommandSubscribe.InitialPosition initialPosition,
-                                Map<String, Long> properties, AsyncCallbacks.OpenCursorCallback callback, Object ctx) {
+                                Map<String, Long> properties, Map<String, String> cursorProperties,
+                                AsyncCallbacks.OpenCursorCallback callback, Object ctx) {
 
     }
 
@@ -166,6 +177,11 @@ public class MockManagedLedger implements ManagedLedger {
 
     @Override
     public long getNumberOfEntries() {
+        return 0;
+    }
+
+    @Override
+    public long getNumberOfEntries(Range<Position> range) {
         return 0;
     }
 
@@ -266,7 +282,7 @@ public class MockManagedLedger implements ManagedLedger {
 
     @Override
     public ManagedLedgerConfig getConfig() {
-        return null;
+        return new ManagedLedgerConfig();
     }
 
     @Override
@@ -333,7 +349,7 @@ public class MockManagedLedger implements ManagedLedger {
 
     @Override
     public CompletableFuture<Position> asyncFindPosition(Predicate<Entry> predicate) {
-        return null;
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
@@ -343,8 +359,14 @@ public class MockManagedLedger implements ManagedLedger {
 
     @Override
     public CompletableFuture<LedgerInfo> getLedgerInfo(long ledgerId) {
-        final LedgerInfo build = LedgerInfo.newBuilder().setLedgerId(ledgerId).setSize(100).setEntries(20).build();
+        final LedgerInfo build = new LedgerInfo().setLedgerId(ledgerId).setSize(100).setEntries(20);
         return CompletableFuture.completedFuture(build);
+    }
+
+    @Override
+    public Optional<LedgerInfo> getOptionalLedgerInfo(long ledgerId) {
+        final LedgerInfo build = new LedgerInfo().setLedgerId(ledgerId).setSize(100).setEntries(20);
+        return Optional.of(build);
     }
 
     @Override
@@ -354,6 +376,88 @@ public class MockManagedLedger implements ManagedLedger {
 
     @Override
     public CompletableFuture<ManagedLedgerInternalStats> getManagedLedgerInternalStats(boolean includeLedgerMetadata) {
+        return CompletableFuture.completedFuture(null);
+    }
+
+    @Override
+    public boolean checkInactiveLedgerAndRollOver() {
+        return false;
+    }
+
+    @Override
+    public void checkCursorsToCacheEntries() {
+        // no-op
+    }
+
+    @Override
+    public void asyncReadEntry(Position position, AsyncCallbacks.ReadEntryCallback callback, Object ctx) {
+
+    }
+
+    @Override
+    public NavigableMap<Long, LedgerInfo> getLedgersInfo() {
         return null;
+    }
+
+    @Override
+    public Position getNextValidPosition(Position position) {
+        return null;
+    }
+
+    @Override
+    public Position getPreviousPosition(Position position) {
+        return null;
+    }
+
+    @Override
+    public long getEstimatedBacklogSize(Position position) {
+        return 0;
+    }
+
+    @Override
+    public Position getPositionAfterN(Position startPosition, long n, PositionBound startRange) {
+        return null;
+    }
+
+    @Override
+    public int getPendingAddEntriesCount() {
+        return 0;
+    }
+
+    @Override
+    public long getCacheSize() {
+        return 0;
+    }
+
+    @Override
+    public Position getFirstPosition() {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<Position> asyncMigrate() {
+        // no-op
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<Void> asyncAddLedgerProperty(long ledgerId, String key, String value) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<Void> asyncRemoveLedgerProperty(long ledgerId, String key) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<String> asyncGetLedgerProperty(long ledgerId, String key) {
+        return null;
+    }
+
+    @Override
+    public boolean isMigrated() {
+        // no-op
+        return false;
     }
 }

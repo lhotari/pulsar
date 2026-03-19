@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,12 +19,9 @@
 package org.apache.pulsar.tests.integration.auth.token;
 
 import com.google.common.io.Files;
-
 import java.io.File;
 import java.util.concurrent.TimeUnit;
-
 import lombok.extern.slf4j.Slf4j;
-
 import org.apache.pulsar.tests.integration.containers.BrokerContainer;
 import org.apache.pulsar.tests.integration.containers.ProxyContainer;
 import org.apache.pulsar.tests.integration.containers.PulsarContainer;

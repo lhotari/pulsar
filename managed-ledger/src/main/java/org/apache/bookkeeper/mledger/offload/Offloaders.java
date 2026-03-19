@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -46,6 +46,12 @@ public class Offloaders implements AutoCloseable {
     @Override
     public void close() throws Exception {
         offloaders.forEach(offloader -> {
+            try {
+                offloader.getRight().close();
+            } catch (Exception e) {
+                log.warn("Failed to close offloader '{}': {}",
+                        offloader.getRight().getClass(), e.getMessage());
+            }
             try {
                 offloader.getLeft().close();
             } catch (IOException e) {

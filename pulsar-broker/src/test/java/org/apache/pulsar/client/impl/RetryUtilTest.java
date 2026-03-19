@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,18 +18,18 @@
  */
 package org.apache.pulsar.client.impl;
 
-import org.apache.pulsar.client.util.RetryUtil;
-import org.apache.pulsar.common.util.FutureUtil;
-import org.testng.annotations.Test;
-
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertTrue;
+import lombok.Cleanup;
+import org.apache.pulsar.client.util.RetryUtil;
+import org.apache.pulsar.common.util.Backoff;
+import org.apache.pulsar.common.util.FutureUtil;
+import org.testng.annotations.Test;
 
 @Test(groups = "utils")
 public class RetryUtilTest {
@@ -37,14 +37,15 @@ public class RetryUtilTest {
 
     @Test
     public void testFailAndRetry() throws Exception {
+        @Cleanup("shutdownNow")
         ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
         CompletableFuture<Boolean> callback = new CompletableFuture<>();
         AtomicInteger atomicInteger = new AtomicInteger(0);
-        Backoff backoff = new BackoffBuilder()
-                .setInitialTime(100, TimeUnit.MILLISECONDS)
-                .setMax(2000, TimeUnit.MILLISECONDS)
-                .setMandatoryStop(5000, TimeUnit.MILLISECONDS)
-                .create();
+        Backoff backoff = Backoff.builder()
+                .initialDelay(Duration.ofMillis(100))
+                .maxBackoff(Duration.ofMillis(2000))
+                .mandatoryStop(Duration.ofMillis(5000))
+                .build();
         RetryUtil.retryAsynchronously(() -> {
             CompletableFuture<Boolean> future = new CompletableFuture<>();
             atomicInteger.incrementAndGet();
@@ -57,18 +58,18 @@ public class RetryUtilTest {
         }, backoff, executor, callback);
         assertTrue(callback.get());
         assertEquals(atomicInteger.get(), 5);
-        executor.shutdownNow();
     }
 
     @Test
     public void testFail() throws Exception {
+        @Cleanup("shutdownNow")
         ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
         CompletableFuture<Boolean> callback = new CompletableFuture<>();
-        Backoff backoff = new BackoffBuilder()
-                .setInitialTime(500, TimeUnit.MILLISECONDS)
-                .setMax(2000, TimeUnit.MILLISECONDS)
-                .setMandatoryStop(5000, TimeUnit.MILLISECONDS)
-                .create();
+        Backoff backoff = Backoff.builder()
+                .initialDelay(Duration.ofMillis(500))
+                .maxBackoff(Duration.ofMillis(2000))
+                .mandatoryStop(Duration.ofMillis(5000))
+                .build();
         long start = System.currentTimeMillis();
         RetryUtil.retryAsynchronously(() ->
                 FutureUtil.failedFuture(new RuntimeException("fail")), backoff, executor, callback);
@@ -79,6 +80,5 @@ public class RetryUtilTest {
         }
         long time = System.currentTimeMillis() - start;
         assertTrue(time >= 5000 - 2000, "Duration:" + time);
-        executor.shutdownNow();
     }
 }

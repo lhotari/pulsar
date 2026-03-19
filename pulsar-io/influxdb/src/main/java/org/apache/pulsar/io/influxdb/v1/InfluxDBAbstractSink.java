@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -43,7 +43,7 @@ public abstract class InfluxDBAbstractSink<T> extends BatchSink<Point, T> {
 
     @Override
     public void open(Map<String, Object> config, SinkContext sinkContext) throws Exception {
-        InfluxDBSinkConfig influxDBSinkConfig = InfluxDBSinkConfig.load(config);
+        InfluxDBSinkConfig influxDBSinkConfig = InfluxDBSinkConfig.load(config, sinkContext);
         influxDBSinkConfig.validate();
 
         super.init(influxDBSinkConfig.getBatchTimeMs(), influxDBSinkConfig.getBatchSize());

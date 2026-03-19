@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -50,7 +50,7 @@ import org.glassfish.jersey.media.multipart.FormDataParam;
 public class SourcesBase extends AdminResource {
 
     Sources<? extends WorkerService> sources() {
-        return pulsar().getWorkerService().getSources();
+        return validateAndGetWorkerService().getSources();
     }
 
     @POST
@@ -119,34 +119,30 @@ public class SourcesBase extends AdminResource {
                     examples = @Example(
                             value = @ExampleProperty(
                                     mediaType = MediaType.TEXT_PLAIN,
-                                    value = " Example \n"
-                                            + "\n"
-                                            + "1. Create a JSON object. \n"
-                                            + "\n"
-                                            + "{\n"
-                                            + "\t\"tenant\": \"public\",\n"
-                                            + "\t\"namespace\": \"default\",\n"
-                                            + "\t\"name\": \"pulsar-io-mysql\",\n"
-                                            + "\t\"className\": \"TestSourceMysql\",\n"
-                                            + "\t\"topicName\": \"pulsar-io-mysql\",\n"
-                                            + "\t\"parallelism\": \"1\",\n"
-                                            + "\t\"archive\": \"/connectors/pulsar-io-mysql-0.0.1.nar\",\n"
-                                            + "\t\"schemaType\": \"avro\"\n"
-                                            + "}\n"
-                                            + "\n"
-                                            + "\n"
-                                            + "2. Encapsulate the JSON object to a multipart object (in Python). \n"
-                                            + "\n"
-                                            + "from requests_toolbelt.multipart.encoder import MultipartEncoder \n"
-                                            + "mp_encoder = MultipartEncoder( \n"
-                                            + "\t[('sourceConfig', "
-                                            + "(None, json.dumps(config), 'application/json'))])\n"
+                                    value = """
+                                            Example
+                                            1. Create a JSON object.
+                                            {
+                                             "tenant": "public",
+                                             "namespace": "default",
+                                             "name": "pulsar-io-mysql",
+                                             "className": "TestSourceMysql",
+                                             "topicName": "pulsar-io-mysql",
+                                             "parallelism": "1",
+                                             "archive": "/connectors/pulsar-io-mysql-0.0.1.nar",
+                                             "schemaType": "avro"
+                                            }
+                                            2. Encapsulate the JSON object to a multipart object (in Python).
+                                            from requests_toolbelt.multipart.encoder import MultipartEncoder
+                                            mp_encoder = MultipartEncoder([('sourceConfig', \
+                                            (None, json.dumps(config), 'application/json'))])
+                                            """
                             )
                     )
             )
             final @FormDataParam("sourceConfig") SourceConfig sourceConfig) {
         sources().registerSource(tenant, namespace, sourceName, uploadedInputStream, fileDetail,
-            sourcePkgUrl, sourceConfig, clientAppId(), clientAuthData());
+            sourcePkgUrl, sourceConfig, authParams());
     }
 
     @PUT
@@ -212,16 +208,18 @@ public class SourcesBase extends AdminResource {
                     examples = @Example(
                             value = @ExampleProperty(
                                     mediaType = MediaType.APPLICATION_JSON,
-                                    value = "{\n"
-                                            + "  \"tenant\": public\n"
-                                            + "  \"namespace\": default\n"
-                                            + "  \"name\": pulsar-io-mysql\n"
-                                            + "  \"className\": TestSourceMysql\n"
-                                            + "  \"topicName\": pulsar-io-mysql\n"
-                                            + "  \"parallelism\": 1\n"
-                                            + "  \"archive\": /connectors/pulsar-io-mysql-0.0.1.nar\n"
-                                            + "  \"schemaType\": avro\n"
-                                            + "}\n"
+                                    value = """
+                                            {
+                                              "tenant": "public",
+                                              "namespace": "default",
+                                              "name": "pulsar-io-mysql",
+                                              "className": "TestSourceMysql",
+                                              "topicName": "pulsar-io-mysql",
+                                              "parallelism": 1,
+                                              "archive": "/connectors/pulsar-io-mysql-0.0.1.nar",
+                                              "schemaType": "avro"
+                                            }
+                                            """
                             )
                     )
             )
@@ -229,7 +227,7 @@ public class SourcesBase extends AdminResource {
             @ApiParam(value = "Update options for Pulsar Source")
             final @FormDataParam("updateOptions") UpdateOptionsImpl updateOptions) {
         sources().updateSource(tenant, namespace, sourceName, uploadedInputStream, fileDetail,
-            sourcePkgUrl, sourceConfig, clientAppId(), clientAuthData(), updateOptions);
+            sourcePkgUrl, sourceConfig, authParams(), updateOptions);
     }
 
 
@@ -252,7 +250,7 @@ public class SourcesBase extends AdminResource {
             final @PathParam("namespace") String namespace,
             @ApiParam(value = "The name of a Pulsar Source")
             final @PathParam("sourceName") String sourceName) {
-        sources().deregisterFunction(tenant, namespace, sourceName, clientAppId(), clientAuthData());
+        sources().deregisterFunction(tenant, namespace, sourceName, authParams());
     }
 
     @GET
@@ -273,7 +271,7 @@ public class SourcesBase extends AdminResource {
             final @PathParam("namespace") String namespace,
             @ApiParam(value = "The name of a Pulsar Source")
             final @PathParam("sourceName") String sourceName) throws IOException {
-        return sources().getSourceInfo(tenant, namespace, sourceName);
+        return sources().getSourceInfo(tenant, namespace, sourceName, authParams());
     }
 
     @GET
@@ -296,7 +294,7 @@ public class SourcesBase extends AdminResource {
                     + " (if instance-id is not provided, the stats of all instances is returned).") final @PathParam(
                     "instanceId") String instanceId) throws IOException {
         return sources().getSourceInstanceStatus(
-            tenant, namespace, sourceName, instanceId, uri.getRequestUri(), clientAppId(), clientAuthData());
+            tenant, namespace, sourceName, instanceId, uri.getRequestUri(), authParams());
     }
 
     @GET
@@ -318,15 +316,14 @@ public class SourcesBase extends AdminResource {
             final @PathParam("namespace") String namespace,
             @ApiParam(value = "The name of a Pulsar Source")
             final @PathParam("sourceName") String sourceName) throws IOException {
-        return sources().getSourceStatus(tenant, namespace, sourceName, uri.getRequestUri(), clientAppId(),
-                clientAuthData());
+        return sources().getSourceStatus(tenant, namespace, sourceName, uri.getRequestUri(), authParams());
     }
 
     @GET
     @ApiOperation(
             value = "Lists all Pulsar Sources currently deployed in a given namespace",
             response = String.class,
-            responseContainer = "Collection"
+            responseContainer = "List"
     )
     @ApiResponses(value = {
             @ApiResponse(code = 400, message = "Invalid request"),
@@ -341,12 +338,13 @@ public class SourcesBase extends AdminResource {
             final @PathParam("tenant") String tenant,
             @ApiParam(value = "The namespace of a Pulsar Source")
             final @PathParam("namespace") String namespace) {
-        return sources().listFunctions(tenant, namespace, clientAppId(), clientAuthData());
+        return sources().listFunctions(tenant, namespace, authParams());
     }
 
     @POST
-    @ApiOperation(value = "Restart an instance of a Pulsar Source", response = Void.class)
+    @ApiOperation(value = "Restart an instance of a Pulsar Source")
     @ApiResponses(value = {
+            @ApiResponse(code = 200, message = "Operation successful"),
             @ApiResponse(code = 307, message = "Current broker doesn't serve the namespace of this source"),
             @ApiResponse(code = 400, message = "Invalid request"),
             @ApiResponse(code = 401, message = "Client is not authorized to perform operation"),
@@ -364,12 +362,13 @@ public class SourcesBase extends AdminResource {
                     + " (if instance-id is not provided, the stats of all instances is returned).") final @PathParam(
                     "instanceId") String instanceId) {
         sources().restartFunctionInstance(tenant, namespace, sourceName, instanceId,
-                uri.getRequestUri(), clientAppId(), clientAuthData());
+                uri.getRequestUri(), authParams());
     }
 
     @POST
-    @ApiOperation(value = "Restart all instances of a Pulsar Source", response = Void.class)
+    @ApiOperation(value = "Restart all instances of a Pulsar Source")
     @ApiResponses(value = {
+            @ApiResponse(code = 200, message = "Operation successful"),
             @ApiResponse(code = 400, message = "Invalid request"),
             @ApiResponse(code = 401, message = "Client is not authorized to perform operation"),
             @ApiResponse(code = 404, message = "Not Found(The Pulsar Source doesn't exist)"),
@@ -385,12 +384,13 @@ public class SourcesBase extends AdminResource {
             final @PathParam("namespace") String namespace,
             @ApiParam(value = "The name of a Pulsar Source")
             final @PathParam("sourceName") String sourceName) {
-        sources().restartFunctionInstances(tenant, namespace, sourceName, clientAppId(), clientAuthData());
+        sources().restartFunctionInstances(tenant, namespace, sourceName, authParams());
     }
 
     @POST
-    @ApiOperation(value = "Stop instance of a Pulsar Source", response = Void.class)
+    @ApiOperation(value = "Stop instance of a Pulsar Source")
     @ApiResponses(value = {
+            @ApiResponse(code = 200, message = "Operation successful"),
             @ApiResponse(code = 400, message = "Invalid request"),
             @ApiResponse(code = 401, message = "Client is not authorized to perform operation"),
             @ApiResponse(code = 404, message = "Not Found(The Pulsar Source doesn't exist)"),
@@ -406,12 +406,13 @@ public class SourcesBase extends AdminResource {
             @ApiParam(value = "The instanceId of a Pulsar Source (if instance-id is not provided,"
                     + " the stats of all instances is returned).") final @PathParam("instanceId") String instanceId) {
         sources().stopFunctionInstance(tenant, namespace, sourceName, instanceId,
-                uri.getRequestUri(), clientAppId(), clientAuthData());
+                uri.getRequestUri(), authParams());
     }
 
     @POST
-    @ApiOperation(value = "Stop all instances of a Pulsar Source", response = Void.class)
+    @ApiOperation(value = "Stop all instances of a Pulsar Source")
     @ApiResponses(value = {
+            @ApiResponse(code = 200, message = "Operation successful"),
             @ApiResponse(code = 400, message = "Invalid request"),
             @ApiResponse(code = 401, message = "Client is not authorized to perform operation"),
             @ApiResponse(code = 404, message = "Not Found(The Pulsar Source doesn't exist)"),
@@ -427,12 +428,13 @@ public class SourcesBase extends AdminResource {
             final @PathParam("namespace") String namespace,
             @ApiParam(value = "The name of a Pulsar Source")
             final @PathParam("sourceName") String sourceName) {
-        sources().stopFunctionInstances(tenant, namespace, sourceName, clientAppId(), clientAuthData());
+        sources().stopFunctionInstances(tenant, namespace, sourceName, authParams());
     }
 
     @POST
-    @ApiOperation(value = "Start an instance of a Pulsar Source", response = Void.class)
+    @ApiOperation(value = "Start an instance of a Pulsar Source")
     @ApiResponses(value = {
+            @ApiResponse(code = 200, message = "Operation successful"),
             @ApiResponse(code = 400, message = "Invalid request"),
             @ApiResponse(code = 401, message = "Client is not authorized to perform operation"),
             @ApiResponse(code = 404, message = "Not Found(The Pulsar Source doesn't exist)"),
@@ -448,12 +450,13 @@ public class SourcesBase extends AdminResource {
             @ApiParam(value = "The instanceId of a Pulsar Source (if instance-id is not provided,"
                     + " the stats of all instances is returned).") final @PathParam("instanceId") String instanceId) {
         sources().startFunctionInstance(tenant, namespace, sourceName, instanceId,
-                uri.getRequestUri(), clientAppId(), clientAuthData());
+                uri.getRequestUri(), authParams());
     }
 
     @POST
-    @ApiOperation(value = "Start all instances of a Pulsar Source", response = Void.class)
+    @ApiOperation(value = "Start all instances of a Pulsar Source")
     @ApiResponses(value = {
+            @ApiResponse(code = 200, message = "Operation successful"),
             @ApiResponse(code = 400, message = "Invalid request"),
             @ApiResponse(code = 401, message = "Client is not authorized to perform operation"),
             @ApiResponse(code = 404, message = "Not Found(The Pulsar Source doesn't exist)"),
@@ -469,7 +472,7 @@ public class SourcesBase extends AdminResource {
             final @PathParam("namespace") String namespace,
             @ApiParam(value = "The name of a Pulsar Source")
             final @PathParam("sourceName") String sourceName) {
-        sources().startFunctionInstances(tenant, namespace, sourceName, clientAppId(), clientAuthData());
+        sources().startFunctionInstances(tenant, namespace, sourceName, authParams());
     }
 
     @GET
@@ -522,6 +525,6 @@ public class SourcesBase extends AdminResource {
     })
     @Path("/reloadBuiltInSources")
     public void reloadSources() {
-        sources().reloadConnectors(clientAppId(), clientAuthData());
+        sources().reloadConnectors(authParams());
     }
 }

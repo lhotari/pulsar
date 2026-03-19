@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,6 +18,11 @@
  */
 package org.apache.pulsar.client.impl;
 
+import static org.testng.Assert.assertEquals;
+import java.net.InetSocketAddress;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.broker.service.BrokerTestBase;
 import org.apache.pulsar.client.admin.PulsarAdminException;
@@ -35,13 +40,6 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 import org.testng.internal.thread.ThreadTimeoutException;
-
-import java.net.InetSocketAddress;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Set;
-
-import static org.testng.Assert.assertEquals;
 
 @Test
 @Slf4j
@@ -69,14 +67,11 @@ public class ClientWithSocks5ProxyTest extends BrokerTestBase {
         config.setPort(11080);
         config.setEnableAuth(enableAuth);
         server = new Socks5Server(config);
-        Thread thread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    server.start();
-                } catch (Exception e) {
-                    log.error("start socks5 server error", e);
-                }
+        Thread thread = new Thread(() -> {
+            try {
+                server.start();
+            } catch (Exception e) {
+                log.error("start socks5 server error", e);
             }
         });
         thread.setDaemon(true);

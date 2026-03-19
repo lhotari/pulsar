@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,11 +25,11 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Collections;
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.common.nar.NarClassLoader;
+import org.apache.pulsar.common.nar.NarClassLoaderBuilder;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 
 /**
@@ -50,8 +50,10 @@ class ProxyExtensionsUtils {
      */
     public static ProxyExtensionDefinition getProxyExtensionDefinition(String narPath, String narExtractionDirectory)
             throws IOException {
-        try (NarClassLoader ncl = NarClassLoader.getFromArchive(new File(narPath), Collections.emptySet(),
-                narExtractionDirectory)) {
+        try (NarClassLoader ncl = NarClassLoaderBuilder.builder()
+                .narFile(new File(narPath))
+                .extractionDirectory(narExtractionDirectory)
+                .build();) {
             return getProxyExtensionDefinition(ncl);
         }
     }
@@ -59,7 +61,7 @@ class ProxyExtensionsUtils {
     private static ProxyExtensionDefinition getProxyExtensionDefinition(NarClassLoader ncl) throws IOException {
         String configStr = ncl.getServiceDefinition(PROXY_EXTENSION_DEFINITION_FILE);
 
-        return ObjectMapperFactory.getThreadLocalYaml().readValue(
+        return ObjectMapperFactory.getYamlMapper().reader().readValue(
             configStr, ProxyExtensionDefinition.class
         );
     }
@@ -73,7 +75,7 @@ class ProxyExtensionsUtils {
      */
     public static ExtensionsDefinitions searchForExtensions(String extensionsDirectory,
                                                             String narExtractionDirectory) throws IOException {
-        Path path = Paths.get(extensionsDirectory).toAbsolutePath();
+        Path path = Paths.get(extensionsDirectory).toAbsolutePath().normalize();
         log.info("Searching for extensions in {}", path);
 
         ExtensionsDefinitions extensions = new ExtensionsDefinitions();
@@ -117,10 +119,12 @@ class ProxyExtensionsUtils {
      */
     static ProxyExtensionWithClassLoader load(ProxyExtensionMetadata metadata,
                                               String narExtractionDirectory) throws IOException {
-        NarClassLoader ncl = NarClassLoader.getFromArchive(
-            metadata.getArchivePath().toAbsolutePath().toFile(),
-            Collections.emptySet(),
-            ProxyExtension.class.getClassLoader(), narExtractionDirectory);
+        final File narFile = metadata.getArchivePath().toAbsolutePath().normalize().toFile();
+        NarClassLoader ncl = NarClassLoaderBuilder.builder()
+                .narFile(narFile)
+                .parentClassLoader(ProxyExtension.class.getClassLoader())
+                .extractionDirectory(narExtractionDirectory)
+                .build();
 
         ProxyExtensionDefinition phDef = getProxyExtensionDefinition(ncl);
         if (StringUtils.isBlank(phDef.getExtensionClass())) {

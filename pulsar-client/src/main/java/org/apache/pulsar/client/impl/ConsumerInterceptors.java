@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -42,6 +42,38 @@ public class ConsumerInterceptors<T> implements Closeable {
 
     public ConsumerInterceptors(List<ConsumerInterceptor<T>> interceptors) {
         this.interceptors = interceptors;
+    }
+
+
+    /**
+     * This method is called when a message arrives in the consumer.
+     * <p>
+     * This method calls {@link ConsumerInterceptor#onArrival(Consumer, Message) method for each
+     * interceptor.
+     * <p>
+     * This method does not throw exceptions. If any of the interceptors in the chain throws an exception, it gets
+     * caught and logged, and next interceptor in int the chain is called with 'messages' returned by the previous
+     * successful interceptor beforeConsume call.
+     *
+     * @param consumer the consumer which contains the interceptors
+     * @param message message to be consume by the client.
+     * @return messages that are either modified by interceptors or same as messages passed to this method.
+     */
+    public Message<T> onArrival(Consumer<T> consumer, Message<T> message) {
+        Message<T> interceptorMessage = message;
+        for (int i = 0, interceptorsSize = interceptors.size(); i < interceptorsSize; i++) {
+            try {
+                interceptorMessage = interceptors.get(i).onArrival(consumer, interceptorMessage);
+            } catch (Throwable e) {
+                if (consumer != null) {
+                    log.warn("Error executing interceptor beforeConsume callback topic: {} consumerName: {}",
+                            consumer.getTopic(), consumer.getConsumerName(), e);
+                } else {
+                    log.warn("Error executing interceptor beforeConsume callback", e);
+                }
+            }
+        }
+        return interceptorMessage;
     }
 
     /**

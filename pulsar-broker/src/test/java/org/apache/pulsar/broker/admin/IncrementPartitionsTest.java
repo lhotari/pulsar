@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,10 +19,13 @@
 package org.apache.pulsar.broker.admin;
 
 import static org.testng.Assert.assertEquals;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Sets;
 import java.util.Collections;
-
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import lombok.Cleanup;
 import org.apache.pulsar.broker.BrokerTestUtil;
 import org.apache.pulsar.broker.admin.AdminApiTest.MockedPulsarService;
@@ -35,7 +38,9 @@ import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.TenantInfoImpl;
+import org.apache.pulsar.common.policies.data.TopicStats;
 import org.awaitility.Awaitility;
+import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -57,10 +62,12 @@ public class IncrementPartitionsTest extends MockedPulsarServiceBaseTest {
         mockPulsarSetup.setup();
 
         // Setup namespaces
-        admin.clusters().createCluster("use", ClusterData.builder().serviceUrl(pulsar.getWebServiceAddress()).build());
-        TenantInfoImpl tenantInfo = new TenantInfoImpl(Sets.newHashSet("role1", "role2"), Sets.newHashSet("use"));
+        admin.clusters().createCluster("test", ClusterData.builder().serviceUrl(pulsar.getWebServiceAddress()).build());
+        TenantInfoImpl tenantInfo = new TenantInfoImpl(Set.of("role1", "role2"), Set.of("test"));
         admin.tenants().createTenant("prop-xyz", tenantInfo);
-        admin.namespaces().createNamespace("prop-xyz/use/ns1");
+        admin.namespaces().createNamespace("prop-xyz/ns1");
+
+        setupDefaultTenantAndNamespace();
     }
 
     @AfterMethod(alwaysRun = true)
@@ -72,7 +79,7 @@ public class IncrementPartitionsTest extends MockedPulsarServiceBaseTest {
 
     @Test
     public void testIncrementPartitionsOfTopicOnUnusedTopic() throws Exception {
-        final String partitionedTopicName = "persistent://prop-xyz/use/ns1/test-topic";
+        final String partitionedTopicName = "persistent://prop-xyz/ns1/test-topic";
 
         admin.topics().createPartitionedTopic(partitionedTopicName, 10);
         assertEquals(admin.topics().getPartitionedTopicMetadata(partitionedTopicName).partitions, 10);
@@ -83,13 +90,13 @@ public class IncrementPartitionsTest extends MockedPulsarServiceBaseTest {
 
     @Test
     public void testIncrementPartitionsOfTopic() throws Exception {
-        final String partitionedTopicName = "persistent://prop-xyz/use/ns1/test-topic-2";
+        final String partitionedTopicName = "persistent://prop-xyz/ns1/test-topic-2";
 
         admin.topics().createPartitionedTopic(partitionedTopicName, 1);
         assertEquals(admin.topics().getPartitionedTopicMetadata(partitionedTopicName).partitions, 1);
 
         Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(partitionedTopicName).subscriptionName("sub-1")
-          .subscribe();
+                    .subscribe();
 
         admin.topics().updatePartitionedTopic(partitionedTopicName, 2);
         assertEquals(admin.topics().getPartitionedTopicMetadata(partitionedTopicName).partitions, 2);
@@ -100,16 +107,52 @@ public class IncrementPartitionsTest extends MockedPulsarServiceBaseTest {
         admin.topics().updatePartitionedTopic(partitionedTopicName, 20);
         assertEquals(admin.topics().getPartitionedTopicMetadata(partitionedTopicName).partitions, 20);
 
-        assertEquals(admin.topics().getSubscriptions(
-                TopicName.get(partitionedTopicName).getPartition(15).toString()), Lists.newArrayList("sub-1"));
+        AtomicReference<Map<String, ? extends TopicStats>> partitionsStats = new AtomicReference<>();
+        Awaitility.await().until(() -> {
+            partitionsStats.set(admin.topics().getPartitionedStats(partitionedTopicName, true).getPartitions());
+            return partitionsStats.get().size() == 20;
+        });
+        for (TopicStats topic : partitionsStats.get().values()) {
+                assertEquals(topic.getSubscriptions().keySet(), List.of("sub-1"));
+        }
 
         consumer.close();
     }
 
     @Test
+    public void testIncrementPartitionsOfTopicWithSubscriptionProperties() throws Exception {
+        final String partitionedTopicName = UUID.randomUUID()
+                + "-testIncrementPartitionsOfTopicWithSubscriptionProperties";
+
+        admin.topics().createPartitionedTopic(partitionedTopicName, 1);
+        assertEquals(admin.topics().getPartitionedTopicMetadata(partitionedTopicName).partitions, 1);
+
+        Map<String, String> properties = new HashMap<>();
+        properties.put("method", "testIncrementPartitionsOfTopic");
+
+        @Cleanup
+        Consumer<byte[]> consumer = pulsarClient.newConsumer()
+                .topic(partitionedTopicName)
+                .subscriptionName("sub-1")
+                .subscriptionProperties(properties)
+                .subscribe();
+
+        admin.topics().updatePartitionedTopic(partitionedTopicName, 20);
+        assertEquals(admin.topics().getPartitionedTopicMetadata(partitionedTopicName).partitions, 20);
+
+        assertEquals(admin.topics().getSubscriptions(
+                TopicName.get(partitionedTopicName).getPartition(15).toString()), List.of("sub-1"));
+        TopicStats stats = admin.topics()
+                .getStats(TopicName.get(partitionedTopicName).getPartition(15).toString());
+        Map<String, String> subscriptionProperties = stats.getSubscriptions()
+                .get("sub-1").getSubscriptionProperties();
+        Assert.assertEquals(properties, subscriptionProperties);
+    }
+
+    @Test
     public void testIncrementPartitionsWithNoSubscriptions() throws Exception {
         final String partitionedTopicName =
-                BrokerTestUtil.newUniqueName("persistent://prop-xyz/use/ns1/test-topic");
+                BrokerTestUtil.newUniqueName("persistent://prop-xyz/ns1/test-topic");
 
         admin.topics().createPartitionedTopic(partitionedTopicName, 1);
         assertEquals(admin.topics().getPartitionedTopicMetadata(partitionedTopicName).partitions, 1);
@@ -136,7 +179,7 @@ public class IncrementPartitionsTest extends MockedPulsarServiceBaseTest {
     @Test
     public void testIncrementPartitionsWithReaders() throws Exception {
         TopicName partitionedTopicName = TopicName.get(
-                BrokerTestUtil.newUniqueName("persistent://prop-xyz/use/ns1/test-topic"));
+                BrokerTestUtil.newUniqueName("persistent://prop-xyz/ns1/test-topic"));
 
         admin.topics().createPartitionedTopic(partitionedTopicName.toString(), 1);
         assertEquals(admin.topics().getPartitionedTopicMetadata(partitionedTopicName.toString()).partitions, 1);

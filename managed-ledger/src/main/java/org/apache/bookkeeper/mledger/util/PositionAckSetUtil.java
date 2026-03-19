@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,8 +18,9 @@
  */
 package org.apache.bookkeeper.mledger.util;
 
-import com.google.common.collect.ComparisonChain;
-import org.apache.bookkeeper.mledger.impl.PositionImpl;
+import org.apache.bookkeeper.mledger.Position;
+import org.apache.bookkeeper.mledger.impl.AckSetState;
+import org.apache.bookkeeper.mledger.impl.AckSetStateUtil;
 import org.apache.pulsar.common.util.collections.BitSetRecyclable;
 
 public class PositionAckSetUtil {
@@ -42,43 +43,58 @@ public class PositionAckSetUtil {
     }
 
     //This method is do `and` operation for position's ack set
-    public static void andAckSet(PositionImpl currentPosition, PositionImpl otherPosition) {
+    public static void andAckSet(Position currentPosition, Position otherPosition) {
         if (currentPosition == null || otherPosition == null) {
             return;
         }
-        BitSetRecyclable thisAckSet = BitSetRecyclable.valueOf(currentPosition.getAckSet());
-        BitSetRecyclable otherAckSet = BitSetRecyclable.valueOf(otherPosition.getAckSet());
+        AckSetState currentAckSetState = AckSetStateUtil.getAckSetState(currentPosition);
+        AckSetState otherAckSetState = AckSetStateUtil.getAckSetState(otherPosition);
+        currentAckSetState.setAckSet(andAckSet(currentAckSetState.getAckSet(), otherAckSetState.getAckSet()));
+    }
+
+    //This method is do `and` operation for ack set
+    public static long[] andAckSet(long[] firstAckSet, long[] secondAckSet) {
+        BitSetRecyclable thisAckSet = BitSetRecyclable.valueOf(firstAckSet);
+        BitSetRecyclable otherAckSet = BitSetRecyclable.valueOf(secondAckSet);
         thisAckSet.and(otherAckSet);
-        currentPosition.setAckSet(thisAckSet.toLongArray());
+        long[] ackSet = thisAckSet.toLongArray();
         thisAckSet.recycle();
         otherAckSet.recycle();
+        return ackSet;
+    }
+
+    public static boolean isAckSetEmpty(long[] ackSet) {
+        BitSetRecyclable bitSet =  BitSetRecyclable.create().resetWords(ackSet);
+        boolean isEmpty = bitSet.isEmpty();
+        bitSet.recycle();
+        return isEmpty;
     }
 
     //This method is compare two position which position is bigger than another one.
     //When the ledgerId and entryId in this position is same to another one and two position all have ack set, it will
     //compare the ack set next bit index is bigger than another one.
-    public static int compareToWithAckSet(PositionImpl currentPosition, PositionImpl otherPosition) {
+    public static int compareToWithAckSet(Position currentPosition, Position otherPosition) {
         if (currentPosition == null || otherPosition == null) {
             throw new IllegalArgumentException("Two positions can't be null! "
                     + "current position : [" + currentPosition + "] other position : [" + otherPosition + "]");
         }
-        int result = ComparisonChain.start().compare(currentPosition.getLedgerId(),
-                otherPosition.getLedgerId()).compare(currentPosition.getEntryId(), otherPosition.getEntryId())
-                .result();
+        int result = currentPosition.compareTo(otherPosition);
         if (result == 0) {
             BitSetRecyclable otherAckSet;
             BitSetRecyclable currentAckSet;
 
-            if (otherPosition.getAckSet() == null) {
+            long[] otherAckSetArr = AckSetStateUtil.getAckSetArrayOrNull(otherPosition);
+            if (otherAckSetArr == null) {
                 otherAckSet = BitSetRecyclable.create();
             } else {
-                otherAckSet = BitSetRecyclable.valueOf(otherPosition.getAckSet());
+                otherAckSet = BitSetRecyclable.valueOf(otherAckSetArr);
             }
 
-            if (currentPosition.getAckSet() == null) {
+            long[] currentAckSetArr = AckSetStateUtil.getAckSetArrayOrNull(currentPosition);
+            if (currentAckSetArr == null) {
                 currentAckSet = BitSetRecyclable.create();
             } else {
-                currentAckSet = BitSetRecyclable.valueOf(currentPosition.getAckSet());
+                currentAckSet = BitSetRecyclable.valueOf(currentAckSetArr);
             }
 
             if (currentAckSet.isEmpty() || otherAckSet.isEmpty()) {

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,16 +18,31 @@
  */
 package org.apache.pulsar.proxy.server;
 
-import io.prometheus.client.jetty.JettyStatisticsCollector;
+import static org.apache.pulsar.proxy.server.AdminProxyHandler.INIT_PARAM_REQUEST_BUFFER_SIZE;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import io.opentelemetry.api.OpenTelemetry;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import javax.servlet.DispatcherType;
+import javax.servlet.Filter;
+import javax.servlet.FilterChain;
+import javax.servlet.FilterConfig;
+import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
+import javax.servlet.http.HttpServletResponse;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.broker.authentication.AuthenticationService;
 import org.apache.pulsar.broker.web.AuthenticationFilter;
@@ -35,22 +50,33 @@ import org.apache.pulsar.broker.web.JettyRequestLogFactory;
 import org.apache.pulsar.broker.web.JsonMapperProvider;
 import org.apache.pulsar.broker.web.RateLimitingFilter;
 import org.apache.pulsar.broker.web.WebExecutorThreadPool;
-import org.apache.pulsar.common.util.SecurityUtility;
-import org.apache.pulsar.common.util.keystoretls.KeyStoreSSLContext;
+import org.apache.pulsar.client.util.ExecutorProvider;
+import org.apache.pulsar.common.util.ObjectMapperFactory;
+import org.apache.pulsar.common.util.PulsarSslConfiguration;
+import org.apache.pulsar.common.util.PulsarSslFactory;
+import org.apache.pulsar.jetty.metrics.JettyStatisticsCollector;
+import org.apache.pulsar.jetty.tls.JettySslContextFactory;
+import org.apache.pulsar.proxy.stats.PulsarProxyOpenTelemetry;
+import org.eclipse.jetty.ee8.servlet.FilterHolder;
+import org.eclipse.jetty.ee8.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee8.servlet.ServletHolder;
+import org.eclipse.jetty.http.UriCompliance;
+import org.eclipse.jetty.server.ConnectionFactory;
 import org.eclipse.jetty.server.Connector;
+import org.eclipse.jetty.server.ForwardedRequestCustomizer;
 import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
+import org.eclipse.jetty.server.NetworkConnectionLimit;
+import org.eclipse.jetty.server.ProxyConnectionFactory;
+import org.eclipse.jetty.server.SecureRequestCustomizer;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
+import org.eclipse.jetty.server.SslConnectionFactory;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
 import org.eclipse.jetty.server.handler.DefaultHandler;
-import org.eclipse.jetty.server.handler.HandlerCollection;
-import org.eclipse.jetty.server.handler.RequestLogHandler;
+import org.eclipse.jetty.server.handler.QoSHandler;
 import org.eclipse.jetty.server.handler.StatisticsHandler;
-import org.eclipse.jetty.servlet.FilterHolder;
-import org.eclipse.jetty.servlet.ServletContextHandler;
-import org.eclipse.jetty.servlet.ServletHolder;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.glassfish.jersey.servlet.ServletContainer;
@@ -76,53 +102,77 @@ public class WebServer {
     private ServerConnector connector;
     private ServerConnector connectorTls;
 
+    private ScheduledExecutorService sslRefreshScheduledExecutor;
+    private PulsarSslFactory sslFactory;
+
+    private final FilterInitializer filterInitializer;
+
     public WebServer(ProxyConfiguration config, AuthenticationService authenticationService) {
-        this.webServiceExecutor = new WebExecutorThreadPool(config.getHttpNumThreads(), "pulsar-external-web");
+        this.webServiceExecutor = new WebExecutorThreadPool(config.getHttpNumThreads(), "pulsar-external-web",
+                config.getHttpServerThreadPoolQueueSize());
         this.server = new Server(webServiceExecutor);
+        if (config.getMaxHttpServerConnections() > 0) {
+            server.addBean(new NetworkConnectionLimit(config.getMaxHttpServerConnections(), server));
+        }
         this.authenticationService = authenticationService;
         this.config = config;
 
         List<ServerConnector> connectors = new ArrayList<>();
 
         HttpConfiguration httpConfig = new HttpConfiguration();
+        httpConfig.setUriCompliance(UriCompliance.LEGACY);
+        if (config.isWebServiceTrustXForwardedFor()) {
+            httpConfig.addCustomizer(new ForwardedRequestCustomizer());
+        }
         httpConfig.setOutputBufferSize(config.getHttpOutputBufferSize());
+        httpConfig.setRequestHeaderSize(config.getHttpMaxRequestHeaderSize());
+        httpConfig.setIdleTimeout(config.getHttpServerIdleTimeout());
 
+        HttpConnectionFactory httpConnectionFactory = new HttpConnectionFactory(httpConfig);
         if (config.getWebServicePort().isPresent()) {
             this.externalServicePort = config.getWebServicePort().get();
-            connector = new ServerConnector(server, 1, 1, new HttpConnectionFactory(httpConfig));
+            List<ConnectionFactory> connectionFactories = new ArrayList<>();
+            if (config.isWebServiceHaProxyProtocolEnabled()) {
+                connectionFactories.add(new ProxyConnectionFactory());
+            }
+            connectionFactories.add(httpConnectionFactory);
+            connector = new ServerConnector(server, connectionFactories.toArray(new ConnectionFactory[0]));
             connector.setHost(config.getBindAddress());
             connector.setPort(externalServicePort);
             connectors.add(connector);
         }
         if (config.getWebServicePortTls().isPresent()) {
             try {
-                SslContextFactory sslCtxFactory;
-                if (config.isTlsEnabledWithKeyStore()) {
-                    sslCtxFactory = KeyStoreSSLContext.createSslContextFactory(
-                            config.getTlsProvider(),
-                            config.getTlsKeyStoreType(),
-                            config.getTlsKeyStore(),
-                            config.getTlsKeyStorePassword(),
-                            config.isTlsAllowInsecureConnection(),
-                            config.getTlsTrustStoreType(),
-                            config.getTlsTrustStore(),
-                            config.getTlsTrustStorePassword(),
-                            config.isTlsRequireTrustedClientCertOnConnect(),
-                            config.getWebServiceTlsCiphers(),
-                            config.getWebServiceTlsProtocols(),
-                            config.getTlsCertRefreshCheckDurationSec()
-                    );
-                } else {
-                    sslCtxFactory = SecurityUtility.createSslContextFactory(
-                            config.isTlsAllowInsecureConnection(),
-                            config.getTlsTrustCertsFilePath(),
-                            config.getTlsCertificateFilePath(),
-                            config.getTlsKeyFilePath(),
-                            config.isTlsRequireTrustedClientCertOnConnect(),
-                            true,
-                            config.getTlsCertRefreshCheckDurationSec());
+                this.sslRefreshScheduledExecutor = Executors.newSingleThreadScheduledExecutor(
+                        new ExecutorProvider.ExtendedThreadFactory("pulsar-proxy-web-server-tls-refresh"));
+                PulsarSslConfiguration sslConfiguration = buildSslConfiguration(config);
+                this.sslFactory = (PulsarSslFactory) Class.forName(config.getSslFactoryPlugin())
+                        .getConstructor().newInstance();
+                this.sslFactory.initialize(sslConfiguration);
+                this.sslFactory.createInternalSslContext();
+                if (config.getTlsCertRefreshCheckDurationSec() > 0) {
+                    sslRefreshScheduledExecutor.scheduleWithFixedDelay(this::refreshSslContext,
+                            config.getTlsCertRefreshCheckDurationSec(),
+                            config.getTlsCertRefreshCheckDurationSec(), TimeUnit.SECONDS);
                 }
-                connectorTls = new ServerConnector(server, 1, 1, sslCtxFactory);
+                SslContextFactory.Server sslCtxFactory =
+                        JettySslContextFactory.createSslContextFactory(config.getTlsProvider(),
+                                sslFactory, config.isTlsRequireTrustedClientCertOnConnect(),
+                                config.getWebServiceTlsCiphers(), config.getWebServiceTlsProtocols());
+                List<ConnectionFactory> connectionFactories = new ArrayList<>();
+                if (config.isWebServiceHaProxyProtocolEnabled()) {
+                    connectionFactories.add(new ProxyConnectionFactory());
+                }
+                connectionFactories.add(new SslConnectionFactory(sslCtxFactory, httpConnectionFactory.getProtocol()));
+                connectionFactories.add(httpConnectionFactory);
+                // org.eclipse.jetty.server.AbstractConnectionFactory.getFactories contains similar logic
+                // this is needed for TLS authentication
+                if (httpConfig.getCustomizer(SecureRequestCustomizer.class) == null) {
+                    // disable SNI host check for backwards compatibility with Jetty 9.x
+                    boolean sniHostCheck = false;
+                    httpConfig.addCustomizer(new SecureRequestCustomizer(sniHostCheck));
+                }
+                connectorTls = new ServerConnector(server, connectionFactories.toArray(new ConnectionFactory[0]));
                 connectorTls.setPort(config.getWebServicePortTls().get());
                 connectorTls.setHost(config.getBindAddress());
                 connectors.add(connectorTls);
@@ -132,61 +182,139 @@ public class WebServer {
         }
 
         // Limit number of concurrent HTTP connections to avoid getting out of file descriptors
-        connectors.stream().forEach(c -> c.setAcceptQueueSize(1024 / connectors.size()));
+        connectors.stream().forEach(c -> {
+            c.setAcceptQueueSize(config.getHttpServerAcceptQueueSize());
+            c.setIdleTimeout(config.getHttpServerIdleTimeout());
+        });
         server.setConnectors(connectors.toArray(new ServerConnector[connectors.size()]));
+
+        filterInitializer = new FilterInitializer(config, authenticationService);
     }
 
     public URI getServiceUri() {
         return serviceURI;
     }
 
-    public void addServlet(String basePath, ServletHolder servletHolder) {
-        addServlet(basePath, servletHolder, Collections.emptyList());
+    private static class FilterInitializer {
+        private final List<FilterHolder> filterHolders = new ArrayList<>();
+        private final FilterHolder authenticationFilterHolder;
+
+        FilterInitializer(ProxyConfiguration config, AuthenticationService authenticationService) {
+            if (config.isHttpRequestsLimitEnabled()) {
+                filterHolders.add(new FilterHolder(
+                        new RateLimitingFilter(config.getHttpRequestsMaxPerSecond(),
+                                OpenTelemetry.noop().getMeter(PulsarProxyOpenTelemetry.INSTRUMENTATION_SCOPE_NAME))));
+            }
+
+            if (config.isAuthenticationEnabled()) {
+                authenticationFilterHolder = new FilterHolder(new AuthenticationFilter(authenticationService));
+                filterHolders.add(authenticationFilterHolder);
+            } else {
+                authenticationFilterHolder = null;
+            }
+        }
+
+        public void addFilters(ServletContextHandler context, boolean requiresAuthentication) {
+            for (FilterHolder filterHolder : filterHolders) {
+                if (requiresAuthentication || filterHolder != authenticationFilterHolder) {
+                    context.addFilter(filterHolder,
+                            MATCH_ALL, EnumSet.allOf(DispatcherType.class));
+                }
+            }
+        }
     }
 
-    public void addServlet(String basePath, ServletHolder servletHolder, List<Pair<String, Object>> attributes) {
-        addServlet(basePath, servletHolder, attributes, true);
+    public ServletContextHandler addServlet(String basePath, ServletHolder servletHolder) {
+        return addServlet(basePath, servletHolder, Collections.emptyList());
     }
 
-    public void addServlet(String basePath, ServletHolder servletHolder,
+    public ServletContextHandler addServlet(String basePath, ServletHolder servletHolder,
+                                            List<Pair<String, Object>> attributes) {
+        return addServlet(basePath, servletHolder, attributes, true);
+    }
+
+    public ServletContextHandler addServlet(String basePath, ServletHolder servletHolder,
                            List<Pair<String, Object>> attributes, boolean requireAuthentication) {
-        Optional<String> existingPath = servletPaths.stream().filter(p -> p.startsWith(basePath)).findFirst();
-        if (existingPath.isPresent()) {
-            throw new IllegalArgumentException(
-                    String.format("Cannot add servlet at %s, path %s already exists", basePath, existingPath.get()));
+        return addServlet(basePath, servletHolder, attributes, requireAuthentication, true);
+    }
+
+    private ServletContextHandler addServlet(String basePath, ServletHolder servletHolder,
+                                             List<Pair<String, Object>> attributes, boolean requireAuthentication,
+                                             boolean checkForExistingPaths) {
+        popularServletParams(servletHolder, config);
+
+        if (checkForExistingPaths) {
+            Optional<String> existingPath = servletPaths.stream().filter(p -> p.startsWith(basePath)).findFirst();
+            if (existingPath.isPresent()) {
+                throw new IllegalArgumentException(
+                        String.format("Cannot add servlet at %s, path %s already exists", basePath,
+                                existingPath.get()));
+            }
         }
         servletPaths.add(basePath);
 
         ServletContextHandler context = new ServletContextHandler(ServletContextHandler.SESSIONS);
         context.setContextPath(basePath);
-        context.addServlet(servletHolder, "/*");
+        context.addServlet(servletHolder, MATCH_ALL);
+        context.addFilter(new FilterHolder(new CustomHeaderFilter(config)), "/*", null);
         for (Pair<String, Object> attribute : attributes) {
             context.setAttribute(attribute.getLeft(), attribute.getRight());
         }
-        if (config.isAuthenticationEnabled() && requireAuthentication) {
-            FilterHolder filter = new FilterHolder(new AuthenticationFilter(authenticationService));
-            context.addFilter(filter, MATCH_ALL, EnumSet.allOf(DispatcherType.class));
-        }
 
-        if (config.isHttpRequestsLimitEnabled()) {
-            context.addFilter(new FilterHolder(new RateLimitingFilter(config.getHttpRequestsMaxPerSecond())), MATCH_ALL,
-                    EnumSet.allOf(DispatcherType.class));
-        }
+        filterInitializer.addFilters(context, requireAuthentication);
 
-        handlers.add(context);
+        handlers.add(context.get());
+
+        return context;
     }
 
-    public void addRestResources(String basePath, String javaPackages, String attribute, Object attributeValue) {
+    private static void popularServletParams(ServletHolder servletHolder, ProxyConfiguration config) {
+        int requestBufferSize = -1;
+        try {
+            requestBufferSize = Integer.parseInt(servletHolder.getInitParameter(INIT_PARAM_REQUEST_BUFFER_SIZE));
+        } catch (NumberFormatException nfe){
+            log.warn("The init-param {} is invalidated, because it is not a number", INIT_PARAM_REQUEST_BUFFER_SIZE);
+        }
+        if (requestBufferSize > 0 || config.getHttpMaxRequestHeaderSize() > 0) {
+            int v = Math.max(requestBufferSize, config.getHttpMaxRequestHeaderSize());
+            servletHolder.setInitParameter(INIT_PARAM_REQUEST_BUFFER_SIZE, String.valueOf(v));
+        }
+    }
+
+    /**
+     * Add a REST resource to the servlet context with authentication coverage.
+     *
+     * @see WebServer#addRestResource(String, String, Object, Class, boolean)
+     *
+     * @param basePath             The base path for the resource.
+     * @param attribute            An attribute associated with the resource.
+     * @param attributeValue       The value of the attribute.
+     * @param resourceClass        The class representing the resource.
+     */
+    public void addRestResource(String basePath, String attribute, Object attributeValue, Class<?> resourceClass) {
+        addRestResource(basePath, attribute, attributeValue, resourceClass, true);
+    }
+
+    /**
+     * Add a REST resource to the servlet context.
+     *
+     * @param basePath             The base path for the resource.
+     * @param attribute            An attribute associated with the resource.
+     * @param attributeValue       The value of the attribute.
+     * @param resourceClass        The class representing the resource.
+     * @param requireAuthentication A boolean indicating whether authentication is required for this resource.
+     */
+    public void addRestResource(String basePath, String attribute, Object attributeValue,
+                                Class<?> resourceClass, boolean requireAuthentication) {
         ResourceConfig config = new ResourceConfig();
-        config.packages("jersey.config.server.provider.packages", javaPackages);
+        config.register(resourceClass);
         config.register(JsonMapperProvider.class);
         ServletHolder servletHolder = new ServletHolder(new ServletContainer(config));
         servletHolder.setAsyncSupported(true);
-        ServletContextHandler context = new ServletContextHandler(ServletContextHandler.SESSIONS);
-        context.setContextPath(basePath);
-        context.addServlet(servletHolder, "/*");
-        context.setAttribute(attribute, attributeValue);
-        handlers.add(context);
+        // This method has not historically checked for existing paths, so we don't check here either. The
+        // method call is added to reduce code duplication.
+        addServlet(basePath, servletHolder, Collections.singletonList(Pair.of(attribute, attributeValue)),
+                requireAuthentication, false);
     }
 
     public int getExternalServicePort() {
@@ -194,16 +322,16 @@ public class WebServer {
     }
 
     public void start() throws Exception {
-        RequestLogHandler requestLogHandler = new RequestLogHandler();
-        requestLogHandler.setRequestLog(JettyRequestLogFactory.createRequestLogger());
-        handlers.add(0, new ContextHandlerCollection());
-        handlers.add(requestLogHandler);
+        boolean showDetailedAddresses = config.getWebServiceLogDetailedAddresses() != null
+                ? config.getWebServiceLogDetailedAddresses() :
+                (config.isWebServiceHaProxyProtocolEnabled() || config.isWebServiceTrustXForwardedFor());
+        server.setRequestLog(JettyRequestLogFactory.createRequestLogger(showDetailedAddresses, server));
 
         ContextHandlerCollection contexts = new ContextHandlerCollection();
-        contexts.setHandlers(handlers.toArray(new Handler[handlers.size()]));
+        contexts.setHandlers(handlers);
 
-        HandlerCollection handlerCollection = new HandlerCollection();
-        handlerCollection.setHandlers(new Handler[] { contexts, new DefaultHandler(), requestLogHandler });
+        Handler.Collection handlerCollection = new Handler.Sequence();
+        handlerCollection.setHandlers(contexts, new DefaultHandler());
 
         // Metrics handler
         StatisticsHandler stats = new StatisticsHandler();
@@ -214,7 +342,13 @@ public class WebServer {
             // Already registered. Eg: in unit tests
         }
 
-        server.setHandler(stats);
+        Handler serverHandler = stats;
+        if (config.getMaxConcurrentHttpRequests() > 0) {
+            QoSHandler qoSHandler = new QoSHandler(serverHandler);
+            qoSHandler.setMaxRequestCount(config.getMaxConcurrentHttpRequests());
+            serverHandler = qoSHandler;
+        }
+        server.setHandler(serverHandler);
 
         try {
             server.start();
@@ -246,6 +380,9 @@ public class WebServer {
     }
 
     public void stop() throws Exception {
+        if (this.sslRefreshScheduledExecutor != null) {
+            this.sslRefreshScheduledExecutor.shutdownNow();
+        }
         server.stop();
         webServiceExecutor.stop();
         log.info("Server stopped successfully");
@@ -268,6 +405,76 @@ public class WebServer {
             return Optional.of(connectorTls.getLocalPort());
         } else {
             return Optional.empty();
+        }
+    }
+
+    protected PulsarSslConfiguration buildSslConfiguration(ProxyConfiguration config) {
+        return PulsarSslConfiguration.builder()
+                .tlsProvider(config.getTlsProvider())
+                .tlsKeyStoreType(config.getTlsKeyStoreType())
+                .tlsKeyStorePath(config.getTlsKeyStore())
+                .tlsKeyStorePassword(config.getTlsKeyStorePassword())
+                .tlsTrustStoreType(config.getTlsTrustStoreType())
+                .tlsTrustStorePath(config.getTlsTrustStore())
+                .tlsTrustStorePassword(config.getTlsTrustStorePassword())
+                .tlsCiphers(config.getTlsCiphers())
+                .tlsProtocols(config.getTlsProtocols())
+                .tlsTrustCertsFilePath(config.getTlsTrustCertsFilePath())
+                .tlsCertificateFilePath(config.getTlsCertificateFilePath())
+                .tlsKeyFilePath(config.getTlsKeyFilePath())
+                .allowInsecureConnection(config.isTlsAllowInsecureConnection())
+                .requireTrustedClientCertOnConnect(config.isTlsRequireTrustedClientCertOnConnect())
+                .tlsEnabledWithKeystore(config.isTlsEnabledWithKeyStore())
+                .tlsCustomParams(config.getSslFactoryPluginParams())
+                .authData(null)
+                .serverMode(true)
+                .isHttps(true)
+                .build();
+    }
+
+    protected void refreshSslContext() {
+        try {
+            this.sslFactory.update();
+        } catch (Exception e) {
+            log.error("Failed to refresh SSL context", e);
+        }
+    }
+
+    static class CustomHeaderFilter implements Filter {
+
+        Map<String, String> defaultHeaders = new HashMap<>();
+
+        public CustomHeaderFilter(ProxyConfiguration config) {
+            String headerJson = config.getProxyHttpResponseHeadersJson();
+            if (StringUtils.isNotBlank(headerJson)) {
+                try {
+                    defaultHeaders = ObjectMapperFactory.getMapper().getObjectMapper().readerFor(Map.class)
+                            .readValue(headerJson);
+                } catch (JsonProcessingException e) {
+                    log.warn("Failed to deserialize json headers {}", headerJson, e);
+                }
+            }
+        }
+
+        @Override
+        public void init(FilterConfig filterConfig) throws ServletException {
+        }
+
+        @Override
+        public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+                throws IOException, ServletException {
+            if (defaultHeaders != null && response instanceof HttpServletResponse) {
+                HttpServletResponse httpResponse = (HttpServletResponse) response;
+                defaultHeaders.forEach((header, value) -> {
+                    httpResponse.setHeader(header, value);
+                });
+
+            }
+            chain.doFilter(request, response);
+        }
+
+        @Override
+        public void destroy() {
         }
     }
 

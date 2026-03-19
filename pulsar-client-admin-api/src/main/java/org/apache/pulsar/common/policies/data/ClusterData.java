@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -55,6 +55,20 @@ public interface ClusterData {
 
     String getBrokerClientTrustCertsFilePath();
 
+    String getBrokerClientCertificateFilePath();
+
+    String getBrokerClientKeyFilePath();
+
+    String getBrokerClientTlsKeyStoreType();
+
+    String getBrokerClientTlsKeyStorePassword();
+
+    String getBrokerClientTlsKeyStore();
+
+    String getBrokerClientSslFactoryPlugin();
+
+    String getBrokerClientSslFactoryPluginParams();
+
     String getListenerName();
 
     interface Builder {
@@ -90,7 +104,21 @@ public interface ClusterData {
 
         Builder brokerClientTrustCertsFilePath(String trustCertsFilePath);
 
+        Builder brokerClientCertificateFilePath(String certificateFilePath);
+
+        Builder brokerClientKeyFilePath(String keyFilePath);
+
+        Builder brokerClientTlsKeyStoreType(String keyStoreType);
+
+        Builder brokerClientTlsKeyStorePassword(String keyStorePassword);
+
+        Builder brokerClientTlsKeyStore(String keyStore);
+
         Builder listenerName(String listenerName);
+
+        Builder brokerClientSslFactoryPlugin(String sslFactoryPlugin);
+
+        Builder brokerClientSslFactoryPluginParams(String sslFactoryPluginParams);
 
         ClusterData build();
     }

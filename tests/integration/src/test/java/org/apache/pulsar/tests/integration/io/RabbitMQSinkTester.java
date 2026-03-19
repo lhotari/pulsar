@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,26 +18,24 @@
  */
 package org.apache.pulsar.tests.integration.io;
 
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.fail;
 import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.DefaultConsumer;
 import com.rabbitmq.client.Envelope;
-import lombok.Data;
-import org.apache.pulsar.tests.integration.containers.RabbitMQContainer;
-import org.apache.pulsar.tests.integration.io.sinks.SinkTester;
-import org.apache.pulsar.tests.integration.io.sinks.SinkTester.SinkType;
-import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
-
 import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeoutException;
-
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.fail;
+import lombok.Data;
+import org.apache.pulsar.tests.integration.containers.RabbitMQContainer;
+import org.apache.pulsar.tests.integration.io.sinks.SinkTester;
+import org.apache.pulsar.tests.integration.io.sinks.SinkTester.SinkType;
+import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
 
 public class RabbitMQSinkTester extends SinkTester<RabbitMQContainer> {
     private final String exchangeName = "test-sink-exchange";
@@ -66,7 +64,7 @@ public class RabbitMQSinkTester extends SinkTester<RabbitMQContainer> {
 
     static ConnectionFactory createConnectionFactory(RabbitMQContainer container) {
         ConnectionFactory connectionFactory = new ConnectionFactory();
-        connectionFactory.setHost(container.getContainerIpAddress());
+        connectionFactory.setHost(container.getHost());
         connectionFactory.setPort(container.getMappedPort(RabbitMQContainer.PORTS[0]));
 
         return connectionFactory;
@@ -81,7 +79,8 @@ public class RabbitMQSinkTester extends SinkTester<RabbitMQContainer> {
             channel.queueDeclare(queueName, true, false, false, null);
             channel.basicConsume(queueName, new DefaultConsumer(channel) {
                 @Override
-                public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body) throws IOException {
+                public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties,
+                                           byte[] body) throws IOException {
                     records.add(new Record(envelope.getRoutingKey(), body));
                     channel.basicAck(envelope.getDeliveryTag(), false);
                 }
@@ -105,5 +104,10 @@ public class RabbitMQSinkTester extends SinkTester<RabbitMQContainer> {
     private static class Record {
         private final String key;
         private final byte[] body;
+    }
+
+    @Override
+    public void close() throws Exception {
+
     }
 }

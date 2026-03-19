@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -57,7 +57,7 @@ public abstract class CanalAbstractSource<V> extends PushSource<V> {
 
     @Override
     public void open(Map<String, Object> config, SourceContext sourceContext) throws Exception {
-        canalSourceConfig = CanalSourceConfig.load(config);
+        canalSourceConfig = CanalSourceConfig.load(config, sourceContext);
         if (canalSourceConfig.getCluster()) {
             connector = CanalConnectors.newClusterConnector(canalSourceConfig.getZkServers(),
                     canalSourceConfig.getDestination(), canalSourceConfig.getUsername(),

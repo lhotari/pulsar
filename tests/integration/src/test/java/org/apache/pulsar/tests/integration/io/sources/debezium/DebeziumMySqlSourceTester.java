@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,9 +18,7 @@
  */
 package org.apache.pulsar.tests.integration.io.sources.debezium;
 
-import java.io.Closeable;
 import java.util.Map;
-
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.tests.integration.containers.DebeziumMySQLContainer;
@@ -38,7 +36,7 @@ import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
  * which is a MySQL database server preconfigured with an inventory database.
  */
 @Slf4j
-public class DebeziumMySqlSourceTester extends SourceTester<DebeziumMySQLContainer> implements Closeable {
+public class DebeziumMySqlSourceTester extends SourceTester<DebeziumMySQLContainer> {
 
     private static final String NAME = "debezium-mysql";
 
@@ -60,15 +58,15 @@ public class DebeziumMySqlSourceTester extends SourceTester<DebeziumMySQLContain
         sourceConfig.put("database.user", "debezium");
         sourceConfig.put("database.password", "dbz");
         sourceConfig.put("database.server.id", "184054");
-        sourceConfig.put("database.server.name", "dbserver1");
-        sourceConfig.put("database.whitelist", "inventory");
+        sourceConfig.put("topic.prefix", "dbserver1");
+        sourceConfig.put("database.include.list", "inventory");
         if (!testWithClientBuilder) {
-            sourceConfig.put("database.history.pulsar.service.url", pulsarServiceUrl);
+            sourceConfig.put("schema.history.internal.pulsar.service.url", pulsarServiceUrl);
         }
         sourceConfig.put("key.converter", converterClassName);
         sourceConfig.put("value.converter", converterClassName);
-        sourceConfig.put("topic.namespace", "debezium/mysql-" +
-                (converterClassName.endsWith("AvroConverter") ? "avro" : "json"));
+        sourceConfig.put("topic.namespace", "debezium/mysql-"
+               + (converterClassName.endsWith("AvroConverter") ? "avro" : "json"));
     }
 
     @Override
@@ -85,37 +83,26 @@ public class DebeziumMySqlSourceTester extends SourceTester<DebeziumMySQLContain
 
     @Override
     public void prepareInsertEvent() throws Exception {
-        this.debeziumMySqlContainer.execCmd(
-                "/bin/bash", "-c",
-                "mysql -h 127.0.0.1 -u root -pdebezium -e 'SELECT * FROM inventory.products'");
-        this.debeziumMySqlContainer.execCmd(
-                "/bin/bash", "-c",
-                "mysql -h 127.0.0.1 -u root -pdebezium " +
-                        "-e \"INSERT INTO inventory.products(name, description, weight) " +
-                        "values('test-debezium', 'This is description', 2.0)\"");
+        executeSql("SELECT * FROM inventory.products");
+        executeSql("INSERT INTO inventory.products(name, description, weight) "
+                + "values('test-debezium', 'This is description', 2.0)");
+    }
+
+    private void executeSql(String sqlStatement) throws Exception {
+        this.debeziumMySqlContainer.execCmd("mysql", "-u", "root", "-pdebezium", "-e", sqlStatement);
     }
 
     @Override
     public void prepareUpdateEvent() throws Exception {
-        this.debeziumMySqlContainer.execCmd(
-                "/bin/bash", "-c",
-                "mysql -h 127.0.0.1 -u root -pdebezium " +
-                        "-e \"UPDATE inventory.products set description='update description', weight=10 " +
-                        "WHERE name='test-debezium'\"");
+        executeSql("UPDATE inventory.products set description='update description', weight=10 "
+                + "WHERE name='test-debezium'");
     }
 
     @Override
     public void prepareDeleteEvent() throws Exception {
-        this.debeziumMySqlContainer.execCmd(
-                "/bin/bash", "-c",
-                "mysql -h 127.0.0.1 -u root -pdebezium -e 'SELECT * FROM inventory.products'");
-        this.debeziumMySqlContainer.execCmd(
-                "/bin/bash", "-c",
-                "mysql -h 127.0.0.1 -u root -pdebezium " +
-                        "-e \"DELETE FROM inventory.products WHERE name='test-debezium'\"");
-        this.debeziumMySqlContainer.execCmd(
-                "/bin/bash", "-c",
-                "mysql -h 127.0.0.1 -u root -pdebezium -e 'SELECT * FROM inventory.products'");
+        executeSql("SELECT * FROM inventory.products");
+        executeSql("DELETE FROM inventory.products WHERE name='test-debezium'");
+        executeSql("SELECT * FROM inventory.products");
     }
 
 
@@ -127,8 +114,9 @@ public class DebeziumMySqlSourceTester extends SourceTester<DebeziumMySQLContain
 
     @Override
     public void close() {
-        if (pulsarCluster != null) {
-            pulsarCluster.stopService(DebeziumMySQLContainer.NAME, debeziumMySqlContainer);
+        if (debeziumMySqlContainer != null) {
+            PulsarCluster.stopService(DebeziumMySQLContainer.NAME, debeziumMySqlContainer);
+            debeziumMySqlContainer = null;
         }
     }
 

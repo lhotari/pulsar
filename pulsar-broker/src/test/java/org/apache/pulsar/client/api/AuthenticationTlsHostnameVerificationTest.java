@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,8 +18,6 @@
  */
 package org.apache.pulsar.client.api;
 
-import static org.mockito.Mockito.spy;
-
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -27,15 +25,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-
 import org.apache.pulsar.broker.authentication.AuthenticationProviderBasic;
 import org.apache.pulsar.broker.authentication.AuthenticationProviderTls;
-import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.impl.auth.AuthenticationTls;
-import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.tls.PublicSuffixMatcher;
 import org.apache.pulsar.common.tls.TlsHostnameVerifier;
-import org.apache.pulsar.common.policies.data.TenantInfoImpl;
+import org.assertj.core.util.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testng.Assert;
@@ -43,29 +38,28 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-import com.google.common.collect.Sets;
-
 @Test(groups = "broker-api")
 public class AuthenticationTlsHostnameVerificationTest extends ProducerConsumerBase {
     private static final Logger log = LoggerFactory.getLogger(AuthenticationTlsHostnameVerificationTest.class);
 
     // Man in middle certificate which tries to act as a broker by sending its own valid certificate
-    private final String TLS_MIM_TRUST_CERT_FILE_PATH = "./src/test/resources/authentication/tls/hn-verification/cacert.pem";
-    private final String TLS_MIM_SERVER_CERT_FILE_PATH = "./src/test/resources/authentication/tls/hn-verification/broker-cert.pem";
-    private final String TLS_MIM_SERVER_KEY_FILE_PATH = "./src/test/resources/authentication/tls/hn-verification/broker-key.pem";
+    private static final String TLS_MIM_TRUST_CERT_FILE_PATH =
+            "./src/test/resources/authentication/tls/hn-verification/cacert.pem";
+    private static final String TLS_MIM_SERVER_CERT_FILE_PATH =
+            "./src/test/resources/authentication/tls/hn-verification/broker-cert.pem";
+    private static final String TLS_MIM_SERVER_KEY_FILE_PATH =
+            "./src/test/resources/authentication/tls/hn-verification/broker-key.pem";
 
-    private final String TLS_TRUST_CERT_FILE_PATH = "./src/test/resources/authentication/tls/cacert.pem";
-    private final String TLS_SERVER_CERT_FILE_PATH = "./src/test/resources/authentication/tls/broker-cert.pem";
-    private final String TLS_SERVER_KEY_FILE_PATH = "./src/test/resources/authentication/tls/broker-key.pem";
-
-    private final String TLS_CLIENT_CERT_FILE_PATH = "./src/test/resources/authentication/tls/client-cert.pem";
-    private final String TLS_CLIENT_KEY_FILE_PATH = "./src/test/resources/authentication/tls/client-key.pem";
-
-    private final String BASIC_CONF_FILE_PATH = "./src/test/resources/authentication/basic/.htpasswd";
+    private static final String BASIC_CONF_FILE_PATH = "./src/test/resources/authentication/basic/.htpasswd";
 
     private boolean hostnameVerificationEnabled = true;
+    private String clientTrustCertFilePath = CA_CERT_FILE_PATH;
 
     protected void setup() throws Exception {
+        super.internalSetup();
+        super.producerBaseSetup();
+        super.stopBroker();
+
         if (methodName.equals("testAnonymousSyncProducerAndConsumer")) {
             conf.setAnonymousUserRole("anonymousUser");
         }
@@ -73,7 +67,7 @@ public class AuthenticationTlsHostnameVerificationTest extends ProducerConsumerB
         conf.setAuthenticationEnabled(true);
         conf.setAuthorizationEnabled(true);
 
-        conf.setTlsAllowInsecureConnection(true);
+        conf.setTlsAllowInsecureConnection(false);
 
         Set<String> superUserRoles = new HashSet<>();
         superUserRoles.add("localhost");
@@ -84,7 +78,8 @@ public class AuthenticationTlsHostnameVerificationTest extends ProducerConsumerB
 
         conf.setBrokerClientAuthenticationPlugin(AuthenticationTls.class.getName());
         conf.setBrokerClientAuthenticationParameters(
-                "tlsCertFile:" + TLS_CLIENT_CERT_FILE_PATH + "," + "tlsKeyFile:" + TLS_SERVER_KEY_FILE_PATH);
+                "tlsCertFile:" + getTlsFileForClient("admin.cert")
+                        + ",tlsKeyFile:" +  getTlsFileForClient("admin.key-pk8"));
 
         Set<String> providers = new HashSet<>();
         providers.add(AuthenticationProviderTls.class.getName());
@@ -95,7 +90,7 @@ public class AuthenticationTlsHostnameVerificationTest extends ProducerConsumerB
         conf.setClusterName("test");
         conf.setNumExecutorThreadPoolSize(5);
 
-        super.init();
+        startBroker();
 
         setupClient();
     }
@@ -103,27 +98,16 @@ public class AuthenticationTlsHostnameVerificationTest extends ProducerConsumerB
     protected void setupClient() throws Exception {
 
         Map<String, String> authParams = new HashMap<>();
-        authParams.put("tlsCertFile", TLS_CLIENT_CERT_FILE_PATH);
-        authParams.put("tlsKeyFile", TLS_CLIENT_KEY_FILE_PATH);
+        authParams.put("tlsCertFile", getTlsFileForClient("admin.cert"));
+        authParams.put("tlsKeyFile", getTlsFileForClient("admin.key-pk8"));
         Authentication authTls = new AuthenticationTls();
         authTls.configure(authParams);
 
-        admin = spy(PulsarAdmin.builder().serviceHttpUrl(brokerUrlTls.toString())
-                .tlsTrustCertsFilePath(TLS_MIM_TRUST_CERT_FILE_PATH).allowTlsInsecureConnection(true)
-                .authentication(authTls).build());
         replacePulsarClient(PulsarClient.builder()
                 .serviceUrl(pulsar.getBrokerServiceUrlTls())
                 .statsInterval(0, TimeUnit.SECONDS)
-                .tlsTrustCertsFilePath(TLS_MIM_TRUST_CERT_FILE_PATH).allowTlsInsecureConnection(true)
+                .tlsTrustCertsFilePath(clientTrustCertFilePath)
                 .authentication(authTls).enableTls(true).enableTlsHostnameVerification(hostnameVerificationEnabled));
-
-        admin.clusters().createCluster("test", ClusterData.builder()
-                .serviceUrl(brokerUrl.toString())
-                .build());
-
-        admin.tenants().createTenant("my-property",
-                new TenantInfoImpl(Sets.newHashSet("appid1", "appid2"), Sets.newHashSet("test")));
-        admin.namespaces().createNamespace("my-property/my-ns", Sets.newHashSet("test"));
     }
 
     @AfterMethod(alwaysRun = true)
@@ -154,16 +138,20 @@ public class AuthenticationTlsHostnameVerificationTest extends ProducerConsumerB
     public void testTlsSyncProducerAndConsumerWithInvalidBrokerHost(boolean hostnameVerificationEnabled)
             throws Exception {
         log.info("-- Starting {} test --", methodName);
+        cleanup();
 
         this.hostnameVerificationEnabled = hostnameVerificationEnabled;
+        clientTrustCertFilePath = TLS_MIM_TRUST_CERT_FILE_PATH;
         // setup broker cert which has CN = "pulsar" different than broker's hostname="localhost"
         conf.setBrokerServicePortTls(Optional.of(0));
         conf.setWebServicePortTls(Optional.of(0));
-        conf.setTlsTrustCertsFilePath(TLS_MIM_TRUST_CERT_FILE_PATH);
+        conf.setAuthenticationProviders(Sets.newTreeSet(AuthenticationProviderTls.class.getName()));
+        conf.setTlsTrustCertsFilePath(CA_CERT_FILE_PATH);
         conf.setTlsCertificateFilePath(TLS_MIM_SERVER_CERT_FILE_PATH);
         conf.setTlsKeyFilePath(TLS_MIM_SERVER_KEY_FILE_PATH);
         conf.setBrokerClientAuthenticationParameters(
-                "tlsCertFile:" + TLS_CLIENT_CERT_FILE_PATH + "," + "tlsKeyFile:" + TLS_MIM_SERVER_KEY_FILE_PATH);
+                "tlsCertFile:" + getTlsFileForClient("admin.cert") + "," + "tlsKeyFile:"
+                        + TLS_MIM_SERVER_KEY_FILE_PATH);
 
         setup();
 
@@ -196,13 +184,14 @@ public class AuthenticationTlsHostnameVerificationTest extends ProducerConsumerB
     @Test
     public void testTlsSyncProducerAndConsumerCorrectBrokerHost() throws Exception {
         log.info("-- Starting {} test --", methodName);
-
+        cleanup();
         // setup broker cert which has CN = "localhost"
         conf.setBrokerServicePortTls(Optional.of(0));
         conf.setWebServicePortTls(Optional.of(0));
-        conf.setTlsTrustCertsFilePath(TLS_TRUST_CERT_FILE_PATH);
-        conf.setTlsCertificateFilePath(TLS_SERVER_CERT_FILE_PATH);
-        conf.setTlsKeyFilePath(TLS_SERVER_KEY_FILE_PATH);
+        conf.setAuthenticationProviders(Sets.newTreeSet(AuthenticationProviderTls.class.getName()));
+        conf.setTlsTrustCertsFilePath(CA_CERT_FILE_PATH);
+        conf.setTlsCertificateFilePath(BROKER_CERT_FILE_PATH);
+        conf.setTlsKeyFilePath(BROKER_KEY_FILE_PATH);
 
         setup();
 
@@ -217,7 +206,7 @@ public class AuthenticationTlsHostnameVerificationTest extends ProducerConsumerB
         }
 
         Message<byte[]> msg = null;
-        Set<String> messageSet = Sets.newHashSet();
+        Set<String> messageSet = new HashSet<>();
         for (int i = 0; i < 10; i++) {
             msg = consumer.receive(5, TimeUnit.SECONDS);
             String receivedMessage = new String(msg.getData());
@@ -233,7 +222,7 @@ public class AuthenticationTlsHostnameVerificationTest extends ProducerConsumerB
     }
 
     /**
-     * This test verifies {@link TlsHostnameVerifier} behavior and gives fair idea about host matching result
+     * This test verifies {@link TlsHostnameVerifier} behavior and gives fair idea about host matching result.
      *
      * @throws Exception
      */

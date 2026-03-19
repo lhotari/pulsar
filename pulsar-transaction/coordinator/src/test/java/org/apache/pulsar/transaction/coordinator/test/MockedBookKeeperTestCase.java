@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -70,8 +70,10 @@ public abstract class MockedBookKeeperTestCase {
     @BeforeMethod(alwaysRun = true)
     public void setUp(Method method) throws Exception {
         LOG.info(">>>>>> starting {}", method);
-        metadataStore = new FaultInjectionMetadataStore(MetadataStoreExtended.create("memory://local",
-                MetadataStoreConfig.builder().build()));
+        metadataStore = new FaultInjectionMetadataStore(MetadataStoreExtended.create("memory:local",
+                MetadataStoreConfig.builder()
+                        .metadataStoreName("metastore-" + method.getName())
+                        .build()));
         try {
             // start bookkeeper service
             startBookKeeper();
@@ -80,8 +82,12 @@ public abstract class MockedBookKeeperTestCase {
             throw e;
         }
 
-        ManagedLedgerFactoryConfig conf = new ManagedLedgerFactoryConfig();
+        ManagedLedgerFactoryConfig conf = createManagedLedgerFactoryConfig();
         factory = new ManagedLedgerFactoryImpl(metadataStore, bkc, conf);
+    }
+
+    protected ManagedLedgerFactoryConfig createManagedLedgerFactoryConfig() {
+        return new ManagedLedgerFactoryConfig();
     }
 
     @AfterMethod(alwaysRun = true)
@@ -112,7 +118,7 @@ public abstract class MockedBookKeeperTestCase {
     }
 
     /**
-     * Start cluster
+     * Start cluster.
      *
      * @throws Exception
      */

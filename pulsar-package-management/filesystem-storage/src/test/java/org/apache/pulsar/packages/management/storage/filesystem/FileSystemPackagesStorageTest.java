@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -158,7 +158,7 @@ public class FileSystemPackagesStorageTest {
         storage.deleteAsync(testPath).get();
 
         // list again and not file under the path
-        paths= storage.listAsync("").get();
+        paths = storage.listAsync("").get();
         assertEquals(paths.size(), 0);
 
 

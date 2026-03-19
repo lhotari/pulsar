@@ -25,8 +25,7 @@
     <parent>
         <groupId>org.apache.pulsar</groupId>
         <artifactId>pulsar</artifactId>
-        <version>2.10.0-SNAPSHOT</version>
-        <relativePath>..</relativePath>
+        <version>4.2.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>pulsar-client-api</artifactId>
@@ -46,17 +45,30 @@
             <artifactId>protobuf-java</artifactId>
             <scope>provided</scope>
         </dependency>
+
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 
 
     <build>
         <plugins>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>${pulsar.client.compiler.release}</release>
+                </configuration>
+            </plugin>
+            <plugin>
                 <groupId>org.gaul</groupId>
                 <artifactId>modernizer-maven-plugin</artifactId>
                 <configuration>
                     <failOnViolations>true</failOnViolations>
-                    <javaVersion>8</javaVersion>
+                    <javaVersion>17</javaVersion>
                 </configuration>
                 <executions>
                     <execution>

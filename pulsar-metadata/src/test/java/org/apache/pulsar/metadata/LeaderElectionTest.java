@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -43,7 +43,7 @@ public class LeaderElectionTest extends BaseMetadataStoreTest {
     public void basicTest(String provider, Supplier<String> urlSupplier) throws Exception {
         @Cleanup
         MetadataStoreExtended store = MetadataStoreExtended.create(urlSupplier.get(),
-                MetadataStoreConfig.builder().build());
+                MetadataStoreConfig.builder().fsyncEnable(false).build());
 
         @Cleanup
         CoordinationService coordinationService = new CoordinationServiceImpl(store);
@@ -68,6 +68,8 @@ public class LeaderElectionTest extends BaseMetadataStoreTest {
         assertEquals(cache.get("/my/leader-election").join(), Optional.of("test-1"));
 
         leaderElection.close();
+
+        assertEquals(leaderElection.getState(), LeaderElectionState.NoLeader);
 
         assertEquals(cache.get("/my/leader-election").join(), Optional.empty());
     }
@@ -111,21 +113,21 @@ public class LeaderElectionTest extends BaseMetadataStoreTest {
 
         LeaderElectionState les1 = le1.elect("test-1").join();
         assertEquals(les1, LeaderElectionState.Leading);
-        assertEquals(le1.getLeaderValueIfPresent(), Optional.of("test-1"));
+        assertEqualsAndRetry(() -> le1.getLeaderValueIfPresent(), Optional.of("test-1"), Optional.empty());
         assertEquals(le1.getLeaderValue().join(), Optional.of("test-1"));
         assertEquals(n1.poll(3, TimeUnit.SECONDS), LeaderElectionState.Leading);
 
         LeaderElectionState les2 = le2.elect("test-2").join();
         assertEquals(les2, LeaderElectionState.Following);
         assertEquals(le2.getLeaderValue().join(), Optional.of("test-1"));
-        assertEquals(le2.getLeaderValueIfPresent(), Optional.of("test-1"));
+        assertEqualsAndRetry(() -> le2.getLeaderValueIfPresent(), Optional.of("test-1"), Optional.empty());
         assertEquals(n2.poll(3, TimeUnit.SECONDS), LeaderElectionState.Following);
 
         le1.close();
 
         assertEquals(n2.poll(3, TimeUnit.SECONDS), LeaderElectionState.Leading);
         assertEquals(le2.getState(), LeaderElectionState.Leading);
-        assertEquals(le2.getLeaderValueIfPresent(), Optional.of("test-2"));
+        assertEqualsAndRetry(() -> le2.getLeaderValueIfPresent(), Optional.of("test-2"), Optional.empty());
         assertEquals(le2.getLeaderValue().join(), Optional.of("test-2"));
     }
 
@@ -133,7 +135,7 @@ public class LeaderElectionTest extends BaseMetadataStoreTest {
     public void leaderNodeIsDeletedExternally(String provider, Supplier<String> urlSupplier) throws Exception {
         @Cleanup
         MetadataStoreExtended store = MetadataStoreExtended.create(urlSupplier.get(),
-                MetadataStoreConfig.builder().build());
+                MetadataStoreConfig.builder().fsyncEnable(false).build());
 
         @Cleanup
         CoordinationService coordinationService = new CoordinationServiceImpl(store);
@@ -161,7 +163,7 @@ public class LeaderElectionTest extends BaseMetadataStoreTest {
     public void closeAll(String provider, Supplier<String> urlSupplier) throws Exception {
         @Cleanup
         MetadataStoreExtended store = MetadataStoreExtended.create(urlSupplier.get(),
-                MetadataStoreConfig.builder().build());
+                MetadataStoreConfig.builder().fsyncEnable(false).build());
         MetadataCache<String> cache = store.getMetadataCache(String.class);
 
         CoordinationService cs = new CoordinationServiceImpl(store);
@@ -191,7 +193,7 @@ public class LeaderElectionTest extends BaseMetadataStoreTest {
     public void revalidateLeaderWithinSameSession(String provider, Supplier<String> urlSupplier) throws Exception {
         @Cleanup
         MetadataStoreExtended store = MetadataStoreExtended.create(urlSupplier.get(),
-                MetadataStoreConfig.builder().build());
+                MetadataStoreConfig.builder().fsyncEnable(false).build());
 
         String path = newKey();
 
@@ -203,13 +205,13 @@ public class LeaderElectionTest extends BaseMetadataStoreTest {
                 path, __ -> {
                 });
 
-        store.put(path, ObjectMapperFactory.getThreadLocal().writeValueAsBytes("test-1"), Optional.of(-1L),
+        store.put(path, ObjectMapperFactory.getMapper().writer().writeValueAsBytes("test-1"), Optional.of(-1L),
                 EnumSet.of(CreateOption.Ephemeral)).join();
 
         LeaderElectionState les = le.elect("test-2").join();
         assertEquals(les, LeaderElectionState.Leading);
         assertEquals(le.getLeaderValue().join(), Optional.of("test-2"));
-        assertEquals(le.getLeaderValueIfPresent(), Optional.of("test-2"));
+        assertEqualsAndRetry(() -> le.getLeaderValueIfPresent(), Optional.of("test-2"), Optional.empty());
     }
 
     @Test(dataProvider = "impl")
@@ -238,13 +240,13 @@ public class LeaderElectionTest extends BaseMetadataStoreTest {
                 path, __ -> {
                 });
 
-        store2.put(path, ObjectMapperFactory.getThreadLocal().writeValueAsBytes("test-1"), Optional.of(-1L),
+        store2.put(path, ObjectMapperFactory.getMapper().writer().writeValueAsBytes("test-1"), Optional.of(-1L),
                 EnumSet.of(CreateOption.Ephemeral)).join();
 
         LeaderElectionState les = le.elect("test-1").join();
         assertEquals(les, LeaderElectionState.Leading);
         assertEquals(le.getLeaderValue().join(), Optional.of("test-1"));
-        assertEquals(le.getLeaderValueIfPresent(), Optional.of("test-1"));
+        assertEqualsAndRetry(() -> le.getLeaderValueIfPresent(), Optional.of("test-1"), Optional.empty());
     }
 
 
@@ -274,12 +276,12 @@ public class LeaderElectionTest extends BaseMetadataStoreTest {
                 path, __ -> {
                 });
 
-        store2.put(path, ObjectMapperFactory.getThreadLocal().writeValueAsBytes("test-1"), Optional.of(-1L),
+        store2.put(path, ObjectMapperFactory.getMapper().writer().writeValueAsBytes("test-1"), Optional.of(-1L),
                 EnumSet.of(CreateOption.Ephemeral)).join();
 
         LeaderElectionState les = le.elect("test-2").join();
         assertEquals(les, LeaderElectionState.Following);
         assertEquals(le.getLeaderValue().join(), Optional.of("test-1"));
-        assertEquals(le.getLeaderValueIfPresent(), Optional.of("test-1"));
+        assertEqualsAndRetry(() -> le.getLeaderValueIfPresent(), Optional.of("test-1"), Optional.empty());
     }
 }

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -31,6 +31,8 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.ToString;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.authorization.PulsarAuthorizationProvider;
 import org.apache.pulsar.common.configuration.Category;
 import org.apache.pulsar.common.configuration.FieldContext;
@@ -38,7 +40,10 @@ import org.apache.pulsar.common.configuration.PropertiesContext;
 import org.apache.pulsar.common.configuration.PropertyContext;
 import org.apache.pulsar.common.configuration.PulsarConfiguration;
 import org.apache.pulsar.common.nar.NarClassLoader;
+import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.sasl.SaslConstants;
+import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
+
 
 @Getter
 @Setter
@@ -47,6 +52,8 @@ public class ProxyConfiguration implements PulsarConfiguration {
     private static final String CATEGORY_SERVER = "Server";
     @Category
     private static final String CATEGORY_BROKER_DISCOVERY = "Broker Discovery";
+    @Category
+    private static final String CATEGORY_BROKER_PROXY = "Broker Proxy";
     @Category
     private static final String CATEGORY_AUTHENTICATION = "Proxy Authentication";
     @Category
@@ -74,66 +81,177 @@ public class ProxyConfiguration implements PulsarConfiguration {
 
     @FieldContext(
         category = CATEGORY_BROKER_DISCOVERY,
+        deprecated = true,
         doc = "The ZooKeeper quorum connection string (as a comma-separated list)"
     )
+    @Deprecated
     private String zookeeperServers;
+
     @FieldContext(
-        category = CATEGORY_BROKER_DISCOVERY,
-        doc = "Configuration store connection string (as a comma-separated list)"
+            category = CATEGORY_BROKER_DISCOVERY,
+            required = false,
+            doc = "The metadata store URL. \n"
+                    + " Examples: \n"
+                    + "  * zk:my-zk-1:2181,my-zk-2:2181,my-zk-3:2181\n"
+                    + "  * my-zk-1:2181,my-zk-2:2181,my-zk-3:2181 (will default to ZooKeeper when the schema is not "
+                    + "specified)\n"
+                    + "  * zk:my-zk-1:2181,my-zk-2:2181,my-zk-3:2181/my-chroot-path (to add a ZK chroot path)\n"
     )
-    private String configurationStoreServers;
+    private String metadataStoreUrl;
+
     @FieldContext(
         category = CATEGORY_BROKER_DISCOVERY,
+        deprecated = true,
+        doc = "Configuration store connection string (as a comma-separated list). Deprecated in favor of "
+                + "`configurationMetadataStoreUrl`"
+    )
+    @Deprecated
+    private String configurationStoreServers;
+
+    @FieldContext(
+        category = CATEGORY_BROKER_DISCOVERY,
+        deprecated = true,
         doc = "Global ZooKeeper quorum connection string (as a comma-separated list)"
     )
     @Deprecated
     private String globalZookeeperServers;
 
     @FieldContext(
-        category = CATEGORY_BROKER_DISCOVERY,
-        doc = "ZooKeeper session timeout (in milliseconds)"
-    )
-    private int zookeeperSessionTimeoutMs = 30_000;
-    @FieldContext(
             category = CATEGORY_BROKER_DISCOVERY,
-            doc = "ZooKeeper cache expiry time in seconds"
-        )
-    private int zooKeeperCacheExpirySeconds = 300;
+            required = false,
+            doc = "The metadata store URL for the configuration data. If empty, we fall back to use metadataStoreUrl"
+    )
+    private String configurationMetadataStoreUrl;
+
+    @FieldContext(
+            category = CATEGORY_SERVER,
+            doc = "Metadata store session timeout in milliseconds."
+    )
+    private int metadataStoreSessionTimeoutMillis = 30_000;
+
+    @FieldContext(
+            category = CATEGORY_SERVER,
+            doc = "Metadata store cache expiry time in seconds."
+    )
+    private int metadataStoreCacheExpirySeconds = 300;
+
+    @FieldContext(
+            category = CATEGORY_SERVER,
+            doc = "Is metadata store read-only operations."
+    )
+    private boolean metadataStoreAllowReadOnlyOperations;
+
+    @FieldContext(
+            category = CATEGORY_SERVER,
+            doc = "Max size of messages.",
+            maxValue = Integer.MAX_VALUE - Commands.MESSAGE_SIZE_FRAME_PADDING)
+    private int maxMessageSize = Commands.DEFAULT_MAX_MESSAGE_SIZE;
+
+    @Deprecated
+    @FieldContext(
+        category = CATEGORY_BROKER_DISCOVERY,
+        deprecated = true,
+        doc = "ZooKeeper session timeout in milliseconds. "
+                + "@deprecated - Use metadataStoreSessionTimeoutMillis instead."
+    )
+    private int zookeeperSessionTimeoutMs = -1;
+
+    @Deprecated
+    @FieldContext(
+        category = CATEGORY_BROKER_DISCOVERY,
+        deprecated = true,
+        doc = "ZooKeeper cache expiry time in seconds. "
+                + "@deprecated - Use metadataStoreCacheExpirySeconds instead."
+    )
+    private int zooKeeperCacheExpirySeconds = -1;
+
+    @Deprecated
+    @FieldContext(
+            category = CATEGORY_SERVER,
+            deprecated = true,
+            doc = "Is zooKeeper allow read-only operations."
+    )
+    private boolean zooKeeperAllowReadOnlyOperations;
 
     @FieldContext(
         category = CATEGORY_BROKER_DISCOVERY,
-        doc = "The service url points to the broker cluster"
+        doc = "If does not set metadataStoreUrl or configurationMetadataStoreUrl, this url should point to the"
+                + " discovery service provider."
+                + " URL must have the pulsar:// prefix. And does not support multi url yet."
     )
     private String brokerServiceURL;
     @FieldContext(
         category = CATEGORY_BROKER_DISCOVERY,
-        doc = "The tls service url points to the broker cluster"
+            doc = "If does not set metadataStoreUrl or configurationMetadataStoreUrl, this url should point to the"
+                    + " discovery service provider."
+                + " URL must have the pulsar+ssl:// prefix. And does not support multi url yet."
     )
     private String brokerServiceURLTLS;
 
     @FieldContext(
         category = CATEGORY_BROKER_DISCOVERY,
-        doc = "The web service url points to the broker cluster"
+        doc = "The web service url points to the discovery service provider of the broker cluster, and does not support"
+                + " multi url yet."
     )
     private String brokerWebServiceURL;
     @FieldContext(
         category = CATEGORY_BROKER_DISCOVERY,
-        doc = "The tls web service url points to the broker cluster"
+        doc = "The tls web service url points to the discovery service provider of the broker cluster, and does not"
+                + " support multi url yet."
     )
     private String brokerWebServiceURLTLS;
 
     @FieldContext(
         category = CATEGORY_BROKER_DISCOVERY,
-        doc = "The web service url points to the function worker cluster."
+        doc = "The web service url points to the discovery service provider of the function worker cluster, and does"
+                + " not support multi url yet."
             + " Only configure it when you setup function workers in a separate cluster"
     )
     private String functionWorkerWebServiceURL;
     @FieldContext(
         category = CATEGORY_BROKER_DISCOVERY,
-        doc = "The tls web service url points to the function worker cluster."
+        doc = "The tls web service url points to the discovery service provider of the function worker cluster, and"
+                + " does not support multi url yet."
             + " Only configure it when you setup function workers in a separate cluster"
     )
     private String functionWorkerWebServiceURLTLS;
+
+    @FieldContext(category = CATEGORY_BROKER_PROXY,
+            doc = "When enabled, checks that the target broker is active before connecting. "
+                    + "zookeeperServers and configurationStoreServers must be configured in proxy configuration "
+                    + "for retrieving the active brokers.")
+    private boolean checkActiveBrokers = false;
+
+    @FieldContext(
+            category = CATEGORY_BROKER_PROXY,
+            doc = "Broker proxy connect timeout.\n"
+                    + "The timeout value for Broker proxy connect timeout is in millisecond. Set to 0 to disable."
+    )
+    private int brokerProxyConnectTimeoutMs = 10000;
+
+    @FieldContext(
+            category = CATEGORY_BROKER_PROXY,
+            doc = "Broker proxy read timeout.\n"
+                    + "The timeout value for Broker proxy read timeout is in millisecond. Set to 0 to disable."
+    )
+    private int brokerProxyReadTimeoutMs = 75000;
+
+    @FieldContext(
+            category = CATEGORY_BROKER_PROXY,
+            doc = "Allowed broker target host names. "
+                    + "Supports multiple comma separated entries and a wildcard.")
+    private String brokerProxyAllowedHostNames = "*";
+
+    @FieldContext(
+            category = CATEGORY_BROKER_PROXY,
+            doc = "Allowed broker target ip addresses or ip networks / netmasks. "
+                    + "Supports multiple comma separated entries.")
+    private String brokerProxyAllowedIPAddresses = "*";
+
+    @FieldContext(
+            category = CATEGORY_BROKER_PROXY,
+            doc = "Allowed broker target ports")
+    private String brokerProxyAllowedTargetPorts = "6650,6651";
 
     @FieldContext(
         category = CATEGORY_SERVER,
@@ -148,9 +266,46 @@ public class ProxyConfiguration implements PulsarConfiguration {
     )
     private String advertisedAddress;
 
+    @FieldContext(
+            category = CATEGORY_SERVER,
+            doc = "Specifies the interval (in seconds) for sending ping messages to the client. Set to 0 to disable "
+                    + "ping messages. This setting applies to client connections used for topic lookups and "
+                    + "partition metadata requests. When a client establishes a broker connection via the proxy, "
+                    + "the client and broker will communicate directly without the proxy intercepting the messages. "
+                    + "In that case, the broker's keepAliveIntervalSeconds configuration becomes relevant.")
+    private int keepAliveIntervalSeconds = 30;
+
     @FieldContext(category = CATEGORY_SERVER,
             doc = "Enable or disable the proxy protocol.")
     private boolean haProxyProtocolEnabled;
+
+    @FieldContext(category = CATEGORY_SERVER,
+            doc = "Enable or disable the use of HA proxy protocol for resolving the client IP for http/https "
+                    + "requests. Default is false.")
+    private boolean webServiceHaProxyProtocolEnabled = false;
+
+    @FieldContext(category = CATEGORY_SERVER, doc =
+            "Trust X-Forwarded-For header for resolving the client IP for http/https requests.\n"
+                    + "Default is false.")
+    private boolean webServiceTrustXForwardedFor = false;
+
+    @FieldContext(category = CATEGORY_SERVER, doc =
+            "Add detailed client/remote and server/local addresses and ports to http/https request logging.\n"
+                    + "Defaults to true when either webServiceHaProxyProtocolEnabled or webServiceTrustXForwardedFor "
+                    + "is enabled.")
+    private Boolean webServiceLogDetailedAddresses;
+
+    @FieldContext(category = CATEGORY_SERVER, doc =
+            "Defines how the broker will anonymize the role and originalAuthRole before logging. "
+                    + "Possible values are: NONE (no anonymization), REDACTED (replaces with '[REDACTED]'), "
+                    + "hash:SHA256 (hashes using SHA-256), and hash:MD5 (hashes using MD5). Default is NONE."
+    )
+    private String authenticationRoleLoggingAnonymizer = "NONE";
+
+    @FieldContext(category = CATEGORY_SERVER,
+            doc = "Enables zero-copy transport of data across network interfaces using the spice. "
+                    + "Zero copy mode cannot be used when TLS is enabled or when proxyLogLevel is > 0.")
+    private boolean proxyZeroCopyModeEnabled = true;
 
     @FieldContext(
         category = CATEGORY_SERVER,
@@ -173,6 +328,12 @@ public class ProxyConfiguration implements PulsarConfiguration {
         doc = "The port for serving https requests"
     )
     private Optional<Integer> webServicePortTls = Optional.empty();
+
+    @FieldContext(
+            category = CATEGORY_KEYSTORE_TLS,
+            doc = "Specify the TLS provider for the web service, available values can be SunJSSE, Conscrypt and etc."
+    )
+    private String webServiceTlsProvider = "Conscrypt";
 
     @FieldContext(
             category = CATEGORY_TLS,
@@ -245,6 +406,19 @@ public class ProxyConfiguration implements PulsarConfiguration {
             + "to take effect"
     )
     private boolean forwardAuthorizationCredentials = false;
+
+    @FieldContext(
+            category = CATEGORY_AUTHENTICATION,
+            doc = "Interval of time for checking for expired authentication credentials. Disable by setting to 0."
+    )
+    private int authenticationRefreshCheckSeconds = 60;
+
+    @FieldContext(
+        category = CATEGORY_HTTP,
+        doc = "Whether to enable the proxy's /metrics and /proxy-stats http endpoints"
+    )
+    private boolean enableProxyStatsEndpoints = true;
+
     @FieldContext(
         category = CATEGORY_AUTHENTICATION,
         doc = "Whether the '/metrics' endpoint requires authentication. Defaults to true."
@@ -252,6 +426,12 @@ public class ProxyConfiguration implements PulsarConfiguration {
     )
     private boolean authenticateMetricsEndpoint = true;
 
+    @FieldContext(
+            category = CATEGORY_HTTP,
+            doc = "Time in milliseconds that metrics endpoint would time out. Default is 30s.\n"
+                    + " Set it to 0 to disable timeout."
+    )
+    private long metricsServletTimeoutMs = 30000;
 
     @FieldContext(
         category = CATEGORY_SASL_AUTH,
@@ -267,6 +447,14 @@ public class ProxyConfiguration implements PulsarConfiguration {
     private String saslJaasServerSectionName = SaslConstants.JAAS_DEFAULT_PROXY_SECTION_NAME;
 
     @FieldContext(
+            category = CATEGORY_SASL_AUTH,
+            doc = "Path to file containing the secret to be used to SaslRoleTokenSigner\n"
+                    + "The secret can be specified like:\n"
+                    + "saslJaasServerRoleTokenSignerSecretPath=file:///my/saslRoleTokenSignerSecret.key."
+    )
+    private String saslJaasServerRoleTokenSignerSecretPath;
+
+    @FieldContext(
         category = CATEGORY_SASL_AUTH,
         doc = "kerberos kinit command."
     )
@@ -280,10 +468,53 @@ public class ProxyConfiguration implements PulsarConfiguration {
     private int maxConcurrentInboundConnections = 10000;
 
     @FieldContext(
+            category = CATEGORY_RATE_LIMITING,
+            doc = "The maximum number of connections per IP. If it exceeds, new connections are rejected."
+    )
+    private int maxConcurrentInboundConnectionsPerIp = 0;
+
+
+    @FieldContext(
         category = CATEGORY_RATE_LIMITING,
         doc = "Max concurrent lookup requests. The proxy will reject requests beyond that"
     )
     private int maxConcurrentLookupRequests = 50000;
+
+    @FieldContext(
+            category = CATEGORY_RATE_LIMITING,
+            doc = "Maximum heap memory for inflight topic list operations (MB).\n"
+                    + "Default: 100 MB (supports ~1M topic names assuming 100 bytes each)")
+    private int maxTopicListInFlightHeapMemSizeMB = 100;
+
+    @FieldContext(
+            category = CATEGORY_RATE_LIMITING,
+            doc = "Maximum direct memory for inflight topic list responses (MB).\n"
+                    + "Default: 100 MB (network buffers for serialized responses)")
+    private int maxTopicListInFlightDirectMemSizeMB = 100;
+
+    @FieldContext(
+            category = CATEGORY_RATE_LIMITING,
+            doc = "Timeout for acquiring heap memory permits (milliseconds).\n"
+                    + "Default: 25000 (25 seconds)")
+    private int maxTopicListInFlightHeapMemSizePermitsAcquireTimeoutMillis = 25000;
+
+    @FieldContext(
+            category = CATEGORY_RATE_LIMITING,
+            doc = "Maximum queue size for heap memory permit requests.\n"
+                    + "Default: 10000 (prevent unbounded queueing)")
+    private int maxTopicListInFlightHeapMemSizePermitsAcquireQueueSize = 10000;
+
+    @FieldContext(
+            category = CATEGORY_RATE_LIMITING,
+            doc = "Timeout for acquiring direct memory permits (milliseconds).\n"
+                    + "Default: 25000 (25 seconds)")
+    private int maxTopicListInFlightDirectMemSizePermitsAcquireTimeoutMillis = 25000;
+
+    @FieldContext(
+            category = CATEGORY_RATE_LIMITING,
+            doc = "Maximum queue size for direct memory permit requests.\n"
+                    + "Default: 10000 (prevent unbounded queueing)")
+    private int maxTopicListInFlightDirectMemSizePermitsAcquireQueueSize = 10000;
 
     @FieldContext(
         category = CATEGORY_CLIENT_AUTHENTICATION,
@@ -300,6 +531,17 @@ public class ProxyConfiguration implements PulsarConfiguration {
         doc = "The path to trusted certificates used by the Pulsar proxy to authenticate with Pulsar brokers"
     )
     private String brokerClientTrustCertsFilePath;
+
+    @FieldContext(
+            category = CATEGORY_CLIENT_AUTHENTICATION,
+            doc = "The path to TLS private key used by the Pulsar proxy to authenticate with Pulsar brokers"
+    )
+    private String brokerClientKeyFilePath;
+
+    @FieldContext(
+            category = CATEGORY_CLIENT_AUTHENTICATION,
+            doc = "The path to the TLS certificate used by the Pulsar proxy to authenticate with Pulsar brokers")
+    private String brokerClientCertificateFilePath;
 
     @FieldContext(
         category = CATEGORY_CLIENT_AUTHENTICATION,
@@ -384,7 +626,9 @@ public class ProxyConfiguration implements PulsarConfiguration {
 
     @FieldContext(
             category = CATEGORY_KEYSTORE_TLS,
-            doc = "TLS Provider"
+            doc = "Specify the TLS provider for the broker service: \n"
+                    + "When using TLS authentication with CACert, the valid value is either OPENSSL or JDK.\n"
+                    + "When using TLS authentication with KeyStore, available values can be SunJSSE, Conscrypt and etc."
     )
     private String tlsProvider = null;
 
@@ -424,6 +668,16 @@ public class ProxyConfiguration implements PulsarConfiguration {
     )
     private String tlsTrustStorePassword = null;
 
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "SSL Factory Plugin class to provide SSLEngine and SSLContext objects. The default "
+                    + " class used is DefaultSslFactory.")
+    private String sslFactoryPlugin = DefaultPulsarSslFactory.class.getName();
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "SSL Factory plugin configuration parameters.")
+    private String sslFactoryPluginParams = "";
+
     /**
      * KeyStore TLS config variables used for proxy to auth with broker.
      */
@@ -439,6 +693,25 @@ public class ProxyConfiguration implements PulsarConfiguration {
     private String brokerClientSslProvider = null;
 
     // needed when client auth is required
+    @FieldContext(
+            category = CATEGORY_KEYSTORE_TLS,
+            doc = "TLS KeyStore type configuration for proxy: JKS, PKCS12 "
+                    + " used by the Pulsar proxy to authenticate with Pulsar brokers"
+    )
+    private String brokerClientTlsKeyStoreType = "JKS";
+    @FieldContext(
+            category = CATEGORY_KEYSTORE_TLS,
+            doc = "TLS KeyStore path for internal client, "
+                    + " used by the Pulsar proxy to authenticate with Pulsar brokers"
+    )
+    private String brokerClientTlsKeyStore = null;
+    @FieldContext(
+            category = CATEGORY_KEYSTORE_TLS,
+            doc = "TLS KeyStore password for proxy, "
+                    + " used by the Pulsar proxy to authenticate with Pulsar brokers"
+    )
+    @ToString.Exclude
+    private String brokerClientTlsKeyStorePassword = null;
     @FieldContext(
             category = CATEGORY_KEYSTORE_TLS,
             doc = "TLS TrustStore type configuration for proxy: JKS, PKCS12 "
@@ -474,6 +747,16 @@ public class ProxyConfiguration implements PulsarConfiguration {
     )
     private Set<String> brokerClientTlsProtocols = new TreeSet<>();
 
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "SSL Factory Plugin class used by internal client to provide SSLEngine and SSLContext objects. "
+                    + "The default class used is DefaultSslFactory.")
+    private String brokerClientSslFactoryPlugin = DefaultPulsarSslFactory.class.getName();
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "SSL Factory plugin configuration parameters used by internal client.")
+    private String brokerClientSslFactoryPluginParams = "";
+
     // HTTP
 
     @FieldContext(
@@ -496,6 +779,18 @@ public class ProxyConfiguration implements PulsarConfiguration {
     private int httpOutputBufferSize = 32 * 1024;
 
     @FieldContext(
+        minValue = 1,
+        category = CATEGORY_HTTP,
+        doc = """
+                The maximum size in bytes of the request header.
+                Larger headers will allow for more and/or larger cookies plus larger form content encoded in a URL.
+                However, larger headers consume more memory and can make a server more vulnerable to denial of service
+                attacks.
+              """
+    )
+    private int httpMaxRequestHeaderSize = 8 * 1024;
+
+    @FieldContext(
             minValue = 1,
             category = CATEGORY_HTTP,
             doc = "Http input buffer max size.\n\n"
@@ -514,11 +809,61 @@ public class ProxyConfiguration implements PulsarConfiguration {
     private int httpProxyTimeout = 5 * 60 * 1000;
 
     @FieldContext(
+            minValue = 0,
+            category = CATEGORY_HTTP,
+            doc = "Http proxy idle timeout.\n\n"
+                    + "The idle timeout value for HTTP proxy is in millisecond."
+    )
+    private int httpProxyIdleTimeout = 30 * 1000;
+
+    @FieldContext(
            minValue = 1,
            category = CATEGORY_HTTP,
            doc = "Number of threads to use for HTTP requests processing"
     )
     private int httpNumThreads = Math.max(8, 2 * Runtime.getRuntime().availableProcessors());
+
+    @FieldContext(category = CATEGORY_SERVER, doc = "Max concurrent web requests")
+    private int maxConcurrentHttpRequests = 1024;
+
+    @FieldContext(
+            category = CATEGORY_SERVER,
+            doc = "Capacity for thread pool queue in the HTTP server"
+                    + " Default is set to 8192."
+    )
+    private int httpServerThreadPoolQueueSize = 8192;
+
+    @FieldContext(
+            category = CATEGORY_SERVER,
+            doc = "Capacity for accept queue in the HTTP server"
+                    + " Default is set to 8192."
+    )
+    private int httpServerAcceptQueueSize = 8192;
+
+    @FieldContext(
+            minValue = 0,
+            category = CATEGORY_HTTP,
+            doc = "Idle timeout for HTTP server connections in milliseconds."
+    )
+    private int httpServerIdleTimeout = 30 * 1000;
+
+    @FieldContext(category = CATEGORY_SERVER, doc = "Maximum number of inbound http connections. "
+            + "(0 to disable limiting)")
+    private int maxHttpServerConnections = 2048;
+
+    @FieldContext(
+            category = CATEGORY_SERVER,
+            doc = "Number of threads used for Netty IO."
+                    + " Default is set to `2 * Runtime.getRuntime().availableProcessors()`"
+    )
+    private int numIOThreads = 2 * Runtime.getRuntime().availableProcessors();
+
+    @FieldContext(
+            category = CATEGORY_SERVER,
+            doc = "Number of threads used for Netty Acceptor."
+                    + " Default is set to `1`"
+    )
+    private int numAcceptorThreads = 1;
 
     @Deprecated
     @FieldContext(
@@ -539,6 +884,13 @@ public class ProxyConfiguration implements PulsarConfiguration {
             doc = "List of proxy additional servlet to load, which is a list of proxy additional servlet names"
     )
     private Set<String> proxyAdditionalServlets = new TreeSet<>();
+
+    @FieldContext(
+            category = CATEGORY_PLUGIN,
+            doc = "Default http header map to add into http-proxy for the any security requirements "
+                    + "eg: { \"header1\": \"val1\", \"header2\": \"val2\" }"
+    )
+    private String proxyHttpResponseHeadersJson;
 
     @FieldContext(
             category = CATEGORY_PLUGIN,
@@ -612,9 +964,37 @@ public class ProxyConfiguration implements PulsarConfiguration {
 
     @FieldContext(
             category = CATEGORY_WEBSOCKET,
+            doc = "Interval of time to sending the ping to keep alive in WebSocket proxy. "
+                    + "This value greater than 0 means enabled")
+    private int webSocketPingDurationSeconds = -1;
+
+    @FieldContext(
+            category = CATEGORY_WEBSOCKET,
             doc = "Name of the cluster to which this broker belongs to"
     )
     private String clusterName;
+
+    public String getMetadataStoreUrl() {
+        if (StringUtils.isNotBlank(metadataStoreUrl)) {
+            return metadataStoreUrl;
+        } else {
+            // Fallback to old setting
+            return zookeeperServers;
+        }
+    }
+
+    public String getConfigurationMetadataStoreUrl() {
+        if (StringUtils.isNotBlank(configurationMetadataStoreUrl)) {
+            return configurationMetadataStoreUrl;
+        } else if (StringUtils.isNotBlank(configurationStoreServers)) {
+            return configurationStoreServers;
+        } else if (StringUtils.isNotBlank(globalZookeeperServers)) {
+            return globalZookeeperServers;
+        } else {
+            // Fallback to local zookeeper
+            return getMetadataStoreUrl();
+        }
+    }
 
     private Properties properties = new Properties();
 
@@ -692,5 +1072,17 @@ public class ProxyConfiguration implements PulsarConfiguration {
         public String toString() {
             return String.format("HttpReverseProxyConfig(%s, path=%s, proxyTo=%s)", name, path, proxyTo);
         }
+    }
+
+    public int getMetadataStoreSessionTimeoutMillis() {
+        return zookeeperSessionTimeoutMs > 0 ? zookeeperSessionTimeoutMs : metadataStoreSessionTimeoutMillis;
+    }
+
+    public int getMetadataStoreCacheExpirySeconds() {
+        return zooKeeperCacheExpirySeconds > 0 ? zooKeeperCacheExpirySeconds : metadataStoreCacheExpirySeconds;
+    }
+
+    public boolean isMetadataStoreAllowReadOnlyOperations() {
+        return zooKeeperAllowReadOnlyOperations || metadataStoreAllowReadOnlyOperations;
     }
 }

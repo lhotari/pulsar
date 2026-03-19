@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -24,11 +24,13 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang.NotImplementedException;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.NotImplementedException;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
@@ -122,7 +124,7 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
         this.earlyTokenRefreshPercent = earlyTokenRefreshPercent;
         this.clock = clock;
         if (scheduler == null && earlyTokenRefreshPercent < 1) {
-            this.scheduler = new ScheduledThreadPoolExecutor(1);
+            this.scheduler = new ScheduledThreadPoolExecutor(1, new DaemonThreadFactory());
             this.createdScheduler = true;
         } else {
             this.scheduler = scheduler;
@@ -271,6 +273,29 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
                     }
                 });
             }
+        }
+    }
+
+    private static class DaemonThreadFactory implements ThreadFactory {
+        private static final AtomicInteger poolNumber = new AtomicInteger(1);
+        private final ThreadGroup group;
+        private final AtomicInteger threadNumber = new AtomicInteger(1);
+        private final String namePrefix;
+
+        DaemonThreadFactory() {
+            SecurityManager s = System.getSecurityManager();
+            group = (s != null) ? s.getThreadGroup() : Thread.currentThread().getThreadGroup();
+            namePrefix = "oauth2-token-refresher-" + poolNumber.getAndIncrement() + "-thread-";
+        }
+
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(group, r, namePrefix + threadNumber.getAndIncrement(), 0);
+            t.setDaemon(true);
+            if (t.getPriority() != Thread.NORM_PRIORITY) {
+                t.setPriority(Thread.NORM_PRIORITY);
+            }
+            return t;
         }
     }
 
