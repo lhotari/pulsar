@@ -61,9 +61,6 @@ class ClientCredentialsFlow extends FlowBase {
 
     private boolean initialized = false;
 
-    /**
-     * See {@link ClientCredentialsConfiguration} for field documentation.
-     */
     @Builder
     public ClientCredentialsFlow(URL issuerUrl, String audience, String privateKey, String scope,
                                  Duration connectTimeout, Duration readTimeout, String trustCertsFilePath,
