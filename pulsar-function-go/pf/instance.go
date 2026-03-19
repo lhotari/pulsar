@@ -165,7 +165,7 @@ CLOSE:
 			msgInput := cm.Message
 			atMostOnce := gi.context.instanceConf.funcDetails.ProcessingGuarantees == pb.ProcessingGuarantees_ATMOST_ONCE
 			atLeastOnce := gi.context.instanceConf.funcDetails.ProcessingGuarantees == pb.ProcessingGuarantees_ATLEAST_ONCE
-			autoAck := gi.context.instanceConf.funcDetails.AutoAck
+			autoAck := gi.context.instanceConf.funcDetails.AutoAck //nolint:staticcheck
 			if autoAck && atMostOnce {
 				gi.ackInputMessage(msgInput)
 			}
@@ -404,7 +404,7 @@ func (gi *goInstance) handlerMsg(input pulsar.Message) (output []byte, err error
 
 func (gi *goInstance) processResult(msgInput pulsar.Message, output []byte) {
 	atLeastOnce := gi.context.instanceConf.funcDetails.ProcessingGuarantees == pb.ProcessingGuarantees_ATLEAST_ONCE
-	autoAck := gi.context.instanceConf.funcDetails.AutoAck
+	autoAck := gi.context.instanceConf.funcDetails.AutoAck //nolint:staticcheck
 
 	// If the function had an output and the user has specified an output topic, the output needs to be sent to the
 	// assigned output topic.

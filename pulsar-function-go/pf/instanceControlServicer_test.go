@@ -27,11 +27,11 @@ import (
 	"testing"
 
 	pb "github.com/apache/pulsar/pulsar-function-go/pb"
-	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const bufSize = 1024 * 1024
@@ -48,7 +48,7 @@ func TestInstanceControlServicer_serve_creates_valid_instance(t *testing.T) {
 	// create a gRPC server object
 	grpcServer := grpc.NewServer()
 	instance := newGoInstance()
-	servicer := InstanceControlServicer{instance}
+	servicer := InstanceControlServicer{goInstance: instance}
 	// must register before we start the service.
 	pb.RegisterInstanceControlServer(grpcServer, &servicer)
 	// start the server
@@ -70,7 +70,7 @@ func TestInstanceControlServicer_serve_creates_valid_instance(t *testing.T) {
 	}
 	defer conn.Close()
 	client := pb.NewInstanceControlClient(conn)
-	resp, err := client.HealthCheck(ctx, &empty.Empty{})
+	resp, err := client.HealthCheck(ctx, &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("SayHello failed: %v", err)
 	}
@@ -97,7 +97,7 @@ func instanceCommunicationClient(t *testing.T, instance *goInstance) pb.Instance
 		grpcServer.Stop()
 	})
 
-	servicer := InstanceControlServicer{instance}
+	servicer := InstanceControlServicer{goInstance: instance}
 	// must register before we start the service.
 	pb.RegisterInstanceControlServer(grpcServer, &servicer)
 
