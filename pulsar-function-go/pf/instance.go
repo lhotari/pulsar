@@ -646,7 +646,7 @@ func (gi *goInstance) getFilteredMetricFamilies(metricName string) []*prometheus
 	filteredMetricFamilies := filter(metricFamilies, matchFamilyFunc)
 	if len(filteredMetricFamilies) > 1 {
 		// handle this.
-		log.Errorf("Too many metric families for metricName: %s " + metricName)
+		log.Errorf("Too many metric families for metricName: %s ", metricName)
 	}
 	return filteredMetricFamilies
 }

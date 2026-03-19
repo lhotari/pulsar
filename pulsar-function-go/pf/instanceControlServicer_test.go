@@ -63,7 +63,7 @@ func TestInstanceControlServicer_serve_creates_valid_instance(t *testing.T) {
 	// Now we can setup the client:
 
 	ctx := context.Background()
-	conn, err := grpc.NewClient("bufnet", grpc.WithContextDialer(getBufDialer(lis)),
+	conn, err := grpc.NewClient("passthrough:///bufnet", grpc.WithContextDialer(getBufDialer(lis)),
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("Failed to dial bufnet: %v", err)
@@ -111,7 +111,7 @@ func instanceCommunicationClient(t *testing.T, instance *goInstance) pb.Instance
 	}()
 
 	// Now we can setup the client:
-	conn, err := grpc.NewClient("bufnet", grpc.WithContextDialer(getBufDialer(lis)),
+	conn, err := grpc.NewClient("passthrough:///bufnet", grpc.WithContextDialer(getBufDialer(lis)),
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("Failed to dial bufnet: %v", err)
