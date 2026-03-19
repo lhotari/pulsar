@@ -95,7 +95,8 @@ protoc \\
     /proto/*.proto
 
 # Prepend ASF license header to every generated file.
-LICENSE_HEADER='// Licensed to the Apache Software Foundation (ASF) under one
+LICENSE_HEADER='//
+// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -110,11 +111,19 @@ LICENSE_HEADER='// Licensed to the Apache Software Foundation (ASF) under one
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.'
+// under the License.
+//'
 
 for f in /out/*.pb.go; do
     tmp="\${f}.tmp"
-    printf '%s\n\n' "\${LICENSE_HEADER}" | cat - "\$f" > "\${tmp}" && mv "\${tmp}" "\$f"
+    # protoc copies the proto file's own license block into the generated output.
+    # Strip everything before the "// Code generated" marker, then prepend ours.
+    gen_line=\$(grep -n "^// Code generated" "\$f" | head -1 | cut -d: -f1)
+    if [ -n "\${gen_line}" ]; then
+        { printf '%s\n\n' "\${LICENSE_HEADER}"; tail -n "+\${gen_line}" "\$f"; } > "\${tmp}" && mv "\${tmp}" "\$f"
+    else
+        printf '%s\n\n' "\${LICENSE_HEADER}" | cat - "\$f" > "\${tmp}" && mv "\${tmp}" "\$f"
+    fi
 done
 
 # Write tool versions to a temp file so the outer script can embed them in doc.go.
@@ -150,6 +159,7 @@ rm -f "${toolVersions}"
 
 # Generate godoc describing this package and the git sha it was created from
 cat <<EOF >"${outDir}/doc.go"
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -166,6 +176,7 @@ cat <<EOF >"${outDir}/doc.go"
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+//
 
 // Package ${pkg} provides the protocol buffer messages that Pulsar
 // uses for the client/broker wire protocol.
