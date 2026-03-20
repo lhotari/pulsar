@@ -266,13 +266,11 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
      * updated safely.
      */
     private void handleSuccessfulTokenRefresh() {
-        if (scheduler != null) {
+        if (scheduler != null && earlyTokenRefreshPercent < 1) {
             scheduler.execute(() -> {
-                if (earlyTokenRefreshPercent < 1) {
-                    backoff = buildBackoff(cachedToken.latest.getExpiresIn());
-                    long expiresInMillis = TimeUnit.SECONDS.toMillis(cachedToken.latest.getExpiresIn());
-                    scheduleRefresh((long) (expiresInMillis * earlyTokenRefreshPercent));
-                }
+                  backoff = buildBackoff(cachedToken.latest.getExpiresIn());
+                  long expiresInMillis = TimeUnit.SECONDS.toMillis(cachedToken.latest.getExpiresIn());
+                  scheduleRefresh((long) (expiresInMillis * earlyTokenRefreshPercent));
             });
         }
     }
