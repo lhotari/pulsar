@@ -27,12 +27,13 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.JavaVersion;
 import org.apache.commons.lang3.NotImplementedException;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.SystemUtils;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
@@ -78,18 +79,16 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
     public static final String AUTH_METHOD_NAME = "token";
     private static final long serialVersionUID = 1L;
 
-    // Shared executor used when the caller does not supply one. Uses daemon threads and lets
-    // idle core threads time out so that the thread is released when no instances are actively
-    // refreshing tokens.
+    // Shared executor used when the caller does not supply one. Uses daemon threads and scales down to
+    // 0 threads when no instances are actively refreshing tokens.
     private static final ScheduledExecutorService INTERNAL_SCHEDULER = createInternalScheduler();
 
     private static ScheduledExecutorService createInternalScheduler() {
-        ScheduledExecutorService executor = Executors.newScheduledThreadPool(1,
+        // corePoolSize=0 allows the pool to scale down to zero idle threads (Java 9+).
+        // On Java 8 a corePoolSize of 0 means tasks may never execute, so fall back to 1.
+        int corePoolSize = SystemUtils.isJavaVersionAtLeast(JavaVersion.JAVA_9) ? 0 : 1;
+        return Executors.newScheduledThreadPool(corePoolSize,
                 new DefaultThreadFactory("oauth2-token-refresher", true));
-        ThreadPoolExecutor poolExecutor = (ThreadPoolExecutor) executor;
-        poolExecutor.setKeepAliveTime(10, TimeUnit.SECONDS);
-        poolExecutor.allowCoreThreadTimeOut(true);
-        return executor;
     }
 
     private transient ScheduledExecutorService scheduler;
