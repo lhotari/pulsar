@@ -2014,6 +2014,48 @@ public class ServiceUnitStateChannelTest extends MockedPulsarServiceBaseTest {
         channel2.cleanOwnerships();
     }
 
+    @Test(priority = 24)
+    public void testHandleExistingResolvesAssigningStateOnChannelRestart()
+            throws Exception {
+        // Regression test for: handleExisting() must immediately resolve an Assigning state
+        // targeting this broker to Owned, simulating the broker-restart recovery scenario.
+        //
+        // When a broker restarts, its ServiceUnitStateChannel calls handleExisting() for each
+        // entry in the table view during start(). Without the fix, Assigning states were silently
+        // ignored, leaving bundles stuck until the ownership monitor rescued them after
+        // inFlightStateWaitingTimeInMillis (default 30s). The fix is verified by asserting
+        // that Owned state appears within 15s — shorter than the 30s monitor threshold —
+        // which proves handleExisting() drove the resolution, not the ownership monitor.
+        var handleExistingMethod = ServiceUnitStateChannelImpl.class
+                .getDeclaredMethod("handleExisting", String.class, ServiceUnitStateData.class);
+        handleExistingMethod.setAccessible(true);
+
+        // Case 1: Assigning targeting brokerId1 with no source broker
+        //         (fresh assignment after a Free override when no broker was available)
+        String assigningBundle1 = "public/test-existing-assigning1/0xfffffff0_0xffffffff";
+        handleExistingMethod.invoke(channel1, assigningBundle1,
+                new ServiceUnitStateData(Assigning, brokerId1, null, 1));
+
+        // Case 2: Assigning targeting brokerId1 with a source broker
+        //         (transfer interrupted mid-flight by broker restart)
+        String assigningBundle2 = "public/test-existing-assigning2/0xfffffff0_0xffffffff";
+        handleExistingMethod.invoke(channel1, assigningBundle2,
+                new ServiceUnitStateData(Assigning, brokerId1, brokerId2, 1));
+
+        try {
+            // Both bundles must reach Owned state within 15s (< inFlightStateWaitingTimeInMillis 30s).
+            // Without the fix, the tableview state would remain null/Init until the monitor runs at ~30s.
+            Awaitility.await().atMost(15, TimeUnit.SECONDS).pollInterval(200, TimeUnit.MILLISECONDS)
+                    .untilAsserted(() -> {
+                        assertEquals(Owned, state(getTableView(channel1).get(assigningBundle1)));
+                        assertEquals(Owned, state(getTableView(channel2).get(assigningBundle1)));
+                        assertEquals(Owned, state(getTableView(channel1).get(assigningBundle2)));
+                        assertEquals(Owned, state(getTableView(channel2).get(assigningBundle2)));
+                    });
+        } finally {
+            cleanTableViews();
+        }
+    }
 
     private static ConcurrentHashMap<String, CompletableFuture<Optional<String>>> getOwnerRequests(
             ServiceUnitStateChannel channel) throws IllegalAccessException {
