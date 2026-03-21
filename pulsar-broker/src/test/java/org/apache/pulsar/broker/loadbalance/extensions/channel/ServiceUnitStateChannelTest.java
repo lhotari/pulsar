@@ -2026,25 +2026,43 @@ public class ServiceUnitStateChannelTest extends MockedPulsarServiceBaseTest {
         // inFlightStateWaitingTimeInMillis (default 30s). The fix is verified by asserting
         // that Owned state appears within 15s — shorter than the 30s monitor threshold —
         // which proves handleExisting() drove the resolution, not the ownership monitor.
-        var handleExistingMethod = ServiceUnitStateChannelImpl.class
-                .getDeclaredMethod("handleExisting", String.class, ServiceUnitStateData.class);
-        handleExistingMethod.setAccessible(true);
 
         // Case 1: Assigning targeting brokerId1 with no source broker
         //         (fresh assignment after a Free override when no broker was available)
         String assigningBundle1 = "public/test-existing-assigning1/0xfffffff0_0xffffffff";
-        handleExistingMethod.invoke(channel1, assigningBundle1,
-                new ServiceUnitStateData(Assigning, brokerId1, null, 1));
+        var assigningData1 = new ServiceUnitStateData(Assigning, brokerId1, null, 1);
 
         // Case 2: Assigning targeting brokerId1 with a source broker
         //         (transfer interrupted mid-flight by broker restart)
         String assigningBundle2 = "public/test-existing-assigning2/0xfffffff0_0xffffffff";
-        handleExistingMethod.invoke(channel1, assigningBundle2,
-                new ServiceUnitStateData(Assigning, brokerId1, brokerId2, 1));
+        var assigningData2 = new ServiceUnitStateData(Assigning, brokerId1, brokerId2, 1);
+
+        // Pre-populate the Assigning states in the tableview while channels are disabled.
+        // This is required for the metadata store implementation: the conflict resolver
+        // checks that the existing versionId == (new versionId - 1), so Owned(v=2) is
+        // only accepted when Assigning(v=1) is already stored. Without pre-population,
+        // shouldKeepLeft(null, Owned(v=2)) returns true (conflict) and the put is silently
+        // dropped, leaving the bundle stuck in the Init state.
+        try {
+            disableChannels();
+            overrideTableViews(assigningBundle1, assigningData1);
+            overrideTableViews(assigningBundle2, assigningData2);
+        } finally {
+            enableChannels();
+        }
+
+        var handleExistingMethod = ServiceUnitStateChannelImpl.class
+                .getDeclaredMethod("handleExisting", String.class, ServiceUnitStateData.class);
+        handleExistingMethod.setAccessible(true);
+
+        // Simulate restart: handleExisting() is called by ServiceUnitStateTableView.start() for
+        // each entry present in the tableview snapshot when the channel starts up.
+        handleExistingMethod.invoke(channel1, assigningBundle1, assigningData1);
+        handleExistingMethod.invoke(channel1, assigningBundle2, assigningData2);
 
         try {
             // Both bundles must reach Owned state within 15s (< inFlightStateWaitingTimeInMillis 30s).
-            // Without the fix, the tableview state would remain null/Init until the monitor runs at ~30s.
+            // Without the fix, the tableview state would remain Assigning until the monitor runs at ~30s.
             Awaitility.await().atMost(15, TimeUnit.SECONDS).pollInterval(200, TimeUnit.MILLISECONDS)
                     .untilAsserted(() -> {
                         assertEquals(Owned, state(getTableView(channel1).get(assigningBundle1)));
