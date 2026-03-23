@@ -322,9 +322,15 @@ public abstract class OneWayReplicatorTestBase extends TestRetrySupport {
             admin1.namespaces().deleteNamespace(sourceClusterAlwaysSchemaCompatibleNamespace, true);
         });
         if (!usingGlobalZK) {
-            admin2.namespaces().deleteNamespace(replicatedNamespace, true);
-            admin2.namespaces().deleteNamespace(nonReplicatedNamespace, true);
-            admin2.namespaces().deleteNamespace(sourceClusterAlwaysSchemaCompatibleNamespace, true);
+            Awaitility.await().atMost(Duration.ofSeconds(30)).ignoreExceptions().untilAsserted(() -> {
+                admin2.namespaces().deleteNamespace(replicatedNamespace, true);
+            });
+            Awaitility.await().atMost(Duration.ofSeconds(30)).ignoreExceptions().untilAsserted(() -> {
+                admin2.namespaces().deleteNamespace(nonReplicatedNamespace, true);
+            });
+            Awaitility.await().atMost(Duration.ofSeconds(30)).ignoreExceptions().untilAsserted(() -> {
+                admin2.namespaces().deleteNamespace(sourceClusterAlwaysSchemaCompatibleNamespace, true);
+            });
         }
     }
 
