@@ -21,6 +21,7 @@ package org.apache.pulsar.client.impl.crypto;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
+import io.netty.util.concurrent.FastThreadLocal;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
@@ -94,11 +95,8 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
     public static final String AESGCM = "AES/GCM/NoPadding";
     private static final String AESGCM_PROVIDER_NAME;
 
-    private static KeyGenerator keyGenerator;
     private static final int tagLen = 16 * 8;
     private byte[] iv = new byte[IV_LEN];
-    private Cipher cipher;
-    MessageDigest digest;
     private String logCtx;
 
     // Data key which is used to encrypt message
@@ -139,6 +137,40 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
         }
     }
 
+    // Thread-local instances for non-thread-safe JCA classes
+    private static final FastThreadLocal<Cipher> THREAD_LOCAL_CIPHER = new FastThreadLocal<Cipher>() {
+        @Override
+        protected Cipher initialValue() throws Exception {
+            return Cipher.getInstance(AESGCM, AESGCM_PROVIDER_NAME);
+        }
+    };
+
+    // codeql[java/weak-cryptographic-algorithm] - md5 is sufficient for this use case
+    private static final FastThreadLocal<MessageDigest> THREAD_LOCAL_MD5 = new FastThreadLocal<MessageDigest>() {
+        @Override
+        protected MessageDigest initialValue() throws Exception {
+            return MessageDigest.getInstance("MD5");
+        }
+    };
+
+    private static final FastThreadLocal<KeyGenerator> THREAD_LOCAL_KEY_GENERATOR =
+            new FastThreadLocal<KeyGenerator>() {
+        @Override
+        protected KeyGenerator initialValue() throws Exception {
+            KeyGenerator kg = KeyGenerator.getInstance("AES");
+            int aesKeyLength = Cipher.getMaxAllowedKeyLength("AES");
+            if (aesKeyLength <= 128) {
+                log.warn("AES Cryptographic strength is limited to {} bits. "
+                        + "Consider installing JCE Unlimited Strength Jurisdiction Policy Files.",
+                        aesKeyLength);
+                kg.init(aesKeyLength, secureRandom);
+            } else {
+                kg.init(256, secureRandom);
+            }
+            return kg;
+        }
+    };
+
     public MessageCryptoBc(String logCtx, boolean keyGenNeeded) {
 
         this.logCtx = logCtx;
@@ -153,37 +185,14 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
                 });
 
-        try {
-
-            cipher = Cipher.getInstance(AESGCM, AESGCM_PROVIDER_NAME);
-            // If keygen is not needed(e.g: consumer), data key will be decrypted from the message
-            if (!keyGenNeeded) {
-                // codeql[java/weak-cryptographic-algorithm] - md5 is sufficient for this use case
-                digest = MessageDigest.getInstance("MD5");
-
-                dataKey = null;
-                return;
-            }
-            keyGenerator = KeyGenerator.getInstance("AES");
-            int aesKeyLength = Cipher.getMaxAllowedKeyLength("AES");
-            if (aesKeyLength <= 128) {
-                log.warn("{} AES Cryptographic strength is limited to {} bits. "
-                        + "Consider installing JCE Unlimited Strength Jurisdiction Policy Files.",
-                        logCtx, aesKeyLength);
-                keyGenerator.init(aesKeyLength, secureRandom);
-            } else {
-                keyGenerator.init(256, secureRandom);
-            }
-
-        } catch (NoSuchAlgorithmException | NoSuchProviderException | NoSuchPaddingException e) {
-
-            cipher = null;
-            log.error("{} MessageCrypto initialization Failed {}", logCtx, e.getMessage());
-
+        // If keygen is not needed(e.g: consumer), data key will be decrypted from the message
+        if (!keyGenNeeded) {
+            dataKey = null;
+            return;
         }
 
         // Generate data key to encrypt messages
-        dataKey = keyGenerator.generateKey();
+        dataKey = THREAD_LOCAL_KEY_GENERATOR.get().generateKey();
 
         iv = new byte[IV_LEN];
 
@@ -310,7 +319,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
             throws CryptoException {
 
         // Generate data key
-        dataKey = keyGenerator.generateKey();
+        dataKey = THREAD_LOCAL_KEY_GENERATOR.get().generateKey();
 
         for (String key : keyNames) {
             addPublicKeyCipher(key, keyReader);
@@ -457,6 +466,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
         try {
             // Encrypt the data
+            Cipher cipher = THREAD_LOCAL_CIPHER.get();
             cipher.init(Cipher.ENCRYPT_MODE, dataKey, gcmParam);
 
             int maxLength = cipher.getOutputSize(payload.remaining());
@@ -522,7 +532,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
             }
             dataKeyValue = dataKeyCipher.doFinal(encryptedDataKey);
 
-            keyDigest = digest.digest(encryptedDataKey);
+            keyDigest = THREAD_LOCAL_MD5.get().digest(encryptedDataKey);
 
         } catch (Exception e) {
             log.error("{} Failed to decrypt data key {} to decrypt messages {}", logCtx, keyName, e.getMessage());
@@ -541,6 +551,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
         GCMParameterSpec gcmParams = new GCMParameterSpec(tagLen, iv);
         try {
+            Cipher cipher = THREAD_LOCAL_CIPHER.get();
             cipher.init(Cipher.DECRYPT_MODE, dataKeySecret, gcmParams);
 
             int maxLength = cipher.getOutputSize(payload.remaining());
@@ -570,7 +581,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
         for (int i = 0; i < encKeys.size(); i++) {
 
             byte[] msgDataKey = encKeys.get(i).getValue();
-            byte[] keyDigest = digest.digest(msgDataKey);
+            byte[] keyDigest = THREAD_LOCAL_MD5.get().digest(msgDataKey);
             SecretKey storedSecretKey = dataKeyCache.getIfPresent(ByteBuffer.wrap(keyDigest));
             if (storedSecretKey != null) {
 
