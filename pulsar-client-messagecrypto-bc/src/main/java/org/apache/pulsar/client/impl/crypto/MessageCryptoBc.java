@@ -96,7 +96,6 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
     private static final String AESGCM_PROVIDER_NAME;
 
     private static final int tagLen = 16 * 8;
-    private byte[] iv = new byte[IV_LEN];
     private String logCtx;
 
     // Data key which is used to encrypt message
@@ -193,8 +192,6 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
         // Generate data key to encrypt messages
         dataKey = THREAD_LOCAL_KEY_GENERATOR.get().generateKey();
-
-        iv = new byte[IV_LEN];
 
     }
 
@@ -413,7 +410,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
      * @return encryptedData if success
      */
     @Override
-    public synchronized void encrypt(Set<String> encKeys, CryptoKeyReader keyReader,
+    public void encrypt(Set<String> encKeys, CryptoKeyReader keyReader,
                                         Supplier<MessageMetadata> messageMetadataBuilderSupplier,
                                      ByteBuffer payload, ByteBuffer outBuffer) throws PulsarClientException {
 
@@ -458,6 +455,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
         // Create gcm param
         // TODO: Replace random with counter and periodic refreshing based on timer/counter value
+        byte[] iv = new byte[IV_LEN];
         secureRandom.nextBytes(iv);
         GCMParameterSpec gcmParam = new GCMParameterSpec(tagLen, iv);
 
@@ -547,7 +545,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
                                 ByteBuffer payload, ByteBuffer targetBuffer) {
 
         // unpack iv and encrypted data
-        iv =  msgMetadata.getEncryptionParam();
+        byte[] iv = msgMetadata.getEncryptionParam();
 
         GCMParameterSpec gcmParams = new GCMParameterSpec(tagLen, iv);
         try {
