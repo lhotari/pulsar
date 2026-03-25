@@ -144,10 +144,10 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
         }
     };
 
-    // codeql[java/weak-cryptographic-algorithm] - md5 is sufficient for this use case
     private static final FastThreadLocal<MessageDigest> THREAD_LOCAL_MD5 = new FastThreadLocal<MessageDigest>() {
         @Override
         protected MessageDigest initialValue() throws Exception {
+            // codeql[java/weak-cryptographic-algorithm] - md5 is sufficient for this use case
             return MessageDigest.getInstance("MD5");
         }
     };

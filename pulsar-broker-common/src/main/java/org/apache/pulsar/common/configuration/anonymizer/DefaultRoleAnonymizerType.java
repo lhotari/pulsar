@@ -52,10 +52,10 @@ public enum DefaultRoleAnonymizerType {
    },
    MD5 {
       private static final String PREFIX = "MD5:";
-      // codeql[java/weak-cryptographic-algorithm] - md5 is sufficient for this use case
       private static final FastThreadLocal<MessageDigest> DIGEST = new FastThreadLocal<MessageDigest>() {
          @Override
          protected MessageDigest initialValue() throws Exception {
+            // codeql[java/weak-cryptographic-algorithm] - md5 is sufficient for this use case
             return MessageDigest.getInstance("MD5");
          }
       };
