@@ -18,9 +18,8 @@
  */
 package org.apache.pulsar.client.impl.crypto;
 
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.CacheLoader;
-import com.google.common.cache.LoadingCache;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import io.netty.util.concurrent.FastThreadLocal;
 import java.io.IOException;
 import java.io.Reader;
@@ -29,7 +28,6 @@ import java.nio.ByteBuffer;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.KeyFactory;
-import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.PrivateKey;
@@ -38,6 +36,7 @@ import java.security.SecureRandom;
 import java.security.Security;
 import java.security.spec.AlgorithmParameterSpec;
 import java.security.spec.InvalidKeySpecException;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -100,8 +99,9 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
     // Data key which is used to encrypt message
     @Getter
-    private SecretKey dataKey;
-    private LoadingCache<ByteBuffer, SecretKey> dataKeyCache;
+    private volatile SecretKey encryptionKey;
+    private final Cache<SecretKeyCacheKey, SecretKey> decryptionKeyCache;
+    private volatile SecretKey lastUsedDecryptionKey;
 
     // Map of key name and encrypted gcm key, metadata pair which is sent with encrypted message
     private ConcurrentHashMap<String, EncryptionKeyInfo> encryptedDataKeyMap;
@@ -144,14 +144,6 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
         }
     };
 
-    private static final FastThreadLocal<MessageDigest> THREAD_LOCAL_MD5 = new FastThreadLocal<MessageDigest>() {
-        @Override
-        protected MessageDigest initialValue() throws Exception {
-            // codeql[java/weak-cryptographic-algorithm] - md5 is sufficient for this use case
-            return MessageDigest.getInstance("MD5");
-        }
-    };
-
     private static final FastThreadLocal<KeyGenerator> THREAD_LOCAL_KEY_GENERATOR =
             new FastThreadLocal<KeyGenerator>() {
         @Override
@@ -171,28 +163,15 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
     };
 
     public MessageCryptoBc(String logCtx, boolean keyGenNeeded) {
-
         this.logCtx = logCtx;
         encryptedDataKeyMap = new ConcurrentHashMap<String, EncryptionKeyInfo>();
-        dataKeyCache = CacheBuilder.newBuilder().expireAfterAccess(4, TimeUnit.HOURS)
-                .build(new CacheLoader<ByteBuffer, SecretKey>() {
-
-                    @Override
-                    public SecretKey load(ByteBuffer key) {
-                        return null;
-                    }
-
-                });
-
-        // If keygen is not needed(e.g: consumer), data key will be decrypted from the message
-        if (!keyGenNeeded) {
-            dataKey = null;
-            return;
+        decryptionKeyCache = Caffeine.newBuilder()
+                .expireAfterAccess(4, TimeUnit.HOURS)
+                .build();
+        if (keyGenNeeded) {
+            // Generate data key to encrypt messages
+            encryptionKey = THREAD_LOCAL_KEY_GENERATOR.get().generateKey();
         }
-
-        // Generate data key to encrypt messages
-        dataKey = THREAD_LOCAL_KEY_GENERATOR.get().generateKey();
-
     }
 
     public static PublicKey loadPublicKey(byte[] keyBytes) throws Exception {
@@ -316,7 +295,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
             throws CryptoException {
 
         // Generate data key
-        dataKey = THREAD_LOCAL_KEY_GENERATOR.get().generateKey();
+        encryptionKey = THREAD_LOCAL_KEY_GENERATOR.get().generateKey();
 
         for (String key : keyNames) {
             addPublicKeyCipher(key, keyReader);
@@ -363,7 +342,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
             } else {
                 dataKeyCipher.init(Cipher.ENCRYPT_MODE, pubKey);
             }
-            encryptedKey = dataKeyCipher.doFinal(dataKey.getEncoded());
+            encryptedKey = dataKeyCipher.doFinal(encryptionKey.getEncoded());
 
         } catch (IllegalBlockSizeException | BadPaddingException | NoSuchAlgorithmException | NoSuchProviderException
                  | NoSuchPaddingException | InvalidKeyException | InvalidAlgorithmParameterException e) {
@@ -411,8 +390,8 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
      */
     @Override
     public void encrypt(Set<String> encKeys, CryptoKeyReader keyReader,
-                                        Supplier<MessageMetadata> messageMetadataBuilderSupplier,
-                                     ByteBuffer payload, ByteBuffer outBuffer) throws PulsarClientException {
+                        Supplier<MessageMetadata> messageMetadataBuilderSupplier,
+                        ByteBuffer payload, ByteBuffer outBuffer) throws PulsarClientException {
 
         MessageMetadata msgMetadata = messageMetadataBuilderSupplier.get();
 
@@ -465,7 +444,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
         try {
             // Encrypt the data
             Cipher cipher = THREAD_LOCAL_CIPHER.get();
-            cipher.init(Cipher.ENCRYPT_MODE, dataKey, gcmParam);
+            cipher.init(Cipher.ENCRYPT_MODE, encryptionKey, gcmParam);
 
             int maxLength = cipher.getOutputSize(payload.remaining());
             if (outBuffer.remaining() < maxLength) {
@@ -482,7 +461,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
         }
     }
 
-    private boolean decryptDataKey(String keyName, byte[] encryptedDataKey, List<KeyValue> encKeyMeta,
+    private SecretKey tryDecryptDataKey(String keyName, byte[] encryptedDataKey, List<KeyValue> encKeyMeta,
             CryptoKeyReader keyReader) {
 
         Map<String, String> keyMeta = new HashMap<String, String>();
@@ -499,20 +478,17 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
             privateKey = loadPrivateKey(keyInfo.getKey());
             if (privateKey == null) {
                 log.error("{} Failed to load private key {}.", logCtx, keyName);
-                return false;
+                return null;
             }
         } catch (Exception e) {
             log.error("{} Failed to decrypt data key {} to decrypt messages {}", logCtx, keyName, e.getMessage());
-            return false;
+            return null;
         }
 
         // Decrypt data key to decrypt messages
-        Cipher dataKeyCipher = null;
-        byte[] dataKeyValue = null;
-        byte[] keyDigest = null;
-
         try {
             AlgorithmParameterSpec params = null;
+            Cipher dataKeyCipher;
             // Decrypt data key using private key
             if (RSA.equals(privateKey.getAlgorithm())) {
                 dataKeyCipher = Cipher.getInstance(RSA_TRANS, BouncyCastleProvider.PROVIDER_NAME);
@@ -521,24 +497,20 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
                 params = createIESParameterSpec();
             } else {
                 log.error("Unsupported key type {} for key {}.", privateKey.getAlgorithm(), keyName);
-                return false;
+                return null;
             }
             if (params != null) {
                 dataKeyCipher.init(Cipher.DECRYPT_MODE, privateKey, params);
             } else {
                 dataKeyCipher.init(Cipher.DECRYPT_MODE, privateKey);
             }
-            dataKeyValue = dataKeyCipher.doFinal(encryptedDataKey);
-
-            keyDigest = THREAD_LOCAL_MD5.get().digest(encryptedDataKey);
+            byte[] dataKeyValue = dataKeyCipher.doFinal(encryptedDataKey);
+            return new SecretKeySpec(dataKeyValue, "AES");
 
         } catch (Exception e) {
             log.error("{} Failed to decrypt data key {} to decrypt messages {}", logCtx, keyName, e.getMessage());
-            return false;
+            return null;
         }
-        dataKey = new SecretKeySpec(dataKeyValue, "AES");
-        dataKeyCache.put(ByteBuffer.wrap(keyDigest), dataKey);
-        return true;
     }
 
     private boolean decryptData(SecretKey dataKeySecret, MessageMetadata msgMetadata,
@@ -572,34 +544,6 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
         return inputLen + Math.max(inputLen, 512);
     }
 
-    private boolean getKeyAndDecryptData(MessageMetadata msgMetadata, ByteBuffer payload, ByteBuffer targetBuffer) {
-        List<EncryptionKeys> encKeys = msgMetadata.getEncryptionKeysList();
-
-        // Go through all keys to retrieve data key from cache
-        for (int i = 0; i < encKeys.size(); i++) {
-
-            byte[] msgDataKey = encKeys.get(i).getValue();
-            byte[] keyDigest = THREAD_LOCAL_MD5.get().digest(msgDataKey);
-            SecretKey storedSecretKey = dataKeyCache.getIfPresent(ByteBuffer.wrap(keyDigest));
-            if (storedSecretKey != null) {
-
-                // Taking a small performance hit here if the hash collides. When it
-                // returns a different key, decryption fails. At this point, we would
-                // call decryptDataKey to refresh the cache and come here again to decrypt.
-                if (decryptData(storedSecretKey, msgMetadata, payload, targetBuffer)) {
-                    // If decryption succeeded, we can already return
-                    return true;
-                }
-            } else {
-                // First time, entry won't be present in cache
-                log.debug("{} Failed to decrypt data or data key is not in cache. Will attempt to refresh", logCtx);
-            }
-
-        }
-
-        return false;
-    }
-
     /*
      * Decrypt the payload using the data key. Keys used to encrypt data key can be retrieved from msgMetadata
      *
@@ -616,29 +560,70 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
                         ByteBuffer payload, ByteBuffer outBuffer, CryptoKeyReader keyReader) {
 
         MessageMetadata msgMetadata = messageMetadataSupplier.get();
-        // If dataKey is present, attempt to decrypt using the existing key
-        if (dataKey != null) {
-            if (getKeyAndDecryptData(msgMetadata, payload, outBuffer)) {
+
+        // Pass 1: Try last used decryption key
+        SecretKey localLastUsedDecryptionKey = lastUsedDecryptionKey;
+        if (localLastUsedDecryptionKey != null) {
+            if (decryptData(localLastUsedDecryptionKey, msgMetadata, payload, outBuffer)) {
                 return true;
+            } else {
+                lastUsedDecryptionKey = null;
             }
         }
 
-        // dataKey is null or decryption failed. Attempt to regenerate data key
         List<EncryptionKeys> encKeys = msgMetadata.getEncryptionKeysList();
-        EncryptionKeys encKeyInfo = encKeys.stream().filter(kbv -> {
-
-            byte[] encDataKey = kbv.getValue();
-            List<KeyValue> encKeyMeta = kbv.getMetadatasList();
-            return decryptDataKey(kbv.getKey(), encDataKey, encKeyMeta, keyReader);
-
-        }).findFirst().orElse(null);
-
-        if (encKeyInfo == null || dataKey == null) {
-            // Unable to decrypt data key
-            return false;
+        // Pass 2: Try cached keys (fast path — no CryptoKeyReader calls)
+        for (EncryptionKeys encKey : encKeys) {
+            SecretKeyCacheKey cacheKey = new SecretKeyCacheKey(encKey.getValue());
+            SecretKey cachedKey = decryptionKeyCache.getIfPresent(cacheKey);
+            if (cachedKey != null) {
+                if (decryptData(cachedKey, msgMetadata, payload, outBuffer)) {
+                    lastUsedDecryptionKey = cachedKey;
+                    return true;
+                }
+            }
         }
 
-        return getKeyAndDecryptData(msgMetadata, payload, outBuffer);
+        // Pass 3: Decrypt data keys via CryptoKeyReader (slow path)
+        for (EncryptionKeys encKey : encKeys) {
+            SecretKey decryptedKey = tryDecryptDataKey(
+                    encKey.getKey(), encKey.getValue(), encKey.getMetadatasList(), keyReader);
+            if (decryptedKey != null) {
+                SecretKeyCacheKey cacheKey = new SecretKeyCacheKey(encKey.getValue());
+                decryptionKeyCache.put(cacheKey, decryptedKey);
+                if (decryptData(decryptedKey, msgMetadata, payload, outBuffer)) {
+                    return true;
+                }
+            }
+        }
 
+        return false;
+    }
+
+    // key to be used in the cache
+    private static final class SecretKeyCacheKey {
+        private final byte[] encryptedKeyBytes;
+        private final int hashCode;
+
+        SecretKeyCacheKey(byte[] encryptedKeyBytes) {
+            this.encryptedKeyBytes = encryptedKeyBytes.clone();
+            this.hashCode = Arrays.hashCode(this.encryptedKeyBytes);
+        }
+
+        @Override
+        public int hashCode() {
+            return hashCode;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof SecretKeyCacheKey)) {
+                return false;
+            }
+            return Arrays.equals(encryptedKeyBytes, ((SecretKeyCacheKey) o).encryptedKeyBytes);
+        }
     }
 }
