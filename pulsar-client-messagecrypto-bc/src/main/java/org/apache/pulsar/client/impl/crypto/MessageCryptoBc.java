@@ -592,6 +592,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
                 SecretKeyCacheKey cacheKey = new SecretKeyCacheKey(encKey.getValue());
                 decryptionKeyCache.put(cacheKey, decryptedKey);
                 if (decryptData(decryptedKey, msgMetadata, payload, outBuffer)) {
+                    lastUsedDecryptionKey = decryptedKey;
                     return true;
                 }
             }
