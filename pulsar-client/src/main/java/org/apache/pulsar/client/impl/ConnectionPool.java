@@ -364,8 +364,8 @@ public class ConnectionPool implements AutoCloseable {
                     inetAddresses -> connectToResolvedAddresses(
                             logicalAddress,
                             unresolvedPhysicalAddress,
-                            inetAddresses.iterator(),
-                            isSniProxy ? unresolvedPhysicalAddress : null)
+                            inetAddresses.iterator()
+                    )
             );
         } catch (URISyntaxException e) {
             log.error("Invalid Proxy url {}", clientConfig.getProxyServiceUrl(), e);
@@ -380,18 +380,17 @@ public class ConnectionPool implements AutoCloseable {
      */
     private CompletableFuture<Channel> connectToResolvedAddresses(InetSocketAddress logicalAddress,
                                                                   InetSocketAddress unresolvedPhysicalAddress,
-                                                                  Iterator<InetSocketAddress> resolvedPhysicalAddress,
-                                                                  InetSocketAddress sniHost) {
+                                                                  Iterator<InetSocketAddress> resolvedPhysicalAddress) {
         CompletableFuture<Channel> future = new CompletableFuture<>();
 
         // Successfully connected to server
-        connectToAddress(logicalAddress, resolvedPhysicalAddress.next(), unresolvedPhysicalAddress, sniHost)
+        connectToAddress(logicalAddress, resolvedPhysicalAddress.next(), unresolvedPhysicalAddress)
                 .thenAccept(future::complete)
                 .exceptionally(exception -> {
                     if (resolvedPhysicalAddress.hasNext()) {
                         // Try next IP address
                         connectToResolvedAddresses(logicalAddress, unresolvedPhysicalAddress,
-                                resolvedPhysicalAddress, sniHost)
+                                resolvedPhysicalAddress)
                                 .thenAccept(future::complete)
                                 .exceptionally(ex -> {
                                     // This is already unwinding the recursive call
@@ -425,12 +424,11 @@ public class ConnectionPool implements AutoCloseable {
      */
     private CompletableFuture<Channel> connectToAddress(InetSocketAddress logicalAddress,
                                                         InetSocketAddress physicalAddress,
-                                                        InetSocketAddress unresolvedPhysicalAddress,
-                                                        InetSocketAddress sniHost) {
+                                                        InetSocketAddress unresolvedPhysicalAddress) {
         if (clientConfig.isUseTls()) {
             return toCompletableFuture(bootstrap.register())
                     .thenCompose(channel -> channelInitializerHandler
-                            .initTls(channel, sniHost != null ? sniHost : physicalAddress))
+                            .initTls(channel, unresolvedPhysicalAddress))
                     .thenCompose(channelInitializerHandler::initSocks5IfConfig)
                     .thenCompose(ch ->
                             channelInitializerHandler.initializeClientCnx(ch, logicalAddress,

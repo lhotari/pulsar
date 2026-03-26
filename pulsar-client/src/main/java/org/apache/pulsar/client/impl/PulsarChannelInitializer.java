@@ -118,7 +118,8 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         CompletableFuture<Channel> initTlsFuture = new CompletableFuture<>();
         ch.eventLoop().execute(() -> {
             try {
-                PulsarSslFactory pulsarSslFactory = pulsarSslFactoryMap.computeIfAbsent(sniHost.getHostName(), key -> {
+                PulsarSslFactory pulsarSslFactory =
+                        pulsarSslFactoryMap.computeIfAbsent(sniHost.getHostString(), key -> {
                     try {
                         PulsarSslFactory factory = (PulsarSslFactory) Class.forName(conf.getSslFactoryPlugin())
                                 .getConstructor().newInstance();
@@ -136,7 +137,7 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
                     return;
                 }
                 SslHandler handler = new SslHandler(pulsarSslFactory
-                        .createClientSslEngine(ch.alloc(), sniHost.getHostName(), sniHost.getPort()));
+                        .createClientSslEngine(ch.alloc(), sniHost.getHostString(), sniHost.getPort()));
 
                 if (tlsHostnameVerificationEnabled) {
                     SecurityUtility.configureSSLHandler(handler);
