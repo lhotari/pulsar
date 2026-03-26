@@ -162,7 +162,25 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
         }
     };
 
-    public MessageCryptoBc(String logCtx, boolean keyGenNeeded) {
+    private static Cipher getAesGcmCipher() throws CryptoException {
+        try {
+            return THREAD_LOCAL_CIPHER.get();
+        } catch (Exception e) {
+            log.error("Failed to get AES-GCM cipher instance. {}", e.getMessage());
+            throw new PulsarClientException.CryptoException(e.getMessage());
+        }
+    }
+
+    private static KeyGenerator getKeyGenerator() throws CryptoException {
+        try {
+            return THREAD_LOCAL_KEY_GENERATOR.get();
+        } catch (Exception e) {
+            log.error("Failed to get AES key generator instance. {}", e.getMessage());
+            throw new PulsarClientException.CryptoException(e.getMessage());
+        }
+    }
+
+    public MessageCryptoBc(String logCtx, boolean keyGenNeeded) throws CryptoException {
         this.logCtx = logCtx;
         encryptedDataKeyMap = new ConcurrentHashMap<String, EncryptionKeyInfo>();
         decryptionKeyCache = Caffeine.newBuilder()
@@ -170,7 +188,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
                 .build();
         if (keyGenNeeded) {
             // Generate data key to encrypt messages
-            encryptionKey = THREAD_LOCAL_KEY_GENERATOR.get().generateKey();
+            encryptionKey = getKeyGenerator().generateKey();
         }
     }
 
@@ -295,7 +313,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
             throws CryptoException {
 
         // Generate data key
-        encryptionKey = THREAD_LOCAL_KEY_GENERATOR.get().generateKey();
+        encryptionKey = getKeyGenerator().generateKey();
 
         for (String key : keyNames) {
             addPublicKeyCipher(key, keyReader);
@@ -443,7 +461,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
         try {
             // Encrypt the data
-            Cipher cipher = THREAD_LOCAL_CIPHER.get();
+            Cipher cipher = getAesGcmCipher();
             cipher.init(Cipher.ENCRYPT_MODE, encryptionKey, gcmParam);
 
             int maxLength = cipher.getOutputSize(payload.remaining());
@@ -521,7 +539,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
         GCMParameterSpec gcmParams = new GCMParameterSpec(tagLen, iv);
         try {
-            Cipher cipher = THREAD_LOCAL_CIPHER.get();
+            Cipher cipher = getAesGcmCipher();
             cipher.init(Cipher.DECRYPT_MODE, dataKeySecret, gcmParams);
 
             int maxLength = cipher.getOutputSize(payload.remaining());

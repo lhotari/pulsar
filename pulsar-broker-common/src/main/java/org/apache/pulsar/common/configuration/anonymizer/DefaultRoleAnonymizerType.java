@@ -46,8 +46,12 @@ public enum DefaultRoleAnonymizerType {
 
       @Override
       public String anonymize(String role) {
-         byte[] hash = DIGEST.get().digest(role.getBytes());
-         return PREFIX + Base64.getEncoder().encodeToString(hash);
+         try {
+            byte[] hash = DIGEST.get().digest(role.getBytes());
+            return PREFIX + Base64.getEncoder().encodeToString(hash);
+         } catch (Exception e) {
+            throw new RuntimeException("SHA-256 algorithm not found", e);
+         }
       }
    },
    MD5 {
@@ -62,8 +66,12 @@ public enum DefaultRoleAnonymizerType {
 
       @Override
       public String anonymize(String role) {
-         byte[] hash = DIGEST.get().digest(role.getBytes());
-         return PREFIX + Base64.getEncoder().encodeToString(hash);
+         try {
+            byte[] hash = DIGEST.get().digest(role.getBytes());
+            return PREFIX + Base64.getEncoder().encodeToString(hash);
+         } catch (Exception e) {
+            throw new RuntimeException("MD5 algorithm not found", e);
+         }
       }
    };
 
