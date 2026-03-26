@@ -100,7 +100,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
     @Getter
     private volatile SecretKey encryptionKey;
     private final Cache<SecretKeyCacheKey, SecretKeySpec> decryptionKeyCache;
-    private volatile SecretKey lastUsedDecryptionKey;
+    private final Cache<String, SecretKey> lastDecryptionKeyCache;
 
     // Map of key name and encrypted gcm key, metadata pair which is sent with encrypted message
     private final ConcurrentHashMap<String, EncryptionKeyInfo> encryptedDataKeyMap;
@@ -188,7 +188,12 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
                 .expireAfterAccess(4, TimeUnit.HOURS)
                 .weigher((SecretKeyCacheKey key, SecretKeySpec value) -> key.encryptedKeyBytes.length
                         + value.getEncoded().length)
-                .maximumWeight(50 * 1024 * 1024) // 50MB as upperbound
+                .maximumWeight(10 * 1024 * 1024) // 10MB upperbound
+                .build();
+        lastDecryptionKeyCache = Caffeine.newBuilder()
+                .expireAfterAccess(4, TimeUnit.HOURS)
+                .maximumWeight(10 * 1024 * 1024) // 10MB upperbound
+                .weigher((String key, SecretKey value) -> key.length() + value.getEncoded().length)
                 .build();
         if (keyGenNeeded) {
             // Generate data key to encrypt messages
@@ -528,9 +533,12 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
         GCMParameterSpec gcmParams = new GCMParameterSpec(tagLen, iv);
         try {
+            // mark the buffers to allow resetting them in case of decryption failure
+            payload.mark();
+            targetBuffer.mark();
+
             Cipher cipher = getAesGcmCipher();
             cipher.init(Cipher.DECRYPT_MODE, dataKeySecret, gcmParams);
-
             int maxLength = cipher.getOutputSize(payload.remaining());
             if (targetBuffer.remaining() < maxLength) {
                 throw new IllegalArgumentException("Target buffer size is too small");
@@ -539,8 +547,11 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
             targetBuffer.flip();
             targetBuffer.limit(decryptedSize);
             return true;
-
         } catch (Exception e) {
+            // reset the buffers so that decryption can be retried with the same buffers
+            payload.reset();
+            targetBuffer.reset();
+
             log.error("{} Failed to decrypt message {}", logCtx, e.getMessage());
             return false;
         }
@@ -566,14 +577,15 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
     public boolean decrypt(Supplier<MessageMetadata> messageMetadataSupplier,
                         ByteBuffer payload, ByteBuffer outBuffer, CryptoKeyReader keyReader) {
         MessageMetadata msgMetadata = messageMetadataSupplier.get();
+        String producerName = msgMetadata.hasProducerName() ? msgMetadata.getProducerName() : "__not_set__";
 
-        // Pass 1: Try last used decryption key
-        SecretKey localLastUsedDecryptionKey = lastUsedDecryptionKey;
-        if (localLastUsedDecryptionKey != null) {
-            if (decryptData(localLastUsedDecryptionKey, msgMetadata, payload, outBuffer)) {
+        // Pass 1: Try last used decryption key for this producer
+        SecretKey lastKey = lastDecryptionKeyCache.getIfPresent(producerName);
+        if (lastKey != null) {
+            if (decryptData(lastKey, msgMetadata, payload, outBuffer)) {
                 return true;
             } else {
-                lastUsedDecryptionKey = null;
+                lastDecryptionKeyCache.invalidate(producerName);
             }
         }
 
@@ -584,7 +596,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
             SecretKey cachedKey = decryptionKeyCache.getIfPresent(cacheKey);
             if (cachedKey != null) {
                 if (decryptData(cachedKey, msgMetadata, payload, outBuffer)) {
-                    lastUsedDecryptionKey = cachedKey;
+                    lastDecryptionKeyCache.put(producerName, cachedKey);
                     return true;
                 }
             }
@@ -598,7 +610,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
                 SecretKeyCacheKey cacheKey = new SecretKeyCacheKey(encKey.getValue());
                 decryptionKeyCache.put(cacheKey, decryptedKey);
                 if (decryptData(decryptedKey, msgMetadata, payload, outBuffer)) {
-                    lastUsedDecryptionKey = decryptedKey;
+                    lastDecryptionKeyCache.put(producerName, decryptedKey);
                     return true;
                 }
             }
