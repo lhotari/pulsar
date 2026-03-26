@@ -34,6 +34,7 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Security;
+import java.security.interfaces.ECPrivateKey;
 import java.security.spec.AlgorithmParameterSpec;
 import java.security.spec.InvalidKeySpecException;
 import java.util.Arrays;
@@ -69,8 +70,7 @@ import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.asn1.x9.ECNamedCurveTable;
 import org.bouncycastle.asn1.x9.X9ECParameters;
 import org.bouncycastle.cert.X509CertificateHolder;
-import org.bouncycastle.jcajce.provider.asymmetric.ec.BCECPrivateKey;
-import org.bouncycastle.jcajce.provider.asymmetric.ec.BCECPublicKey;
+import org.bouncycastle.jce.interfaces.ECPublicKey;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.jce.spec.ECParameterSpec;
 import org.bouncycastle.jce.spec.ECPrivateKeySpec;
@@ -83,7 +83,6 @@ import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
 
 @Slf4j
 public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMetadata> {
-
     public static final String ECDSA = "ECDSA";
     public static final String RSA = "RSA";
     public static final String ECIES = "ECIES";
@@ -95,27 +94,25 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
     private static final String AESGCM_PROVIDER_NAME;
 
     private static final int tagLen = 16 * 8;
-    private String logCtx;
+    private final String logCtx;
 
     // Data key which is used to encrypt message
     @Getter
     private volatile SecretKey encryptionKey;
-    private final Cache<SecretKeyCacheKey, SecretKey> decryptionKeyCache;
+    private final Cache<SecretKeyCacheKey, SecretKeySpec> decryptionKeyCache;
     private volatile SecretKey lastUsedDecryptionKey;
 
     // Map of key name and encrypted gcm key, metadata pair which is sent with encrypted message
-    private ConcurrentHashMap<String, EncryptionKeyInfo> encryptedDataKeyMap;
-
+    private final ConcurrentHashMap<String, EncryptionKeyInfo> encryptedDataKeyMap;
 
     private static final SecureRandom secureRandom;
     static {
-        SecureRandom rand = null;
+        SecureRandom rand;
         try {
             rand = SecureRandom.getInstance("NativePRNGNonBlocking");
         } catch (NoSuchAlgorithmException nsa) {
             rand = new SecureRandom();
         }
-
         secureRandom = rand;
 
         // Initial seed
@@ -180,41 +177,52 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
         }
     }
 
-    public MessageCryptoBc(String logCtx, boolean keyGenNeeded) throws CryptoException {
+    private static SecretKey generateEncryptionKey() throws CryptoException {
+        return getKeyGenerator().generateKey();
+    }
+
+    public MessageCryptoBc(String logCtx, boolean keyGenNeeded) {
         this.logCtx = logCtx;
         encryptedDataKeyMap = new ConcurrentHashMap<String, EncryptionKeyInfo>();
         decryptionKeyCache = Caffeine.newBuilder()
                 .expireAfterAccess(4, TimeUnit.HOURS)
+                .weigher((SecretKeyCacheKey key, SecretKeySpec value) -> key.encryptedKeyBytes.length
+                        + value.getEncoded().length)
+                .maximumWeight(50 * 1024 * 1024) // 50MB as upperbound
                 .build();
         if (keyGenNeeded) {
             // Generate data key to encrypt messages
-            encryptionKey = getKeyGenerator().generateKey();
+            try {
+                encryptionKey = generateEncryptionKey();
+            } catch (CryptoException e) {
+                // retain same contract as before
+                if (e.getCause() instanceof RuntimeException) {
+                    throw (RuntimeException) e.getCause();
+                } else {
+                    throw new RuntimeException(e.getCause());
+                }
+            }
         }
     }
 
     public static PublicKey loadPublicKey(byte[] keyBytes) throws Exception {
-
         Reader keyReader = new StringReader(new String(keyBytes));
-        PublicKey publicKey = null;
+        PublicKey publicKey;
         try (PEMParser pemReader = new PEMParser(keyReader)) {
             Object pemObj = pemReader.readObject();
             JcaPEMKeyConverter pemConverter = new JcaPEMKeyConverter();
-            SubjectPublicKeyInfo keyInfo = null;
+            SubjectPublicKeyInfo keyInfo;
             X9ECParameters ecParam = null;
 
             if (pemObj instanceof ASN1ObjectIdentifier) {
-
                 // make sure this is EC Parameter we're handling. In which case
                 // we'll store it and read the next object which should be our
                 // EC Public Key
-
                 ASN1ObjectIdentifier ecOID = (ASN1ObjectIdentifier) pemObj;
                 ecParam = ECNamedCurveTable.getByOID(ecOID);
                 if (ecParam == null) {
-                    throw new PEMException("Unable to find EC Parameter for the given curve oid: "
-                            + ((ASN1ObjectIdentifier) pemObj).getId());
+                    throw new PEMException("Unable to find EC Parameter for the given curve oid: " + ecOID.getId());
                 }
-
                 pemObj = pemReader.readObject();
             } else if (pemObj instanceof X9ECParameters) {
                 ecParam = (X9ECParameters) pemObj;
@@ -232,7 +240,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
                 ECParameterSpec ecSpec = new ECParameterSpec(ecParam.getCurve(), ecParam.getG(), ecParam.getN(),
                         ecParam.getH(), ecParam.getSeed());
                 KeyFactory keyFactory = KeyFactory.getInstance(ECDSA, BouncyCastleProvider.PROVIDER_NAME);
-                ECPublicKeySpec keySpec = new ECPublicKeySpec(((BCECPublicKey) publicKey).getQ(), ecSpec);
+                ECPublicKeySpec keySpec = new ECPublicKeySpec(((ECPublicKey) publicKey).getQ(), ecSpec);
                 publicKey = keyFactory.generatePublic(keySpec);
             }
         } catch (IOException | NoSuchAlgorithmException | NoSuchProviderException | InvalidKeySpecException e) {
@@ -241,8 +249,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
         return publicKey;
     }
 
-    private PrivateKey loadPrivateKey(byte[] keyBytes) throws Exception {
-
+    private static PrivateKey loadPrivateKey(byte[] keyBytes) throws Exception {
         Reader keyReader = new StringReader(new String(keyBytes));
         PrivateKey privateKey = null;
         try (PEMParser pemReader = new PEMParser(keyReader)) {
@@ -251,31 +258,24 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
             Object pemObj = pemReader.readObject();
 
             if (pemObj instanceof ASN1ObjectIdentifier) {
-
                 // make sure this is EC Parameter we're handling. In which case
                 // we'll store it and read the next object which should be our
                 // EC Private Key
-
                 ASN1ObjectIdentifier ecOID = (ASN1ObjectIdentifier) pemObj;
                 ecParam = ECNamedCurveTable.getByOID(ecOID);
                 if (ecParam == null) {
                     throw new PEMException("Unable to find EC Parameter for the given curve oid: " + ecOID.getId());
                 }
-
                 pemObj = pemReader.readObject();
-
             } else if (pemObj instanceof X9ECParameters) {
-
                 ecParam = (X9ECParameters) pemObj;
                 pemObj = pemReader.readObject();
             }
 
             if (pemObj instanceof PEMKeyPair) {
-
                 PrivateKeyInfo pKeyInfo = ((PEMKeyPair) pemObj).getPrivateKeyInfo();
                 JcaPEMKeyConverter pemConverter = new JcaPEMKeyConverter();
                 privateKey = pemConverter.getPrivateKey(pKeyInfo);
-
             } else if (pemObj instanceof PrivateKeyInfo) {
                 JcaPEMKeyConverter pemConverter = new JcaPEMKeyConverter();
                 privateKey = pemConverter.getPrivateKey((PrivateKeyInfo) pemObj);
@@ -283,12 +283,11 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
             // if our private key is EC type and we have parameters specified
             // then we need to set it accordingly
-
             if (ecParam != null && ECDSA.equals(privateKey.getAlgorithm())) {
                 ECParameterSpec ecSpec = new ECParameterSpec(ecParam.getCurve(), ecParam.getG(), ecParam.getN(),
                         ecParam.getH(), ecParam.getSeed());
                 KeyFactory keyFactory = KeyFactory.getInstance(ECDSA, BouncyCastleProvider.PROVIDER_NAME);
-                ECPrivateKeySpec keySpec = new ECPrivateKeySpec(((BCECPrivateKey) privateKey).getS(), ecSpec);
+                ECPrivateKeySpec keySpec = new ECPrivateKeySpec(((ECPrivateKey) privateKey).getS(), ecSpec);
                 privateKey = keyFactory.generatePrivate(keySpec);
             }
 
@@ -309,11 +308,9 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
      *
      */
     @Override
-    public synchronized void addPublicKeyCipher(Set<String> keyNames, CryptoKeyReader keyReader)
-            throws CryptoException {
-
-        // Generate data key
-        encryptionKey = getKeyGenerator().generateKey();
+    public void addPublicKeyCipher(Set<String> keyNames, CryptoKeyReader keyReader) throws CryptoException {
+        // Rotate the encryption key each time this method is called
+        encryptionKey = generateEncryptionKey();
 
         for (String key : keyNames) {
             addPublicKeyCipher(key, keyReader);
@@ -321,7 +318,6 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
     }
 
     private void addPublicKeyCipher(String keyName, CryptoKeyReader keyReader) throws CryptoException {
-
         if (keyName == null || keyReader == null) {
             throw new PulsarClientException.CryptoException("Keyname or KeyReader is null");
         }
@@ -339,9 +335,8 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
             throw new PulsarClientException.CryptoException(msg);
         }
 
-        Cipher dataKeyCipher = null;
+        Cipher dataKeyCipher;
         byte[] encryptedKey;
-
         try {
             AlgorithmParameterSpec params = null;
             // Encrypt data key using public key
@@ -361,7 +356,6 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
                 dataKeyCipher.init(Cipher.ENCRYPT_MODE, pubKey);
             }
             encryptedKey = dataKeyCipher.doFinal(encryptionKey.getEncoded());
-
         } catch (IllegalBlockSizeException | BadPaddingException | NoSuchAlgorithmException | NoSuchProviderException
                  | NoSuchPaddingException | InvalidKeyException | InvalidAlgorithmParameterException e) {
             log.error("{} Failed to encrypt data key {}. {}", logCtx, keyName, e.getMessage());
@@ -387,7 +381,6 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
      */
     @Override
     public boolean removeKeyCipher(String keyName) {
-
         if (keyName == null) {
             return false;
         }
@@ -410,7 +403,6 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
     public void encrypt(Set<String> encKeys, CryptoKeyReader keyReader,
                         Supplier<MessageMetadata> messageMetadataBuilderSupplier,
                         ByteBuffer payload, ByteBuffer outBuffer) throws PulsarClientException {
-
         MessageMetadata msgMetadata = messageMetadataBuilderSupplier.get();
 
         if (encKeys.isEmpty()) {
@@ -447,7 +439,6 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
                 // We should never reach here.
                 log.error("{} Failed to find encrypted Data key for key {}.", logCtx, keyName);
             }
-
         }
 
         // Create gcm param
@@ -479,9 +470,8 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
         }
     }
 
-    private SecretKey tryDecryptDataKey(String keyName, byte[] encryptedDataKey, List<KeyValue> encKeyMeta,
+    private SecretKeySpec tryDecryptDataKey(String keyName, byte[] encryptedDataKey, List<KeyValue> encKeyMeta,
             CryptoKeyReader keyReader) {
-
         Map<String, String> keyMeta = new HashMap<String, String>();
         encKeyMeta.forEach(kv -> {
             keyMeta.put(kv.getKey(), kv.getValue());
@@ -533,7 +523,6 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
     private boolean decryptData(SecretKey dataKeySecret, MessageMetadata msgMetadata,
                                 ByteBuffer payload, ByteBuffer targetBuffer) {
-
         // unpack iv and encrypted data
         byte[] iv = msgMetadata.getEncryptionParam();
 
@@ -576,7 +565,6 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
     @Override
     public boolean decrypt(Supplier<MessageMetadata> messageMetadataSupplier,
                         ByteBuffer payload, ByteBuffer outBuffer, CryptoKeyReader keyReader) {
-
         MessageMetadata msgMetadata = messageMetadataSupplier.get();
 
         // Pass 1: Try last used decryption key
@@ -604,7 +592,7 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
 
         // Pass 3: Decrypt data keys via CryptoKeyReader (slow path)
         for (EncryptionKeys encKey : encKeys) {
-            SecretKey decryptedKey = tryDecryptDataKey(
+            SecretKeySpec decryptedKey = tryDecryptDataKey(
                     encKey.getKey(), encKey.getValue(), encKey.getMetadatasList(), keyReader);
             if (decryptedKey != null) {
                 SecretKeyCacheKey cacheKey = new SecretKeyCacheKey(encKey.getValue());
