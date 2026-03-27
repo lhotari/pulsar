@@ -45,6 +45,38 @@ subprojects {
 // ── Apache RAT (Release Audit Tool) ─────────────────────────────────────────
 // The RAT plugin is applied in the root build.gradle.kts; configure the task here.
 tasks.named("rat").configure {
+    // Print unapproved files to stdout so errors are visible without opening the report file.
+    doLast {
+        val reportDir = this.javaClass.getMethod("getReportDir").invoke(this) as File
+        val xmlReport = File(reportDir, "rat-report.xml")
+        if (xmlReport.exists()) {
+            val unapproved = mutableListOf<String>()
+            // Parse resources that have a <header-type name='?????'/> (unknown/missing license)
+            val blockRegex = Regex(
+                """<resource\s+name='([^']+)'[^>]*>.*?<header-type\s+name='([^']+)'""",
+                RegexOption.DOT_MATCHES_ALL
+            )
+            for (match in blockRegex.findAll(xmlReport.readText())) {
+                val fileName = match.groupValues[1]
+                val headerType = match.groupValues[2]
+                if (headerType.contains("?????") || headerType == "unknown") {
+                    unapproved.add(fileName)
+                }
+            }
+            if (unapproved.isNotEmpty()) {
+                logger.lifecycle("")
+                logger.lifecycle("========================================================================")
+                logger.lifecycle("  RAT: ${unapproved.size} file(s) with unapproved/unknown license:")
+                logger.lifecycle("========================================================================")
+                unapproved.forEach { logger.lifecycle("  !  $it") }
+                logger.lifecycle("========================================================================")
+                logger.lifecycle("  Full report: ${xmlReport.absolutePath}")
+                logger.lifecycle("========================================================================")
+                logger.lifecycle("")
+            }
+        }
+    }
+
     // Use reflection since type-safe accessors aren't available in applied scripts
     val excludesProp = this.javaClass.getMethod("getExcludes").invoke(this)
     @Suppress("UNCHECKED_CAST")
