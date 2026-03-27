@@ -147,6 +147,9 @@ tasks.named("rat").configure {
         "**/test-output/**",
         // Generated LightProto files
         "**/generated-lightproto/**",
+        // Local runtime data
+        "**/data/**",
+        "**/logs/**",
         // Hidden directories (AI tools, etc.)
         ".*/**",
         // Gradle files
@@ -222,6 +225,8 @@ subprojects {
             "**/zk-3.5-test-data/*",
             "**/*_pb2.py",
             "**/*_pb2_grpc.py",
+            "**/data/**",
+            "**/logs/**",
         ).forEach { excludeMethod.invoke(licenseExt, it) }
     }
 }
