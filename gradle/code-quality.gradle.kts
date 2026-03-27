@@ -37,6 +37,7 @@ subprojects {
         // Exclude generated source files (proto, lightproto, etc.)
         exclude { it.file.path.contains("/build/") }
         exclude { it.file.path.contains("/generated-lightproto/") }
+        exclude { it.file.path.contains("/generated-sources/") }
         // Match Maven exclusion: **/proto/*
         exclude("**/proto/*")
     }
@@ -147,6 +148,8 @@ tasks.named("rat").configure {
         "**/test-output/**",
         // Generated LightProto files
         "**/generated-lightproto/**",
+        // Generated source files (e.g. Protobuf, Avro)
+        "**/generated-sources/**",
         // Local runtime data
         "**/data/**",
         "**/logs/**",
@@ -202,6 +205,7 @@ subprojects {
             source = project.files(source).asFileTree.matching {
                 exclude { it.file.path.contains("/build/") }
                 exclude { it.file.path.contains("/generated-lightproto/") }
+                exclude { it.file.path.contains("/generated-sources/") }
             }
         }
 
@@ -222,6 +226,7 @@ subprojects {
             "**/circe/**",
             "**/generated/**",
             "**/generated-lightproto/**",
+            "**/generated-sources/**",
             "**/zk-3.5-test-data/*",
             "**/*_pb2.py",
             "**/*_pb2_grpc.py",
