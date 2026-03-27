@@ -22,8 +22,7 @@
 // so the Maven shade test depends on the shaded JAR, not the original.
 
 dependencies {
-    // Shadow JAR (provides relocated classes like org.apache.pulsar.shade.io.netty)
-    testImplementation(project(path = ":pulsar-client-admin-shaded", configuration = "shadowElements"))
+    testImplementation(project(":pulsar-client-admin-shaded"))
     // API modules and messagecrypto are not bundled in the shaded JAR
     testImplementation(project(":pulsar-client-admin-api"))
     testImplementation(project(":pulsar-client-messagecrypto-bc"))

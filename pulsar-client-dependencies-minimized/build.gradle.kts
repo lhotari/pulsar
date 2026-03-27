@@ -18,7 +18,7 @@
  */
 
 plugins {
-    alias(libs.plugins.shadow)
+    id("pulsar.shadow-conventions")
 }
 
 dependencies {
@@ -26,7 +26,6 @@ dependencies {
 }
 
 tasks.shadowJar {
-    archiveClassifier.set("")
     dependencies {
         include(dependency("it.unimi.dsi:fastutil"))
     }
@@ -179,24 +178,3 @@ tasks.shadowJar {
     }
 }
 
-// Expose the shadow jar as the primary artifact so downstream modules
-// (pulsar-client-shaded, pulsar-client-admin-shaded, pulsar-client-all)
-// get the minimized fastutil classes instead of an empty jar.
-tasks.jar {
-    archiveClassifier.set("original")
-}
-
-configurations {
-    runtimeElements {
-        outgoing {
-            artifacts.clear()
-            artifact(tasks.shadowJar)
-        }
-    }
-    apiElements {
-        outgoing {
-            artifacts.clear()
-            artifact(tasks.shadowJar)
-        }
-    }
-}

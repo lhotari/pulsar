@@ -18,7 +18,7 @@
  */
 
 plugins {
-    alias(libs.plugins.shadow)
+    id("pulsar.shadow-conventions")
 }
 
 dependencies {
@@ -31,7 +31,6 @@ dependencies {
 }
 
 tasks.shadowJar {
-    archiveClassifier.set("")
     // Only merge zookeeper dependency into the shadow jar (matching Maven shade artifactSet).
     // The module's own classes (patched admin replacements) are included by default.
     dependencies {
@@ -39,22 +38,3 @@ tasks.shadowJar {
     }
 }
 
-// Replace the default jar with the shadow jar for downstream consumers
-tasks.jar {
-    archiveClassifier.set("original")
-}
-
-configurations {
-    runtimeElements {
-        outgoing {
-            artifacts.clear()
-            artifact(tasks.shadowJar)
-        }
-    }
-    apiElements {
-        outgoing {
-            artifacts.clear()
-            artifact(tasks.shadowJar)
-        }
-    }
-}

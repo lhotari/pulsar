@@ -18,7 +18,7 @@
  */
 
 plugins {
-    alias(libs.plugins.shadow)
+    id("pulsar.shadow-conventions")
 }
 
 dependencies {
@@ -36,11 +36,6 @@ tasks.shadowJar {
     dependencies {
         include(project(":pulsar-functions:pulsar-functions-api-examples"))
     }
-    mergeServiceFiles()
-}
-
-tasks.named("jar") {
-    enabled = false
 }
 
 tasks.named("assemble") {

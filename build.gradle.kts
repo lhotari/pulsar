@@ -214,20 +214,6 @@ subprojects {
     }
     artifacts.add("testJar", testJar)
 
-    // Shadow JAR modules: expose the shadow JAR as a consumable configuration so other
-    // projects can depend on it via project(path = "...", configuration = "shadowElements")
-    pluginManager.withPlugin("com.gradleup.shadow") {
-        val shadowElements by configurations.creating {
-            isCanBeConsumed = true
-            isCanBeResolved = false
-            attributes {
-                attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_RUNTIME))
-                attribute(Bundling.BUNDLING_ATTRIBUTE, objects.named(Bundling.SHADOWED))
-            }
-        }
-        artifacts.add("shadowElements", tasks.named("shadowJar"))
-    }
-
     // NAR modules should not bundle Pulsar platform dependencies — they are provided
     // at runtime by Pulsar's classloader hierarchy.
     // Note: pulsar-io-common is NOT in java-instance.jar (runtime-all), so it must be

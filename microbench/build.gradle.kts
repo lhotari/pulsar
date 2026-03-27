@@ -18,7 +18,7 @@
  */
 
 plugins {
-    alias(libs.plugins.shadow)
+    id("pulsar.shadow-conventions")
 }
 
 dependencies {

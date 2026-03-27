@@ -18,7 +18,7 @@
  */
 
 plugins {
-    alias(libs.plugins.shadow)
+    id("pulsar.shadow-conventions")
 }
 
 // Pin guava to 32.x for jclouds compatibility — jclouds uses TypeToken from
@@ -47,9 +47,6 @@ dependencies {
 }
 
 tasks.shadowJar {
-    archiveClassifier.set("")
-    mergeServiceFiles()
-
     dependencies {
         include(dependency("com.google.guava:guava"))
         include(dependency("com.google.guava:failureaccess"))
@@ -81,25 +78,3 @@ tasks.shadowJar {
     // API (e.g. credentialsSupplier expects com.google.common.base.Supplier).
 }
 
-// Replace the default jar with the shadow jar for downstream consumers
-tasks.jar {
-    archiveClassifier.set("original")
-}
-
-// Replace the default jar artifact with the shadow jar for downstream consumers.
-// Consumers should use isTransitive=false to avoid pulling in guava/jclouds
-// separately (they're bundled in the shadow jar with guava 32.x).
-configurations {
-    runtimeElements {
-        outgoing {
-            artifacts.clear()
-            artifact(tasks.shadowJar)
-        }
-    }
-    apiElements {
-        outgoing {
-            artifacts.clear()
-            artifact(tasks.shadowJar)
-        }
-    }
-}
