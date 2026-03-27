@@ -89,6 +89,7 @@ docker.debug-info
 
 # Gradle
 .gradle/
+.kotlin/
 build/
 
 # Avro

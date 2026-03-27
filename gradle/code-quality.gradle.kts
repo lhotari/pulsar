@@ -155,10 +155,11 @@ tasks.named("rat").configure {
         "**/logs/**",
         // Hidden directories (AI tools, etc.)
         ".*/**",
-        // Gradle files
+        // Gradle/Kotlin files
         ".gradle/**",
         "gradle/wrapper/**",
         "**/.gradle/**",
+        "**/.kotlin/**",
         "**/gradle/wrapper/**",
         "gradlew",
         "gradlew.bat",
@@ -232,6 +233,7 @@ subprojects {
             "**/*_pb2_grpc.py",
             "**/data/**",
             "**/logs/**",
+            "**/.kotlin/**",
         ).forEach { excludeMethod.invoke(licenseExt, it) }
     }
 }
