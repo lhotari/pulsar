@@ -156,6 +156,13 @@ subprojects {
             val excludedTestGroups = providers.gradleProperty("excludedTestGroups").getOrElse("quarantine,flaky")
             excludeGroups(*(excludedTestGroups.split(",").map { it.trim() }.toTypedArray()))
         }
+        testLogging {
+            events("FAILED")
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
+            showStackTraces = true
+            showExceptions = true
+            showCauses = true
+        }
         maxHeapSize = "1300m"
         maxParallelForks = 4
         systemProperty("testRetryCount", System.getProperty("testRetryCount", "1"))
