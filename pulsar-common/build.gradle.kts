@@ -23,6 +23,8 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
 plugins {
+    id("pulsar.java-conventions")
+    id("pulsar.test-certs-conventions")
     alias(libs.plugins.lightproto)
 }
 
@@ -53,8 +55,12 @@ val generatePulsarVersion by tasks.registering {
 
     inputs.file(templateFile)
     inputs.property("version", projectVersion)
-    inputs.property("gitCommitId", gitCommitId)
-    inputs.property("gitDirty", gitDirty)
+    // TODO: Replace git/build metadata with a Gradle configuration cache and build cache
+    // compatible solution. Currently gitCommitId and gitDirty are not declared as inputs
+    // because they cause cascading rebuilds of pulsar-common and all its dependents.
+    // gitCommitId changes on every commit, and gitDirty changes whenever any file is
+    // modified (via `git status --porcelain`). The values are still captured in the output
+    // when the task runs for other reasons (same as buildTime/buildHost).
     outputs.dir(outputDir)
 
     doLast {

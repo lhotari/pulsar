@@ -24,6 +24,9 @@ plugins {
     `java-platform`
 }
 
+group = "org.apache.pulsar"
+version = the<VersionCatalogsExtension>().named("libs").findVersion("pulsar").get().requiredVersion
+
 // Allow declaring constraints on dependencies that also appear as direct dependencies
 javaPlatform {
     allowDependencies()

@@ -74,7 +74,7 @@ jobs:
           languages: ${{ matrix.language }}
 
       - name: Build Java code
-        run: ./gradlew assemble -PcoreModules
+        run: ./gradlew assemble
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3

@@ -17,17 +17,16 @@
  * under the License.
  */
 
-plugins {
-    `kotlin-dsl`
+dependencyResolutionManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+    versionCatalogs {
+        create("libs") {
+            from(files("../gradle/libs.versions.toml"))
+        }
+    }
 }
-
-repositories {
-    gradlePluginPortal()
-    mavenCentral()
-}
-
-dependencies {
-    implementation(libs.plugins.shadow.get().let {
-        "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}"
-    })
-}
+rootProject.name = "build-logic"
+include("conventions")

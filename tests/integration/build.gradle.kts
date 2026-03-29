@@ -17,6 +17,10 @@
  * under the License.
  */
 
+plugins {
+    id("pulsar.java-conventions")
+}
+
 dependencies {
     testImplementation(libs.gson)
     testImplementation(project(":pulsar-functions:pulsar-functions-api-examples"))

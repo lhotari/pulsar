@@ -463,7 +463,7 @@ jobs:
         run: tar xf gradle-build-outputs.tar
 
       - name: Build java-test-image Docker image
-        run: ./gradlew -Pdocker :tests:java-test-image:dockerBuild
+        run: ./gradlew :tests:java-test-image:dockerBuild
 
       - name: Save docker image to file
         run: |
@@ -702,7 +702,7 @@ jobs:
         run: tar xf gradle-build-outputs.tar
 
       - name: Build pulsar-test-latest-version Docker image
-        run: ./gradlew -Pdocker :tests:latest-version-image:dockerBuild
+        run: ./gradlew :tests:latest-version-image:dockerBuild
 
       - name: Check binary licenses
         run: |
@@ -933,7 +933,7 @@ jobs:
           languages: ${{ env.CODEQL_LANGUAGE }}
 
       - name: Build Java code
-        run: ./gradlew assemble -PcoreModules
+        run: ./gradlew assemble
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3

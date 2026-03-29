@@ -17,6 +17,11 @@
  * under the License.
  */
 
+plugins {
+    id("pulsar.java-conventions")
+    id("pulsar.test-certs-conventions")
+}
+
 sourceSets["test"].resources.srcDir(rootProject.layout.projectDirectory.dir("tests"))
 
 // Exclude the non-FIPS BouncyCastle module — this module tests with FIPS provider only.

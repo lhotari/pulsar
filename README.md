@@ -196,12 +196,6 @@ Compile and assemble individual module:
 $ ./gradlew :pulsar-broker:assemble
 ```
 
-### Minimal build (core modules only, skips external connectors and tiered storage handlers)
-
-```bash
-$ ./gradlew assemble -PcoreModules
-```
-
 Run Unit Tests:
 
 ```bash

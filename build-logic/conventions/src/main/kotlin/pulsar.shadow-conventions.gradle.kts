@@ -26,6 +26,10 @@ plugins {
     id("com.gradleup.shadow")
 }
 
+shadow {
+    addShadowVariantIntoJavaComponent.set(false)
+}
+
 tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {
     archiveClassifier.set("")
     mergeServiceFiles()

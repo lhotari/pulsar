@@ -19,7 +19,7 @@
 
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 
-/** Relocate a package under the shade prefix: `"x.y"` → `"$prefix.x.y"` */
+/** Relocate a package under the shade prefix: `"x.y"` -> `"$prefix.x.y"` */
 fun ShadowJar.relocateWithPrefix(prefix: String, pattern: String) {
     relocate(pattern, "$prefix.$pattern")
 }

@@ -18,6 +18,8 @@
  */
 
 plugins {
+    id("pulsar.java-conventions")
+    id("pulsar.test-certs-conventions")
     alias(libs.plugins.protobuf)
     alias(libs.plugins.lightproto)
 }
