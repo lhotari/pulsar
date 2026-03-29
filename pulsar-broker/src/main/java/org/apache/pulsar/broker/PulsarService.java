@@ -364,7 +364,8 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         this.advertisedListeners = MultipleListenerValidator.validateAndAnalysisAdvertisedListener(config);
 
         // the advertised address is defined as the host component of the broker's canonical name.
-        this.advertisedAddress = ServiceConfigurationUtils.getDefaultOrConfiguredAddress(config.getAdvertisedAddress());
+        this.advertisedAddress = ServiceConfigurationUtils.getDefaultOrConfiguredAddress(config.getAdvertisedAddress(),
+                config.isAdvertisedAddressAutoResolvedHostNameAsAbsoluteDnsName());
 
         // use `internalListenerName` listener as `advertisedAddress`
         this.bindAddress = ServiceConfigurationUtils.getDefaultOrConfiguredAddress(config.getBindAddress());
@@ -2085,7 +2086,8 @@ public class PulsarService implements AutoCloseable, ShutdownService {
 
         // worker talks to local broker
         String hostname = ServiceConfigurationUtils.getDefaultOrConfiguredAddress(
-                brokerConfig.getAdvertisedAddress());
+                brokerConfig.getAdvertisedAddress(),
+                brokerConfig.isAdvertisedAddressAutoResolvedHostNameAsAbsoluteDnsName());
         workerConfig.setWorkerHostname(hostname);
         workerConfig.setPulsarFunctionsCluster(brokerConfig.getClusterName());
         // inherit broker authorization setting
