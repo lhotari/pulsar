@@ -17,6 +17,8 @@
  * under the License.
  */
 import com.github.vlsi.gradle.git.dsl.gitignore
+import org.jetbrains.gradle.ext.copyright
+import org.jetbrains.gradle.ext.settings
 
 buildscript {
     // The license plugin pulls in plexus-utils:2.0.6 which conflicts with
@@ -32,6 +34,7 @@ plugins {
     alias(libs.plugins.version.catalog.update)
     alias(libs.plugins.versions)
     alias(libs.plugins.crlf) apply false
+    alias(libs.plugins.idea.ext)
 }
 
 versionCatalogUpdate {
@@ -71,6 +74,24 @@ tasks.named<org.nosphere.apache.rat.RatTask>("rat").configure {
 }
 
 apply(from = "gradle/verify-test-groups.gradle.kts")
+
+
+idea {
+    project {
+        settings {
+            // add ASL2 copyright profile to IntelliJ
+            copyright {
+                useDefault = "ASL2"
+                profiles {
+                    create("ASL2") {
+                        notice = rootProject.file("src/license-header.txt").readText().trimEnd()
+                        keyword = "Copyright"
+                    }
+                }
+            }
+        }
+    }
+}
 
 // ── Root lifecycle tasks ────────────────────────────────────────────────────
 
