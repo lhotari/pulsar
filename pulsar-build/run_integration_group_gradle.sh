@@ -135,18 +135,7 @@ test_group_pulsar_io_ora() {
   gradle_integration_test -PintegrationTestSuiteFile=pulsar-io-ora-source.xml -PtestGroups=source -PtestRetryCount=0 "$@"
 }
 
-# Shade tests are handled differently — they test the shaded JARs
-test_group_shade_build() {
-  echo "::group::Build shaded JARs"
-  ./gradlew --no-configuration-cache \
-    :pulsar-client-shaded:shadowJar \
-    :pulsar-client-admin-shaded:shadowJar \
-    :pulsar-client-all:shadowJar
-  echo "::endgroup::"
-}
-
 test_group_shade_run() {
-  local runtime_jdk="${RUNTIME_JDK:-}"
   echo "::group::Run shade tests"
   ./gradlew --no-configuration-cache \
     :tests:pulsar-client-shade-test:test \
