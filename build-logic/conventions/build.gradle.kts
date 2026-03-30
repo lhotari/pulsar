@@ -25,7 +25,7 @@ dependencies {
     implementation(libs.plugins.shadow.get().let {
         "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}"
     })
-    implementation(libs.plugins.license.get().let {
+    implementation(libs.plugins.spotless.get().let {
         "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}"
     })
     implementation(libs.plugins.nar.get().let {

@@ -186,7 +186,7 @@ jobs:
         # --no-configuration-cache: Shadow plugin's filesMatching { filter { } } lambdas
         # capture Gradle script references that can't be serialized by the configuration cache.
         run: >-
-          ./gradlew assemble rat licenseMain licenseTest checkstyleMain checkstyleTest
+          ./gradlew assemble rat spotlessCheck checkstyleMain checkstyleTest
           --no-configuration-cache
 
       - name: Check binary licenses
