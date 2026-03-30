@@ -218,10 +218,12 @@ shadow = "9.4.1"
 
 [libraries]
 # SLF4J
+slf4j-bom = { module = "org.slf4j:slf4j-bom", version.ref = "slf4j" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 jcl-over-slf4j = { module = "org.slf4j:jcl-over-slf4j", version.ref = "slf4j" }
 
 # Log4j2
+log4j-bom = { module = "org.apache.logging.log4j:log4j-bom", version.ref = "log4j2" }
 log4j-api = { module = "org.apache.logging.log4j:log4j-api", version.ref = "log4j2" }
 log4j-core = { module = "org.apache.logging.log4j:log4j-core", version.ref = "log4j2" }
 log4j-web = { module = "org.apache.logging.log4j:log4j-web", version.ref = "log4j2" }
@@ -264,8 +266,10 @@ netty-incubator-transport-native-io-uring = { module = "io.netty.incubator:netty
 netty-reactive-streams = { module = "com.typesafe.netty:netty-reactive-streams", version.ref = "netty-reactive-streams" }
 
 # Protobuf / gRPC
+protobuf-bom = { module = "com.google.protobuf:protobuf-bom", version.ref = "protobuf" }
 protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "protobuf" }
 protobuf-java-util = { module = "com.google.protobuf:protobuf-java-util", version.ref = "protobuf" }
+grpc-bom = { module = "io.grpc:grpc-bom", version.ref = "grpc" }
 grpc-all = { module = "io.grpc:grpc-all", version.ref = "grpc" }
 grpc-netty-shaded = { module = "io.grpc:grpc-netty-shaded", version.ref = "grpc" }
 grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
@@ -307,6 +311,7 @@ curator-recipes = { module = "org.apache.curator:curator-recipes", version.ref =
 conscrypt-openjdk-uber = { module = "org.conscrypt:conscrypt-openjdk-uber", version.ref = "conscrypt" }
 
 # Jetty
+jetty-bom = { module = "org.eclipse.jetty:jetty-bom", version.ref = "jetty" }
 jetty-server = { module = "org.eclipse.jetty:jetty-server", version.ref = "jetty" }
 jetty-util = { module = "org.eclipse.jetty:jetty-util", version.ref = "jetty" }
 jetty-alpn-conscrypt-server = { module = "org.eclipse.jetty:jetty-alpn-conscrypt-server", version.ref = "jetty" }
@@ -332,6 +337,7 @@ jersey-test-framework-core = { module = "org.glassfish.jersey.test-framework:jer
 jersey-test-framework-grizzly2 = { module = "org.glassfish.jersey.test-framework.providers:jersey-test-framework-provider-grizzly2", version.ref = "jersey" }
 
 # Prometheus
+simpleclient-bom = { module = "io.prometheus:simpleclient_bom", version.ref = "prometheus" }
 simpleclient = { module = "io.prometheus:simpleclient", version.ref = "prometheus" }
 simpleclient-hotspot = { module = "io.prometheus:simpleclient_hotspot", version.ref = "prometheus" }
 simpleclient-caffeine = { module = "io.prometheus:simpleclient_caffeine", version.ref = "prometheus" }
@@ -342,6 +348,10 @@ simpleclient-log4j2 = { module = "io.prometheus:simpleclient_log4j2", version.re
 prometheus-jmx-collector = { module = "io.prometheus.jmx:collector", version.ref = "prometheus-jmx" }
 
 # OpenTelemetry
+opentelemetry-bom = { module = "io.opentelemetry:opentelemetry-bom", version.ref = "opentelemetry" }
+opentelemetry-bom-alpha = { module = "io.opentelemetry:opentelemetry-bom-alpha", version.ref = "opentelemetry-alpha" }
+opentelemetry-instrumentation-bom = { module = "io.opentelemetry.instrumentation:opentelemetry-instrumentation-bom", version.ref = "opentelemetry-instrumentation" }
+opentelemetry-instrumentation-bom-alpha = { module = "io.opentelemetry.instrumentation:opentelemetry-instrumentation-bom-alpha", version.ref = "opentelemetry-instrumentation-alpha" }
 opentelemetry-api = { module = "io.opentelemetry:opentelemetry-api", version.ref = "opentelemetry" }
 opentelemetry-api-incubator = { module = "io.opentelemetry:opentelemetry-api-incubator", version.ref = "opentelemetry-alpha" }
 opentelemetry-sdk = { module = "io.opentelemetry:opentelemetry-sdk", version.ref = "opentelemetry" }
@@ -388,8 +398,10 @@ javassist = { module = "org.javassist:javassist", version.ref = "javassist" }
 commons-text = { module = "org.apache.commons:commons-text", version.ref = "commons-text" }
 typetools = { module = "net.jodah:typetools", version.ref = "typetools" }
 perfmark-api = { module = "io.perfmark:perfmark-api", version.ref = "perfmark" }
+okhttp3-bom = { module = "com.squareup.okhttp3:okhttp-bom", version.ref = "okhttp3" }
 okhttp3 = { module = "com.squareup.okhttp3:okhttp-jvm", version.ref = "okhttp3" }
 okhttp3-logging-interceptor = { module = "com.squareup.okhttp3:logging-interceptor", version.ref = "okhttp3" }
+okio-bom = { module = "com.squareup.okio:okio-bom", version.ref = "okio" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 # Transitive dep version pins (enforced by pulsar-dependencies platform)
 google-auth-library-credentials = { module = "com.google.auth:google-auth-library-credentials", version.ref = "google-auth" }
@@ -452,6 +464,7 @@ jsr305 = { module = "com.google.code.findbugs:jsr305", version.ref = "jsr305" }
 
 # Test
 testng = { module = "org.testng:testng", version.ref = "testng" }
+mockito-bom = { module = "org.mockito:mockito-bom", version.ref = "mockito" }
 mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockito" }
 awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
@@ -472,6 +485,7 @@ spring-jdbc = { module = "org.springframework:spring-jdbc", version.ref = "sprin
 spring-orm = { module = "org.springframework:spring-orm", version.ref = "spring" }
 kubernetes-client-java = { module = "io.kubernetes:client-java", version.ref = "kubernetesclient" }
 kubernetes-client-java-api-fluent = { module = "io.kubernetes:client-java-api-fluent", version.ref = "kubernetesclient" }
+testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
 testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
 testcontainers-elasticsearch = { module = "org.testcontainers:elasticsearch", version.ref = "testcontainers" }
 testcontainers-toxiproxy = { module = "org.testcontainers:toxiproxy", version.ref = "testcontainers" }
@@ -486,8 +500,10 @@ kerby-simplekdc = { module = "org.apache.kerby:kerb-simplekdc", version.ref = "k
 json = { module = "org.json:json", version.ref = "json" }
 
 # AWS SDKs
+aws-java-sdk-bom = { module = "com.amazonaws:aws-java-sdk-bom", version.ref = "aws-sdk" }
 aws-java-sdk-core = { module = "com.amazonaws:aws-java-sdk-core", version.ref = "aws-sdk" }
 aws-java-sdk-sts = { module = "com.amazonaws:aws-java-sdk-sts", version.ref = "aws-sdk" }
+aws-sdk2-bom = { module = "software.amazon.awssdk:bom", version.ref = "aws-sdk2" }
 aws-sdk2-regions = { module = "software.amazon.awssdk:regions", version.ref = "aws-sdk2" }
 aws-sdk2-sts = { module = "software.amazon.awssdk:sts", version.ref = "aws-sdk2" }
 aws-sdk2-utils = { module = "software.amazon.awssdk:utils", version.ref = "aws-sdk2" }

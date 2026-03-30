@@ -40,7 +40,8 @@ dependencies {
     catalog.libraryAliases.forEach { alias ->
         catalog.findLibrary(alias).ifPresent { provider ->
             val module = provider.get().module
-            if (module.name.endsWith("-bom")) {
+            if (module.name.endsWith("-bom") || module.name.endsWith("_bom") || module.name == "bom"
+                    || module.name.contains("-bom-") || module.name.contains("_bom_")) {
                 api(enforcedPlatform(provider))
             } else {
                 constraints.api(provider)
