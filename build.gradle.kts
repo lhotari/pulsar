@@ -52,12 +52,8 @@ val catalog = the<VersionCatalogsExtension>().named("libs")
 val pulsarVersion = catalog.findVersion("pulsar").get().requiredVersion
 
 // ── Apache RAT (Release Audit Tool) ─────────────────────────────────────────
-tasks.named("rat").configure {
-    // Use reflection since type-safe accessors aren't available for applied plugins
-    val excludesProp = this.javaClass.getMethod("getExcludes").invoke(this)
-    @Suppress("UNCHECKED_CAST")
-    val excludes = excludesProp as MutableCollection<String>
-    excludes.addAll(listOf(
+tasks.named<org.nosphere.apache.rat.RatTask>("rat").configure {
+    exclude(
         // License files
         "licenses/LICENSE-*.txt",
         "src/assemble/README.bin.txt",
@@ -171,7 +167,7 @@ tasks.named("rat").configure {
         "gradlew",
         "gradlew.bat",
         "gradle/libs.versions.toml",
-    ))
+    )
 }
 
 apply(from = "gradle/verify-test-groups.gradle.kts")
