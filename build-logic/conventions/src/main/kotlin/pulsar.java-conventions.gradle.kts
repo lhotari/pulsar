@@ -199,3 +199,6 @@ tasks.withType<Jar>().configureEach {
         )
     }
 }
+
+// Add a task for viewing all configurations for all projects in a simple way
+tasks.register<DependencyReportTask>("allDependencies"){}
