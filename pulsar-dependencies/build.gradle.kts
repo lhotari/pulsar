@@ -33,14 +33,17 @@ javaPlatform {
 }
 
 dependencies {
-    constraints {
-        // Iterate over all library declarations in the version catalog and add them as constraints.
-        // This ensures that any transitive dependency matching a catalog entry gets pinned to
-        // the version we specify, regardless of what version a transitive dependency requests.
-        val catalog = project.extensions.getByType<VersionCatalogsExtension>().named("libs")
-        catalog.libraryAliases.forEach { alias ->
-            catalog.findLibrary(alias).ifPresent { provider ->
-                api(provider)
+    val catalog = project.extensions.getByType<VersionCatalogsExtension>().named("libs")
+    // Iterate over all library declarations in the version catalog and add them as constraints.
+    // This ensures that any transitive dependency matching a catalog entry gets pinned to
+    // the version we specify, regardless of what version a transitive dependency requests.
+    catalog.libraryAliases.forEach { alias ->
+        catalog.findLibrary(alias).ifPresent { provider ->
+            val module = provider.get().module
+            if (module.name.endsWith("-bom")) {
+                api(enforcedPlatform(provider))
+            } else {
+                constraints.api(provider)
             }
         }
     }
