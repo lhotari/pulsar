@@ -1806,6 +1806,7 @@ public abstract class PulsarFunctionsTest extends PulsarFunctionsTestBase {
         try (PulsarAdmin admin = PulsarAdmin.builder().serviceHttpUrl(pulsarCluster.getHttpServiceUrl()).build()) {
             admin.topics().createNonPartitionedTopic(inputTopicName);
             admin.topics().createNonPartitionedTopic(logTopicName);
+            admin.topics().createSubscription(logTopicName, "test-sub", MessageId.earliest);
         }
 
         String functionName = "test-logging-fn-" + randomName(8);
