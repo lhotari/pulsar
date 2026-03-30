@@ -22,15 +22,15 @@
 // By adding it as a source set resource (under "certificate-authority/"), Gradle's
 // processTestResources handles the copy and all downstream tasks see it automatically.
 
-the<SourceSetContainer>()["test"].resources {
-    srcDir(rootProject.file("tests").absolutePath)
-    // Only include the certificate-authority directory; exclude subproject directories
-    // (integration, docker-images, etc.) that would cause implicit dependency conflicts.
-    include("certificate-authority/**")
-}
-
 // Some modules already have certificate-authority files in their own test resources,
 // creating duplicates with the shared directory above.
 tasks.named<ProcessResources>("processTestResources") {
     duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    // Add only the certificate-authority directory from the shared tests/ folder.
+    // This is done via from() instead of srcDir() + include() because an include()
+    // on the source set would filter ALL test resource directories, not just this one,
+    // causing files in src/test/resources (e.g. .htpasswd) to be excluded.
+    from(rootProject.file("tests")) {
+        include("certificate-authority/**")
+    }
 }
