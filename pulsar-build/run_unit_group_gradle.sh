@@ -142,7 +142,7 @@ function test_group_other() {
     -x :pulsar-io:pulsar-io-batch-discovery-triggerers:test \
     -x :tests:pulsar-client-admin-shade-test:test \
     -x :tests:pulsar-client-all-shade-test:test \
-    -x :tests:pulsar-client-shade-test:test
+    -x :tests:pulsar-client-shade-test:test \
     test
 
   # Run DnsResolverTest separately since it relies on static field values
