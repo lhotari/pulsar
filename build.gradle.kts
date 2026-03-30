@@ -35,6 +35,7 @@ plugins {
     alias(libs.plugins.versions)
     alias(libs.plugins.crlf) apply false
     alias(libs.plugins.idea.ext)
+    alias(libs.plugins.spotless) apply false // workaround for https://github.com/diffplug/spotless/issues/2877
 }
 
 versionCatalogUpdate {
