@@ -34,8 +34,7 @@ public class TopicBundleAssignmentStrategyTest {
     @Test
     public void testStrategyFactory() {
         ServiceConfiguration conf = new ServiceConfiguration();
-        conf.setTopicBundleAssignmentStrategy(
-                "org.apache.pulsar.common.naming.TopicBundleAssignmentStrategyTest$TestStrategy");
+        conf.setTopicBundleAssignmentStrategy(TestStrategy.class.getName());
         PulsarService pulsarService = mock(PulsarService.class);
         doReturn(conf).when(pulsarService).getConfiguration();
         TopicBundleAssignmentStrategy strategy = TopicBundleAssignmentFactory.create(pulsarService);
@@ -56,7 +55,7 @@ public class TopicBundleAssignmentStrategyTest {
 
         @Override
         public void init(PulsarService pulsarService) {
-            
+
         }
     }
 }
