@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import com.github.vlsi.gradle.git.dsl.gitignore
 
 buildscript {
     // The license plugin pulls in plexus-utils:2.0.6 which conflicts with
@@ -30,6 +31,7 @@ plugins {
     alias(libs.plugins.rat)
     alias(libs.plugins.version.catalog.update)
     alias(libs.plugins.versions)
+    alias(libs.plugins.crlf) apply false
 }
 
 versionCatalogUpdate {
@@ -53,121 +55,19 @@ val pulsarVersion = catalog.findVersion("pulsar").get().requiredVersion
 
 // ── Apache RAT (Release Audit Tool) ─────────────────────────────────────────
 tasks.named<org.nosphere.apache.rat.RatTask>("rat").configure {
-    exclude(
-        // License files
-        "licenses/LICENSE-*.txt",
-        "src/assemble/README.bin.txt",
-        "src/assemble/LICENSE.bin.txt",
-        "src/assemble/NOTICE.bin.txt",
-        // Services files
-        "**/META-INF/services/*",
-        // Generated Protobuf files
-        "src/main/java/org/apache/bookkeeper/mledger/proto/MLDataFormats.java",
-        "src/main/java/org/apache/pulsar/broker/service/schema/proto/SchemaRegistryFormat.java",
-        "bin/proto/MLDataFormats_pb2.py",
-        // Generated Avro files
-        "**/avro/generated/*.java",
-        "**/*.avsc",
-        // Generated Flatbuffer files (Kinesis)
-        "**/org/apache/pulsar/io/kinesis/fbs/*.java",
-        // Imported from Netty
-        "src/main/java/org/apache/bookkeeper/mledger/util/AbstractCASReferenceCounted.java",
-        // Maven build artifacts
-        "**/dependency-reduced-pom.xml",
-        // HdrHistogram output files
-        "**/*.hgrm",
-        // ProGuard/R8 rules
-        "**/*.pro",
-        // Go module configs
-        "pulsar-client-go/go.mod",
-        "pulsar-client-go/go.sum",
-        "pulsar-function-go/go.mod",
-        "pulsar-function-go/go.sum",
-        "pulsar-function-go/examples/go.mod",
-        "pulsar-function-go/examples/go.sum",
-        // HashProvider service file
-        "**/META-INF/services/com.scurrilous.circe.HashProvider",
-        // Django generated code
-        "**/django/stats/migrations/*.py",
-        "**/conf/uwsgi_params",
-        // Certificates and keys
-        "**/*.crt",
-        "**/*.key",
-        "**/*.csr",
-        "**/*.srl",
-        "**/*.txt",
-        "**/*.pem",
-        "**/*.json",
-        "**/*.htpasswd",
-        "**/src/test/resources/athenz.conf.test",
-        "deployment/terraform-ansible/templates/myid",
-        "**/certificate-authority/index.txt",
-        "**/certificate-authority/serial",
-        "**/certificate-authority/README.md",
-        // ZK test data
-        "**/zk-3.5-test-data/*",
-        // Python requirements
-        "**/requirements.txt",
-        // Configuration templates
-        "conf/schema_example.json",
-        "**/templates/*.tpl",
-        // Helm
-        "**/.helmignore",
-        "**/_helpers.tpl",
-        // Project/IDE files
-        "**/*.md",
-        ".github/**",
-        "**/*.nar",
-        "**/.terraform/**",
-        "**/.gitignore",
-        "**/.gitattributes",
-        "**/.svn",
-        "**/*.iws",
-        "**/*.ipr",
-        "**/*.iml",
-        "**/*.cbp",
-        "**/*.pyc",
-        "**/.classpath",
-        "**/.project",
-        "**/.settings",
-        "**/target/**",
-        "**/*.log",
-        "**/build/**",
-        "**/file:/**",
-        "**/SecurityAuth.audit*",
-        "**/site2/**",
-        "**/.idea/**",
-        "**/.vscode/**",
-        "**/.mvn/**",
-        "**/*.a",
-        "**/*.so",
-        "**/*.so.*",
-        "**/*.dylib",
-        "**/*.patch",
-        "src/test/resources/*.txt",
-        "**/*_pb2.py",
-        "**/*_pb2_grpc.py",
-        // Test output (local builds)
-        "**/test-output/**",
-        // Generated LightProto files
-        "**/generated-lightproto/**",
-        // Generated source files (e.g. Protobuf, Avro)
-        "**/generated-sources/**",
-        // Local runtime data
-        "**/data/**",
-        "**/logs/**",
-        // Hidden directories (AI tools, etc.)
-        ".*/**",
-        // Gradle/Kotlin files
-        ".gradle/**",
-        "gradle/wrapper/**",
-        "**/.gradle/**",
-        "**/.kotlin/**",
-        "**/gradle/wrapper/**",
-        "gradlew",
-        "gradlew.bat",
-        "gradle/libs.versions.toml",
-    )
+    // Honour .gitignore exclusions so RAT skips untracked/generated files.
+    // Register .gitignore files as inputs so the task re-runs when they change.
+    inputs.files(fileTree(rootDir) {
+        include("**/.gitignore")
+        exclude("**/build/**")
+        exclude("**/.gradle/**")
+    })
+    // use crlf plugin's gitignore dsl
+    gitignore(rootDir)
+    // Apply additional RAT-specific exclusions from .ratignore.
+    val ratignoreFile = rootDir.resolve(".ratignore")
+    inputs.file(ratignoreFile)
+    exclude(ratignoreFile.readLines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") })
 }
 
 apply(from = "gradle/verify-test-groups.gradle.kts")

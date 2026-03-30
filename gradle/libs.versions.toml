@@ -592,3 +592,4 @@ rat = { id = "org.nosphere.apache.rat", version = "0.8.1" }
 license = { id = "com.github.hierynomus.license", version = "0.16.1" }
 version-catalog-update = { id = "nl.littlerobots.version-catalog-update", version = "1.1.0" }
 versions = { id = "com.github.ben-manes.versions", version = "0.53.0" }
+crlf = { id = "com.github.vlsi.crlf", version = "3.0.1" }
