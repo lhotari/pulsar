@@ -268,7 +268,7 @@ public class JavaInstanceRunnable implements AutoCloseable, Runnable {
         // start the input consumer
         setupInput(contextImpl);
         // start any log topic handler
-        setupLogHandler();
+        setupLogHandler(contextImpl.getLogger());
 
         if (!(object instanceof IdentityFunction) && !(sink instanceof PulsarSink)) {
             sinkSchemaInfoProvider = new SinkSchemaInfoProvider();
@@ -746,7 +746,7 @@ public class JavaInstanceRunnable implements AutoCloseable, Runnable {
         return functionStatusBuilder;
     }
 
-    private void setupLogHandler() {
+    private void setupLogHandler(Logger slfLogger) {
         if (instanceConfig.getFunctionDetails().getLogTopic() != null
                 && !instanceConfig.getFunctionDetails().getLogTopic().isEmpty()) {
             // make sure Crc32cIntChecksum class is loaded before logging starts
@@ -758,6 +758,12 @@ public class JavaInstanceRunnable implements AutoCloseable, Runnable {
             logAppender.start();
             setupLogTopicAppender(LoggerContext.getContext());
             setupLogTopicAppender(LoggerContext.getContext(false));
+            // Also add the appender to the LoggerContext that the SLF4J logger uses.
+            // SLF4J's Log4jLoggerFactory (loaded by the root/parent classloader) may resolve
+            // to a different Log4j2 LoggerContext than LoggerContext.getContext() called from
+            // this class (loaded by the instance classloader). Get the actual Log4j2 Logger
+            // backing the SLF4J Logger and add the appender to its context.
+            addAppenderToSlf4jLogger(slfLogger);
         }
     }
 
@@ -769,6 +775,40 @@ public class JavaInstanceRunnable implements AutoCloseable, Runnable {
         }
         config.getRootLogger().addAppender(logAppender, null, null);
         context.updateLoggers();
+    }
+
+    /**
+     * Extracts the underlying Log4j2 Logger from an SLF4J Logger and adds the log topic appender
+     * to its LoggerContext. This ensures the appender is in the same context as the function logger,
+     * regardless of classloader-based context resolution differences.
+     */
+    private void addAppenderToSlf4jLogger(org.slf4j.Logger slfLogger) {
+        try {
+            // SLF4J's Log4jLogger wraps a Log4j2 ExtendedLogger. Use reflection to access it
+            // since the Log4jLogger class is in the root classloader and may not be directly
+            // accessible from the instance classloader.
+            java.lang.reflect.Field loggerField = null;
+            for (Class<?> cls = slfLogger.getClass(); cls != null; cls = cls.getSuperclass()) {
+                try {
+                    loggerField = cls.getDeclaredField("logger");
+                    break;
+                } catch (NoSuchFieldException ignored) {
+                }
+            }
+            if (loggerField != null) {
+                loggerField.setAccessible(true);
+                Object log4jLogger = loggerField.get(slfLogger);
+                if (log4jLogger instanceof org.apache.logging.log4j.core.Logger) {
+                    org.apache.logging.log4j.core.Logger coreLogger =
+                            (org.apache.logging.log4j.core.Logger) log4jLogger;
+                    LoggerContext slfContext = coreLogger.getContext();
+                    log.info("Adding log topic appender to SLF4J logger's context: {}", slfContext.getName());
+                    setupLogTopicAppender(slfContext);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to add log topic appender to SLF4J logger's context", e);
+        }
     }
 
     private void removeLogTopicAppender(LoggerContext context) {
