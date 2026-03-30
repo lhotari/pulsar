@@ -83,7 +83,6 @@ val generatePulsarVersion by tasks.registering {
 
 sourceSets["main"].java.srcDir(generatePulsarVersion.map { layout.buildDirectory.dir("generated-sources/java-templates").get() })
 
-sourceSets["test"].resources.srcDir(rootProject.layout.projectDirectory.dir("tests"))
 
 dependencies {
     api(project(":pulsar-client-api"))

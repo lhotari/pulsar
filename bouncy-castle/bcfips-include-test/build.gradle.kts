@@ -22,7 +22,6 @@ plugins {
     id("pulsar.test-certs-conventions")
 }
 
-sourceSets["test"].resources.srcDir(rootProject.layout.projectDirectory.dir("tests"))
 
 // Exclude the non-FIPS BouncyCastle module — this module tests with FIPS provider only.
 // Having both bc (bcprov) and bcfips (bc-fips) causes CryptoServicesRegistrar conflicts.
