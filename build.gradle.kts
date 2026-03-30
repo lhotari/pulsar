@@ -187,27 +187,3 @@ tasks.register("docker") {
     group = "docker"
     dependsOn(":docker:pulsar-docker-image:dockerBuild")
 }
-
-// ── Filtered BookKeeper test JAR ────────────────────────────────────────────
-// Filtered bookkeeper-server test-jar that excludes classes conflicting with testmocks
-// (BookKeeperTestClient and TestStatsProvider have Pulsar-specific versions in testmocks).
-// Exposed as a consumable configuration so consuming projects can depend on it via:
-//   testImplementation(project(path = ":", configuration = "filteredBkServerTestJar"))
-val bkServerTestJarResolvable by configurations.creating {
-    isCanBeResolved = true
-    isCanBeConsumed = false
-    isTransitive = false
-}
-dependencies {
-    bkServerTestJarResolvable(libs.bookkeeper.server) { artifact { classifier = "tests" } }
-}
-val filteredBkServerTestJarTask = tasks.register<Jar>("filteredBkServerTestJarTask") {
-    archiveFileName.set("bookkeeper-server-tests-filtered.jar")
-    destinationDirectory.set(layout.buildDirectory.dir("libs"))
-    from(zipTree(bkServerTestJarResolvable.singleFile)) {
-        exclude("org/apache/bookkeeper/client/BookKeeperTestClient*")
-        exclude("org/apache/bookkeeper/client/TestStatsProvider*")
-    }
-}
-configurations.consumable("filteredBkServerTestJar")
-artifacts.add("filteredBkServerTestJar", filteredBkServerTestJarTask)

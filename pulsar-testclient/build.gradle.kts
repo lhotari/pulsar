@@ -42,9 +42,7 @@ dependencies {
     implementation(libs.zookeeper) {
         exclude(group = "org.slf4j")
     }
-    implementation(libs.bookkeeper.server) {
-        exclude(group = "org.slf4j")
-    }
+    implementation(libs.bookkeeper.server)
     implementation(libs.re2j)
     implementation(libs.gson)
     implementation(libs.jetty.client)

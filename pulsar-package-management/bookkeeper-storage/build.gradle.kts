@@ -27,8 +27,6 @@ dependencies {
 
     testImplementation(project(":managed-ledger"))
     testImplementation(project(":testmocks"))
-    testImplementation(libs.bookkeeper.server)
-    testImplementation(project(path = ":", configuration = "filteredBkServerTestJar"))
     testImplementation(libs.zookeeper) { artifact { classifier = "tests" } }
     testRuntimeOnly(libs.dropwizardmetrics.core)
     testRuntimeOnly(libs.snappy.java)

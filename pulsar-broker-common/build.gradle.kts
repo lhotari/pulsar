@@ -26,9 +26,7 @@ dependencies {
     api(project(":pulsar-metadata"))
     implementation(libs.guava)
     implementation(libs.commons.lang3)
-    implementation(libs.bookkeeper.server) {
-        exclude(group = "org.slf4j")
-    }
+    implementation(libs.bookkeeper.server)
     implementation(libs.opentelemetry.api)
     implementation(libs.simpleclient)
     implementation(libs.caffeine)

@@ -23,10 +23,7 @@ plugins {
 
 dependencies {
     api(project(":pulsar-common"))
-    implementation(libs.bookkeeper.server) {
-        exclude(group = "org.slf4j")
-        exclude(group = "org.apache.logging.log4j", module = "log4j-slf4j-impl")
-    }
+    implementation(libs.bookkeeper.server)
     implementation(libs.zookeeper) {
         exclude(group = "org.slf4j")
     }
@@ -39,7 +36,6 @@ dependencies {
     testImplementation(project(":buildtools"))
     testImplementation(project(":testmocks"))
     testImplementation(project(path = ":managed-ledger", configuration = "testJar"))
-    testImplementation(project(path = ":", configuration = "filteredBkServerTestJar"))
     testImplementation(libs.bookkeeper.common) { artifact { classifier = "tests" } }
     testImplementation(libs.zookeeper) { artifact { classifier = "tests" } }
     testImplementation(libs.oxia.testcontainers)

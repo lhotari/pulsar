@@ -35,7 +35,7 @@ import org.apache.commons.lang3.StringUtils;
 /**
  * Simple in-memory stat provider for use in unit tests.
  */
-public class TestStatsProvider implements StatsProvider {
+public class PulsarBookKeeperTestStatsProvider implements StatsProvider {
     /**
      * In-memory counter.
      */
@@ -173,12 +173,12 @@ public class TestStatsProvider implements StatsProvider {
 
         @Override
         public OpStatsLogger getOpStatsLogger(String name) {
-            return TestStatsProvider.this.getOrCreateOpStatsLogger(getSubPath(name));
+            return PulsarBookKeeperTestStatsProvider.this.getOrCreateOpStatsLogger(getSubPath(name));
         }
 
         @Override
         public Counter getCounter(String name) {
-            return TestStatsProvider.this.getOrCreateCounter(getSubPath(name));
+            return PulsarBookKeeperTestStatsProvider.this.getOrCreateCounter(getSubPath(name));
         }
 
         public Gauge<? extends Number> getGauge(String name) {
@@ -187,12 +187,12 @@ public class TestStatsProvider implements StatsProvider {
 
         @Override
         public <T extends Number> void registerGauge(String name, Gauge<T> gauge) {
-            TestStatsProvider.this.registerGauge(getSubPath(name), gauge);
+            PulsarBookKeeperTestStatsProvider.this.registerGauge(getSubPath(name), gauge);
         }
 
         @Override
         public <T extends Number> void unregisterGauge(String name, Gauge<T> gauge) {
-            TestStatsProvider.this.unregisterGauge(getSubPath(name), gauge);
+            PulsarBookKeeperTestStatsProvider.this.unregisterGauge(getSubPath(name), gauge);
         }
 
         @Override

@@ -22,8 +22,9 @@ plugins {
 }
 
 dependencies {
-    implementation(libs.bookkeeper.server) {
-        exclude(group = "org.slf4j")
+    api(libs.bookkeeper.server)
+    api(libs.bookkeeper.server) {
+        artifact { classifier = "tests" }
     }
     implementation(libs.commons.lang3)
     implementation(libs.testng)

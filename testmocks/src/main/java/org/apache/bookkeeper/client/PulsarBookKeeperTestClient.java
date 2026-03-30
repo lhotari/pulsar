@@ -37,10 +37,10 @@ import org.apache.zookeeper.ZooKeeper;
  * wish to expose in the public API.
  */
 @Slf4j
-public class BookKeeperTestClient extends BookKeeper {
-    TestStatsProvider statsProvider;
+public class PulsarBookKeeperTestClient extends BookKeeper {
+    PulsarBookKeeperTestStatsProvider statsProvider;
 
-    public BookKeeperTestClient(ClientConfiguration conf, TestStatsProvider statsProvider)
+    public PulsarBookKeeperTestClient(ClientConfiguration conf, PulsarBookKeeperTestStatsProvider statsProvider)
             throws IOException, InterruptedException, BKException {
         super(conf, null, null, new UnpooledByteBufAllocator(false),
                 statsProvider == null ? NullStatsLogger.INSTANCE : statsProvider.getStatsLogger(""),
@@ -48,15 +48,15 @@ public class BookKeeperTestClient extends BookKeeper {
         this.statsProvider = statsProvider;
     }
 
-    public BookKeeperTestClient(ClientConfiguration conf, ZooKeeper zkc)
+    public PulsarBookKeeperTestClient(ClientConfiguration conf, ZooKeeper zkc)
             throws IOException, InterruptedException, BKException {
         super(conf, zkc, null, new UnpooledByteBufAllocator(false),
                 NullStatsLogger.INSTANCE, null, null, null);
     }
 
-    public BookKeeperTestClient(ClientConfiguration conf)
+    public PulsarBookKeeperTestClient(ClientConfiguration conf)
             throws InterruptedException, BKException, IOException {
-        this(conf, (TestStatsProvider) null);
+        this(conf, (PulsarBookKeeperTestStatsProvider) null);
     }
 
     public ZooKeeper getZkHandle() {
@@ -145,7 +145,7 @@ public class BookKeeperTestClient extends BookKeeper {
         bookieWatcher.initialBlockingBookieRead();
     }
 
-    public TestStatsProvider getTestStatsProvider() {
+    public PulsarBookKeeperTestStatsProvider getTestStatsProvider() {
         return statsProvider;
     }
 }
