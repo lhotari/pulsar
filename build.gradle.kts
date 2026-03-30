@@ -39,6 +39,7 @@ plugins {
 }
 
 versionCatalogUpdate {
+    sortByKey = false
     keep {
         keepUnusedVersions.set(true)
     }
