@@ -991,6 +991,7 @@ public class TestReplicationWorker extends BookKeeperClusterTestCase {
         testRepairedNotAdheringPlacementPolicyLedgerFragments(RackawareEnsemblePlacementPolicy.class, null);
     }
 
+    @SuppressWarnings("deprecation")
     @Test
     public void testReplicationStats() throws Exception {
         BiConsumer<Boolean, ReplicationWorker> checkReplicationStats = (first, rw) -> {
@@ -1033,6 +1034,7 @@ public class TestReplicationWorker extends BookKeeperClusterTestCase {
         testRepairedNotAdheringPlacementPolicyLedgerFragments(
                 RackawareEnsemblePlacementPolicy.class, checkReplicationStats);
     }
+    @SuppressWarnings("deprecation")
 
     private void testRepairedNotAdheringPlacementPolicyLedgerFragments(
             Class<? extends EnsemblePlacementPolicy> placementPolicyClass,

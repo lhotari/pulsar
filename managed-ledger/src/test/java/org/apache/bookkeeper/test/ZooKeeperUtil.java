@@ -170,7 +170,7 @@ public class ZooKeeperUtil implements ZooKeeperCluster {
         for (final Thread t : allthreads) {
             if (t.getName().contains("SyncThread:0")) {
                 Thread sleeper = new Thread() {
-                    @SuppressWarnings("deprecation")
+                    @SuppressWarnings({"deprecation", "removal"})
                     public void run() {
                         try {
                             t.suspend();

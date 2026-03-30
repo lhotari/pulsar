@@ -259,6 +259,7 @@ public class NonPersistentTopicTest extends ProducerConsumerBase {
         log.info("-- Exiting {} test --", methodName);
 
     }
+    @SuppressWarnings("deprecation")
 
     @Test(dataProvider = "subscriptionType")
     public void testPartitionedNonPersistentTopicWithTcpLookup(SubscriptionType type) throws Exception {

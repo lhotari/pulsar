@@ -265,6 +265,7 @@ public class BucketDelayedDeliveryTrackerTest extends AbstractDeliveryTrackerTes
         assertNotSame(array, array2);
     }
 
+    @SuppressWarnings("deprecation")
     @Test(dataProvider = "delayedTracker")
     public void testMergeSnapshot(final BucketDelayedDeliveryTracker tracker) throws Exception {
         for (int i = 1; i <= 110; i++) {
@@ -318,6 +319,7 @@ public class BucketDelayedDeliveryTrackerTest extends AbstractDeliveryTrackerTes
         tracker2.close();
     }
 
+    @SuppressWarnings("deprecation")
     @Test(dataProvider = "delayedTracker")
     public void testWithBkException(final BucketDelayedDeliveryTracker tracker) throws Exception {
         MockBucketSnapshotStorage mockBucketSnapshotStorage = (MockBucketSnapshotStorage) bucketSnapshotStorage;
