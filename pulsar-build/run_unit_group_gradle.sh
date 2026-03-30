@@ -37,9 +37,9 @@ function gradle_test() {
     local failfast_args=""
     local continue_args=""
     if [ $use_fail_fast -eq 1 ]; then
-      failfast_args="-DtestFailFast=true"
+      failfast_args="-PtestFailFast=true"
     else
-      failfast_args="-DtestFailFast=false"
+      failfast_args="-PtestFailFast=false"
       # When fail-fast is off, use --continue so Gradle runs all test tasks
       # even if one module's tests fail (similar to Maven's --fail-at-end).
       continue_args="--continue"

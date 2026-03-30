@@ -143,8 +143,10 @@ tasks.withType<Test>().configureEach {
     }
     maxHeapSize = "1300m"
     maxParallelForks = 4
-    systemProperty("testRetryCount", System.getProperty("testRetryCount", "1"))
-    systemProperty("testFailFast", System.getProperty("testFailFast", "true"))
+    val failFastValue = providers.gradleProperty("testFailFast").getOrElse("true").toBoolean()
+    failFast = failFastValue
+    systemProperty("testRetryCount", providers.gradleProperty("testRetryCount").getOrElse("1"))
+    systemProperty("testFailFast", failFastValue.toString())
     jvmArgs(
         "--add-opens", "java.base/jdk.internal.loader=ALL-UNNAMED",
         "--add-opens", "java.base/java.lang=ALL-UNNAMED",

@@ -35,9 +35,9 @@ function gradle_integration_test() {
   fi
   local failfast_args=""
   if [ $use_fail_fast -eq 1 ]; then
-    failfast_args="-DtestFailFast=true"
+    failfast_args="-PtestFailFast=true"
   else
-    failfast_args="-DtestFailFast=false"
+    failfast_args="-PtestFailFast=false"
   fi
 
   local coverage_args=""
