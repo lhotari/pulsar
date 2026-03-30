@@ -20,10 +20,8 @@ package org.apache.pulsar.common.naming;
 
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
-
 import com.google.common.collect.BoundType;
 import com.google.common.collect.Range;
-
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.testng.Assert;
