@@ -327,13 +327,6 @@ jobs:
         if: ${{ always() }}
         uses: ./.github/actions/copy-test-reports
 
-      - name: Publish Test Report
-        uses: apache/pulsar-test-infra/action-junit-report@master
-        if: ${{ always() }}
-        with:
-          report_paths: 'test-reports/TEST-*.xml'
-          annotate_only: 'true'
-
       - name: Report detected thread leaks
         if: ${{ always() }}
         run: |
@@ -593,13 +586,6 @@ jobs:
         if: ${{ always() }}
         uses: ./.github/actions/copy-test-reports
 
-      - name: Publish Test Report
-        uses: apache/pulsar-test-infra/action-junit-report@master
-        if: ${{ always() }}
-        with:
-          report_paths: 'test-reports/TEST-*.xml'
-          annotate_only: 'true'
-
       - name: Upload test reports
         uses: actions/upload-artifact@v7
         if: ${{ !success() }}
@@ -814,13 +800,6 @@ jobs:
       - name: Aggregate test reports to ./test-reports directory
         if: ${{ always() }}
         uses: ./.github/actions/copy-test-reports
-
-      - name: Publish Test Report
-        uses: apache/pulsar-test-infra/action-junit-report@master
-        if: ${{ always() }}
-        with:
-          report_paths: 'test-reports/TEST-*.xml'
-          annotate_only: 'true'
 
       - name: Upload test reports
         uses: actions/upload-artifact@v7

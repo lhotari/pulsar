@@ -219,13 +219,6 @@ jobs:
         if: ${{ always() }}
         uses: ./.github/actions/copy-test-reports
 
-      - name: Publish Test Report
-        uses: apache/pulsar-test-infra/action-junit-report@master
-        if: ${{ always() }}
-        with:
-          report_paths: 'test-reports/TEST-*.xml'
-          annotate_only: 'true'
-
       - name: Report detected thread leaks
         if: ${{ always() }}
         run: |
