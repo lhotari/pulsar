@@ -28,6 +28,10 @@ val dockerPlatforms = providers.gradleProperty("docker.platforms").getOrElse("")
 val golangImage = providers.gradleProperty("docker.golang.image").getOrElse("golang:1.24-alpine")
 
 // Dependencies: pulsar image, java-test-functions jar, java-test-plugins jar, buildtools jar
+evaluationDependsOn(":docker:pulsar-docker-image")
+evaluationDependsOn(":tests:java-test-functions")
+evaluationDependsOn(":tests:java-test-plugins")
+evaluationDependsOn(":buildtools")
 val pulsarDockerBuild = project(":docker:pulsar-docker-image").tasks.named("dockerBuild")
 val testFunctionsJar = project(":tests:java-test-functions").tasks.named("shadowJar")
 val testPluginsJar = project(":tests:java-test-plugins").tasks.named("jar")

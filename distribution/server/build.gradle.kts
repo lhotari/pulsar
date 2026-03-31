@@ -26,6 +26,9 @@ tasks.named("compileJava") { enabled = false }
 tasks.named("compileTestJava") { enabled = false }
 tasks.named("jar") { enabled = false }
 
+evaluationDependsOn(":pulsar-functions:pulsar-functions-runtime-all")
+evaluationDependsOn(":pulsar-functions:pulsar-functions-api-examples")
+
 val bookkeeperVersion: String = libs.versions.bookkeeper.get()
 val zookeeperVersion: String = libs.versions.zookeeper.get()
 val kotlinStdlibVersion: String = libs.versions.kotlin.stdlib.get()

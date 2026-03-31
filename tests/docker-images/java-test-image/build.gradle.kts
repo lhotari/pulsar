@@ -27,6 +27,9 @@ val dockerTag = providers.gradleProperty("docker.tag").getOrElse("latest")
 val dockerPlatforms = providers.gradleProperty("docker.platforms").getOrElse("")
 
 // Dependencies: base pulsar image, java-test-functions jar, buildtools jar
+evaluationDependsOn(":docker:pulsar-docker-image")
+evaluationDependsOn(":tests:java-test-functions")
+evaluationDependsOn(":buildtools")
 val pulsarDockerBuild = project(":docker:pulsar-docker-image").tasks.named("dockerBuild")
 val testFunctionsJar = project(":tests:java-test-functions").tasks.named("shadowJar")
 val buildtoolsJar = project(":buildtools").tasks.named("jar")

@@ -28,6 +28,8 @@ val dockerTag = providers.gradleProperty("docker.tag").getOrElse("latest")
 val dockerPlatforms = providers.gradleProperty("docker.platforms").getOrElse("")
 val useWolfi = providers.gradleProperty("docker.wolfi").isPresent
 
+evaluationDependsOn(":distribution:pulsar-server-distribution")
+evaluationDependsOn(":distribution:pulsar-offloader-distribution")
 val serverDistTask = project(":distribution:pulsar-server-distribution").tasks.named("serverDistTar")
 val offloaderDistTask = project(":distribution:pulsar-offloader-distribution").tasks.named("offloaderDistTar")
 
