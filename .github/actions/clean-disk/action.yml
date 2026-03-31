@@ -40,6 +40,8 @@ runs:
         CLEAN_THRESHOLD_GB: ${{ inputs.clean-threshold-gb }}
         FULL_CLEAN_THRESHOLD_GB: ${{ inputs.full-clean-threshold-gb }}
       run: |
+        set -x
+        
         if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
           available_gb() {

@@ -25,6 +25,8 @@ runs:
     - shell: bash
       run: |
         if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            set -x
+        
             echo "::group::Configure and tune OS"
             # Ensure that reverse lookups for current hostname are handled properly
             # Add the current IP address, long hostname and short hostname record to /etc/hosts file
