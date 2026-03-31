@@ -197,12 +197,6 @@ dependencies {
 val pulsarVersion = project.version.toString()
 val rootDir = rootProject.projectDir
 
-// Consumable configuration exposing the server distribution tarball
-val serverDistElements by configurations.creating {
-    isCanBeConsumed = true
-    isCanBeResolved = false
-}
-
 val serverDistTar by tasks.registering(Tar::class) {
     archiveBaseName.set("apache-pulsar")
     archiveVersion.set(pulsarVersion)
@@ -343,8 +337,13 @@ val serverDistTar by tasks.registering(Tar::class) {
     }
 }
 
-artifacts {
-    add("serverDistElements", serverDistTar)
+// Consumable configuration exposing the server distribution tarball
+val serverDistElements by configurations.creating {
+    isCanBeConsumed = true
+    isCanBeResolved = false
+    outgoing {
+        artifact(serverDistTar)
+    }
 }
 
 tasks.named("assemble") {

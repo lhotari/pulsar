@@ -51,10 +51,9 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
 val shadowJarElements by configurations.creating {
     isCanBeConsumed = true
     isCanBeResolved = false
-}
-
-artifacts {
-    add("shadowJarElements", tasks.named("shadowJar"))
+    outgoing {
+        artifact(tasks.named("shadowJar"))
+    }
 }
 
 tasks.withType<Test>().configureEach {
