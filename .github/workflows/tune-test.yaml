@@ -41,6 +41,12 @@ jobs:
       - name: Tune Runner VM
         uses: ./.github/actions/tune-runner-vm
 
+      - name: Clean Disk
+        uses: ./.github/actions/clean-disk
+        with:
+          mode: "full"
+          full-clean-threshold-gb: 1
+
       - name: Setup ssh access to build runner VM
         # ssh access is enabled for builds in own forks
         if: ${{ github.repository != 'apache/pulsar' && github.event_name == 'pull_request' }}
