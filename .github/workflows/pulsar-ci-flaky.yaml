@@ -166,7 +166,6 @@ jobs:
     env:
       JOB_NAME: Flaky tests suite
       COLLECT_COVERAGE: "${{ needs.preconditions.outputs.collect_coverage }}"
-      DEVELOCITY_ACCESS_KEY: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
       CI_JDK_MAJOR_VERSION: ${{ needs.preconditions.outputs.jdk_major_version }}
       TRACE_TEST_RESOURCE_CLEANUP: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.trace_test_resource_cleanup || 'off' }}
       TRACE_TEST_RESOURCE_CLEANUP_DIR: ${{ github.workspace }}/target/trace-test-resource-cleanup
@@ -203,11 +202,10 @@ jobs:
           java-version: ${{ env.CI_JDK_MAJOR_VERSION }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@39e147cb9de83bb9910b8ef8bd7fff0ee20fcd6f
+        uses: ./.github/actions/setup-gradle
         with:
+          develocity-access-key: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
           cache-read-only: false
-          develocity-injection-enabled: true
-          develocity-url: https://develocity.apache.org
 
       - name: Run unit test group BROKER_FLAKY
         run: |

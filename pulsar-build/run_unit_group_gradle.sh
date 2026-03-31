@@ -45,9 +45,6 @@ function gradle_test() {
       continue_args="--continue"
     fi
     echo "::group::Run tests for " "$@"
-    # --no-configuration-cache: required because the Shadow plugin's filesMatching { filter { } }
-    # lambdas in shaded JAR builds capture Gradle script references that can't be serialized.
-    # This is a known Shadow plugin limitation tracked upstream.
     ./gradlew --no-configuration-cache $continue_args "$@" $failfast_args "${COMMANDLINE_ARGS[@]}"
     echo "::endgroup::"
     set +x
