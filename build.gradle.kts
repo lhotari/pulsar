@@ -20,15 +20,6 @@ import com.github.vlsi.gradle.git.dsl.gitignore
 import org.jetbrains.gradle.ext.copyright
 import org.jetbrains.gradle.ext.settings
 
-buildscript {
-    // The license plugin pulls in plexus-utils:2.0.6 which conflicts with
-    // the Shadow plugin's plexus-utils:4.0.2 (missing 4-arg matchPath method).
-    // Force the newer version to avoid NoSuchMethodError at shading time.
-    configurations.classpath {
-        resolutionStrategy.force("org.codehaus.plexus:plexus-utils:4.0.2")
-    }
-}
-
 plugins {
     alias(libs.plugins.rat)
     alias(libs.plugins.version.catalog.update)

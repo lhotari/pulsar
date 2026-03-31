@@ -135,6 +135,11 @@ dependencies {
     }
 }
 
+// Ensure parent projects are configured before resolving cross-project task references.
+// Required for --configure-on-demand: the Kotlin DSL needs parent ClassLoaderScopes to be locked.
+evaluationDependsOn(":pulsar-io")
+evaluationDependsOn(":pulsar-functions")
+
 // NAR/JAR files needed by broker tests (mirrors Maven's maven-dependency-plugin config).
 tasks.withType<Test> {
     dependsOn(
