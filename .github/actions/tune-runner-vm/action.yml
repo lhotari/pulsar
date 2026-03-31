@@ -58,17 +58,16 @@ runs:
             for i in /sys/block/sd*/queue/discard_max_bytes; do
               echo 0 | sudo tee $i
             done
-            # disable any background jobs that run SSD discard/trim
-            sudo systemctl disable fstrim.timer || true
-            sudo systemctl stop fstrim.timer || true
-            sudo systemctl stop fstrim.service || true
+            # disable unnecessary timers
+            sudo systemctl stop fstrim.timer fstrim.service \
+              podman-auto-update.timer sysstat-collect.timer sysstat-summary.timer \
+              phpsessionclean.timer man-db.timer motd-news.timer \
+              dpkg-db-backup.timer e2scrub_all.timer \
+              update-notifier-download.timer update-notifier-motd.timer || true
 
-            # stop unnecessary services to save RAM
-            sudo systemctl stop php8.3-fpm.service || true
-            sudo systemctl stop ModemManager.service || true
-            sudo systemctl stop multipathd.service || true
-            sudo systemctl stop udisks2.service || true
-            sudo systemctl stop walinuxagent.service || true
+            # stop unnecessary services
+            sudo systemctl stop php8.3-fpm.service ModemManager.service \
+              multipathd.service udisks2.service walinuxagent.service || true
           
             echo '::endgroup::'
 
