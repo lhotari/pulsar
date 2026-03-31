@@ -45,7 +45,7 @@ jobs:
         uses: ./.github/actions/clean-disk
         with:
           mode: "full"
-          full-clean-threshold-gb: 1
+          full-clean-threshold-gb: 95
 
       - name: Setup ssh access to build runner VM
         # ssh access is enabled for builds in own forks
