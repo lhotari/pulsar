@@ -27,20 +27,37 @@ val dockerTag = providers.gradleProperty("docker.tag").getOrElse("latest")
 val dockerPlatforms = providers.gradleProperty("docker.platforms").getOrElse("")
 val golangImage = providers.gradleProperty("docker.golang.image").getOrElse("golang:1.24-alpine")
 
-// Dependencies: pulsar image, java-test-functions jar, java-test-plugins jar, buildtools jar
-evaluationDependsOn(":docker:pulsar-docker-image")
-evaluationDependsOn(":tests:java-test-functions")
-evaluationDependsOn(":tests:java-test-plugins")
-evaluationDependsOn(":buildtools")
-val pulsarDockerBuild = project(":docker:pulsar-docker-image").tasks.named("dockerBuild")
-val testFunctionsJar = project(":tests:java-test-functions").tasks.named("shadowJar")
-val testPluginsJar = project(":tests:java-test-plugins").tasks.named("jar")
-val buildtoolsJar = project(":buildtools").tasks.named("jar")
+// Ensure the parent project is configured before resolving cross-project task references.
+// Required for --configure-on-demand: the Kotlin DSL needs parent ClassLoaderScopes to be locked.
+evaluationDependsOn(":docker")
+
+// Resolvable configurations for cross-project artifact dependencies.
+// Using configurations instead of direct task references (project().tasks.named())
+// ensures compatibility with Gradle's configure-on-demand feature.
+val testFunctionsJar by configurations.creating {
+    isCanBeResolved = true
+    isCanBeConsumed = false
+    isTransitive = false
+}
+val testPluginsJar by configurations.creating {
+    isCanBeResolved = true
+    isCanBeConsumed = false
+    isTransitive = false
+}
+val buildtoolsJar by configurations.creating {
+    isCanBeResolved = true
+    isCanBeConsumed = false
+    isTransitive = false
+}
+
+dependencies {
+    testFunctionsJar(project(":tests:java-test-functions"))
+    testPluginsJar(project(":tests:java-test-plugins"))
+    buildtoolsJar(project(":buildtools"))
+}
 
 // Prepare the build context in target/ (to match Dockerfile COPY paths)
 val prepareBuildContext by tasks.registering(Sync::class) {
-    dependsOn(testFunctionsJar, testPluginsJar, buildtoolsJar)
-
     // Copy pulsar-function-go source
     from("${rootDir}/pulsar-function-go") {
         into("pulsar-function-go")
@@ -52,18 +69,18 @@ val prepareBuildContext by tasks.registering(Sync::class) {
     }
 
     // Copy java-test-functions.jar
-    from(testFunctionsJar.map { (it as Jar).archiveFile }) {
+    from(testFunctionsJar) {
         rename { "java-test-functions.jar" }
     }
 
     // Copy java-test-plugins as .nar
-    from(testPluginsJar.map { (it as Jar).archiveFile }) {
+    from(testPluginsJar) {
         rename { "java-test-plugins.nar" }
         into("plugins")
     }
 
     // Copy buildtools.jar
-    from(buildtoolsJar.map { (it as Jar).archiveFile }) {
+    from(buildtoolsJar) {
         rename { "buildtools.jar" }
     }
 
@@ -74,7 +91,7 @@ val dockerBuild by tasks.registering(Exec::class) {
     group = "docker"
     description = "Build the pulsar-test-latest-version Docker image"
 
-    dependsOn(pulsarDockerBuild, prepareBuildContext)
+    dependsOn(":docker:pulsar-docker-image:dockerBuild", prepareBuildContext)
 
     val imageName = "${dockerOrganization}/pulsar-test-latest-version:${dockerTag}"
     val pulsarImage = "${dockerOrganization}/pulsar:${dockerTag}"

@@ -43,6 +43,12 @@ dependencies {
     offloaderNars(project(":tiered-storage:tiered-storage-file-system"))
 }
 
+// Consumable configuration exposing the offloader distribution tarball
+val offloaderDistElements by configurations.creating {
+    isCanBeConsumed = true
+    isCanBeResolved = false
+}
+
 val offloaderDistTar by tasks.registering(Tar::class) {
     val baseDir = "apache-pulsar-offloaders-${pulsarVersion}"
 
@@ -64,6 +70,10 @@ val offloaderDistTar by tasks.registering(Tar::class) {
     from(offloaderNars) {
         into("${baseDir}/offloaders")
     }
+}
+
+artifacts {
+    add("offloaderDistElements", offloaderDistTar)
 }
 
 tasks.named("assemble") {
