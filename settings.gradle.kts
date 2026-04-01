@@ -36,6 +36,18 @@ dependencyResolutionManagement {
             }
         }
     }
+
+    versionCatalogs {
+        create("libs") {
+            from(files("gradle/libs.versions.toml"))
+
+            // override docker-jdk version with -PdockerJavaVersion=21|25
+            val overrideDockerJavaVersion = settings.providers.gradleProperty("dockerJavaVersion")
+            if (overrideDockerJavaVersion.isPresent) {
+                version("docker-jdk", overrideDockerJavaVersion.get())
+            }
+        }
+    }
 }
 
 rootProject.name = "pulsar"
