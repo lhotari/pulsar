@@ -25,13 +25,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.JavaVersion;
+import org.apache.commons.lang3.SystemUtils;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.tests.integration.docker.ContainerExecException;
 import org.apache.pulsar.tests.integration.docker.ContainerExecResult;
+import org.testng.SkipException;
+import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 @Slf4j
 public class TestOffloadDeletionFS extends TestBaseOffload {
+
+    @BeforeClass
+    public void checkJavaVersion() {
+        if (SystemUtils.isJavaVersionAtLeast(JavaVersion.JAVA_25)) {
+            throw new SkipException("Filesystem Offload is incompatible with Java 25");
+        }
+    }
 
     @Override
     protected int getEntrySize() {
