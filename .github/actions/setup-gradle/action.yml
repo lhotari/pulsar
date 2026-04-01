@@ -46,7 +46,6 @@ runs:
         develocity-injection-enabled: true
         develocity-url: https://develocity.apache.org
         develocity-access-key: ${{ inputs.develocity-access-key }}
-        build-scan-publish: ${{ inputs.build-scan-publish }}
         cache-read-only: ${{ inputs.cache-read-only }}
         add-job-summary: ${{ inputs.add-job-summary }}
 
