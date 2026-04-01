@@ -46,7 +46,7 @@ runs:
         mkdir -p ~/.gradle
         touch ~/.gradle/gradle.properties
         grep -q 'systemProp.develocity.projectId=' ~/.gradle/gradle.properties || echo systemProp.develocity.projectId=pulsar >> ~/.gradle/gradle.properties
-        grep -q 'systemProp.develocity.buildScan.uploadInBackground=' ~/.gradle/gradle.properties || echo systemProp.develocity.buildScan.uploadInBackground=false >> ~/.gradle/gradle.properties
+        grep -q 'systemProp.scan.uploadInBackground=' ~/.gradle/gradle.properties || echo systemProp.scan.uploadInBackground=false >> ~/.gradle/gradle.properties
 
     - name: Setup Gradle with Develocity
       if: ${{ inputs.develocity-access-key != '' && inputs.build-scan-publish == 'true' }}
