@@ -51,10 +51,10 @@ dependencyResolutionManagement {
 rootProject.name = "pulsar"
 
 // Running this build requires Java 21 or 25. Version check can be skipped with -PskipJavaVersionCheck parameter.
-val javaVersion = JavaVersion.current()
-require(javaVersion == JavaVersion.VERSION_21 || javaVersion == JavaVersion.VERSION_25
-        || providers.gradleProperty("skipJavaVersionCheck").isPresent) {
-    "This build requires Java 21 or 25, but is running on Java $javaVersion"
+val javaVersion = providers.provider { JavaVersion.current() }
+val statisfiedJavaVersion = javaVersion.map { it == JavaVersion.VERSION_21 || it == JavaVersion.VERSION_25 }
+require(providers.gradleProperty("skipJavaVersionCheck").isPresent || statisfiedJavaVersion.get()) {
+    "This build requires Java 21 or 25, but is running on Java $javaVersion. Pass -PskipJavaVersionCheck to skip this check."
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
