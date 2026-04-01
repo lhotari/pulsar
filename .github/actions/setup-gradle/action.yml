@@ -45,6 +45,7 @@ runs:
       with:
         develocity-injection-enabled: true
         develocity-url: https://develocity.apache.org
+        # expected format is develocity.apache.org:<access-key>
         develocity-access-key: ${{ inputs.develocity-access-key }}
         cache-read-only: ${{ inputs.cache-read-only }}
         add-job-summary: ${{ inputs.add-job-summary }}
