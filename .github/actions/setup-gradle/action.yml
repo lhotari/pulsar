@@ -56,6 +56,7 @@ runs:
         develocity-url: https://develocity.apache.org
         # expected format is develocity.apache.org:<access-key>
         develocity-access-key: ${{ inputs.develocity-access-key }}
+        build-scan-publish: ${{ inputs.build-scan-publish }}
         cache-read-only: ${{ inputs.cache-read-only }}
         add-job-summary: ${{ inputs.add-job-summary }}
 
