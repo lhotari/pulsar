@@ -39,13 +39,14 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Set Develocity Project ID
+    - name: Set Develocity Project ID and configure custom settings
       if: ${{ inputs.develocity-access-key != '' && inputs.build-scan-publish == 'true' }}
       shell: bash
       run: |
         mkdir -p ~/.gradle
-        echo systemProp.develocity.projectId=pulsar >> ~/.gradle/gradle.properties
-        echo systemProp.develocity.buildScan.uploadInBackground=false >> ~/.gradle/gradle.properties
+        touch ~/.gradle/gradle.properties
+        grep -q 'systemProp.develocity.projectId=' ~/.gradle/gradle.properties || echo systemProp.develocity.projectId=pulsar >> ~/.gradle/gradle.properties
+        grep -q 'systemProp.develocity.buildScan.uploadInBackground=' ~/.gradle/gradle.properties || echo systemProp.develocity.buildScan.uploadInBackground=false >> ~/.gradle/gradle.properties
 
     - name: Setup Gradle with Develocity
       if: ${{ inputs.develocity-access-key != '' && inputs.build-scan-publish == 'true' }}
