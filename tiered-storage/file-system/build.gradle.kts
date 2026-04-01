@@ -83,8 +83,10 @@ dependencies {
 }
 
 // Hadoop MiniDFSCluster is incompatible with Java 25
-val testJavaVersion = providers.gradleProperty("testJavaVersion").map { it.toInt() }
-val effectiveTestJava = testJavaVersion.orElse(JavaVersion.current().majorVersion.toInt())
+val testJavaVersion = providers.gradleProperty("testJavaVersion")
+val effectiveTestJava = testJavaVersion
+    .orElse(provider { JavaVersion.current().majorVersion })
+    .map { it.toInt() }
 tasks.withType<Test>().configureEach {
     enabled = effectiveTestJava.get() < 25
 }
