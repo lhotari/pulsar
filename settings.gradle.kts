@@ -37,13 +37,11 @@ dependencyResolutionManagement {
         }
     }
 
-    versionCatalogs {
-        create("libs") {
-            from(files("gradle/libs.versions.toml"))
-
-            // override docker-jdk version with -PdockerJavaVersion=21|25
-            val overrideDockerJavaVersion = settings.providers.gradleProperty("dockerJavaVersion")
-            if (overrideDockerJavaVersion.isPresent) {
+    // override docker-jdk version with -PdockerJavaVersion=21|25
+    val overrideDockerJavaVersion = settings.providers.gradleProperty("dockerJavaVersion")
+    if (overrideDockerJavaVersion.isPresent) {
+        versionCatalogs {
+            create("libs") {
                 version("docker-jdk", overrideDockerJavaVersion.get())
             }
         }

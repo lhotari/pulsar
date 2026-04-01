@@ -441,7 +441,7 @@ jobs:
         run: tar xf gradle-build-outputs.tar
 
       - name: Build java-test-image Docker image
-        run: ./gradlew :tests:java-test-image:dockerBuild
+        run: ./gradlew :tests:java-test-image:dockerBuild${{ env.CI_JDK_MAJOR_VERSION != '21' && format(' -PdockerJavaVersion={0}', env.CI_JDK_MAJOR_VERSION) || '' }}
 
       - name: Save docker image to file
         run: |
@@ -659,7 +659,7 @@ jobs:
         run: tar xf gradle-build-outputs.tar
 
       - name: Build pulsar-test-latest-version Docker image
-        run: ./gradlew :tests:latest-version-image:dockerBuild
+        run: ./gradlew :tests:latest-version-image:dockerBuild${{ env.CI_JDK_MAJOR_VERSION != '21' && format(' -PdockerJavaVersion={0}', env.CI_JDK_MAJOR_VERSION) || '' }}
 
       - name: Check binary licenses
         run: |
