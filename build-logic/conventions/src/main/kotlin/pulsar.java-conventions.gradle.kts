@@ -116,7 +116,16 @@ dependencies {
     "testImplementation"(catalog.findLibrary("slf4j-api").get())
 }
 
+// Allow overriding the JDK used for running tests via -PtestJavaVersion=17
+val testJavaVersion = providers.gradleProperty("testJavaVersion").map { it.toInt() }
+val javaToolchains = extensions.getByType<JavaToolchainService>()
+
 tasks.withType<Test>().configureEach {
+    testJavaVersion.orNull?.let { version ->
+        javaLauncher.set(javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(version))
+        })
+    }
     useTestNG {
         listeners.addAll(listOf(
             "org.apache.pulsar.tests.PulsarTestListener",
