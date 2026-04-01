@@ -54,7 +54,7 @@ rootProject.name = "pulsar"
 val javaVersion = providers.provider { JavaVersion.current() }
 val statisfiedJavaVersion = javaVersion.map { it == JavaVersion.VERSION_21 || it == JavaVersion.VERSION_25 }
 require(providers.gradleProperty("skipJavaVersionCheck").isPresent || statisfiedJavaVersion.get()) {
-    "This build requires Java 21 or 25, but is running on Java $javaVersion. Pass -PskipJavaVersionCheck to skip this check."
+    "This build requires Java 21 or 25, but is running on Java ${javaVersion.get()}. Pass -PskipJavaVersionCheck to skip this check."
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
