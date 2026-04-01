@@ -138,6 +138,7 @@ test_group_pulsar_io_ora() {
 test_group_shade_run() {
   echo "::group::Run shade tests"
   ./gradlew --no-configuration-cache \
+    -PskipJavaVersionCheck \
     :tests:pulsar-client-shade-test:test \
     :tests:pulsar-client-admin-shade-test:test \
     :tests:pulsar-client-all-shade-test:test

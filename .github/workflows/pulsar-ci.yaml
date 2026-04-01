@@ -27,7 +27,7 @@ on:
   schedule:
     # scheduled job with JDK 21
     - cron: '0 12 * * *'
-    # scheduled job with JDK 17
+    # scheduled job with JDK 25
     # if cron expression is changed, make sure to update the expression in jdk_major_version step in preconditions job
     - cron: '0 6 * * *'
   workflow_dispatch:
@@ -37,9 +37,7 @@ on:
         required: true
         type: choice
         options:
-          - '17'
           - '21'
-          - '24'
           - '25'
         default: '21'
       trace_test_resource_cleanup:
@@ -99,9 +97,9 @@ jobs:
       - name: Select JDK major version
         id: jdk_major_version
         run: |
-          # use JDK 17 for the scheduled build with cron expression '0 6 * * *'
+          # use JDK 25 for the scheduled build with cron expression '0 6 * * *'
           if [[ "${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' && 'true' || 'false' }}" == "true" ]]; then
-            echo "jdk_major_version=17" >> $GITHUB_OUTPUT
+            echo "jdk_major_version=25" >> $GITHUB_OUTPUT
             exit 0
           fi
           # use JDK 21 for build unless overridden with workflow_dispatch input
@@ -500,10 +498,10 @@ jobs:
             upload_name: SHADE_RUN_21
             runtime_jdk: 21
 
-          - name: Shade on Java 24
+          - name: Shade on Java 25
             group: SHADE_RUN
-            upload_name: SHADE_RUN_24
-            runtime_jdk: 24
+            upload_name: SHADE_RUN_25
+            runtime_jdk: 25
 
           - name: Standalone
             group: STANDALONE
