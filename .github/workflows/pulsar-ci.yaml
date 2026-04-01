@@ -532,11 +532,13 @@ jobs:
         with:
           limit-access-to-actor: true
 
-      - name: Set up JDK ${{ env.CI_JDK_MAJOR_VERSION }}
+      - name: Set up JDK ${{ env.CI_JDK_MAJOR_VERSION }}${{ matrix.runtime_jdk && matrix.runtime_jdk != env.CI_JDK_MAJOR_VERSION && format(' and {0}', matrix.runtime_jdk) || '' }}
         uses: actions/setup-java@v5
         with:
           distribution: ${{ env.JDK_DISTRIBUTION }}
-          java-version: ${{ env.CI_JDK_MAJOR_VERSION }}
+          java-version: >-
+            ${{ matrix.runtime_jdk != env.CI_JDK_MAJOR_VERSION && matrix.runtime_jdk || '' }}
+            ${{ env.CI_JDK_MAJOR_VERSION }}
 
       - name: Setup Gradle
         uses: ./.github/actions/setup-gradle
@@ -565,16 +567,9 @@ jobs:
         run: |
           ${{ matrix.setup }}
 
-      - name: Set up runtime JDK ${{ matrix.runtime_jdk }}
-        uses: actions/setup-java@v5
-        if: ${{ matrix.runtime_jdk }}
-        with:
-          distribution: ${{ env.JDK_DISTRIBUTION }}
-          java-version: ${{ matrix.runtime_jdk }}
-
       - name: Run integration test group '${{ matrix.group }}'
         run: |
-          ./pulsar-build/run_integration_group_gradle.sh ${{ matrix.group }}
+          ./pulsar-build/run_integration_group_gradle.sh ${{ matrix.group }}${{ matrix.runtime_jdk && matrix.runtime_jdk != env.CI_JDK_MAJOR_VERSION && format(' -PtestJavaVersion={0}', matrix.runtime_jdk) || '' }}
 
       - name: print JVM thread dumps when cancelled
         if: cancelled()
