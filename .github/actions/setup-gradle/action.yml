@@ -41,6 +41,7 @@ runs:
   steps:
     - name: Set Develocity Project ID
       if: ${{ inputs.develocity-access-key != '' && inputs.build-scan-publish == 'true' }}
+      shell: bash
       run: |
         mkdir -p ~/.gradle
         echo systemProp.develocity.projectId=pulsar >> ~/.gradle/gradle.properties
