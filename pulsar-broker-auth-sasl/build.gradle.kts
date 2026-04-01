@@ -20,6 +20,7 @@
 plugins {
     id("pulsar.java-conventions")
     id("pulsar.test-certs-conventions")
+    id("pulsar.publish-conventions")
 }
 
 // Each test class gets its own JVM fork because AuthenticationSasl has static JAAS state

@@ -19,6 +19,7 @@
 
 plugins {
     id("pulsar.java-conventions")
+    id("pulsar.publish-conventions")
 }
 
 // Include parent module's test resources (YAML config files used by WorkerApiV2ResourceConfigTest)

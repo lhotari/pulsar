@@ -20,6 +20,7 @@
 plugins {
     id("pulsar.java-conventions")
     id("pulsar.test-certs-conventions")
+    id("pulsar.publish-conventions")
 }
 
 dependencies {

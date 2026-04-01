@@ -22,6 +22,7 @@
 // All subprojects consume this via: implementation(enforcedPlatform(project(":pulsar-dependencies")))
 plugins {
     `java-platform`
+    id("pulsar.publish-conventions")
 }
 
 group = "org.apache.pulsar"

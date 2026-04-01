@@ -19,6 +19,7 @@
 
 plugins {
     id("pulsar.java-conventions")
+    id("pulsar.publish-conventions")
 }
 
 // pulsar-transaction-common has no internal Pulsar dependencies

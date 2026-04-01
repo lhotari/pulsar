@@ -23,6 +23,7 @@
 
 plugins {
     `java-platform`
+    id("pulsar.publish-conventions")
 }
 
 group = "org.apache.pulsar"

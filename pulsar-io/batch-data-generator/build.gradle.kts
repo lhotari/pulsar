@@ -20,6 +20,7 @@
 plugins {
     id("pulsar.java-conventions")
     id("pulsar.nar-conventions")
+    id("pulsar.publish-conventions")
 }
 dependencies {
     implementation(project(":pulsar-io:pulsar-io-core"))

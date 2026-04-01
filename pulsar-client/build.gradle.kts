@@ -20,6 +20,7 @@
 plugins {
     id("pulsar.java-conventions")
     alias(libs.plugins.protobuf)
+    id("pulsar.publish-conventions")
 }
 
 dependencies {

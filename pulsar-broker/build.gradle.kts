@@ -22,6 +22,7 @@ plugins {
     id("pulsar.test-certs-conventions")
     alias(libs.plugins.protobuf)
     alias(libs.plugins.lightproto)
+    id("pulsar.publish-conventions")
 }
 
 dependencies {

@@ -19,6 +19,7 @@
 
 plugins {
     id("pulsar.java-conventions")
+    id("pulsar.publish-conventions")
 }
 
 dependencies {
