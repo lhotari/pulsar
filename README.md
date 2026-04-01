@@ -182,6 +182,8 @@ There is also a guide for [setting up the tooling for building Pulsar](https://p
 >
 > This project includes a [Gradle Wrapper](https://docs.gradle.org/current/userguide/gradle_wrapper.html) so no separate Gradle installation is needed.
 > Use `./gradlew` on Linux/macOS and `gradlew.bat` on Windows.
+>
+> For a better developer experience, install [Gradle command-line completion](https://docs.gradle.org/current/userguide/command_line_interface.html#sec:command_line_completion) ([gradle-completion installation](https://github.com/gradle/gradle-completion?tab=readme-ov-file#gradle-completion)) for bash and zsh shells.
 
 ### Build
 
