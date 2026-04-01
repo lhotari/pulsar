@@ -82,7 +82,7 @@ dependencies {
     testImplementation("org.eclipse.jetty:jetty-util:9.4.58.v20250814")
 }
 
-// Hadoop MiniDFSCluster is incompatible with Java 25
+// Hadoop 3.4.x is incompatible with Java 25
 val testJavaVersion = providers.gradleProperty("testJavaVersion")
 val effectiveTestJava = testJavaVersion
     .orElse(provider { JavaVersion.current().majorVersion })
