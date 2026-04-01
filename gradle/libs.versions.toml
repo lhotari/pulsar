@@ -19,7 +19,6 @@
 [versions]
 # Core
 pulsar = "4.3.0-SNAPSHOT"
-java = "17"
 # Docker
 docker-jdk = "21"
 pulsar-client-python = "3.10.0"
