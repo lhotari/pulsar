@@ -65,8 +65,8 @@ runs:
 
             # stop unnecessary services
             sudo systemctl stop php8.3-fpm.service ModemManager.service \
-              multipathd.service udisks2.service walinuxagent.service || true
-          
+              multipathd.socket multipathd.service udisks2.service walinuxagent.service || true
+
             echo '::endgroup::'
 
             # show memory
