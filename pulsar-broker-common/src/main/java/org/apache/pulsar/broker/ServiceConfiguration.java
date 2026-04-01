@@ -222,15 +222,25 @@ public class ServiceConfiguration implements PulsarConfiguration {
         category = CATEGORY_SERVER,
         doc = "Hostname or IP address the service advertises to the outside world."
             + " If not set, the value of `InetAddress.getLocalHost().getCanonicalHostName()` is used."
+            + " Append a dot to a fully-qualified domain name (FQDN) to make it absolute and"
+            + " prevent unnecessary DNS lookups on clients."
     )
     private String advertisedAddress;
+
+    @FieldContext(category = CATEGORY_SERVER, doc =
+            "When the advertised address is not set, appends a dot to the auto-resolved DNS name to make it "
+                    + "absolute. This reduces the load on client-side DNS servers by preventing the client from "
+                    + "appending search domains during DNS resolution, regardless of the client's ndots option value.")
+    private boolean advertisedAddressAutoResolvedHostNameAsAbsoluteDnsName = false;
 
     @FieldContext(category = CATEGORY_SERVER,
             doc = "Used to specify multiple advertised listeners for the broker."
                     + " The value must format as <listener_name>:pulsar://<host>:<port>,"
                     + "multiple listeners should separate with commas."
-                    + "Do not use this configuration with advertisedAddress and brokerServicePort."
-                    + "The Default value is absent means use advertisedAddress and brokerServicePort.")
+                    + " Do not use this configuration with advertisedAddress and brokerServicePort."
+                    + " The Default value is absent means use advertisedAddress and brokerServicePort."
+                    + " Append a dot to a fully-qualified domain name (FQDN) to make it absolute and"
+                    + " prevent unnecessary DNS lookups on clients.")
     private String advertisedListeners;
 
     @FieldContext(category = CATEGORY_SERVER,
