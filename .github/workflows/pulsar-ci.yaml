@@ -536,7 +536,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: ${{ env.JDK_DISTRIBUTION }}
-          java-version: >-
+          java-version: |
             ${{ matrix.runtime_jdk != env.CI_JDK_MAJOR_VERSION && matrix.runtime_jdk || '' }}
             ${{ env.CI_JDK_MAJOR_VERSION }}
 
