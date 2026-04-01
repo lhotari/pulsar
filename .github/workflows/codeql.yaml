@@ -35,8 +35,8 @@ env:
 
 jobs:
   analyze:
-    # only run scheduled analysis in apache/pulsar repository
-    if: ${{ (github.event_name == 'schedule' && github.repository == 'apache/pulsar') || github.event_name != 'schedule' }}
+    # only run on push and schedule in apache/pulsar repo
+    if: ${{ github.repository == 'apache/pulsar' || github.event_name == 'workflow_dispatch' }}
     name: Analyze
     runs-on: 'ubuntu-latest'
     timeout-minutes: 360
