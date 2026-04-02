@@ -17,8 +17,6 @@
 # under the License.
 #
 [versions]
-# Core
-pulsar = "4.3.0-SNAPSHOT"
 # Docker
 docker-jdk = "21"
 pulsar-client-python = "3.10.0"

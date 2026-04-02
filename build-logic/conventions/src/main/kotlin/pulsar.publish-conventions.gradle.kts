@@ -99,7 +99,7 @@ pluginManager.withPlugin("java-platform") {
     }
 }
 
-// --- Common POM metadata for all publications ---
+// --- Common POM configuration for all publications ---
 run {
     // Capture values in a local scope so withXml closures don't capture the script object
     // (which would break configuration cache serialization)
@@ -107,6 +107,8 @@ run {
     val projectDescription = project.description
     val archivesNameValue = the<BasePluginExtension>().archivesName.get()
     val isPlatformProject = plugins.hasPlugin("java-platform")
+    val isRootProject = project == rootProject
+    val pulsarVersion = version.toString()
     val localDeployRepoDir = rootProject.layout.buildDirectory.dir("local-deploy-repo")
 
     publishing {
@@ -115,48 +117,13 @@ run {
                 artifactId = archivesNameValue
 
                 pom {
-                    name.set("Apache Pulsar :: $projectName")
-                    description.set(projectDescription ?: "Apache Pulsar :: $projectName")
-                    url.set("https://pulsar.apache.org")
-                    inceptionYear.set("2017")
-
-                    licenses {
-                        license {
-                            name.set("The Apache License, Version 2.0")
-                            url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
-                            distribution.set("repo")
-                        }
+                    // Per-module name and description
+                    if (!isRootProject) {
+                        name.set("Apache Pulsar :: $projectName")
+                        description.set(projectDescription ?: "Apache Pulsar :: $projectName")
                     }
 
-                    organization {
-                        name.set("Apache Software Foundation")
-                        url.set("https://www.apache.org/")
-                    }
-
-                    issueManagement {
-                        system.set("GitHub Issues")
-                        url.set("https://github.com/apache/pulsar/issues")
-                    }
-
-                    scm {
-                        connection.set("scm:git:https://github.com/apache/pulsar.git")
-                        developerConnection.set("scm:git:https://github.com/apache/pulsar.git")
-                        url.set("https://github.com/apache/pulsar")
-                        tag.set("HEAD")
-                    }
-
-                    mailingLists {
-                        mailingList {
-                            name.set("Apache Pulsar developers list")
-                            subscribe.set("dev-subscribe@pulsar.apache.org")
-                            unsubscribe.set("dev-unsubscribe@pulsar.apache.org")
-                            post.set("dev@pulsar.apache.org")
-                            archive.set("https://lists.apache.org/list.html?dev@pulsar.apache.org")
-                        }
-                    }
-
-                    // Clean up POM XML: remove Maven defaults and dependencyManagement
-                    // (resolved versions are inlined via versionMapping)
+                    // Clean up POM XML and inject <parent> reference
                     withXml {
                         val sb = asString()
                         var s = sb.toString()
@@ -171,6 +138,18 @@ run {
                                     RegexOption.DOT_MATCHES_ALL
                                 ),
                                 ""
+                            )
+                        }
+                        // Inject <parent> reference for child modules (not the root/parent POM itself).
+                        // Metadata (license, SCM, etc.) is inherited from the parent POM.
+                        if (!isRootProject) {
+                            s = s.replace(
+                                "<modelVersion>4.0.0</modelVersion>",
+                                "<modelVersion>4.0.0</modelVersion>\n  <parent>\n" +
+                                    "    <groupId>org.apache.pulsar</groupId>\n" +
+                                    "    <artifactId>pulsar</artifactId>\n" +
+                                    "    <version>$pulsarVersion</version>\n" +
+                                    "  </parent>"
                             )
                         }
                         sb.setLength(0)

@@ -24,9 +24,6 @@ plugins {
 
 val catalog = the<VersionCatalogsExtension>().named("libs")
 
-group = "org.apache.pulsar"
-version = catalog.findVersion("pulsar").get().requiredVersion
-
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.release.set(17)
