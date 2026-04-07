@@ -664,7 +664,8 @@ jobs:
         if: ${{ github.repository == 'apache/pulsar' && github.event_name != 'pull_request' }}
         continue-on-error: true
         with:
-          image-ref: "apachepulsar/pulsar:latest"
+          scan-type: 'image'
+          scan-ref: "apachepulsar/pulsar:latest"
           scanners: vuln
           severity: CRITICAL,HIGH,MEDIUM,LOW
           limit-severities-for-sarif: true
