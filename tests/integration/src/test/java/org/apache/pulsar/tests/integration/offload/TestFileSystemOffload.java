@@ -22,21 +22,10 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.JavaVersion;
-import org.apache.commons.lang3.SystemUtils;
-import org.testng.SkipException;
-import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 @Slf4j
 public class TestFileSystemOffload extends TestBaseOffload {
-
-    @BeforeClass
-    public void checkJavaVersion() {
-        if (SystemUtils.isJavaVersionAtLeast(JavaVersion.JAVA_25)) {
-            throw new SkipException("Filesystem Offload is incompatible with Java 25");
-        }
-    }
 
     @Test(dataProvider =  "ServiceAndAdminUrls")
     public void testPublishOffloadAndConsumeViaCLI(Supplier<String> serviceUrl, Supplier<String> adminUrl)
