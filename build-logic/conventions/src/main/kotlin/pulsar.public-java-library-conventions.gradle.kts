@@ -25,3 +25,45 @@ plugins {
     id("pulsar.java-conventions")
     id("pulsar.publish-conventions")
 }
+
+// Validate that public java-library modules only depend on other published modules
+// in scopes that end up in the published POM (api, implementation, runtimeOnly).
+// Test/compileOnly scoped dependencies are excluded since they don't appear in the POM.
+// NAR modules are not validated here — they bundle all dependencies and have empty POMs.
+run {
+    val publishedScopes = listOf("api", "implementation", "runtimeOnly")
+    val configsToCheck = publishedScopes.mapNotNull { name ->
+        configurations.findByName(name)?.let { name to it }
+    }
+    val currentProjectPath = project.path
+
+    val unpublishedDeps = provider {
+        val errors = mutableListOf<String>()
+        for ((configName, config) in configsToCheck) {
+            for (dep in config.dependencies) {
+                if (dep is ProjectDependency) {
+                    val depPath = dep.path
+                    val depProject = project.rootProject.project(depPath)
+                    if (!depProject.plugins.hasPlugin("maven-publish")) {
+                        errors.add("  - $configName -> $depPath (not published)")
+                    }
+                }
+            }
+        }
+        errors
+    }
+
+    tasks.withType<PublishToMavenRepository>().configureEach {
+        val errorList = unpublishedDeps
+        doFirst {
+            val errors = errorList.get()
+            if (errors.isNotEmpty()) {
+                throw GradleException(
+                    "Published module '$currentProjectPath' depends on unpublished projects:\n" +
+                        errors.joinToString("\n") + "\n" +
+                        "Either publish the dependency or move it to a test/compileOnly scope."
+                )
+            }
+        }
+    }
+}

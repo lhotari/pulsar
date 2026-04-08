@@ -68,23 +68,6 @@ pluginManager.withPlugin("java-library") {
         }
     }
 
-    // NAR modules disable the jar task and produce .nar files instead.
-    // When the NAR plugin is applied (possibly after this plugin), reconfigure
-    // the publication to use the .nar artifact instead of the jar.
-    pluginManager.withPlugin("io.github.merlimat.nar") {
-        publishing {
-            publications {
-                named<MavenPublication>("maven") {
-                    // Clear the component-based artifacts and use NAR instead
-                    artifacts.clear()
-                    artifact(tasks.named("nar"))
-                    artifact(sourcesJar)
-                    artifact(javadocJar)
-                    pom.packaging = "nar"
-                }
-            }
-        }
-    }
 }
 
 // --- java-platform projects (BOM, dependencies): POM-only, no JAR ---
@@ -196,48 +179,3 @@ tasks.withType<GenerateModuleMetadata>().configureEach {
     suppressedValidationErrors.add("enforced-platform")
 }
 
-// Validate that published modules only depend on other published modules.
-// Dependencies in test/compileOnly scopes are excluded since they don't
-// appear in the published POM.
-if (project != rootProject) {
-    pluginManager.withPlugin("java-library") {
-        val publishedScopes = listOf("api", "implementation", "runtimeOnly")
-        val configsToCheck = publishedScopes.mapNotNull { name ->
-            configurations.findByName(name)?.let { name to it }
-        }
-        val currentProjectPath = project.path
-
-        // Collect unpublished project dependencies at configuration time
-        // (after all plugins/dependencies are declared). Store as plain strings
-        // for configuration cache compatibility.
-        val unpublishedDeps = provider {
-            val errors = mutableListOf<String>()
-            for ((configName, config) in configsToCheck) {
-                for (dep in config.dependencies) {
-                    if (dep is ProjectDependency) {
-                        val depPath = dep.path
-                        val depProject = project.rootProject.project(depPath)
-                        if (!depProject.plugins.hasPlugin("maven-publish")) {
-                            errors.add("  - $configName -> $depPath (not published)")
-                        }
-                    }
-                }
-            }
-            errors
-        }
-
-        tasks.withType<PublishToMavenRepository>().configureEach {
-            val errorList = unpublishedDeps
-            doFirst {
-                val errors = errorList.get()
-                if (errors.isNotEmpty()) {
-                    throw GradleException(
-                        "Published module '$currentProjectPath' depends on unpublished projects:\n" +
-                            errors.joinToString("\n") + "\n" +
-                            "Either publish the dependency or move it to a test/compileOnly scope."
-                    )
-                }
-            }
-        }
-    }
-}
