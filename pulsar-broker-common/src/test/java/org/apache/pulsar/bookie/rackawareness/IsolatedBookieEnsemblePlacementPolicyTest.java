@@ -508,7 +508,7 @@ public class IsolatedBookieEnsemblePlacementPolicyTest {
         assertTrue(ensemble.contains(new BookieSocketAddress(BOOKIE4).toBookieId()));
     }
 
-    @Test
+    @Test(invocationCount = 10)
     public void testSecondaryIsolationGroupsBookies() throws Exception {
         Map<String, Map<String, BookieInfo>> bookieMapping = new HashMap<>();
         Map<String, BookieInfo> defaultBookieGroup = new HashMap<>();
@@ -522,11 +522,13 @@ public class IsolatedBookieEnsemblePlacementPolicyTest {
         defaultBookieGroup.put(BOOKIE5, BookieInfo.builder().rack("rack1").build());
 
         Map<String, BookieInfo> primaryIsolatedBookieGroup = new HashMap<>();
-        primaryIsolatedBookieGroup.put(BOOKIE1, BookieInfo.builder().rack("rack1").build());
+        // Use the same rack as in the default group to avoid non-deterministic rack
+        // resolution when the same bookie appears in multiple groups with different racks.
+        primaryIsolatedBookieGroup.put(BOOKIE1, BookieInfo.builder().rack("rack0").build());
 
         Map<String, BookieInfo> secondaryIsolatedBookieGroup = new HashMap<>();
-        secondaryIsolatedBookieGroup.put(BOOKIE2, BookieInfo.builder().rack("rack0").build());
-        secondaryIsolatedBookieGroup.put(BOOKIE4, BookieInfo.builder().rack("rack0").build());
+        secondaryIsolatedBookieGroup.put(BOOKIE2, BookieInfo.builder().rack("rack1").build());
+        secondaryIsolatedBookieGroup.put(BOOKIE4, BookieInfo.builder().rack("rack1").build());
 
         bookieMapping.put("default", defaultBookieGroup);
         bookieMapping.put(isolatedGroup, primaryIsolatedBookieGroup);
