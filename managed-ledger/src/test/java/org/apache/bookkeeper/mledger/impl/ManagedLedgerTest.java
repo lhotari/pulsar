@@ -2288,7 +2288,7 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         assertTrue(ml.getTotalSize() > "shortmessage".getBytes().length);
     }
 
-    @Test(enabled = true)
+    @Test(invocationCount = 10)
     public void testNoRetention() throws Exception {
         @Cleanup("shutdown")
         ManagedLedgerFactory factory = new ManagedLedgerFactoryImpl(metadataStore, bkc);
@@ -2305,18 +2305,20 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         ml.close();
 
         // reopen ml
-        ml = (ManagedLedgerImpl) factory.open("noretention_test_ledger", config);
-        c1 = ml.openCursor("c1noretention");
-        ml.addEntry("shortmessage".getBytes());
-        c1.skipEntries(1, IndividualDeletedEntries.Exclude);
-        // Explicitly trigger trimming and wait for it to complete
-        CompletableFuture<Void> trimFuture = new CompletableFuture<>();
-        ml.trimConsumedLedgersInBackground(trimFuture);
-        trimFuture.join();
-        ml.close();
-
-        assertTrue(ml.getLedgersInfoAsList().size() <= 1);
-        assertTrue(ml.getTotalSize() <= "shortmessage".getBytes().length);
+        ManagedLedgerImpl ml2 = (ManagedLedgerImpl) factory.open("noretention_test_ledger", config);
+        ManagedCursor c1b = ml2.openCursor("c1noretention");
+        ml2.addEntry("shortmessage".getBytes());
+        c1b.skipEntries(1, IndividualDeletedEntries.Exclude);
+        // Trigger trimming and use Awaitility to wait for the async trimming to fully complete,
+        // since trimming may be deferred if a ledger roll is still in progress (CreatingLedger state).
+        Awaitility.await().untilAsserted(() -> {
+            CompletableFuture<Void> trimFuture = new CompletableFuture<>();
+            ml2.trimConsumedLedgersInBackground(trimFuture);
+            trimFuture.join();
+            assertTrue(ml2.getLedgersInfoAsList().size() <= 1);
+            assertTrue(ml2.getTotalSize() <= "shortmessage".getBytes().length);
+        });
+        ml2.close();
     }
 
     @Test
@@ -3919,7 +3921,7 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
                 + '}';
     }
 
-    @Test
+    @Test(invocationCount = 10)
     public void testInvalidateReadHandleWhenDeleteLedger() throws Exception {
         ManagedLedgerConfig config = new ManagedLedgerConfig();
         initManagedLedgerConfig(config);
@@ -3934,13 +3936,18 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
             ledger.addEntry(String.valueOf(i).getBytes(Encoding));
         }
 
+        // Wait for all ledger rolls to complete before reading. With maxEntriesPerLedger=1 and 3 entries,
+        // we expect 4 ledgers (3 closed + 1 current empty). If we read before the last roll completes,
+        // the last entry is read from currentLedger directly (not via ledgerCache), causing ledgerCache
+        // to have fewer entries than expected.
+        Awaitility.await().untilAsserted(() -> assertEquals(ledger.ledgers.size(), 4));
+
         // clear the cache to avoid flakiness
         factory.getEntryCacheManager().clear();
 
         List<Entry> entryList = cursor.readEntries(3);
         assertEquals(entryList.size(), 3);
         Awaitility.await().untilAsserted(() -> {
-            log.error("ledger.ledgerCache.size() : " + ledger.ledgerCache.size());
             assertEquals(ledger.ledgerCache.size(), 3);
             assertEquals(ledger.ledgers.size(), 4);
         });
