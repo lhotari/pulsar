@@ -28,6 +28,7 @@ import static org.apache.bookkeeper.util.BookKeeperConstants.AVAILABLE_NODE;
 import static org.apache.pulsar.common.util.PortManager.nextLockedFreePort;
 import static org.testng.Assert.assertFalse;
 import com.google.common.base.Stopwatch;
+import com.google.common.util.concurrent.MoreExecutors;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -227,7 +228,7 @@ public abstract class BookKeeperClusterTestCase {
             tearDownException = e;
         }
 
-        executor.shutdownNow();
+        MoreExecutors.shutdownAndAwaitTermination(executor, 10, TimeUnit.SECONDS);
 
         LOG.info("Tearing down test {} in {} ms.", testName, sw.elapsed(TimeUnit.MILLISECONDS));
         if (tearDownException != null) {
