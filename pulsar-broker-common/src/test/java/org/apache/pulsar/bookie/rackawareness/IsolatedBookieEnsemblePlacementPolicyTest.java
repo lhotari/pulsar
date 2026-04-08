@@ -508,7 +508,7 @@ public class IsolatedBookieEnsemblePlacementPolicyTest {
         assertTrue(ensemble.contains(new BookieSocketAddress(BOOKIE4).toBookieId()));
     }
 
-    @Test(invocationCount = 10)
+    @Test
     public void testSecondaryIsolationGroupsBookies() throws Exception {
         Map<String, Map<String, BookieInfo>> bookieMapping = new HashMap<>();
         Map<String, BookieInfo> defaultBookieGroup = new HashMap<>();

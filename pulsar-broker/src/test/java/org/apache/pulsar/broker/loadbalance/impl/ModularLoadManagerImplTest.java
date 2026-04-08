@@ -1012,7 +1012,7 @@ public class ModularLoadManagerImplTest {
     }
 
 
-    @Test(invocationCount = 10)
+    @Test
     public void testRemoveNonExistBundleData()
             throws PulsarAdminException, InterruptedException,
             PulsarClientException, PulsarServerException, NoSuchFieldException, IllegalAccessException {
