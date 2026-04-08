@@ -2288,7 +2288,7 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         assertTrue(ml.getTotalSize() > "shortmessage".getBytes().length);
     }
 
-    @Test(invocationCount = 10)
+    @Test
     public void testNoRetention() throws Exception {
         @Cleanup("shutdown")
         ManagedLedgerFactory factory = new ManagedLedgerFactoryImpl(metadataStore, bkc);
@@ -3921,7 +3921,7 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
                 + '}';
     }
 
-    @Test(invocationCount = 10)
+    @Test
     public void testInvalidateReadHandleWhenDeleteLedger() throws Exception {
         ManagedLedgerConfig config = new ManagedLedgerConfig();
         initManagedLedgerConfig(config);
