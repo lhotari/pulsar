@@ -112,6 +112,7 @@ public class PersistentDispatcherFailoverConsumerTest {
         svcConfig.setClusterName("pulsar-cluster");
         svcConfig.setSystemTopicEnabled(false);
         svcConfig.setTopicLevelPoliciesEnabled(false);
+        svcConfig.setActiveConsumerFailoverDelayTimeMillis(0);
         pulsarTestContext = PulsarTestContext.builderForNonStartableContext()
                 .config(svcConfig)
                 .spyByDefault()
@@ -294,7 +295,7 @@ public class PersistentDispatcherFailoverConsumerTest {
         verify(channelCtx, times(1)).writeAndFlush(any(), any());
     }
 
-    @Test
+    @Test(invocationCount = 10)
     public void testAddRemoveConsumer() throws Exception {
         log.info("--- Starting PersistentDispatcherFailoverConsumerTest::testAddConsumer ---");
 
