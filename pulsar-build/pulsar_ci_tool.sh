@@ -116,7 +116,7 @@ function ci_generate_test_report_index() {
     if [ -n "${GITHUB_WORKSPACE}" ]; then
       cd "${GITHUB_WORKSPACE}"
     fi
-    local index_file="build/reports/tests/index.html"
+    local index_file="test-reports/index.html"
     mkdir -p "$(dirname "$index_file")"
     local found_reports=()
     while IFS= read -r -d '' report; do
@@ -148,7 +148,7 @@ HEADER
       local rel_path="${report#./}"
       # extract module name (everything before /build/reports/tests/test/index.html)
       local module_name="${rel_path%%/build/reports/tests/test/index.html}"
-      echo "  <li><a href=\"${rel_path}\">${module_name}</a></li>" >> "$index_file"
+      echo "  <li><a href=\"../${rel_path}\">${module_name}</a></li>" >> "$index_file"
     done
     cat >> "$index_file" <<'FOOTER'
 </ul>
