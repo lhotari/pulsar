@@ -241,6 +241,7 @@ jobs:
             /tmp/*.hprof
             **/hs_err_*.log
             **/core.*
+            build/threaddumps/
             ${{ env.NETTY_LEAK_DUMP_DIR }}/*
             ${{ env.TRACE_TEST_RESOURCE_CLEANUP_DIR }}/*
             ${{ env.THREAD_LEAK_DETECTOR_DIR }}/*
