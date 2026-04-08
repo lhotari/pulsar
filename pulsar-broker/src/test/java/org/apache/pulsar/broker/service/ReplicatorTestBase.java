@@ -617,6 +617,10 @@ public abstract class ReplicatorTestBase extends TestRetrySupport {
         }
 
         void receive(int messages) throws Exception {
+            receive(messages, 10);
+        }
+
+        void receive(int messages, int timeoutSeconds) throws Exception {
             log.info("Start receiving messages");
             Message<byte[]> msg;
 
@@ -624,7 +628,7 @@ public abstract class ReplicatorTestBase extends TestRetrySupport {
 
             int i = 0;
             while (i < messages) {
-                msg = consumer.receive(10, TimeUnit.SECONDS);
+                msg = consumer.receive(timeoutSeconds, TimeUnit.SECONDS);
                 assertNotNull(msg);
                 consumer.acknowledge(msg);
 

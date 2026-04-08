@@ -1056,8 +1056,10 @@ public class ReplicatorTest extends ReplicatorTestBase {
         // Consumer will now drain 1 message and the replication backlog will be cleared
         consumer2.receive(1);
 
-        // Wait until the 2nd message got delivered to consumer
-        consumer2.receive(1);
+        // Wait until the 2nd message got delivered to consumer.
+        // Use a longer timeout because the replicator needs time to detect that the backlog quota
+        // has been relaxed (checked every TIME_TO_CHECK_BACKLOG_QUOTA seconds) and resume replication.
+        consumer2.receive(1, TIME_TO_CHECK_BACKLOG_QUOTA * 4);
 
         Awaitility.await().untilAsserted(() -> assertEquals(replicator.computeStats().replicationBacklog, 0));
         metrics = metricReader1.collectAllMetrics();
