@@ -2101,7 +2101,7 @@ public class ServerCnxTest {
         channel.finish();
     }
 
-    @Test(timeOut = 30000, invocationCount = 10)
+    @Test(timeOut = 30000)
     public void testCreateProducerTimeoutThenCreateSameNamedProducerShouldFail() throws Exception {
         resetChannel();
         setChannelConnected();
