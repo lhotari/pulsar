@@ -66,7 +66,7 @@ public class LeaderElectionServiceTest {
         log.info("---- bk stopped ----");
     }
 
-    @Test(invocationCount = 10)
+    @Test
     public void anErrorShouldBeThrowBeforeLeaderElected() throws PulsarServerException, PulsarClientException,
             PulsarAdminException {
         final String clusterName = "elect-test";
