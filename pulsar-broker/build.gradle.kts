@@ -18,11 +18,10 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
     id("pulsar.test-certs-conventions")
     alias(libs.plugins.protobuf)
     alias(libs.plugins.lightproto)
-    id("pulsar.publish-conventions")
 }
 
 dependencies {

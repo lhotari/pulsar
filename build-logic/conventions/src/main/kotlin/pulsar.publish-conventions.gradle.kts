@@ -48,40 +48,39 @@ pluginManager.withPlugin("java-library") {
         from(tasks.named(JavaPlugin.JAVADOC_TASK_NAME))
     }
 
-    // NAR modules disable the jar task and produce .nar files instead.
-    // Detect the NAR plugin and configure the publication accordingly.
-    val isNarModule = plugins.hasPlugin("io.github.merlimat.nar")
+    // Standard java-library modules: publish from components["java"]
+    publishing {
+        publications {
+            create<MavenPublication>("maven") {
+                from(components["java"])
+                artifact(sourcesJar)
+                artifact(javadocJar)
 
-    if (isNarModule) {
-        // NAR modules: publish the .nar artifact with packaging=nar
-        publishing {
-            publications {
-                create<MavenPublication>("maven") {
-                    artifact(tasks.named("nar"))
-                    artifact(sourcesJar)
-                    artifact(javadocJar)
-                    // Set packaging to "nar" in POM
-                    pom.packaging = "nar"
+                versionMapping {
+                    usage(Usage.JAVA_RUNTIME) {
+                        fromResolutionResult()
+                    }
+                    usage(Usage.JAVA_API) {
+                        fromResolutionOf("runtimeClasspath")
+                    }
                 }
             }
         }
-    } else {
-        // Standard java-library modules: publish from components["java"]
+    }
+
+    // NAR modules disable the jar task and produce .nar files instead.
+    // When the NAR plugin is applied (possibly after this plugin), reconfigure
+    // the publication to use the .nar artifact instead of the jar.
+    pluginManager.withPlugin("io.github.merlimat.nar") {
         publishing {
             publications {
-                create<MavenPublication>("maven") {
-                    from(components["java"])
+                named<MavenPublication>("maven") {
+                    // Clear the component-based artifacts and use NAR instead
+                    artifacts.clear()
+                    artifact(tasks.named("nar"))
                     artifact(sourcesJar)
                     artifact(javadocJar)
-
-                    versionMapping {
-                        usage(Usage.JAVA_RUNTIME) {
-                            fromResolutionResult()
-                        }
-                        usage(Usage.JAVA_API) {
-                            fromResolutionOf("runtimeClasspath")
-                        }
-                    }
+                    pom.packaging = "nar"
                 }
             }
         }

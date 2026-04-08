@@ -18,9 +18,8 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
     id("pulsar.nar-conventions")
-    id("pulsar.publish-conventions")
 }
 dependencies {
     compileOnly(project(":managed-ledger"))

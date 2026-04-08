@@ -17,16 +17,11 @@
  * under the License.
  */
 
-plugins {
-    id("pulsar.public-java-library-conventions")
-}
+// Convention plugin for public Pulsar Java libraries that are published to Maven repositories.
+// Combines java-conventions (compilation, testing) with publish-conventions (Maven publishing,
+// signing, POM metadata). Internal-only modules should use pulsar.java-conventions directly.
 
-dependencies {
-    implementation(libs.zookeeper)
-    implementation(libs.simpleclient)
-    implementation(libs.simpleclient.hotspot)
-    implementation(libs.simpleclient.servlet)
-    implementation(libs.simpleclient.common)
-    implementation(libs.jetty.server)
-    implementation(libs.jetty.ee8.servlet)
+plugins {
+    id("pulsar.java-conventions")
+    id("pulsar.publish-conventions")
 }

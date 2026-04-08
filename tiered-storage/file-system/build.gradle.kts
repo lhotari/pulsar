@@ -18,9 +18,8 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
     id("pulsar.nar-conventions")
-    id("pulsar.publish-conventions")
 }
 
 // Force Jetty 9 for this module. Hadoop MiniDFSCluster requires Jetty 9 classes
