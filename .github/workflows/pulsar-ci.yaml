@@ -335,6 +335,7 @@ jobs:
         with:
           name: Unit-${{ matrix.group }}-test-reports
           path: |
+            test-reports/
             **/build/reports/tests/
           retention-days: 7
           if-no-files-found: ignore
@@ -577,6 +578,7 @@ jobs:
         with:
           name: Integration-${{ matrix.upload_name || matrix.group }}-test-reports
           path: |
+            test-reports/
             **/build/reports/tests/
           retention-days: 7
           if-no-files-found: ignore
@@ -793,6 +795,7 @@ jobs:
         with:
           name: System-${{ matrix.group }}-test-reports
           path: |
+            test-reports/
             **/build/reports/tests/
           retention-days: 7
           if-no-files-found: ignore

@@ -227,6 +227,7 @@ jobs:
         with:
           name: Unit-BROKER_FLAKY-test-reports
           path: |
+            test-reports/
             **/build/reports/tests/
           retention-days: 7
           if-no-files-found: ignore

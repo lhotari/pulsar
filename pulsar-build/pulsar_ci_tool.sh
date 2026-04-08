@@ -110,6 +110,55 @@ function ci_move_test_reports() {
   )
 }
 
+# generates a top-level index.html that links to each module's HTML test report
+function ci_generate_test_report_index() {
+  (
+    if [ -n "${GITHUB_WORKSPACE}" ]; then
+      cd "${GITHUB_WORKSPACE}"
+    fi
+    local index_file="build/reports/tests/index.html"
+    mkdir -p "$(dirname "$index_file")"
+    local found_reports=()
+    while IFS= read -r -d '' report; do
+      found_reports+=("$report")
+    done < <(find . -path '*/build/reports/tests/test/index.html' -not -path './build/*' -print0 | sort -z)
+    if [ ${#found_reports[@]} -eq 0 ]; then
+      echo "No HTML test reports found."
+      return 0
+    fi
+    cat > "$index_file" <<'HEADER'
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Test Reports Index</title>
+<style>
+body { font-family: sans-serif; margin: 2em; }
+a { text-decoration: none; color: #0366d6; }
+a:hover { text-decoration: underline; }
+li { margin: 0.3em 0; }
+</style>
+</head>
+<body>
+<h1>Test Reports</h1>
+<ul>
+HEADER
+    for report in "${found_reports[@]}"; do
+      # strip leading ./
+      local rel_path="${report#./}"
+      # extract module name (everything before /build/reports/tests/test/index.html)
+      local module_name="${rel_path%%/build/reports/tests/test/index.html}"
+      echo "  <li><a href=\"${rel_path}\">${module_name}</a></li>" >> "$index_file"
+    done
+    cat >> "$index_file" <<'FOOTER'
+</ul>
+</body>
+</html>
+FOOTER
+    echo "Generated test report index at $index_file with ${#found_reports[@]} module(s)."
+  )
+}
+
 ci_report_netty_leaks() {
   if [ -z "$NETTY_LEAK_DUMP_DIR" ]; then
     echo "NETTY_LEAK_DUMP_DIR isn't set"
