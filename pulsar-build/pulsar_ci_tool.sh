@@ -35,11 +35,21 @@ function ci_list_functions() {
 # prints thread dumps for all running JVMs
 # used in CI when a job gets cancelled because of a job timeout
 function ci_print_thread_dumps() {
+  local dump_dir=""
+  if [[ "$GITHUB_ACTIONS" == "true" ]]; then
+    dump_dir="${GITHUB_WORKSPACE}/build/threaddumps"
+    mkdir -p "$dump_dir"
+  fi
   for java_pid in $(jps -q -J-XX:+PerfDisableSharedMem); do
     echo "----------------------- pid $java_pid -----------------------"
     cat /proc/$java_pid/cmdline | xargs -0 echo
     jcmd $java_pid Thread.print -l
     jcmd $java_pid GC.heap_info
+    if [ -n "$dump_dir" ]; then
+      cat /proc/$java_pid/cmdline | xargs -0 echo > "$dump_dir/cmdline_$java_pid.txt"
+      jcmd $java_pid Thread.print -l > "$dump_dir/threaddump_$java_pid.txt"
+      jcmd $java_pid GC.heap_info > "$dump_dir/heapinfo_$java_pid.txt"
+    fi
   done
   return 0
 }
