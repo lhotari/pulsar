@@ -532,8 +532,14 @@ public class ExtensibleLoadManagerImplTest extends ExtensibleLoadManagerImplBase
     @Test(timeOut = 30_000, dataProvider = "isPersistentTopicSubscriptionTypeTest")
     public void testTransferClientReconnectionWithoutLookup(TopicDomain topicDomain, SubscriptionType subscriptionType)
             throws Exception {
-        testTransferClientReconnectionWithoutLookup(clients, topicDomain, subscriptionType, defaultTestNamespace,
-                admin, lookupUrl.toString(), pulsar1, pulsar2, primaryLoadManager, secondaryLoadManager);
+        var testClients = createTestClients(4);
+        try {
+            testTransferClientReconnectionWithoutLookup(testClients, topicDomain, subscriptionType,
+                    defaultTestNamespace, admin, lookupUrl.toString(), pulsar1, pulsar2,
+                    primaryLoadManager, secondaryLoadManager);
+        } finally {
+            closeTestClients(testClients);
+        }
     }
 
     @Test(enabled = false)
@@ -689,8 +695,13 @@ public class ExtensibleLoadManagerImplTest extends ExtensibleLoadManagerImplBase
     @Test(timeOut = 30 * 1000, dataProvider = "isPersistentTopicSubscriptionTypeTest")
     public void testUnloadClientReconnectionWithLookup(TopicDomain topicDomain,
                                                        SubscriptionType subscriptionType) throws Exception {
-        testUnloadClientReconnectionWithLookup(clients, topicDomain, subscriptionType, defaultTestNamespace,
-                admin, lookupUrl.toString(), pulsar1);
+        var testClients = createTestClients(1);
+        try {
+            testUnloadClientReconnectionWithLookup(testClients, topicDomain, subscriptionType,
+                    defaultTestNamespace, admin, lookupUrl.toString(), pulsar1);
+        } finally {
+            closeTestClients(testClients);
+        }
     }
 
     @Test(enabled = false)
@@ -711,6 +722,7 @@ public class ExtensibleLoadManagerImplTest extends ExtensibleLoadManagerImplBase
         PulsarClient pulsarClient = null;
         try {
             pulsarClient = clients.get(0);
+            @Cleanup
             var producer = pulsarClient.newProducer(Schema.STRING).topic(topic).create();
 
             var consumerCount = subscriptionType == SubscriptionType.Exclusive ? 1 : 3;
@@ -785,8 +797,13 @@ public class ExtensibleLoadManagerImplTest extends ExtensibleLoadManagerImplBase
 
     @Test(timeOut = 30 * 1000, dataProvider = "isPersistentTopicTest")
     public void testOptimizeUnloadDisable(TopicDomain topicDomain) throws Exception {
-        testOptimizeUnloadDisable(clients, topicDomain, defaultTestNamespace, admin, lookupUrl.toString(), pulsar1,
-                pulsar2);
+        var testClients = createTestClients(1);
+        try {
+            testOptimizeUnloadDisable(testClients, topicDomain, defaultTestNamespace, admin,
+                    lookupUrl.toString(), pulsar1, pulsar2);
+        } finally {
+            closeTestClients(testClients);
+        }
     }
 
     @Test(enabled = false)
