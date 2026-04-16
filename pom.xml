@@ -1744,7 +1744,7 @@ flexible messaging model and an intuitive client API.</description>
 
       <dependency>
         <groupId>org.eclipse.jetty.ee8</groupId>
-        <artifactId>jetty-ee8</artifactId>
+        <artifactId>jetty-ee8-bom</artifactId>
         <version>${jetty.version}</version>
         <type>pom</type>
         <scope>import</scope>
