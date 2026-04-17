@@ -67,6 +67,7 @@ dependencies {
 
     testImplementation(libs.jsonassert)
     testImplementation(libs.awaitility)
+    testImplementation(libs.wiremock)
     testImplementation(libs.protobuf.java)
     testImplementation(libs.protobuf.java.util)
     testImplementation(libs.opentelemetry.sdk)

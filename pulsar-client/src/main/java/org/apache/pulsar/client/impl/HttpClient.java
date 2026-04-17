@@ -56,6 +56,7 @@ import org.asynchttpclient.BoundRequestBuilder;
 import org.asynchttpclient.DefaultAsyncHttpClient;
 import org.asynchttpclient.DefaultAsyncHttpClientConfig;
 import org.asynchttpclient.Request;
+import org.asynchttpclient.Response;
 import org.asynchttpclient.SslEngineFactory;
 import org.asynchttpclient.channel.DefaultKeepAliveStrategy;
 
@@ -88,7 +89,12 @@ public class HttpClient implements Closeable {
         DefaultAsyncHttpClientConfig.Builder confBuilder = new DefaultAsyncHttpClientConfig.Builder();
         confBuilder.setCookieStore(null);
         confBuilder.setUseProxyProperties(true);
-        confBuilder.setFollowRedirect(true);
+        // Follow redirects manually in executeGet(...) so we can re-invoke authentication per hop and
+        // carry the Authorization header across cross-origin redirects. async-http-client >= 2.14.5
+        // (CVE-2026-40490 fix) strips the Authorization header when it follows redirects itself; Pulsar
+        // HTTP lookups routinely redirect to another broker's httpUrl/httpUrlTls which is a different
+        // host/port, i.e. cross-origin.
+        confBuilder.setFollowRedirect(false);
         confBuilder.setMaxRedirects(conf.getMaxLookupRedirects());
         confBuilder.setConnectTimeout(DEFAULT_CONNECT_TIMEOUT_IN_SECONDS * 1000);
         confBuilder.setReadTimeout(DEFAULT_READ_TIMEOUT_IN_SECONDS * 1000);
@@ -168,10 +174,28 @@ public class HttpClient implements Closeable {
         try {
             URI hostUri = serviceNameResolver.resolveHostUri();
             String requestUrl = new URL(hostUri.toURL(), path).toString();
-            String remoteHostName = hostUri.getHost();
+            InetSocketAddress originalHost = InetSocketAddress.createUnresolved(hostUri.getHost(), hostUri.getPort());
+            executeGet(requestUrl, originalHost, clientConf.getMaxLookupRedirects(), future, clazz);
+        } catch (Exception e) {
+            log.warn().attr("path", path).exceptionMessage(e).log("PulsarClientImpl");
+            if (e instanceof PulsarClientException) {
+                future.completeExceptionally(e);
+            } else {
+                future.completeExceptionally(new PulsarClientException(e));
+            }
+        }
+
+        return future;
+    }
+
+    private <T> void executeGet(String requestUrl, InetSocketAddress originalHost,
+                                int redirectsRemaining, CompletableFuture<T> future, Class<T> clazz) {
+        try {
+            URI currentUri = URI.create(requestUrl);
+            String remoteHostName = currentUri.getHost();
             AuthenticationDataProvider authData = authentication.getAuthData(remoteHostName);
 
-            CompletableFuture<Map<String, String>>  authFuture = new CompletableFuture<>();
+            CompletableFuture<Map<String, String>> authFuture = new CompletableFuture<>();
 
             // bring a authenticationStage for sasl auth.
             if (authData.hasDataForHttp()) {
@@ -180,11 +204,9 @@ public class HttpClient implements Closeable {
                 authFuture.complete(null);
             }
 
-            // auth complete, do real request
             authFuture.whenComplete((respHeaders, ex) -> {
                 if (ex != null) {
-                    serviceNameResolver.markHostAvailability(
-                            InetSocketAddress.createUnresolved(hostUri.getHost(), hostUri.getPort()), false);
+                    serviceNameResolver.markHostAvailability(originalHost, false);
                     log.warn().attr("requestUrl", requestUrl)
                             .exceptionMessage(ex)
                             .log("Failed to perform http request at authentication stage");
@@ -192,7 +214,6 @@ public class HttpClient implements Closeable {
                     return;
                 }
 
-                // auth complete, use a new builder
                 BoundRequestBuilder builder = httpClient.prepareGet(requestUrl)
                         // share the DNS resolver and cache with Pulsar client
                         .setNameResolver(nameResolver)
@@ -221,19 +242,24 @@ public class HttpClient implements Closeable {
 
                 builder.execute().toCompletableFuture().whenComplete((response2, t) -> {
                     if (t != null) {
-                        serviceNameResolver.markHostAvailability(
-                                InetSocketAddress.createUnresolved(hostUri.getHost(), hostUri.getPort()), false);
+                        serviceNameResolver.markHostAvailability(originalHost, false);
                         log.warn().attr("requestUrl", requestUrl)
                                 .exceptionMessage(t)
                                 .log("Failed to perform http request");
                         future.completeExceptionally(new PulsarClientException(t));
                         return;
                     }
-                    serviceNameResolver.markHostAvailability(
-                            InetSocketAddress.createUnresolved(hostUri.getHost(), hostUri.getPort()), true);
+                    serviceNameResolver.markHostAvailability(originalHost, true);
+
+                    int statusCode = response2.getStatusCode();
+                    if (isRedirectStatusCode(statusCode)) {
+                        handleRedirect(requestUrl, currentUri, response2, originalHost,
+                                redirectsRemaining, future, clazz);
+                        return;
+                    }
 
                     // request not success
-                    if (response2.getStatusCode() != HttpURLConnection.HTTP_OK) {
+                    if (statusCode != HttpURLConnection.HTTP_OK) {
                         String errorReason = response2.getStatusText();
                         if ("application/json".equals(response2.getContentType()) || "text/json".equals(
                                 response2.getContentType())) {
@@ -257,7 +283,7 @@ public class HttpClient implements Closeable {
                                 .attr("failed", errorReason)
                                 .log("HTTP get request failed");
                         Exception e;
-                        if (response2.getStatusCode() == HttpURLConnection.HTTP_NOT_FOUND) {
+                        if (statusCode == HttpURLConnection.HTTP_NOT_FOUND) {
                             e = new NotFoundException("Not found: " + errorReason);
                         } else {
                             e = new PulsarClientException("HTTP get request failed: " + errorReason);
@@ -279,15 +305,48 @@ public class HttpClient implements Closeable {
                 });
             });
         } catch (Exception e) {
-            log.warn().attr("path", path).exceptionMessage(e).log("PulsarClientImpl");
+            log.warn().attr("requestUrl", requestUrl).exceptionMessage(e).log("HTTP request setup failed");
             if (e instanceof PulsarClientException) {
                 future.completeExceptionally(e);
             } else {
                 future.completeExceptionally(new PulsarClientException(e));
             }
         }
+    }
 
-        return future;
+    private <T> void handleRedirect(String requestUrl, URI currentUri,
+                                    Response response,
+                                    InetSocketAddress originalHost, int redirectsRemaining,
+                                    CompletableFuture<T> future, Class<T> clazz) {
+        String location = response.getHeader("Location");
+        if (location == null || location.isEmpty()) {
+            future.completeExceptionally(new PulsarClientException(
+                    "HTTP redirect " + response.getStatusCode() + " without Location header: " + requestUrl));
+            return;
+        }
+        if (redirectsRemaining <= 0) {
+            future.completeExceptionally(new PulsarClientException(
+                    "Maximum redirects exceeded (" + clientConf.getMaxLookupRedirects()
+                            + ") while following HTTP redirect for " + requestUrl));
+            return;
+        }
+        String newUrl;
+        try {
+            newUrl = currentUri.resolve(location).toString();
+        } catch (Exception e) {
+            future.completeExceptionally(new PulsarClientException(
+                    "Invalid redirect Location \"" + location + "\" for " + requestUrl));
+            return;
+        }
+        executeGet(newUrl, originalHost, redirectsRemaining - 1, future, clazz);
+    }
+
+    private static boolean isRedirectStatusCode(int statusCode) {
+        return statusCode == HttpURLConnection.HTTP_MOVED_PERM   // 301
+                || statusCode == HttpURLConnection.HTTP_MOVED_TEMP   // 302
+                || statusCode == HttpURLConnection.HTTP_SEE_OTHER    // 303
+                || statusCode == 307                                 // Temporary Redirect
+                || statusCode == 308;                                // Permanent Redirect
     }
 
     protected PulsarSslConfiguration buildSslConfiguration(ClientConfigurationData config, String host)
