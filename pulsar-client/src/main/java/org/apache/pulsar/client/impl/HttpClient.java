@@ -177,7 +177,7 @@ public class HttpClient implements Closeable {
             InetSocketAddress originalHost = InetSocketAddress.createUnresolved(hostUri.getHost(), hostUri.getPort());
             executeGet(requestUrl, originalHost, clientConf.getMaxLookupRedirects(), future, clazz);
         } catch (Exception e) {
-            log.warn().attr("path", path).exceptionMessage(e).log("PulsarClientImpl");
+            log.warn().attr("path", path).exceptionMessage(e).log("Failed to initiate HTTP get request");
             if (e instanceof PulsarClientException) {
                 future.completeExceptionally(e);
             } else {
