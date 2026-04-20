@@ -4029,14 +4029,14 @@ public class BrokerService implements Closeable {
         return nsPolicies.replication_clusters.contains(pulsar.getConfig().getClusterName());
     }
 
-    public void setCurrentClusterAllowedIfNoClusterIsAllowed(NamespaceName nsName, Policies nsPolicies) {
-        if (nsPolicies.replication_clusters.contains(pulsar.getConfig().getClusterName())
-                || nsPolicies.allowed_clusters.contains(pulsar.getConfig().getClusterName())) {
-            return;
-        }
+    public void setCurrentClusterAllowedWhenCreating(NamespaceName nsName, Policies nsPolicies) {
         if (nsPolicies.replication_clusters.isEmpty()) {
             nsPolicies.replication_clusters.add(pulsar.getConfig().getClusterName());
-        } else {
+        }
+        if (nsPolicies.allowed_clusters.isEmpty()) {
+            return;
+        }
+        if (!nsPolicies.allowed_clusters.contains(pulsar.getConfig().getClusterName())) {
             nsPolicies.allowed_clusters.add(pulsar.getConfig().getClusterName());
         }
     }
