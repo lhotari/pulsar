@@ -114,44 +114,45 @@ public class TopicName implements ServiceUnitId {
         try {
             // The topic name can be in two different forms, one is fully qualified topic name,
             // the other one is short topic name
-            if (!completeTopicName.contains("://")) {
+            int index = completeTopicName.indexOf("://");
+            if (index < 0) {
                 // The short topic name can be:
                 // - <topic>
                 // - <tenant>/<namespace>/<topic>
-                String[] parts = StringUtils.split(completeTopicName, '/');
-                if (parts.length == 3) {
-                    completeTopicName = TopicDomain.persistent.name() + "://" + completeTopicName;
-                } else if (parts.length == 1) {
-                    completeTopicName = TopicDomain.persistent.name() + "://"
-                        + PUBLIC_TENANT + "/" + DEFAULT_NAMESPACE + "/" + parts[0];
+                List<String> parts = splitBySlash(completeTopicName, 0);
+                this.domain = TopicDomain.persistent;
+                if (parts.size() == 3) {
+                    this.tenant = parts.get(0);
+                    this.namespacePortion = parts.get(1);
+                    this.localName = parts.get(2);
+                } else if (parts.size() == 1) {
+                    this.tenant = PUBLIC_TENANT;
+                    this.namespacePortion = DEFAULT_NAMESPACE;
+                    this.localName = parts.get(0);
                 } else {
                     throw new IllegalArgumentException(
                         "Invalid short topic name '" + completeTopicName + "', it should be in the format of "
                         + "<tenant>/<namespace>/<topic> or <topic>");
                 }
-            }
-
-            // Expected format: persistent://tenant/namespace/topic
-            List<String> parts = Splitter.on("://").limit(2).splitToList(completeTopicName);
-            this.domain = TopicDomain.getEnum(parts.get(0));
-
-            String rest = parts.get(1);
-
-            // Expected format: tenant/namespace/<localName>
-            parts = Splitter.on("/").limit(4).splitToList(rest);
-            if (parts.size() == 4) {
-                throw new IllegalArgumentException(
-                        "V1 topic names (with cluster component) are no longer supported. "
-                        + "Please use the V2 format: '<domain>://tenant/namespace/topic'. Got: "
-                        + completeTopicName);
-            } else if (parts.size() == 3) {
-                this.tenant = parts.get(0);
-                this.namespacePortion = parts.get(1);
-                this.localName = parts.get(2);
-                this.partitionIndex = getPartitionIndex(completeTopicName);
-                this.namespaceName = NamespaceName.get(tenant, namespacePortion);
+                this.completeTopicName = domain.name() + "://" + tenant + "/" + namespacePortion + "/" + localName;
             } else {
-                throw new IllegalArgumentException("Invalid topic name: " + completeTopicName);
+                // Expected format: persistent://tenant/namespace/topic
+                List<String> parts = splitBySlash(completeTopicName.substring(index + "://".length()), 4);
+                if (parts.size() == 4) {
+                    throw new IllegalArgumentException(
+                            "V1 topic names (with cluster component) are no longer supported. "
+                                    + "Please use the V2 format: '<domain>://tenant/namespace/topic'. Got: "
+                                    + completeTopicName);
+                }
+                if (parts.size() == 3) {
+                    this.tenant = parts.get(0);
+                    this.namespacePortion = parts.get(1);
+                    this.localName = parts.get(2);
+                } else {
+                    throw new IllegalArgumentException("Invalid topic name " + completeTopicName);
+                }
+                this.completeTopicName = completeTopicName;
+                this.domain = TopicDomain.getEnum(completeTopicName.substring(0, index));
             }
 
             if (StringUtils.isBlank(localName)) {
@@ -159,11 +160,11 @@ public class TopicName implements ServiceUnitId {
                         + " be blank.", completeTopicName));
             }
 
+            this.partitionIndex = getPartitionIndex(localName);
+            this.namespaceName = NamespaceName.get(tenant, namespacePortion);
         } catch (NullPointerException e) {
             throw new IllegalArgumentException("Invalid topic name: " + completeTopicName, e);
         }
-        this.completeTopicName = String.format("%s://%s/%s/%s",
-                                               domain, tenant, namespacePortion, localName);
     }
 
     public boolean isPersistent() {
