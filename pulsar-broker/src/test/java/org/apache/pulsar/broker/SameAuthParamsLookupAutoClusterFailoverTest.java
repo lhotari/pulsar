@@ -80,7 +80,7 @@ public class SameAuthParamsLookupAutoClusterFailoverTest extends OneWayReplicato
                 .pulsarServiceUrlArray(urlArray)
                 .failoverThreshold(5)
                 .recoverThreshold(5)
-                .checkHealthyIntervalMs(300)
+                .checkHealthyIntervalMs(100)
                 .testTopic("a/b/c")
                 .markTopicNotFoundAsAvailable(true)
                 .build();
