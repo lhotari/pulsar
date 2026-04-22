@@ -116,7 +116,7 @@ dependencies {
     testImplementation(project(":pulsar-io:pulsar-io-batch-discovery-triggerers"))
     testImplementation(libs.zt.zip)
     testImplementation(libs.asynchttpclient)
-    testImplementation(libs.bcprov.ext.jdk18on)
+    testImplementation(libs.bcprov.jdk18on)
     testImplementation(libs.commons.math3)
     testImplementation(libs.okhttp3)
     testImplementation(libs.spring.core)

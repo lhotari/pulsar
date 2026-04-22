@@ -27,5 +27,5 @@ dependencies {
         exclude(group = "io.prometheus", module = "simpleclient_caffeine")
     }
     implementation(libs.bcpkix.jdk18on)
-    implementation(libs.bcprov.ext.jdk18on)
+    implementation(libs.bcprov.jdk18on)
 }
