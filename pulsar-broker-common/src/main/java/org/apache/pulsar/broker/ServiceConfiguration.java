@@ -4065,6 +4065,24 @@ public class ServiceConfiguration implements PulsarConfiguration {
     )
     private String packagesManagementLedgerRootPath = "/ledgers";
 
+    @FieldContext(
+        category = CATEGORY_PACKAGES_MANAGEMENT,
+        doc = "Whether new package metadata writes use JSON (safe) or the legacy Java serialization format. "
+            + "Defaults to true. Set to false only as a temporary rollback path; the legacy format will be "
+            + "removed in a future release."
+    )
+    private boolean packagesManagementJsonSerializationEnabled = true;
+
+    @FieldContext(
+        category = CATEGORY_PACKAGES_MANAGEMENT,
+        doc = "Whether to accept reading legacy Java-serialized package metadata written by older brokers. "
+            + "A strict ObjectInputFilter allowlist is applied unconditionally whenever the legacy path "
+            + "runs. Defaults to true for upgrade compatibility; disable once all existing packages have "
+            + "been re-uploaded or rewritten via updateMeta. This default is scheduled to flip to false in "
+            + "a future release."
+    )
+    private boolean packagesManagementAllowLegacyJavaSerialization = true;
+
     /* packages management service configurations (end) */
 
     @FieldContext(

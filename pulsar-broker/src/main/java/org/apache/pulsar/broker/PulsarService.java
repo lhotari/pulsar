@@ -2074,7 +2074,9 @@ public class PulsarService implements AutoCloseable, ShutdownService {
 
     private void startPackagesManagementService() throws IOException {
         // TODO: using provider to initialize the packages management service.
-        this.packagesManagement = new PackagesManagementImpl();
+        this.packagesManagement = new PackagesManagementImpl(
+                config.isPackagesManagementJsonSerializationEnabled(),
+                config.isPackagesManagementAllowLegacyJavaSerialization());
         PackagesStorageProvider storageProvider = PackagesStorageProvider
             .newProvider(config.getPackagesManagementStorageProvider());
         DefaultPackagesStorageConfiguration storageConfiguration = new DefaultPackagesStorageConfiguration();
