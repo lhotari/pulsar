@@ -3029,6 +3029,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                     info.ledgerId = compactedTopicContext.getLedger().getId();
                     info.entries = compactedTopicContext.getLedger().getLastAddConfirmed() + 1;
                     info.size = compactedTopicContext.getLedger().getLength();
+                    if (includeLedgerMetadata) {
+                        info.metadata = compactedTopicContext.getLedger().getLedgerMetadata().toSafeString();
+                    }
                 }
 
                 stats.compactedLedger = info;
@@ -3110,7 +3113,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                                         schemaLedgerInfo.entries = metadata.getLastEntryId() + 1;
                                         schemaLedgerInfo.size = metadata.getLength();
                                         if (includeLedgerMetadata) {
-                                            info.metadata = metadata.toSafeString();
+                                            schemaLedgerInfo.metadata = metadata.toSafeString();
                                         }
                                         stats.schemaLedgers.add(schemaLedgerInfo);
                                         completableFuture.complete(null);
