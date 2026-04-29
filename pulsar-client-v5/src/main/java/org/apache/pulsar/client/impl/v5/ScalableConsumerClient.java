@@ -126,6 +126,13 @@ final class ScalableConsumerClient implements ScalableConsumerSession, AutoClose
                 })
                 .thenAccept(cnx -> {
                     this.cnx = cnx;
+                    if (!cnx.isSupportsScalableTopics()) {
+                        initialAssignmentFuture.completeExceptionally(
+                                new PulsarClientException.FeatureNotSupportedException(
+                                        "Broker does not support scalable topics",
+                                        PulsarClientException.FailedFeatureCheck.SupportsScalableTopics));
+                        return;
+                    }
                     cnx.registerScalableConsumerSession(consumerId, this);
 
                     long requestId = v4Client.newRequestId();

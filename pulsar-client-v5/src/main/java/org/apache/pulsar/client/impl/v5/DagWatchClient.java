@@ -74,6 +74,13 @@ final class DagWatchClient implements DagWatchSession, AutoCloseable {
         v4Client.getConnection(topicName.toString())
                 .thenAccept(cnx -> {
                     this.cnx = cnx;
+                    if (!cnx.isSupportsScalableTopics()) {
+                        initialLayoutFuture.completeExceptionally(
+                                new PulsarClientException.FeatureNotSupportedException(
+                                        "Broker does not support scalable topics",
+                                        PulsarClientException.FailedFeatureCheck.SupportsScalableTopics));
+                        return;
+                    }
                     // Register this session to receive updates
                     cnx.registerDagWatchSession(sessionId, this);
 

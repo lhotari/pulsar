@@ -316,6 +316,7 @@ message FeatureFlags {
   optional bool supports_get_partitioned_metadata_without_auto_creation = 5 [default = false];
   optional bool supports_repl_dedup_by_lid_and_eid = 6 [default = false];
   optional bool supports_topic_watcher_reconcile = 7 [default = false];
+  optional bool supports_scalable_topics = 8 [default = false];
 }
 
 message CommandConnected {

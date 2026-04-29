@@ -219,6 +219,8 @@ public class ClientCnx extends PulsarHandler {
     private boolean brokerSupportsReplDedupByLidAndEid;
     @Getter
     private boolean supportsTopicWatcherReconcile;
+    @Getter
+    private boolean supportsScalableTopics;
 
     /** Idle stat. **/
     @Getter
@@ -435,6 +437,8 @@ public class ClientCnx extends PulsarHandler {
             connected.hasFeatureFlags() && connected.getFeatureFlags().isSupportsReplDedupByLidAndEid();
         supportsTopicWatcherReconcile =
             connected.hasFeatureFlags() && connected.getFeatureFlags().isSupportsTopicWatcherReconcile();
+        supportsScalableTopics =
+            connected.hasFeatureFlags() && connected.getFeatureFlags().isSupportsScalableTopics();
 
         // set remote protocol version to the correct version before we complete the connection future
         setRemoteEndpointProtocolVersion(connected.getProtocolVersion());

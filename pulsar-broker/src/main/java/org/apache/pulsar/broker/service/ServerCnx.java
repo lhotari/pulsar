@@ -216,6 +216,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
     private final ConcurrentLongHashMap<CompletableFuture<Consumer>> consumers;
     private final boolean enableSubscriptionPatternEvaluation;
     private final boolean enableTopicListWatcher;
+    private final boolean scalableTopicsEnabled;
     private final int maxSubscriptionPatternLength;
     private final TopicListService topicListService;
     private final BrokerInterceptor brokerInterceptor;
@@ -383,6 +384,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         this.maxTopicListInFlightLimiter = pulsar.getBrokerService().getMaxTopicListInFlightLimiter();
         this.enableSubscriptionPatternEvaluation = conf.isEnableBrokerSideSubscriptionPatternEvaluation();
         this.enableTopicListWatcher = conf.isEnableBrokerTopicListWatcher();
+        this.scalableTopicsEnabled = conf.isScalableTopicsEnabled();
         this.maxSubscriptionPatternLength = conf.getSubscriptionPatternMaxLength();
         this.topicListService = new TopicListService(pulsar, this,
                 enableSubscriptionPatternEvaluation, maxSubscriptionPatternLength);
@@ -759,6 +761,12 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         log.debug().attr("topic", topicStr).attr("sessionId", sessionId)
                 .log("Received ScalableTopicLookup");
 
+        if (!scalableTopicsEnabled) {
+            ctx.writeAndFlush(Commands.newScalableTopicError(sessionId, ServerError.NotAllowedError,
+                    "Scalable topics are disabled on this broker"));
+            return;
+        }
+
         final TopicName topicName;
         try {
             topicName = TopicName.get(topicStr);
@@ -849,6 +857,12 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         log.debug().attr("topic", topicStr).attr("subscription", subscription)
                 .attr("consumerName", consumerName).attr("requestId", requestId)
                 .log("Received ScalableTopicSubscribe");
+
+        if (!scalableTopicsEnabled) {
+            getCommandSender().sendScalableTopicSubscribeError(requestId, ServerError.NotAllowedError,
+                    "Scalable topics are disabled on this broker");
+            return;
+        }
 
         final TopicName topicName;
         try {
@@ -1117,7 +1131,8 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             }
             maybeScheduleAuthenticationCredentialsRefresh();
         }
-        writeAndFlush(Commands.newConnected(clientProtoVersion, maxMessageSize, enableTopicListWatcher));
+        writeAndFlush(Commands.newConnected(clientProtoVersion, maxMessageSize, enableTopicListWatcher,
+                scalableTopicsEnabled));
         state = State.Connected;
         service.getPulsarStats().recordConnectionCreateSuccess();
         log.debug()
