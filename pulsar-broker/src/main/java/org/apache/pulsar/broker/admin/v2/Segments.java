@@ -51,6 +51,12 @@ import org.apache.pulsar.common.naming.TopicName;
  *
  * <p>These endpoints route to the broker owning the segment's namespace bundle
  * via {@code validateTopicOwnershipAsync}.
+ *
+ * <p><b>Authorization:</b> all endpoints in this resource are state-modifying
+ * cross-broker coordination primitives invoked by the controller broker during
+ * scalable-topic split/merge. They require <b>super-user</b> access. End users
+ * (including tenant admins) should use the {@link ScalableTopics} resource
+ * instead, which provides the user-facing operations on scalable topics.
  */
 @CustomLog
 @Path("/segments")
@@ -66,9 +72,11 @@ public class Segments extends AdminResource {
 
     @PUT
     @Path("/{tenant}/{namespace}/{topic}/{descriptor}")
-    @ApiOperation(value = "Create a segment topic on the owning broker.")
+    @ApiOperation(value = "Create a segment topic on the owning broker. Super-user only.")
     @ApiResponses(value = {
             @ApiResponse(code = 204, message = "Segment topic created successfully"),
+            @ApiResponse(code = 401, message = "This operation requires super-user access"),
+            @ApiResponse(code = 403, message = "This operation requires super-user access"),
             @ApiResponse(code = 500, message = "Internal server error")})
     public void createSegment(
             @Suspended final AsyncResponse asyncResponse,
@@ -87,7 +95,8 @@ public class Segments extends AdminResource {
         validateNamespaceName(tenant, namespace);
         TopicName segmentTopic = segmentTopicName(tenant, namespace, encodedTopic, descriptor);
 
-        validateTopicOwnershipAsync(segmentTopic, authoritative)
+        validateSuperUserAccessAsync()
+                .thenCompose(__ -> validateTopicOwnershipAsync(segmentTopic, authoritative))
                 .thenCompose(__ -> pulsar().getBrokerService().getOrCreateTopic(segmentTopic.toString()))
                 .thenCompose(topic -> {
                     log.info().attr("clientAppId", clientAppId()).attr("segment", segmentTopic)
@@ -116,9 +125,11 @@ public class Segments extends AdminResource {
 
     @POST
     @Path("/{tenant}/{namespace}/{topic}/{descriptor}/terminate")
-    @ApiOperation(value = "Terminate a segment topic so no more messages can be published.")
+    @ApiOperation(value = "Terminate a segment topic so no more messages can be published. Super-user only.")
     @ApiResponses(value = {
             @ApiResponse(code = 204, message = "Segment topic terminated successfully"),
+            @ApiResponse(code = 401, message = "This operation requires super-user access"),
+            @ApiResponse(code = 403, message = "This operation requires super-user access"),
             @ApiResponse(code = 404, message = "Segment topic not found"),
             @ApiResponse(code = 500, message = "Internal server error")})
     public void terminateSegment(
@@ -136,7 +147,8 @@ public class Segments extends AdminResource {
         validateNamespaceName(tenant, namespace);
         TopicName segmentTopic = segmentTopicName(tenant, namespace, encodedTopic, descriptor);
 
-        validateTopicOwnershipAsync(segmentTopic, authoritative)
+        validateSuperUserAccessAsync()
+                .thenCompose(__ -> validateTopicOwnershipAsync(segmentTopic, authoritative))
                 .thenCompose(__ -> pulsar().getBrokerService().getTopicIfExists(segmentTopic.toString()))
                 .thenCompose(optTopic -> {
                     if (optTopic.isEmpty()) {
@@ -164,9 +176,11 @@ public class Segments extends AdminResource {
 
     @DELETE
     @Path("/{tenant}/{namespace}/{topic}/{descriptor}")
-    @ApiOperation(value = "Delete a segment topic.")
+    @ApiOperation(value = "Delete a segment topic. Super-user only.")
     @ApiResponses(value = {
             @ApiResponse(code = 204, message = "Segment topic deleted successfully"),
+            @ApiResponse(code = 401, message = "This operation requires super-user access"),
+            @ApiResponse(code = 403, message = "This operation requires super-user access"),
             @ApiResponse(code = 500, message = "Internal server error")})
     public void deleteSegment(
             @Suspended final AsyncResponse asyncResponse,
@@ -185,7 +199,8 @@ public class Segments extends AdminResource {
         validateNamespaceName(tenant, namespace);
         TopicName segmentTopic = segmentTopicName(tenant, namespace, encodedTopic, descriptor);
 
-        validateTopicOwnershipAsync(segmentTopic, authoritative)
+        validateSuperUserAccessAsync()
+                .thenCompose(__ -> validateTopicOwnershipAsync(segmentTopic, authoritative))
                 .thenCompose(__ -> pulsar().getBrokerService().getTopicIfExists(segmentTopic.toString()))
                 .thenCompose(optTopic -> {
                     if (optTopic.isEmpty()) {
