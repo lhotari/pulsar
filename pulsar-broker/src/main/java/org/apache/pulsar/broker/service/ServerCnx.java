@@ -790,23 +790,44 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             return;
         }
 
-        // Create a DagWatchSession that will send the initial layout and watch for changes
-        var session = new org.apache.pulsar.broker.service.scalable.DagWatchSession(
-                sessionId, topicName, this, resources, service);
-        dagWatchSessions.put(sessionId, session);
-
-        session.start()
-                .thenAcceptAsync(session::pushUpdate, ctx.executor())
-                .exceptionally(ex -> {
-                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                    log.warn().attr("topic", topicName).exception(cause)
-                            .log("ScalableTopicLookup failed");
-                    dagWatchSessions.remove(sessionId);
-                    session.close();
-                    ctx.executor().execute(() ->
+        isTopicOperationAllowed(topicName, TopicOperation.LOOKUP, authenticationData, originalAuthData)
+                .thenAccept(isAuthorized -> {
+                    if (!isAuthorized) {
+                        final String msg = "Client is not authorized to ScalableTopicLookup";
+                        log.warn()
+                                .attr("principal", getPrincipal())
+                                .attr("topic", topicName)
+                                .log(msg);
                         ctx.writeAndFlush(Commands.newScalableTopicError(sessionId,
-                                ServerError.TopicNotFound, cause.getMessage()))
-                    );
+                                ServerError.AuthorizationError, msg));
+                        return;
+                    }
+                    // Create a DagWatchSession that will send the initial layout and watch for changes
+                    var session = new org.apache.pulsar.broker.service.scalable.DagWatchSession(
+                            sessionId, topicName, this, resources, service);
+                    dagWatchSessions.put(sessionId, session);
+
+                    session.start()
+                            .thenAcceptAsync(session::pushUpdate, ctx.executor())
+                            .exceptionally(ex -> {
+                                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                                log.warn().attr("topic", topicName).exception(cause)
+                                        .log("ScalableTopicLookup failed");
+                                dagWatchSessions.remove(sessionId);
+                                session.close();
+                                ctx.executor().execute(() ->
+                                    ctx.writeAndFlush(Commands.newScalableTopicError(sessionId,
+                                            ServerError.TopicNotFound, cause.getMessage()))
+                                );
+                                return null;
+                            });
+                })
+                .exceptionally(ex -> {
+                    logAuthException(remoteAddress, "scalable-topic-lookup", getPrincipal(),
+                            Optional.of(topicName), ex);
+                    ctx.writeAndFlush(Commands.newScalableTopicError(sessionId,
+                            ServerError.AuthorizationError,
+                            "Exception occurred while trying to authorize ScalableTopicLookup"));
                     return null;
                 });
     }
@@ -814,6 +835,11 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
     @Override
     protected void handleCommandScalableTopicClose(
             CommandScalableTopicClose commandScalableTopicClose) {
+        // No per-call authorization: the session is keyed in this connection's
+        // dagWatchSessions map (per-ServerCnx), authentication is enforced at connect,
+        // and the originating ScalableTopicLookup was authorized when the session was
+        // created. A close for an unknown sessionId is an idempotent no-op. Same
+        // pattern as handleCloseProducer / handleCloseConsumer.
         checkArgument(state == State.Connected);
 
         final long sessionId = commandScalableTopicClose.getSessionId();
@@ -880,23 +906,46 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             return;
         }
 
-        scalableTopicService.registerConsumer(topicName, subscription, consumerName, consumerId, this)
-                .whenCompleteAsync((assignment, ex) -> {
-                    if (ex != null) {
-                        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                        log.warn().attr("topic", topicName).attr("subscription", subscription)
-                                .attr("consumerName", consumerName).exception(cause)
-                                .log("ScalableTopicSubscribe failed");
+        isTopicOperationAllowed(topicName, subscription, TopicOperation.CONSUME)
+                .thenAccept(isAuthorized -> {
+                    if (!isAuthorized) {
+                        final String msg = "Client is not authorized to ScalableTopicSubscribe";
+                        log.warn()
+                                .attr("principal", getPrincipal())
+                                .attr("topic", topicName)
+                                .attr("subscription", subscription)
+                                .log(msg);
                         getCommandSender().sendScalableTopicSubscribeError(requestId,
-                                ServerError.UnknownError, cause.getMessage());
+                                ServerError.AuthorizationError, msg);
                         return;
                     }
-                    // Record the registration so we can call onConsumerDisconnect on channelInactive.
-                    scalableConsumerRegistrations.put(consumerId,
-                            new ScalableConsumerRegistrationRef(topicName, subscription, consumerName));
-                    getCommandSender().sendScalableTopicSubscribeResponse(requestId,
-                            org.apache.pulsar.broker.service.scalable.ConsumerSession.toProto(assignment));
-                }, ctx.executor());
+                    scalableTopicService.registerConsumer(topicName, subscription, consumerName,
+                                    consumerId, this)
+                            .whenCompleteAsync((assignment, ex) -> {
+                                if (ex != null) {
+                                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                                    log.warn().attr("topic", topicName).attr("subscription", subscription)
+                                            .attr("consumerName", consumerName).exception(cause)
+                                            .log("ScalableTopicSubscribe failed");
+                                    getCommandSender().sendScalableTopicSubscribeError(requestId,
+                                            ServerError.UnknownError, cause.getMessage());
+                                    return;
+                                }
+                                // Record the registration so we can call onConsumerDisconnect on channelInactive.
+                                scalableConsumerRegistrations.put(consumerId,
+                                        new ScalableConsumerRegistrationRef(topicName, subscription, consumerName));
+                                getCommandSender().sendScalableTopicSubscribeResponse(requestId,
+                                        org.apache.pulsar.broker.service.scalable.ConsumerSession.toProto(assignment));
+                            }, ctx.executor());
+                })
+                .exceptionally(ex -> {
+                    logAuthException(remoteAddress, "scalable-topic-subscribe", getPrincipal(),
+                            Optional.of(topicName), ex);
+                    getCommandSender().sendScalableTopicSubscribeError(requestId,
+                            ServerError.AuthorizationError,
+                            "Exception occurred while trying to authorize ScalableTopicSubscribe");
+                    return null;
+                });
     }
 
     @Override
