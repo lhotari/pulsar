@@ -82,7 +82,7 @@ opencensus = "0.28.0"
 opentelemetry-gcp-resources = "1.48.0-alpha"
 # Data structures / Utils
 guava = "33.4.8-jre"
-caffeine = "3.2.3"
+caffeine = "3.2.4"
 jctools = "4.0.5"
 roaringbitmap = "1.6.9"
 hppc = "0.9.1"
