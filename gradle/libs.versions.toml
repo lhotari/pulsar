@@ -301,7 +301,7 @@ opentelemetry-sdk-testing = { module = "io.opentelemetry:opentelemetry-sdk-testi
 opentelemetry-exporter-otlp = { module = "io.opentelemetry:opentelemetry-exporter-otlp", version.ref = "opentelemetry" }
 opentelemetry-exporter-prometheus = { module = "io.opentelemetry:opentelemetry-exporter-prometheus", version.ref = "opentelemetry-alpha" }
 opentelemetry-instrumentation-resources = { module = "io.opentelemetry.instrumentation:opentelemetry-resources", version.ref = "opentelemetry-instrumentation-alpha" }
-opentelemetry-instrumentation-runtime-telemetry-java17 = { module = "io.opentelemetry.instrumentation:opentelemetry-runtime-telemetry-java17", version.ref = "opentelemetry-instrumentation-alpha" }
+opentelemetry-instrumentation-runtime-telemetry = { module = "io.opentelemetry.instrumentation:opentelemetry-runtime-telemetry", version.ref = "opentelemetry-instrumentation-alpha" }
 opentelemetry-semconv = { module = "io.opentelemetry.semconv:opentelemetry-semconv", version.ref = "opentelemetry-semconv" }
 opentelemetry-gcp-resources = { module = "io.opentelemetry.contrib:opentelemetry-gcp-resources", version.ref = "opentelemetry-gcp-resources" }
 # BouncyCastle

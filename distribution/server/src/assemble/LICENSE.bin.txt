@@ -546,8 +546,7 @@ The Apache Software License, Version 2.0
     - io.opentelemetry.instrumentation-opentelemetry-instrumentation-api-2.27.0.jar
     - io.opentelemetry.instrumentation-opentelemetry-instrumentation-api-incubator-2.27.0-alpha.jar
     - io.opentelemetry.instrumentation-opentelemetry-resources-2.27.0-alpha.jar
-    - io.opentelemetry.instrumentation-opentelemetry-runtime-telemetry-java17-2.27.0-alpha.jar
-    - io.opentelemetry.instrumentation-opentelemetry-runtime-telemetry-java8-2.27.0-alpha.jar
+    - io.opentelemetry.instrumentation-opentelemetry-runtime-telemetry-2.27.0-alpha.jar
     - io.opentelemetry.semconv-opentelemetry-semconv-1.41.0.jar
     - com.google.cloud.opentelemetry-detector-resources-support-0.36.0.jar
     - io.opentelemetry.contrib-opentelemetry-gcp-resources-1.48.0-alpha.jar
