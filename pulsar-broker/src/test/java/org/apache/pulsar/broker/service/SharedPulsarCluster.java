@@ -116,6 +116,8 @@ public class SharedPulsarCluster {
         bkConf.setNumLongPollWorkerThreads(1);
         bkConf.setAllocatorPoolingPolicy(PoolingPolicy.UnpooledHeap);
         bkConf.setLedgerStorageClass("org.apache.bookkeeper.bookie.storage.ldb.DbLedgerStorage");
+        bkConf.setDiskUsageThreshold(0.999F);
+        bkConf.setDiskUsageWarnThreshold(0.99F);
 
         bkCluster = BKCluster.builder()
                 .baseServerConfiguration(bkConf)
