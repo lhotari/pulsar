@@ -83,7 +83,7 @@ opentelemetry-gcp-resources = "1.48.0-alpha"
 # Data structures / Utils
 guava = "33.4.8-jre"
 caffeine = "3.2.4"
-jctools = "4.0.5"
+jctools = "4.0.6"
 roaringbitmap = "1.6.9"
 hppc = "0.9.1"
 aircompressor = "2.0.3"
@@ -316,6 +316,7 @@ error-prone-annotations = { module = "com.google.errorprone:error_prone_annotati
 # Data structures
 caffeine = { module = "com.github.ben-manes.caffeine:caffeine", version.ref = "caffeine" }
 jctools-core = { module = "org.jctools:jctools-core", version.ref = "jctools" }
+jctools-core-jdk11 = { module = "org.jctools:jctools-core-jdk11", version.ref = "jctools" }
 roaringbitmap = { module = "org.roaringbitmap:RoaringBitmap", version.ref = "roaringbitmap" }
 hppc = { module = "com.carrotsearch:hppc", version.ref = "hppc" }
 aircompressor = { module = "io.airlift:aircompressor", version.ref = "aircompressor" }

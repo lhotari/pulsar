@@ -504,7 +504,8 @@ The Apache Software License, Version 2.0
     - io.jsonwebtoken-jjwt-impl-0.13.0.jar
     - io.jsonwebtoken-jjwt-jackson-0.13.0.jar
   * JCTools - Java Concurrency Tools for the JVM
-    - org.jctools-jctools-core-4.0.5.jar
+    - org.jctools-jctools-core-4.0.6.jar
+    - org.jctools-jctools-core-jdk11-4.0.6.jar
   * Vertx
     - io.vertx-vertx-auth-common-4.5.24.jar
     - io.vertx-vertx-bridge-common-4.5.24.jar
