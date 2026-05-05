@@ -314,16 +314,16 @@ The Apache Software License, Version 2.0
      - picocli-shell-jline3-4.7.5.jar
  * Jackson
      - jackson-annotations-2.21.jar
-     - jackson-core-2.21.2.jar
-     - jackson-databind-2.21.2.jar
-     - jackson-dataformat-yaml-2.21.2.jar
-     - jackson-jaxrs-base-2.21.2.jar
-     - jackson-jaxrs-json-provider-2.21.2.jar
-     - jackson-module-jaxb-annotations-2.21.2.jar
-     - jackson-module-jsonSchema-2.21.2.jar
-     - jackson-datatype-jdk8-2.21.2.jar
-     - jackson-datatype-jsr310-2.21.2.jar
-     - jackson-module-parameter-names-2.21.2.jar
+     - jackson-core-2.21.3.jar
+     - jackson-databind-2.21.3.jar
+     - jackson-dataformat-yaml-2.21.3.jar
+     - jackson-jaxrs-base-2.21.3.jar
+     - jackson-jaxrs-json-provider-2.21.3.jar
+     - jackson-module-jaxb-annotations-2.21.3.jar
+     - jackson-module-jsonSchema-2.21.3.jar
+     - jackson-datatype-jdk8-2.21.3.jar
+     - jackson-datatype-jsr310-2.21.3.jar
+     - jackson-module-parameter-names-2.21.3.jar
  * Caffeine -- caffeine-3.2.4.jar
  * Conscrypt -- conscrypt-openjdk-uber-2.5.2.jar
  * Gson
@@ -387,10 +387,10 @@ The Apache Software License, Version 2.0
     - log4j-slf4j2-impl-2.25.4.jar
     - log4j-web-2.25.4.jar
  * OpenTelemetry
-    - opentelemetry-api-1.56.0.jar
-    - opentelemetry-api-incubator-1.56.0-alpha.jar
-    - opentelemetry-common-1.56.0.jar
-    - opentelemetry-context-1.56.0.jar
+    - opentelemetry-api-1.61.0.jar
+    - opentelemetry-api-incubator-1.61.0-alpha.jar
+    - opentelemetry-common-1.61.0.jar
+    - opentelemetry-context-1.61.0.jar
   * Slog
     - slog-0.9.7.jar
 
