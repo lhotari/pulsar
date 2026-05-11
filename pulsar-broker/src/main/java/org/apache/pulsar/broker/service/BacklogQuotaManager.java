@@ -90,10 +90,10 @@ public class BacklogQuotaManager {
             // Mutating cursors here (skipEntries / markDeletePosition) contends with the
             // delete path and can keep namespace force-delete from completing in time;
             // the entries are about to be discarded anyway.
-            log.debug()
-                    .attr("topic", persistentTopic.getName())
-                    .attr("backlogQuotaType", backlogQuotaType)
-                    .log("Skipping backlog-quota eviction on fenced/closing topic");
+            if (log.isDebugEnabled()) {
+                log.debug("Skipping backlog-quota eviction on fenced/closing topic {}, backlog quota type {}",
+                        persistentTopic.getName(), backlogQuotaType);
+            }
             return;
         }
         BacklogQuota quota = persistentTopic.getBacklogQuota(backlogQuotaType);
