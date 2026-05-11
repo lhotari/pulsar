@@ -167,6 +167,7 @@ kubernetesclient = "23.0.0"
 aws-sdk = "1.12.788"
 hadoop3 = "3.5.0"
 jclouds = "2.6.0"
+thrift = "0.23.0"
 # Shading
 shadow = "9.4.1"
 
@@ -247,6 +248,8 @@ bookkeeper-stream-storage-service-impl = { module = "org.apache.bookkeeper:strea
 bookkeeper-tools-framework = { module = "org.apache.bookkeeper:bookkeeper-tools-framework", version.ref = "bookkeeper" }
 bookkeeper-http-vertx-server = { module = "org.apache.bookkeeper.http:vertx-http-server", version.ref = "bookkeeper" }
 distributedlog-core = { module = "org.apache.distributedlog:distributedlog-core", version.ref = "bookkeeper" }
+# thrift is a transitive dependency of distributedlog-core
+thrift = { module = "org.apache.thrift:libthrift", version.ref = "thrift" }
 # ZooKeeper
 zookeeper = { module = "org.apache.zookeeper:zookeeper", version.ref = "zookeeper" }
 zookeeper-tests = { module = "org.apache.zookeeper:zookeeper", version.ref = "zookeeper" }
