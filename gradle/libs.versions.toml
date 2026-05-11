@@ -65,7 +65,7 @@ avro = "1.12.0"
 gson = "2.13.2"
 snakeyaml = "2.0"
 # Vert.x
-vertx = "4.5.24"
+vertx = "4.5.25"
 # Networking / HTTP
 asynchttpclient = "2.14.5"
 conscrypt = "2.5.2"
