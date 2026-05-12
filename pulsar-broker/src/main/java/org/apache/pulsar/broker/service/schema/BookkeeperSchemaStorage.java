@@ -39,11 +39,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Function;
-<<<<<<< HEAD
-import org.apache.bookkeeper.client.AsyncCallback;
-=======
-import lombok.CustomLog;
->>>>>>> f07decea04 ([fix][broker] Wait for orphan schema ledger cleanup before retry (#25579))
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerEntry;
@@ -519,22 +514,14 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
         try {
             bookKeeper.asyncDeleteLedger(ledgerId, (rc, ctx) -> {
                 if (rc != BKException.Code.OK) {
-                    log.warn()
-                            .attr("schemaId", schemaId)
-                            .attr("ledgerId", ledgerId)
-                            .attr("rc", rc)
-                            .attr("reason", reason)
-                            .log("Failed to delete orphan schema ledger");
+                    log.warn("Failed to delete orphan schema ledger, schemaId {}, ledgerId {}, reason {}, rc {}",
+                                    schemaId, ledgerId, reason, rc);
                 }
                 future.complete(null);
             }, null);
         } catch (Throwable t) {
-            log.warn()
-                    .attr("schemaId", schemaId)
-                    .attr("ledgerId", ledgerId)
-                    .attr("reason", reason)
-                    .exception(t)
-                    .log("Failed to trigger orphan schema ledger deletion");
+            log.warn("Failed to trigger orphan schema ledger deletion, schemaId {}, ledgerId {}, reason {}",
+                    schemaId, ledgerId, reason, t);
             future.complete(null);
         }
         return future;
