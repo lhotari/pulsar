@@ -389,7 +389,8 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
                     bookKeeper.asyncDeleteLedger(position.getLedgerId(), (rc, ctx) -> {
                         if (rc != BKException.Code.OK) {
                             log.warn("Failed to delete orphan ledger after schema locator creation"
-                                    + " failed, schemaId {}, ledgerId {}, rc: {}", schemaId, position.getLedgerId(), rc);
+                                    + " failed, schemaId {}, ledgerId {}, rc: {}",
+                                    schemaId, position.getLedgerId(), rc);
                         }
                     }, null);
                 }
