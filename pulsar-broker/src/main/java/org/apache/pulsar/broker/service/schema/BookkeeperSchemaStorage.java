@@ -383,19 +383,13 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
                     return;
                 }
                 Throwable cause = FutureUtil.unwrapCompletionException(ex);
-                log.warn()
-                        .attr("schemaId", schemaId)
-                        .attr("ledgerId", position.getLedgerId())
-                        .exception(cause)
-                        .log("Failed to create schema locator with position");
+                log.warn("Failed to create schema locator with position, schemaId {}, ledgerId {}",
+                        schemaId, position.getLedgerId(), ex);
                 if (cause instanceof AlreadyExistsException || cause instanceof BadVersionException) {
                     bookKeeper.asyncDeleteLedger(position.getLedgerId(), (rc, ctx) -> {
                         if (rc != BKException.Code.OK) {
-                            log.warn()
-                                    .attr("schemaId", schemaId)
-                                    .attr("ledgerId", position.getLedgerId())
-                                    .attr("rc", rc)
-                                    .log("Failed to delete orphan ledger after schema locator creation failed");
+                            log.warn("Failed to delete orphan ledger after schema locator creation"
+                                    + " failed, schemaId {}, ledgerId {}, rc: {}", schemaId, position.getLedgerId(), rc);
                         }
                     }, null);
                 }
@@ -512,11 +506,8 @@ public class BookkeeperSchemaStorage implements SchemaStorage {
         ).thenApply(ignore -> nextVersion).whenComplete((__, ex) -> {
             if (ex != null) {
                 Throwable cause = FutureUtil.unwrapCompletionException(ex);
-                log.warn()
-                        .attr("schemaId", schemaId)
-                        .attr("ledgerId", position.getLedgerId())
-                        .exception(cause)
-                        .log("Failed to update schema locator with position");
+                log.warn("Failed to update schema locator with position, schemaId {}, ledgerId {}",
+                        schemaId, position.getLedgerId(), ex);
                 if (cause instanceof AlreadyExistsException || cause instanceof BadVersionException) {
                     bookKeeper.asyncDeleteLedger(position.getLedgerId(), new AsyncCallback.DeleteCallback() {
                         @Override
