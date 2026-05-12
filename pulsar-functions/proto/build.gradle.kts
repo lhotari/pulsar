@@ -34,3 +34,7 @@ dependencies {
     }
     runtimeOnly(libs.perfmark.api)
 }
+
+lightproto {
+    generateJson = true
+}
