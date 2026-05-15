@@ -192,6 +192,8 @@ tasks.withType<Test>().configureEach {
         "-Dpulsar.allocator.out_of_memory_policy=FallbackToHeap",
         "-Dpulsar.test.preventExit=true",
     )
+    // Avro 1.12.1+ makes Avro serialization strict
+    systemProperty("org.apache.avro.SERIALIZABLE_CLASSES", "java.math.BigDecimal,java.math.BigInteger,java.net.URI,java.net.URL,java.io.File,java.lang.Integer")
 }
 
 // Expose test classes for cross-module test dependencies (Maven test-jar equivalent)
