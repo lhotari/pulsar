@@ -185,6 +185,9 @@ public abstract class PulsarWebResource {
     }
 
     public String getWebServiceListenerName() {
+        if (httpRequest == null) {
+            return null;
+        }
         return (String) httpRequest.getAttribute(WebService.ATTRIBUTE_LISTENER_NAME);
     }
 

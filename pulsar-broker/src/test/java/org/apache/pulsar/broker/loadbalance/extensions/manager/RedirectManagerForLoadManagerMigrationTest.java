@@ -54,6 +54,7 @@ public class RedirectManagerForLoadManagerMigrationTest {
 
         configuration.setLoadManagerClassName(ModularLoadManagerImpl.class.getName());
         configuration.setLoadBalancerDebugModeEnabled(true);
+        configuration.setLoadManagerMigrationEnabled(true);
 
         // Test 1: No load manager class name found.
         doReturn(CompletableFuture.completedFuture(

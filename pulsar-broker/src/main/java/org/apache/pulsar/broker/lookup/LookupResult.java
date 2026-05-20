@@ -262,12 +262,10 @@ public class LookupResult {
             // remove the parameter when the type is not redirect
             uriBuilder.replaceQueryParam("authoritative");
         }
-        // pass the listener parameter
+        // override the listener parameter only when the lookup result specifies one;
+        // otherwise leave the original request's listenerName query parameter untouched
         if (StringUtils.isNotBlank(brokerServiceListenerName)) {
             uriBuilder.replaceQueryParam(LISTENERNAME_PARAM, brokerServiceListenerName);
-        } else {
-            // remove the parameter when the listener name is not specified
-            uriBuilder.replaceQueryParam(LISTENERNAME_PARAM);
         }
         return uriBuilder.build();
     }

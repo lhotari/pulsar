@@ -39,6 +39,7 @@ import java.net.MalformedURLException;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -135,6 +136,7 @@ import org.apache.pulsar.broker.transaction.buffer.TransactionBufferProvider;
 import org.apache.pulsar.broker.transaction.buffer.impl.TransactionBufferClientImpl;
 import org.apache.pulsar.broker.transaction.pendingack.TransactionPendingAckStoreProvider;
 import org.apache.pulsar.broker.transaction.pendingack.impl.MLPendingAckStoreProvider;
+import org.apache.pulsar.broker.validator.BindAddressValidator;
 import org.apache.pulsar.broker.validator.MultipleListenerValidator;
 import org.apache.pulsar.broker.validator.TransactionBatchedWriteValidator;
 import org.apache.pulsar.broker.web.RestException;
@@ -858,8 +860,11 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                 throw new PulsarServerException("Cannot start the service once it was stopped");
             }
 
-            if (config.getWebServicePort().isEmpty() && config.getWebServicePortTls().isEmpty()) {
-                throw new IllegalArgumentException("webServicePort/webServicePortTls must be present");
+            if (config.getWebServicePort().isEmpty()
+                    && config.getWebServicePortTls().isEmpty()
+                    && BindAddressValidator.validateBindAddresses(config, Arrays.asList("http", "https")).isEmpty()) {
+                throw new IllegalArgumentException(
+                        "webServicePort/webServicePortTls or http/https bindAddresses must be present");
             }
 
             if (config.isAuthorizationEnabled() && !config.isAuthenticationEnabled()) {

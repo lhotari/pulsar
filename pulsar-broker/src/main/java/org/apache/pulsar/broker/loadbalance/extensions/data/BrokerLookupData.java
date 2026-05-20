@@ -89,6 +89,11 @@ public record BrokerLookupData (String brokerId,
     }
 
     public LookupResult toLookupResult(LookupOptions options) throws PulsarServerException {
+        if (options.hasAdvertisedListenerName()
+                && !advertisedListeners.containsKey(options.getAdvertisedListenerName())) {
+            throw new PulsarServerException("the broker do not have "
+                    + options.getAdvertisedListenerName() + " listener");
+        }
         return LookupResult.create(this, options);
     }
 
