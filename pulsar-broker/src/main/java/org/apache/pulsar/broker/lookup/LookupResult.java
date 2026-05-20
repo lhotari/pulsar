@@ -22,6 +22,8 @@ import static org.apache.pulsar.broker.lookup.v2.TopicLookup.LISTENERNAME_PARAM;
 import java.net.URI;
 import java.util.Map;
 import java.util.Objects;
+import javax.ws.rs.WebApplicationException;
+import javax.ws.rs.core.Response;
 import javax.ws.rs.core.UriBuilder;
 import lombok.Builder;
 import lombok.Getter;
@@ -176,14 +178,14 @@ public class LookupResult {
             }
         }
 
-        // for backwards compatibility, parse the brokerId from webServiceUrl or webServiceUrlTls
-        // this might be the case temporarily when the broker upgrade happens and there are mixed versions
-        // of brokers in the cluster
+        // for backwards compatibility, derive the brokerId from webServiceUrl or webServiceUrlTls by
+        // parsing the URL and taking host:port. This is a transient state that may occur during a
+        // rolling upgrade when older brokers in the cluster do not yet publish a brokerId in their
+        // ephemeral data; once all brokers have been upgraded, the brokerId field is always populated.
         if (brokerId == null && (webServiceUrl != null || webServiceUrlTls != null)) {
-            if (webServiceUrl != null) {
-                brokerId = webServiceUrl.substring("http://".length());
-            } else {
-                brokerId = webServiceUrlTls.substring("https://".length());
+            URI url = URI.create(webServiceUrl != null ? webServiceUrl : webServiceUrlTls);
+            if (url.getHost() != null && url.getPort() != -1) {
+                brokerId = url.getHost() + ":" + url.getPort();
             }
         }
 
@@ -246,9 +248,14 @@ public class LookupResult {
     private URI toRedirectUriInternal(URI requestUri, boolean authoritativeRedirect) {
         boolean requireHttps = "https".equalsIgnoreCase(requestUri.getScheme());
         String webServiceUrl = requireHttps ? lookupData.getHttpUrlTls() : lookupData.getHttpUrl();
-        Objects.requireNonNull(webServiceUrl, () -> "No "
-                + (requireHttps ? "https" : "http")
-                + " URL configured for broker " + lookupData.getBrokerId());
+        if (webServiceUrl == null) {
+            // Preserve the legacy 412 error semantics when the redirect target broker has no URL
+            // configured for the requested scheme.
+            throw new WebApplicationException(Response.status(Response.Status.PRECONDITION_FAILED)
+                    .entity("No " + (requireHttps ? "https" : "http")
+                            + " URL configured for broker " + lookupData.getBrokerId())
+                    .build());
+        }
         URI webServiceUri = URI.create(webServiceUrl);
         UriBuilder uriBuilder =
                 UriBuilder.fromUri(requestUri) // use the path and query parameters from the request URI

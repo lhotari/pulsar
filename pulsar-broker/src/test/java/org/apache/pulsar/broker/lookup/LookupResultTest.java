@@ -25,10 +25,13 @@ import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.expectThrows;
 import java.net.URI;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import javax.ws.rs.WebApplicationException;
+import javax.ws.rs.core.Response;
 import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
 import org.apache.pulsar.broker.namespace.LookupOptions;
 import org.apache.pulsar.broker.namespace.NamespaceEphemeralData;
@@ -370,7 +373,8 @@ public class LookupResultTest {
 
         URI request = URI.create("https://original-host:1234/admin");
 
-        assertThrows(NullPointerException.class, () -> result.toRedirectUri(request));
+        WebApplicationException e = expectThrows(WebApplicationException.class, () -> result.toRedirectUri(request));
+        assertEquals(e.getResponse().getStatus(), Response.Status.PRECONDITION_FAILED.getStatusCode());
     }
 
     @Test

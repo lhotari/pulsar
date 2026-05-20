@@ -52,7 +52,7 @@ public class RestProducerContext implements TopicEventsListener {
     public void handleEvent(String topicName, TopicEvent event, EventStage stage, Throwable t) {
         // remove topic from owning topics when it's unloaded
         if (event == TopicEvent.UNLOAD && stage == EventStage.SUCCESS) {
-            addOrRemoveTopic(topicName, event == TopicEvent.UNLOAD);
+            addOrRemoveTopic(topicName, true);
         }
     }
 

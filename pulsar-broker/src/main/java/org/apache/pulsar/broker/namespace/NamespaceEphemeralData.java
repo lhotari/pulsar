@@ -22,6 +22,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import org.apache.pulsar.policies.data.loadbalancer.AdvertisedListener;
 import org.jspecify.annotations.NonNull;
@@ -29,6 +30,11 @@ import org.jspecify.annotations.NonNull;
 @Data
 @NoArgsConstructor
 public class NamespaceEphemeralData {
+    // The brokerId field was added later. During a rolling upgrade, entries written by older brokers may not
+    // contain it (LookupResult derives it from the URL host:port in that case). Exclude it from equals/hashCode
+    // so that consumers of this object do not see spurious "changed" notifications when the same logical owner
+    // transitions from a missing brokerId to a populated one.
+    @EqualsAndHashCode.Exclude
     private String brokerId;
     private String nativeUrl;
     private String nativeUrlTls;

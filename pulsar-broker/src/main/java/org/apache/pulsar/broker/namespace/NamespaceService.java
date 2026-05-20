@@ -328,11 +328,14 @@ public class NamespaceService implements AutoCloseable {
     }
 
     /**
-     * Return the LookupResult of the broker who's owning a particular service unit.
-     * The LookupResult won't necessary be the broker who is owning the service unit. When the cluster contains
-     * multiple brokers with different load manager implementations, the LookupResult will be
-     * <p>
-     * If the service unit is not owned, return an empty optional
+     * Return the LookupResult of the broker that owns a particular service unit.
+     *
+     * <p>The returned LookupResult will not necessarily point to the broker that currently owns the service unit.
+     * When the cluster contains multiple brokers with different load manager implementations (e.g. during a
+     * load-manager migration), the LookupResult may point to a broker running the expected load manager, so the
+     * caller redirects the request to a broker that can handle it.
+     *
+     * <p>If the service unit is not owned, return an empty optional.
      */
     public Optional<LookupResult> getLookupResultForWebRequest(ServiceUnitId suName, LookupOptions options)
             throws Exception {
@@ -573,9 +576,7 @@ public class NamespaceService implements AutoCloseable {
                     .get(config.getMetadataStoreOperationTimeoutSeconds(), SECONDS);
 
             if (candidateBroker == null) {
-                Optional<LeaderBroker> currentLeader = pulsar.getLeaderElectionService().getCurrentLeader()
-                        // make a copy to avoid races, lookups will tolerate stale leader information
-                        .map(Function.identity());
+                Optional<LeaderBroker> currentLeader = pulsar.getLeaderElectionService().getCurrentLeader();
 
                 if (options.isAuthoritative()) {
                     // leader broker already assigned the current broker as owner
