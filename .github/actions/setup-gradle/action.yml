@@ -69,3 +69,10 @@ runs:
         build-scan-terms-of-use-agree: 'yes'
         cache-read-only: ${{ inputs.cache-read-only }}
         add-job-summary: ${{ inputs.add-job-summary }}
+
+    - name: Enable pulsar.includeBuildInfo for CI builds
+      shell: bash
+      run: |
+        mkdir -p ~/.gradle
+        touch ~/.gradle/gradle.properties
+        grep -q '^pulsar.includeBuildInfo=' ~/.gradle/gradle.properties || echo pulsar.includeBuildInfo=true >> ~/.gradle/gradle.properties
