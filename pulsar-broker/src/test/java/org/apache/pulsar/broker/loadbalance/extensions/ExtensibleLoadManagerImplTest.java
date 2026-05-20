@@ -1135,12 +1135,21 @@ public class ExtensibleLoadManagerImplTest extends ExtensibleLoadManagerImplBase
 
     @Test(priority = 200)
     public void testDeployAndRollbackLoadManager() throws Exception {
+        // The migration redirect (RedirectManagerForLoadManagerMigration) is gated by
+        // loadManagerMigrationEnabled; enable it on the existing brokers so they redirect
+        // requests to the newly added broker that uses a different load manager.
+        boolean prevMigration1 = pulsar1.getConfiguration().isLoadManagerMigrationEnabled();
+        boolean prevMigration2 = pulsar2.getConfiguration().isLoadManagerMigrationEnabled();
+        pulsar1.getConfiguration().setLoadManagerMigrationEnabled(true);
+        pulsar2.getConfiguration().setLoadManagerMigrationEnabled(true);
+        try {
         // Test rollback to modular load manager.
         ServiceConfiguration defaultConf = getDefaultConf();
         defaultConf.setAllowAutoTopicCreation(true);
         defaultConf.setForceDeleteNamespaceAllowed(true);
         defaultConf.setLoadManagerClassName(ModularLoadManagerImpl.class.getName());
         defaultConf.setLoadBalancerSheddingEnabled(false);
+        defaultConf.setLoadManagerMigrationEnabled(true);
         try (var additionalPulsarTestContext = createAdditionalPulsarTestContext(defaultConf)) {
             // start pulsar3 with old load manager
             @Cleanup
@@ -1201,6 +1210,7 @@ public class ExtensibleLoadManagerImplTest extends ExtensibleLoadManagerImplBase
             conf.setLoadManagerClassName(ExtensibleLoadManagerImpl.class.getName());
             conf.setLoadBalancerLoadSheddingStrategy(TransferShedder.class.getName());
             conf.setLoadManagerServiceUnitStateTableViewClassName(serviceUnitStateTableViewClassName);
+            conf.setLoadManagerMigrationEnabled(true);
             try (var additionPulsarTestContext = createAdditionalPulsarTestContext(conf)) {
                 @Cleanup
                 var pulsar4 = additionPulsarTestContext.getPulsarService();
@@ -1328,6 +1338,10 @@ public class ExtensibleLoadManagerImplTest extends ExtensibleLoadManagerImplBase
                 assertEquals(consumer.receive().getValue(), "t2");
                 assertEquals(consumer.receive().getValue(), "t3");
             }
+        }
+        } finally {
+            pulsar1.getConfiguration().setLoadManagerMigrationEnabled(prevMigration1);
+            pulsar2.getConfiguration().setLoadManagerMigrationEnabled(prevMigration2);
         }
     }
 
