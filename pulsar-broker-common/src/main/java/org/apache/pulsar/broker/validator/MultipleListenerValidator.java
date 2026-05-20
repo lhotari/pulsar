@@ -20,7 +20,6 @@ package org.apache.pulsar.broker.validator;
 
 import java.net.URI;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +28,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.broker.ServiceConfigurationUtils;
 import org.apache.pulsar.policies.data.loadbalancer.AdvertisedListener;
 
 /**
@@ -37,18 +37,79 @@ import org.apache.pulsar.policies.data.loadbalancer.AdvertisedListener;
 public final class MultipleListenerValidator {
 
     /**
-     * Validate the configuration of `advertisedListeners`, `internalListenerName`.
-     * 1. `advertisedListeners` consists of a comma-separated list of endpoints.
-     * 2. Each endpoint consists of a listener name and an associated address (`listener:scheme://host:port`).
-     * 3. A listener name may be repeated to define both a non-TLS and a TLS endpoint.
-     * 4. Duplicate definitions are disallowed.
-     * 5. If `internalListenerName` is absent, set it to the first listener defined in `advertisedListeners`.
-     * @param config the pulsar broker configure.
-     * @return
+     * Validate the configuration of `advertisedListeners` and `internalListenerName`.
+     * <ol>
+     * <li>`advertisedListeners` is a comma-separated list of endpoints in the form
+     *     `listener:scheme://host:port`. Supported schemes are `pulsar`, `pulsar+ssl`, `http`, and `https`.
+     * <li>A listener name may be repeated to define multiple endpoints (e.g. binary and HTTPS) for the
+     *     same listener; duplicate definitions for the same scheme are rejected.
+     * <li>`internalListenerName` identifies the listener used for cluster-internal broker-to-broker
+     *     communication. It defaults to {@value ServiceConfiguration#DEFAULT_INTERNAL_LISTENER_NAME}.
+     *     An internal listener entry is synthesized from the legacy `brokerServicePort`,
+     *     `brokerServicePortTls`, `webServicePort`, and `webServicePortTls` properties; any URLs the
+     *     user has explicitly declared for the internal listener in `advertisedListeners` take
+     *     precedence and the legacy-port URLs only fill in the unspecified slots. This allows the
+     *     internal listener to override individual URLs (e.g. a custom TLS hostname) while still
+     *     benefiting from auto-population for the rest.
+     * </ol>
+     * @param config the pulsar broker configuration.
+     * @return the parsed and validated advertised listeners, keyed by listener name.
      */
     public static Map<String, AdvertisedListener> validateAndAnalysisAdvertisedListener(ServiceConfiguration config) {
+        String internalListenerName = StringUtils.defaultIfBlank(config.getInternalListenerName(),
+                ServiceConfiguration.DEFAULT_INTERNAL_LISTENER_NAME);
+        if (StringUtils.isBlank(config.getInternalListenerName())) {
+            config.setInternalListenerName(internalListenerName);
+        }
+
+        Map<String, AdvertisedListener> result = parseAdvertisedListeners(config);
+
+        // Merge the legacy-port-derived internal listener URLs into any explicit configuration.
+        // Explicit URLs in `advertisedListeners` take precedence; the legacy-port URLs fill in the
+        // unspecified slots so that broker-to-broker communication keeps working without forcing the
+        // user to redeclare every URL when they only want to override one.
+        AdvertisedListener fromLegacyPorts = buildInternalListenerFromLegacyPorts(config);
+        if (fromLegacyPorts != null) {
+            AdvertisedListener explicit = result.get(internalListenerName);
+            result.put(internalListenerName, mergeListeners(explicit, fromLegacyPorts));
+        }
+
+        if (!result.isEmpty() && !result.containsKey(internalListenerName)) {
+            throw new IllegalArgumentException("the `advertisedListeners` configuration does not contain "
+                    + "an entry for the internal listener `" + internalListenerName + "`, and the legacy "
+                    + "port properties are not configured so an internal listener cannot be synthesized");
+        }
+
+        return result;
+    }
+
+    /**
+     * Merges two {@link AdvertisedListener} entries. URLs from {@code override} take precedence; URLs
+     * from {@code fallback} only fill in the slots that {@code override} leaves null. Either argument
+     * may be null.
+     */
+    private static AdvertisedListener mergeListeners(AdvertisedListener override, AdvertisedListener fallback) {
+        if (override == null) {
+            return fallback;
+        }
+        if (fallback == null) {
+            return override;
+        }
+        return AdvertisedListener.builder()
+                .brokerServiceUrl(override.getBrokerServiceUrl() != null
+                        ? override.getBrokerServiceUrl() : fallback.getBrokerServiceUrl())
+                .brokerServiceUrlTls(override.getBrokerServiceUrlTls() != null
+                        ? override.getBrokerServiceUrlTls() : fallback.getBrokerServiceUrlTls())
+                .brokerHttpUrl(override.getBrokerHttpUrl() != null
+                        ? override.getBrokerHttpUrl() : fallback.getBrokerHttpUrl())
+                .brokerHttpsUrl(override.getBrokerHttpsUrl() != null
+                        ? override.getBrokerHttpsUrl() : fallback.getBrokerHttpsUrl())
+                .build();
+    }
+
+    private static Map<String, AdvertisedListener> parseAdvertisedListeners(ServiceConfiguration config) {
         if (StringUtils.isBlank(config.getAdvertisedListeners())) {
-            return Collections.emptyMap();
+            return new LinkedHashMap<>();
         }
         Optional<String> firstListenerName = Optional.empty();
         Map<String, List<String>> listeners = new LinkedHashMap<>();
@@ -59,19 +120,17 @@ public final class MultipleListenerValidator {
                         + str + " do not contain listener name");
             }
             String listenerName = StringUtils.trim(str.substring(0, index));
-            if (!firstListenerName.isPresent()) {
+            if (firstListenerName.isEmpty()) {
                 firstListenerName = Optional.of(listenerName);
             }
             String value = StringUtils.trim(str.substring(index + 1));
             listeners.computeIfAbsent(listenerName, k -> new ArrayList<>(2));
             listeners.get(listenerName).add(value);
         }
+        // For backward compatibility, if `internalListenerName` was left blank, default it to the first
+        // listener parsed from `advertisedListeners`.
         if (StringUtils.isBlank(config.getInternalListenerName())) {
             config.setInternalListenerName(firstListenerName.get());
-        }
-        if (!listeners.containsKey(config.getInternalListenerName())) {
-            throw new IllegalArgumentException("the `advertisedListeners` configure do not contain "
-                    + "`internalListenerName` entry");
         }
         final Map<String, AdvertisedListener> result = new LinkedHashMap<>();
         final Map<String, Set<String>> reverseMappings = new LinkedHashMap<>();
@@ -136,4 +195,35 @@ public final class MultipleListenerValidator {
         return result;
     }
 
+    /**
+     * Synthesize an {@link AdvertisedListener} for the internal listener from the legacy port
+     * configuration (`brokerServicePort`, `brokerServicePortTls`, `webServicePort`,
+     * `webServicePortTls`). Returns {@code null} if no binary port and no web port is set; the caller
+     * is then responsible for raising an error if the internal listener is still missing after
+     * parsing `advertisedListeners`.
+     */
+    private static AdvertisedListener buildInternalListenerFromLegacyPorts(ServiceConfiguration config) {
+        boolean hasBinaryPort = config.getBrokerServicePort().isPresent()
+                || config.getBrokerServicePortTls().isPresent();
+        boolean hasWebPort = config.getWebServicePort().isPresent()
+                || config.getWebServicePortTls().isPresent();
+        if (!hasBinaryPort && !hasWebPort) {
+            return null;
+        }
+        String host = ServiceConfigurationUtils.getDefaultOrConfiguredAddress(config.getAdvertisedAddress());
+        return AdvertisedListener.builder()
+                .brokerServiceUrl(config.getBrokerServicePort()
+                        .map(port -> URI.create(ServiceConfigurationUtils.brokerUrl(host, port))).orElse(null))
+                .brokerServiceUrlTls(config.getBrokerServicePortTls()
+                        .map(port -> URI.create(ServiceConfigurationUtils.brokerUrlTls(host, port))).orElse(null))
+                .brokerHttpUrl(config.getWebServicePort()
+                        .map(port -> URI.create(ServiceConfigurationUtils.webServiceUrl(host, port))).orElse(null))
+                .brokerHttpsUrl(config.getWebServicePortTls()
+                        .map(port -> URI.create(ServiceConfigurationUtils.webServiceUrlTls(host, port))).orElse(null))
+                .build();
+    }
+
+    // Prevent instantiation
+    private MultipleListenerValidator() {
+    }
 }

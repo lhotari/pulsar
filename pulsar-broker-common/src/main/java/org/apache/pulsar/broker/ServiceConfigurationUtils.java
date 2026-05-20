@@ -70,9 +70,14 @@ public class ServiceConfigurationUtils {
 
         AdvertisedListener advertisedListener = result.get(configuration.getInternalListenerName());
         if (advertisedListener != null && !ignoreAdvertisedListener) {
-            String address = advertisedListener.getBrokerServiceUrl().getHost();
-            if (address != null) {
-                return address;
+            // The listener may have been synthesized from a subset of the legacy ports, so any of
+            // the four URLs may be null. Pick the first non-null URL to derive the host.
+            URI url = firstNonNullUri(advertisedListener.getBrokerServiceUrl(),
+                    advertisedListener.getBrokerServiceUrlTls(),
+                    advertisedListener.getBrokerHttpUrl(),
+                    advertisedListener.getBrokerHttpsUrl());
+            if (url != null && url.getHost() != null) {
+                return url.getHost();
             }
         }
 
@@ -111,6 +116,15 @@ public class ServiceConfigurationUtils {
 
     private static URI createUriOrNull(String scheme, String hostname, Optional<Integer> port) {
         return port.map(p -> URI.create(String.format("%s://%s:%d", scheme, hostname, p))).orElse(null);
+    }
+
+    private static URI firstNonNullUri(URI... uris) {
+        for (URI uri : uris) {
+            if (uri != null) {
+                return uri;
+            }
+        }
+        return null;
     }
 
     /**

@@ -972,13 +972,16 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             this.addWebServerHandlers(webService, metricsServlet, this.config);
             this.webService.start();
 
-            // Refresh addresses and update configuration, since the port might have been dynamically assigned
-            if (config.getBrokerServicePort().equals(Optional.of(0))) {
-                config.setBrokerServicePort(brokerService.getListenPort());
-            }
-            if (config.getBrokerServicePortTls().equals(Optional.of(0))) {
-                config.setBrokerServicePortTls(brokerService.getListenPortTls());
-            }
+            // Refresh addresses and update configuration based on the actual bound ports. This is
+            // necessary both for dynamic ports (`Optional.of(0)`) and for the case where the broker
+            // is configured only via `bindAddresses` (legacy port properties left as
+            // `Optional.empty()`), so that downstream code — in particular
+            // MultipleListenerValidator.validateAndAnalysisAdvertisedListener — can synthesize the
+            // internal advertised listener from the now-known ports.
+            brokerService.getListenPort().ifPresent(port -> config.setBrokerServicePort(Optional.of(port)));
+            brokerService.getListenPortTls().ifPresent(port -> config.setBrokerServicePortTls(Optional.of(port)));
+            // Recompute the cached advertised listener map now that the bound ports are known.
+            this.advertisedListeners = MultipleListenerValidator.validateAndAnalysisAdvertisedListener(config);
             this.webServiceAddress = webAddress(config);
             this.webServiceAddressTls = webAddressTls(config);
             this.brokerServiceUrl = brokerUrl(config);
