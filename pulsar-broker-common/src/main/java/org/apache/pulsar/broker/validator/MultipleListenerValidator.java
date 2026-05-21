@@ -23,7 +23,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import org.apache.commons.lang3.StringUtils;
@@ -56,13 +55,19 @@ public final class MultipleListenerValidator {
      * @return the parsed and validated advertised listeners, keyed by listener name.
      */
     public static Map<String, AdvertisedListener> validateAndAnalysisAdvertisedListener(ServiceConfiguration config) {
-        String internalListenerName = StringUtils.defaultIfBlank(config.getInternalListenerName(),
-                ServiceConfiguration.DEFAULT_INTERNAL_LISTENER_NAME);
-        if (StringUtils.isBlank(config.getInternalListenerName())) {
-            config.setInternalListenerName(internalListenerName);
-        }
-
         Map<String, AdvertisedListener> result = parseAdvertisedListeners(config);
+
+        // Resolve `internalListenerName` if the user left it blank. For backward compatibility,
+        // prefer the first entry parsed from `advertisedListeners`; otherwise fall back to the
+        // constant default ("internal"). The field's own default is also "internal", so this
+        // branch is only taken when the user explicitly set the property to an empty string.
+        if (StringUtils.isBlank(config.getInternalListenerName())) {
+            String fallback = result.isEmpty()
+                    ? ServiceConfiguration.DEFAULT_INTERNAL_LISTENER_NAME
+                    : result.keySet().iterator().next();
+            config.setInternalListenerName(fallback);
+        }
+        String internalListenerName = config.getInternalListenerName();
 
         // Merge the legacy-port-derived internal listener URLs into any explicit configuration.
         // Explicit URLs in `advertisedListeners` take precedence; the legacy-port URLs fill in the
@@ -111,7 +116,6 @@ public final class MultipleListenerValidator {
         if (StringUtils.isBlank(config.getAdvertisedListeners())) {
             return new LinkedHashMap<>();
         }
-        Optional<String> firstListenerName = Optional.empty();
         Map<String, List<String>> listeners = new LinkedHashMap<>();
         for (final String str : StringUtils.split(config.getAdvertisedListeners(), ",")) {
             int index = str.indexOf(":");
@@ -120,17 +124,9 @@ public final class MultipleListenerValidator {
                         + str + " do not contain listener name");
             }
             String listenerName = StringUtils.trim(str.substring(0, index));
-            if (firstListenerName.isEmpty()) {
-                firstListenerName = Optional.of(listenerName);
-            }
             String value = StringUtils.trim(str.substring(index + 1));
             listeners.computeIfAbsent(listenerName, k -> new ArrayList<>(2));
             listeners.get(listenerName).add(value);
-        }
-        // For backward compatibility, if `internalListenerName` was left blank, default it to the first
-        // listener parsed from `advertisedListeners`.
-        if (StringUtils.isBlank(config.getInternalListenerName())) {
-            config.setInternalListenerName(firstListenerName.get());
         }
         final Map<String, AdvertisedListener> result = new LinkedHashMap<>();
         final Map<String, Set<String>> reverseMappings = new LinkedHashMap<>();

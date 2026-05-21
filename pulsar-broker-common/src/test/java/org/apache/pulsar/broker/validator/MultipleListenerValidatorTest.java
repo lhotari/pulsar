@@ -75,6 +75,40 @@ public class MultipleListenerValidatorTest {
         assertEquals("internal", config.getInternalListenerName());
     }
 
+    @Test
+    public void testBlankInternalListenerNameFallsBackToFirstAdvertisedListener() {
+        // Backwards compatibility: if the user explicitly leaves `internalListenerName` blank but
+        // configures `advertisedListeners` with custom names, the first listener parsed from
+        // `advertisedListeners` is used as the internal listener — the previous Pulsar behavior.
+        ServiceConfiguration config = newConfigWithNoPorts();
+        config.setInternalListenerName("");
+        config.setAdvertisedListeners(
+                "region1:pulsar://region1.example.com:6650,region2:pulsar://region2.example.com:6650");
+        Map<String, AdvertisedListener> listeners =
+                MultipleListenerValidator.validateAndAnalysisAdvertisedListener(config);
+        // `region1` is the first declared, so it becomes the internal listener.
+        assertEquals(config.getInternalListenerName(), "region1");
+        // Both region entries are preserved in the result map.
+        assertEquals(listeners.size(), 2);
+        assertNotNull(listeners.get("region1"));
+        assertNotNull(listeners.get("region2"));
+    }
+
+    @Test
+    public void testBlankInternalListenerNameFallsBackToDefaultWhenNoAdvertisedListeners() {
+        // When both `internalListenerName` and `advertisedListeners` are blank, the validator falls
+        // back to the constant default `"internal"`.
+        ServiceConfiguration config = newConfigWithNoPorts();
+        config.setInternalListenerName("");
+        config.setBrokerServicePort(Optional.of(6650));
+        config.setWebServicePort(Optional.of(8080));
+        Map<String, AdvertisedListener> listeners =
+                MultipleListenerValidator.validateAndAnalysisAdvertisedListener(config);
+        assertEquals(config.getInternalListenerName(), ServiceConfiguration.DEFAULT_INTERNAL_LISTENER_NAME);
+        assertNotNull(listeners.get(ServiceConfiguration.DEFAULT_INTERNAL_LISTENER_NAME),
+                "the legacy-port-synthesized internal listener should be present");
+    }
+
     @Test(expectedExceptions = IllegalArgumentException.class)
     public void testMalformedListener() {
         ServiceConfiguration config = newConfigWithNoPorts();
