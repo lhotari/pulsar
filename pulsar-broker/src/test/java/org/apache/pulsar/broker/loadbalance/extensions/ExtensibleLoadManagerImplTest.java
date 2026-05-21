@@ -258,13 +258,14 @@ public class ExtensibleLoadManagerImplTest extends ExtensibleLoadManagerImplBase
 
         // TODO: Support LookupOptions.loadTopicsInBundle = true
 
-        // Test LookupOptions.advertisedListenerName = internal but the broker do not have internal listener.
+        // Test LookupOptions.advertisedListenerName = otherlistener but the broker does not have it.
         try {
             pulsar2.getNamespaceService()
-                    .getLookupResultForWebRequest(bundle, LookupOptions.builder().advertisedListenerName("internal").build());
+                    .getLookupResultForWebRequest(bundle,
+                            LookupOptions.builder().advertisedListenerName("otherlistener").build());
             fail();
         } catch (Exception e) {
-            assertTrue(e.getMessage().contains("the broker do not have internal listener"));
+            assertTrue(e.getMessage().contains("the broker do not have otherlistener listener"));
         }
     }
 
