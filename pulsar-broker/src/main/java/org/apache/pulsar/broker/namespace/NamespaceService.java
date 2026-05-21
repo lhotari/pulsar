@@ -263,8 +263,8 @@ public class NamespaceService implements AutoCloseable {
         return future;
     }
 
-    private CompletableFuture<Optional<LookupResult>> redirectIfLoadBalancerOnBrokerIsNotExpected
-            (ServiceUnitId bundle, LookupOptions options) {
+    private CompletableFuture<Optional<LookupResult>> redirectIfLoadBalancerOnBrokerIsNotExpected(
+            ServiceUnitId bundle, LookupOptions options) {
         if (isSLAOrHeartbeatNamespace(bundle.getNamespaceObject().toString())) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -529,8 +529,9 @@ public class NamespaceService implements AutoCloseable {
         return CompletableFuture.completedFuture(null);
     }
 
-    private static void resolveBrokerServiceLookupResult(LookupOptions options, NamespaceEphemeralData nsData,
-                                                         CompletableFuture<Optional<LookupResult>> future) {
+    // package-private for tests
+    static void resolveBrokerServiceLookupResult(LookupOptions options, NamespaceEphemeralData nsData,
+                                                 CompletableFuture<Optional<LookupResult>> future) {
         LookupResult result = LookupResult.create(nsData, options);
 
         // fail the lookup if advertised listener name is provided and does not match
@@ -542,12 +543,16 @@ public class NamespaceService implements AutoCloseable {
             return;
         }
 
+        // Tolerate a missing web service listener on the target broker — during a rolling cluster
+        // upgrade, older brokers may not have published the listener yet. Fall back to the default
+        // web service URL (the broker's primary HTTP/HTTPS) in that case; toRedirectUri picks it up
+        // because httpUrl/httpUrlTls were left at the broker's defaults by LookupResult.create.
         if (options.hasWebServiceAdvertisedListenerName()
                 && !Objects.equals(result.getWebServiceListenerName(), options.getWebServiceAdvertisedListenerName())) {
             log.warn()
                     .attr("brokerId", result.getLookupData().getBrokerId())
                     .attr("webServiceListenerName", options.getWebServiceAdvertisedListenerName())
-                    .log("The broker doesn't have the listener configured.");
+                    .log("Target broker has no matching web service listener; redirecting to its default URL.");
         }
 
         future.complete(Optional.of(result));

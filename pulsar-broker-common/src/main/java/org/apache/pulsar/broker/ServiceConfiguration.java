@@ -293,7 +293,8 @@ public class ServiceConfiguration implements PulsarConfiguration {
                     + " A local hostname is also accepted but not recommended.\n"
                     + " Each `ip:port` may be bound by exactly one (listener, scheme) pair. An entry"
                     + " that exactly matches the auto-derived internal-listener binding is tolerated;"
-                    + " assigning the same `ip:port` to a different listener or scheme fails validation.")
+                    + " assigning the same `ip:port` to a different listener or scheme fails validation.\n"
+                    + " Port `0` (OS-assigned ephemeral port) is supported only for the internal listener.")
     private String bindAddresses;
 
     @FieldContext(category = CATEGORY_SERVER,

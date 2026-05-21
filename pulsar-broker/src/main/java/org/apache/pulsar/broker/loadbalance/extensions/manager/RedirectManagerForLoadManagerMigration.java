@@ -89,8 +89,8 @@ public class RedirectManagerForLoadManagerMigration {
      * @param options lookup options
      * @return lookup result
      */
-    public CompletableFuture<Optional<LookupResult>> redirectIfLoadBalancerOnBrokerIsNotExpected
-            (LookupOptions options) {
+    public CompletableFuture<Optional<LookupResult>> redirectIfLoadBalancerOnBrokerIsNotExpected(
+            LookupOptions options) {
         if (!pulsar.getConfiguration().isLoadManagerMigrationEnabled()) {
             // no-op when load manager migration is disabled.
             return CompletableFuture.completedFuture(Optional.empty());

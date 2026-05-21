@@ -22,6 +22,8 @@ import static org.apache.pulsar.broker.lookup.v2.TopicLookup.LISTENERNAME_PARAM;
 import java.net.URI;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.UriBuilder;
@@ -125,56 +127,27 @@ public class LookupResult {
                                                String webServiceUrlTls, String pulsarServiceUrl,
                                                String pulsarServiceUrlTls,
                                                Map<String, AdvertisedListener> advertisedListeners) {
-        String httpUrl = webServiceUrl;
-        String httpUrlTls = webServiceUrlTls;
-        String brokerServiceUrl = pulsarServiceUrl;
-        String brokerServiceUrlTls = pulsarServiceUrlTls;
-        String brokerServiceListenerName = null;
-        String webServiceListenerName = null;
+        UrlOverride urls = new UrlOverride(webServiceUrl, webServiceUrlTls, pulsarServiceUrl, pulsarServiceUrlTls);
 
-        if (options != null && options.hasAdvertisedListenerName()) {
-            String advertisedListenerName = options.getAdvertisedListenerName();
-            var advertisedListener = advertisedListeners.get(advertisedListenerName);
-            if (advertisedListener != null) {
-                brokerServiceListenerName = advertisedListenerName;
-                brokerServiceUrl = null;
-                brokerServiceUrlTls = null;
-                if (advertisedListener.getBrokerServiceUrl() != null) {
-                    brokerServiceUrl = advertisedListener.getBrokerServiceUrl().toString();
-                }
-                if (advertisedListener.getBrokerServiceUrlTls() != null) {
-                    brokerServiceUrlTls = advertisedListener.getBrokerServiceUrlTls().toString();
-                }
-            }
+        AdvertisedListener brokerListener = lookupListener(options, advertisedListeners,
+                LookupOptions::hasAdvertisedListenerName, LookupOptions::getAdvertisedListenerName);
+        if (brokerListener != null) {
+            urls.brokerServiceListenerName = options.getAdvertisedListenerName();
+            urls.applyBrokerServiceOverride(brokerListener);
         }
 
-        if (options != null && options.hasWebServiceAdvertisedListenerName()) {
-            String advertisedListenerName = options.getWebServiceAdvertisedListenerName();
-            var advertisedListener = advertisedListeners.get(advertisedListenerName);
-            if (advertisedListener != null) {
-                webServiceListenerName = advertisedListenerName;
-                httpUrl = null;
-                httpUrlTls = null;
-                if (advertisedListener.getBrokerHttpUrl() != null) {
-                    httpUrl = advertisedListener.getBrokerHttpUrl().toString();
-                }
-                if (advertisedListener.getBrokerHttpsUrl() != null) {
-                    httpUrlTls = advertisedListener.getBrokerHttpsUrl().toString();
-                }
-                // default to use the webServiceAdvertisedListenerName as the brokerServiceListenerName if there
-                // is a brokerServiceUrl or brokerServiceUrlTls configured for the webServiceAdvertisedListenerName
-                if (brokerServiceListenerName == null && (advertisedListener.getBrokerServiceUrl() != null
-                        || advertisedListener.getBrokerServiceUrlTls() != null)) {
-                    brokerServiceListenerName = advertisedListenerName;
-                    brokerServiceUrl = null;
-                    brokerServiceUrlTls = null;
-                    if (advertisedListener.getBrokerServiceUrl() != null) {
-                        brokerServiceUrl = advertisedListener.getBrokerServiceUrl().toString();
-                    }
-                    if (advertisedListener.getBrokerServiceUrlTls() != null) {
-                        brokerServiceUrlTls = advertisedListener.getBrokerServiceUrlTls().toString();
-                    }
-                }
+        AdvertisedListener webListener = lookupListener(options, advertisedListeners,
+                LookupOptions::hasWebServiceAdvertisedListenerName,
+                LookupOptions::getWebServiceAdvertisedListenerName);
+        if (webListener != null) {
+            urls.webServiceListenerName = options.getWebServiceAdvertisedListenerName();
+            urls.applyWebServiceOverride(webListener);
+            // default the brokerServiceListenerName to the webServiceAdvertisedListenerName if the
+            // listener also configures broker service URLs and no separate advertisedListenerName was given
+            if (urls.brokerServiceListenerName == null
+                    && (webListener.getBrokerServiceUrl() != null || webListener.getBrokerServiceUrlTls() != null)) {
+                urls.brokerServiceListenerName = options.getWebServiceAdvertisedListenerName();
+                urls.applyBrokerServiceOverride(webListener);
             }
         }
 
@@ -192,14 +165,53 @@ public class LookupResult {
         return builder()
                 .type(type)
                 .brokerId(brokerId)
-                .httpUrl(httpUrl)
-                .httpUrlTls(httpUrlTls)
-                .brokerServiceUrl(brokerServiceUrl)
-                .brokerServiceUrlTls(brokerServiceUrlTls)
+                .httpUrl(urls.httpUrl)
+                .httpUrlTls(urls.httpUrlTls)
+                .brokerServiceUrl(urls.brokerServiceUrl)
+                .brokerServiceUrlTls(urls.brokerServiceUrlTls)
                 .authoritativeRedirect(authoritativeRedirect)
-                .brokerServiceListenerName(brokerServiceListenerName)
-                .webServiceListenerName(webServiceListenerName)
+                .brokerServiceListenerName(urls.brokerServiceListenerName)
+                .webServiceListenerName(urls.webServiceListenerName)
                 .build();
+    }
+
+    private static AdvertisedListener lookupListener(LookupOptions options,
+                                                     Map<String, AdvertisedListener> advertisedListeners,
+                                                     Predicate<LookupOptions> hasName,
+                                                     Function<LookupOptions, String> getName) {
+        if (options == null || !hasName.test(options)) {
+            return null;
+        }
+        return advertisedListeners.get(getName.apply(options));
+    }
+
+    /** Mutable URL-set used while resolving listener-specific overrides for a LookupResult. */
+    private static final class UrlOverride {
+        String httpUrl;
+        String httpUrlTls;
+        String brokerServiceUrl;
+        String brokerServiceUrlTls;
+        String brokerServiceListenerName;
+        String webServiceListenerName;
+
+        UrlOverride(String httpUrl, String httpUrlTls, String brokerServiceUrl, String brokerServiceUrlTls) {
+            this.httpUrl = httpUrl;
+            this.httpUrlTls = httpUrlTls;
+            this.brokerServiceUrl = brokerServiceUrl;
+            this.brokerServiceUrlTls = brokerServiceUrlTls;
+        }
+
+        void applyBrokerServiceOverride(AdvertisedListener listener) {
+            brokerServiceUrl = listener.getBrokerServiceUrl() != null
+                    ? listener.getBrokerServiceUrl().toString() : null;
+            brokerServiceUrlTls = listener.getBrokerServiceUrlTls() != null
+                    ? listener.getBrokerServiceUrlTls().toString() : null;
+        }
+
+        void applyWebServiceOverride(AdvertisedListener listener) {
+            httpUrl = listener.getBrokerHttpUrl() != null ? listener.getBrokerHttpUrl().toString() : null;
+            httpUrlTls = listener.getBrokerHttpsUrl() != null ? listener.getBrokerHttpsUrl().toString() : null;
+        }
     }
 
     public boolean isBrokerUrl() {
@@ -233,7 +245,7 @@ public class LookupResult {
      * @return the redirect URI
      */
     public URI toRedirectUri(URI requestUri) {
-        return toRedirectUriInternal(requestUri, this.authoritativeRedirect);
+        return toRedirectUriInternal(requestUri, this.authoritativeRedirect, false);
     }
 
     /**
@@ -242,18 +254,40 @@ public class LookupResult {
      * redirect as authoritative regardless of what the lookup result carried).
      */
     public URI toRedirectUri(URI requestUri, boolean authoritativeRedirectOverride) {
-        return toRedirectUriInternal(requestUri, authoritativeRedirectOverride);
+        return toRedirectUriInternal(requestUri, authoritativeRedirectOverride, false);
     }
 
-    private URI toRedirectUriInternal(URI requestUri, boolean authoritativeRedirect) {
+    /**
+     * Same as {@link #toRedirectUri(URI)} but specialised for topic-lookup redirects: when this
+     * {@code LookupResult} has a resolved {@code brokerServiceListenerName} it is always written to
+     * the {@code listenerName} query parameter on the redirect URI. This handles the case where the
+     * original lookup request carried the listener name in a header rather than as a query
+     * parameter — the header does not survive an HTTP redirect, so the parameter form must be
+     * propagated to the next broker. Other (non-lookup) redirect paths use {@link #toRedirectUri}
+     * and leave the parameter alone.
+     */
+    public URI toLookupRedirectUri(URI requestUri) {
+        return toRedirectUriInternal(requestUri, this.authoritativeRedirect, true);
+    }
+
+    private URI toRedirectUriInternal(URI requestUri, boolean authoritativeRedirect,
+                                      boolean injectListenerNameQueryParam) {
         boolean requireHttps = "https".equalsIgnoreCase(requestUri.getScheme());
         String webServiceUrl = requireHttps ? lookupData.getHttpUrlTls() : lookupData.getHttpUrl();
         if (webServiceUrl == null) {
             // Preserve the legacy 412 error semantics when the redirect target broker has no URL
             // configured for the requested scheme.
+            String scheme = requireHttps ? "https" : "http";
+            StringBuilder entity = new StringBuilder()
+                    .append("No ").append(scheme).append(" URL configured for broker ")
+                    .append(lookupData.getBrokerId());
+            if (StringUtils.isNotBlank(webServiceListenerName)) {
+                entity.append(" on web service listener `").append(webServiceListenerName).append("`");
+            } else if (StringUtils.isNotBlank(brokerServiceListenerName)) {
+                entity.append(" on listener `").append(brokerServiceListenerName).append("`");
+            }
             throw new WebApplicationException(Response.status(Response.Status.PRECONDITION_FAILED)
-                    .entity("No " + (requireHttps ? "https" : "http")
-                            + " URL configured for broker " + lookupData.getBrokerId())
+                    .entity(entity.toString())
                     .build());
         }
         URI webServiceUri = URI.create(webServiceUrl);
@@ -269,9 +303,12 @@ public class LookupResult {
             // remove the parameter when the type is not redirect
             uriBuilder.replaceQueryParam("authoritative");
         }
-        // override the listener parameter only when the lookup result specifies one;
-        // otherwise leave the original request's listenerName query parameter untouched
-        if (StringUtils.isNotBlank(brokerServiceListenerName)) {
+        // Only set the listenerName query parameter on topic-lookup redirects. The original lookup
+        // request can carry it either as a query parameter or as a header; the latter does not
+        // survive an HTTP redirect, so the resolved listener name must be reinjected as a query
+        // parameter so the next broker sees it. Other redirect paths (admin endpoints) do not
+        // understand `listenerName` as a parameter, so for those we leave the request URI alone.
+        if (injectListenerNameQueryParam && StringUtils.isNotBlank(brokerServiceListenerName)) {
             uriBuilder.replaceQueryParam(LISTENERNAME_PARAM, brokerServiceListenerName);
         }
         return uriBuilder.build();

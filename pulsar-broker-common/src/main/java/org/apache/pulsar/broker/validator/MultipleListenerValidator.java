@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.validator;
 
+import io.netty.util.NetUtil;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Pattern;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.ServiceConfigurationUtils;
@@ -35,8 +37,51 @@ import org.apache.pulsar.policies.data.loadbalancer.AdvertisedListener;
  */
 public final class MultipleListenerValidator {
 
+    /** Allowed listener-name characters: ASCII letters, digits, underscore, hyphen. */
+    private static final Pattern LISTENER_NAME_PATTERN = Pattern.compile("[A-Za-z0-9_-]+");
+
     /**
-     * Validate the configuration of `advertisedListeners` and `internalListenerName`.
+     * Format the host:port part of a URI for use as a uniqueness key and in error messages, wrapping
+     * IPv6 literals in brackets so that the colon separator is unambiguous. {@link URI#getHost()} may
+     * or may not include the brackets depending on the JDK, so they are stripped before the
+     * {@link NetUtil#isValidIpV6Address} check.
+     */
+    static String formatHostPort(URI uri) {
+        String host = uri.getHost();
+        if (host == null) {
+            return host + ":" + uri.getPort();
+        }
+        String unbracketed = host.startsWith("[") && host.endsWith("]")
+                ? host.substring(1, host.length() - 1) : host;
+        if (NetUtil.isValidIpV6Address(unbracketed)) {
+            return "[" + unbracketed + "]:" + uri.getPort();
+        }
+        return host + ":" + uri.getPort();
+    }
+
+    /**
+     * Validate a listener name. Listener names must be non-blank and contain only ASCII letters,
+     * digits, underscore, and hyphen so they are safe to embed in URLs without encoding.
+     *
+     * @throws IllegalArgumentException if the name is null, blank, or contains disallowed characters.
+     */
+    public static void validateListenerName(String name) {
+        if (StringUtils.isBlank(name)) {
+            throw new IllegalArgumentException("listener name must not be blank");
+        }
+        if (!LISTENER_NAME_PATTERN.matcher(name).matches()) {
+            throw new IllegalArgumentException("listener name `" + name + "` must contain only ASCII"
+                    + " letters, digits, underscore, or hyphen");
+        }
+    }
+
+    /**
+     * Validate `advertisedListeners` and `internalListenerName`, returning the parsed listener map.
+     * <p>
+     * This method mutates the supplied {@link ServiceConfiguration}: when {@code internalListenerName}
+     * is blank, it is written back with the resolved fallback value (the first parsed listener if any,
+     * otherwise {@value ServiceConfiguration#DEFAULT_INTERNAL_LISTENER_NAME}) so that subsequent reads
+     * from the config see the effective value.
      * <ol>
      * <li>`advertisedListeners` is a comma-separated list of endpoints in the form
      *     `listener:scheme://host:port`. Supported schemes are `pulsar`, `pulsar+ssl`, `http`, and `https`.
@@ -51,16 +96,18 @@ public final class MultipleListenerValidator {
      *     internal listener to override individual URLs (e.g. a custom TLS hostname) while still
      *     benefiting from auto-population for the rest.
      * </ol>
-     * @param config the pulsar broker configuration.
+     * @param config the pulsar broker configuration; updated in place when
+     *               {@code internalListenerName} is blank.
      * @return the parsed and validated advertised listeners, keyed by listener name.
      */
-    public static Map<String, AdvertisedListener> validateAndAnalysisAdvertisedListener(ServiceConfiguration config) {
+    public static Map<String, AdvertisedListener> validateAndUpdateAdvertisedListeners(ServiceConfiguration config) {
         Map<String, AdvertisedListener> result = parseAdvertisedListeners(config);
 
-        // Resolve `internalListenerName` if the user left it blank. For backward compatibility,
-        // prefer the first entry parsed from `advertisedListeners`; otherwise fall back to the
-        // constant default ("internal"). The field's own default is also "internal", so this
-        // branch is only taken when the user explicitly set the property to an empty string.
+        // Resolve `internalListenerName` if the user left it blank (null, empty, or whitespace).
+        // For backward compatibility, prefer the first entry parsed from `advertisedListeners`;
+        // otherwise fall back to the constant default ("internal"). The field's own default is
+        // also "internal", so this branch is normally taken only when the user explicitly set the
+        // property to an empty string.
         if (StringUtils.isBlank(config.getInternalListenerName())) {
             String fallback = result.isEmpty()
                     ? ServiceConfiguration.DEFAULT_INTERNAL_LISTENER_NAME
@@ -117,13 +164,20 @@ public final class MultipleListenerValidator {
             return new LinkedHashMap<>();
         }
         Map<String, List<String>> listeners = new LinkedHashMap<>();
-        for (final String str : StringUtils.split(config.getAdvertisedListeners(), ",")) {
+        // Trim whitespace around comma-separated entries so configurations split across multiple
+        // lines or padded for readability are accepted, and skip empties.
+        for (final String raw : StringUtils.split(config.getAdvertisedListeners(), ",")) {
+            String str = StringUtils.trim(raw);
+            if (StringUtils.isEmpty(str)) {
+                continue;
+            }
             int index = str.indexOf(":");
             if (index <= 0) {
                 throw new IllegalArgumentException("the configure entry `advertisedListeners` is invalid. because "
                         + str + " do not contain listener name");
             }
             String listenerName = StringUtils.trim(str.substring(0, index));
+            validateListenerName(listenerName);
             String value = StringUtils.trim(str.substring(index + 1));
             listeners.computeIfAbsent(listenerName, k -> new ArrayList<>(2));
             listeners.get(listenerName).add(value);
@@ -169,7 +223,7 @@ public final class MultipleListenerValidator {
                         }
                     }
 
-                    String hostPort = String.format("%s:%d", uri.getHost(), uri.getPort());
+                    String hostPort = formatHostPort(uri);
                     Set<String> sets = reverseMappings.computeIfAbsent(hostPort, k -> new TreeSet<>());
                     sets.add(entry.getKey());
                     if (sets.size() > 1) {

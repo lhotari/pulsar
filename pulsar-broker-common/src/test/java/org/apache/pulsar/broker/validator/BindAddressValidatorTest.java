@@ -234,4 +234,27 @@ public class BindAddressValidatorTest {
         assertTrue(e.getMessage().contains("0.0.0.0:8080"),
                 "expected ip:port in message but got: " + e.getMessage());
     }
+
+    @Test
+    public void testWhitespaceBetweenEntriesIsTrimmed() {
+        ServiceConfiguration config = newEmptyConfiguration();
+        // Spaces, newlines, and tabs around the comma separators and around the entries themselves
+        // must all be tolerated and trimmed.
+        config.setBindAddresses("  internal:pulsar://0.0.0.0:6650 ,\n\texternal:pulsar+ssl://0.0.0.0:6651  ");
+        List<BindAddress> addresses = BindAddressValidator.validateBindAddresses(config, null);
+        assertEquals(addresses, Arrays.asList(
+                new BindAddress("internal", URI.create("pulsar://0.0.0.0:6650")),
+                new BindAddress("external", URI.create("pulsar+ssl://0.0.0.0:6651"))));
+    }
+
+    @Test
+    public void testEmptyEntriesAreSkipped() {
+        ServiceConfiguration config = newEmptyConfiguration();
+        // A trailing comma or an extra comma in the middle should be ignored, not flagged as malformed.
+        config.setBindAddresses("internal:pulsar://0.0.0.0:6650, ,external:pulsar+ssl://0.0.0.0:6651,");
+        List<BindAddress> addresses = BindAddressValidator.validateBindAddresses(config, null);
+        assertEquals(addresses, Arrays.asList(
+                new BindAddress("internal", URI.create("pulsar://0.0.0.0:6650")),
+                new BindAddress("external", URI.create("pulsar+ssl://0.0.0.0:6651"))));
+    }
 }

@@ -443,6 +443,67 @@ public class LookupResultTest {
     }
 
     @Test
+    public void testToLookupRedirectUriInjectsListenerNameWhenResolved() {
+        // Topic-lookup case: the original request may carry the listener name in a header that the
+        // redirect does not preserve. toLookupRedirectUri must inject it as a query parameter so the
+        // next broker sees it.
+        LookupResult result = LookupResult.builder()
+                .type(LookupResult.Type.RedirectUrl)
+                .httpUrl(WEB_URL)
+                .brokerServiceListenerName("external")
+                .build();
+
+        URI request = URI.create("http://original-host:1234/lookup/v2/topic/persistent/p/d/t");
+
+        URI redirect = result.toLookupRedirectUri(request);
+
+        String query = redirect.getQuery();
+        assertNotNull(query);
+        assertTrue(query.contains("listenerName=external"), "query=" + query);
+    }
+
+    @Test
+    public void testToRedirectUriDoesNotInjectListenerNameForAdminPaths() {
+        // Admin redirects do not understand the listenerName query parameter — even if the
+        // LookupResult has a resolved brokerServiceListenerName, toRedirectUri must leave the
+        // request's query string alone.
+        LookupResult result = LookupResult.builder()
+                .type(LookupResult.Type.RedirectUrl)
+                .httpUrl(WEB_URL)
+                .brokerServiceListenerName("external")
+                .build();
+
+        URI request = URI.create("http://original-host:1234/admin/v2/persistent/p/d/t");
+
+        URI redirect = result.toRedirectUri(request);
+
+        String query = redirect.getQuery();
+        // no listenerName query param added
+        if (query != null) {
+            assertFalse(query.contains("listenerName"), "query=" + query);
+        }
+    }
+
+    @Test
+    public void testToRedirectUriPreservesExistingListenerNameForAdminPaths() {
+        // If the original admin request already carries listenerName in the query string, leave it
+        // there rather than dropping it.
+        LookupResult result = LookupResult.builder()
+                .type(LookupResult.Type.RedirectUrl)
+                .httpUrl(WEB_URL)
+                .brokerServiceListenerName("external")
+                .build();
+
+        URI request = URI.create("http://original-host:1234/admin?listenerName=fromClient");
+
+        URI redirect = result.toRedirectUri(request);
+
+        String query = redirect.getQuery();
+        assertNotNull(query);
+        assertTrue(query.contains("listenerName=fromClient"), "query=" + query);
+    }
+
+    @Test
     public void testToStringIncludesAllFields() {
         LookupResult result = LookupResult.builder()
                 .type(LookupResult.Type.RedirectUrl)

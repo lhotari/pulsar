@@ -368,7 +368,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         this.openTelemetry = new PulsarBrokerOpenTelemetry(config, openTelemetrySdkBuilderCustomizer);
 
         // validate `advertisedAddress`, `advertisedListeners`, `internalListenerName`
-        this.advertisedListeners = MultipleListenerValidator.validateAndAnalysisAdvertisedListener(config);
+        this.advertisedListeners = MultipleListenerValidator.validateAndUpdateAdvertisedListeners(config);
 
         // the advertised address is defined as the host component of the broker's canonical name.
         this.advertisedAddress = ServiceConfigurationUtils.getDefaultOrConfiguredAddress(config.getAdvertisedAddress());
@@ -976,12 +976,12 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             // necessary both for dynamic ports (`Optional.of(0)`) and for the case where the broker
             // is configured only via `bindAddresses` (legacy port properties left as
             // `Optional.empty()`), so that downstream code — in particular
-            // MultipleListenerValidator.validateAndAnalysisAdvertisedListener — can synthesize the
+            // MultipleListenerValidator.validateAndUpdateAdvertisedListeners — can synthesize the
             // internal advertised listener from the now-known ports.
             brokerService.getListenPort().ifPresent(port -> config.setBrokerServicePort(Optional.of(port)));
             brokerService.getListenPortTls().ifPresent(port -> config.setBrokerServicePortTls(Optional.of(port)));
             // Recompute the cached advertised listener map now that the bound ports are known.
-            this.advertisedListeners = MultipleListenerValidator.validateAndAnalysisAdvertisedListener(config);
+            this.advertisedListeners = MultipleListenerValidator.validateAndUpdateAdvertisedListeners(config);
             this.webServiceAddress = webAddress(config);
             this.webServiceAddressTls = webAddressTls(config);
             this.brokerServiceUrl = brokerUrl(config);

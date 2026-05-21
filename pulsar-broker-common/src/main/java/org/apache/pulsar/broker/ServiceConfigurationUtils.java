@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker;
 
 import static org.apache.commons.lang3.StringUtils.isBlank;
+import io.netty.util.NetUtil;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
@@ -61,7 +62,7 @@ public class ServiceConfigurationUtils {
     public static String getAppliedAdvertisedAddress(ServiceConfiguration configuration,
                                                      boolean ignoreAdvertisedListener) {
         Map<String, AdvertisedListener> result = MultipleListenerValidator
-                .validateAndAnalysisAdvertisedListener(configuration);
+                .validateAndUpdateAdvertisedListeners(configuration);
 
         String advertisedAddress = configuration.getAdvertisedAddress();
         if (advertisedAddress != null) {
@@ -90,7 +91,7 @@ public class ServiceConfigurationUtils {
      */
     public static AdvertisedListener getInternalListener(ServiceConfiguration config, String protocol) {
         Map<String, AdvertisedListener> result = MultipleListenerValidator
-                .validateAndAnalysisAdvertisedListener(config);
+                .validateAndUpdateAdvertisedListeners(config);
         AdvertisedListener internal = result.get(config.getInternalListenerName());
         if (internal == null || !internal.hasUriForProtocol(protocol)) {
             // Search for an advertised listener for same protocol
@@ -114,8 +115,26 @@ public class ServiceConfigurationUtils {
         return internal;
     }
 
-    private static URI createUriOrNull(String scheme, String hostname, Optional<Integer> port) {
-        return port.map(p -> URI.create(String.format("%s://%s:%d", scheme, hostname, p))).orElse(null);
+    private static URI createUriOrNull(String scheme, String ipOrHost, Optional<Integer> port) {
+        return port.map(p -> URI.create(String.format("%s://%s:%d", scheme, formatHost(ipOrHost), p))).orElse(null);
+    }
+
+    /**
+     * Wrap bare IPv6 literals in square brackets so they parse correctly as the host component of a
+     * URL. IPv4 addresses and hostnames are returned unchanged, as is an IPv6 literal that is
+     * already bracketed.
+     */
+    static String formatHost(String ipOrHost) {
+        if (ipOrHost == null || ipOrHost.isEmpty()) {
+            return ipOrHost;
+        }
+        if (ipOrHost.startsWith("[") && ipOrHost.endsWith("]")) {
+            return ipOrHost;
+        }
+        if (NetUtil.isValidIpV6Address(ipOrHost)) {
+            return "[" + ipOrHost + "]";
+        }
+        return ipOrHost;
     }
 
     private static URI firstNonNullUri(URI... uris) {
@@ -134,19 +153,19 @@ public class ServiceConfigurationUtils {
         return ServiceConfigurationUtils.getDefaultOrConfiguredAddress(config.getAdvertisedAddress());
     }
 
-    public static String brokerUrl(String host, int port) {
-        return String.format("pulsar://%s:%d", host, port);
+    public static String brokerUrl(String ipOrHost, int port) {
+        return String.format("pulsar://%s:%d", formatHost(ipOrHost), port);
     }
 
-    public static String brokerUrlTls(String host, int port) {
-        return String.format("pulsar+ssl://%s:%d", host, port);
+    public static String brokerUrlTls(String ipOrHost, int port) {
+        return String.format("pulsar+ssl://%s:%d", formatHost(ipOrHost), port);
     }
 
-    public static String webServiceUrl(String host, int port) {
-        return String.format("http://%s:%d", host, port);
+    public static String webServiceUrl(String ipOrHost, int port) {
+        return String.format("http://%s:%d", formatHost(ipOrHost), port);
     }
 
-    public static String webServiceUrlTls(String host, int port) {
-        return String.format("https://%s:%d", host, port);
+    public static String webServiceUrlTls(String ipOrHost, int port) {
+        return String.format("https://%s:%d", formatHost(ipOrHost), port);
     }
 }

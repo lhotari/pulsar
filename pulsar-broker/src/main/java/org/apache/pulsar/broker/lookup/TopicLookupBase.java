@@ -108,7 +108,7 @@ public class TopicLookupBase extends PulsarWebResource {
                         LookupResult lookupResult = optionalResult.get();
 
                         if (lookupResult.isLoadManagerMigration()) {
-                            URI redirectUri = lookupResult.toRedirectUri(uri.getRequestUri());
+                            URI redirectUri = lookupResult.toLookupRedirectUri(uri.getRequestUri());
                             log.debug().log("Redirecting to a broker with the expected load manager.");
                             throw new WebApplicationException(Response.temporaryRedirect(redirectUri).build());
                         }
@@ -121,7 +121,7 @@ public class TopicLookupBase extends PulsarWebResource {
                                 throw new UnsupportedOperationException(
                                         "This implementation expects that the requestUri is a topic lookup.");
                             }
-                            URI redirectUri = lookupResult.toRedirectUri(requestUri);
+                            URI redirectUri = lookupResult.toLookupRedirectUri(requestUri);
                             log.debug()
                                     .attr("topic", topicName)
                                     .attr("redirectUri", redirectUri)

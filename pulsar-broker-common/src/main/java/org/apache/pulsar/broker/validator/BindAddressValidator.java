@@ -38,7 +38,7 @@ import org.apache.pulsar.common.configuration.BindAddress;
  */
 public class BindAddressValidator {
 
-    private static final Pattern BIND_ADDRESSES_PATTERN = Pattern.compile("(?<name>\\w+):(?<url>.+)$");
+    private static final Pattern BIND_ADDRESSES_PATTERN = Pattern.compile("(?<name>[^:]+):(?<url>.+)$");
 
     /**
      * Validate the configuration of `bindAddresses`.
@@ -64,8 +64,11 @@ public class BindAddressValidator {
         // migrate the legacy port-based configuration to bind addresses tagged with the internal listener name
         List<BindAddress> addresses = migrateBindAddresses(config, internalListenerName);
 
-        // parse the list of additional bind addresses
+        // parse the list of additional bind addresses; trim whitespace around the comma-separated
+        // entries so configurations split across multiple lines or padded for readability are accepted
         Arrays.stream(StringUtils.split(StringUtils.defaultString(config.getBindAddresses()), ","))
+                .map(StringUtils::trim)
+                .filter(StringUtils::isNotEmpty)
                 .map(s -> {
                     Matcher m = BIND_ADDRESSES_PATTERN.matcher(s);
                     if (!m.matches()) {
@@ -73,7 +76,11 @@ public class BindAddressValidator {
                     }
                     return m;
                 })
-                .map(m -> new BindAddress(m.group("name"), URI.create(m.group("url"))))
+                .map(m -> {
+                    String name = StringUtils.trim(m.group("name"));
+                    MultipleListenerValidator.validateListenerName(name);
+                    return new BindAddress(name, URI.create(StringUtils.trim(m.group("url"))));
+                })
                 .forEach(addresses::add);
 
         // apply the filter
@@ -109,7 +116,7 @@ public class BindAddressValidator {
             if (addr.getAddress().getPort() == 0) {
                 continue;
             }
-            String ipPort = addr.getAddress().getHost() + ":" + addr.getAddress().getPort();
+            String ipPort = MultipleListenerValidator.formatHostPort(addr.getAddress());
             BindAddress prior = uniqueIpPort.putIfAbsent(ipPort, addr);
             if (prior != null) {
                 throw new IllegalArgumentException("bindAddresses: ip:port `" + ipPort
