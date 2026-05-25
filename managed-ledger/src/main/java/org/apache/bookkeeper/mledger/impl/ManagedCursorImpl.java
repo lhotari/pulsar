@@ -1679,7 +1679,7 @@ public class ManagedCursorImpl implements ManagedCursor {
 
         persistentMarkDeletePosition = null;
         inProgressMarkDeletePersistPosition = null;
-        internalAsyncMarkDelete(newMarkDeletePosition, isCompactionCursor() ? getProperties() : Collections.emptyMap(),
+        internalAsyncMarkDelete(newMarkDeletePosition, isCompactionCursor() ? null : Collections.emptyMap(),
                 new MarkDeleteCallback() {
             @Override
             public void markDeleteComplete(Object ctx) {
