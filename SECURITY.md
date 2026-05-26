@@ -57,25 +57,32 @@ See <https://pulsar.apache.org/security/#security-policy> and
 
 ## Disclosure hygiene for contributors
 
-Until a fix has been publicly announced, do **not** reveal the security nature of a change anywhere
-public — commit messages, pull request titles or bodies, GitHub issues, or review comments — even
-when the fix touches security-adjacent code (authentication/authorization, deserialization, TLS,
-networking). Describe the behaviour change neutrally. A public commit or PR that advertises "fixes the
-CVE", "security fix", or "patches the vulnerability" discloses the issue before it is announced and
-defeats the coordinated-disclosure process above.
-
-Do **not** push, commit publicly, or open a PR for a fix to a non-public security issue. When
-reporting, you may include a suggested fix patch privately in your report to
-`private@pulsar.apache.org` — never in a public commit or PR.
-
-This applies to every contributor, and identically to any AI tooling acting on a contributor's behalf.
-
-The **project team** commits the fix, coordinated through the ASF security vulnerability handling
+The **project team commits the fix**, coordinated through the ASF security vulnerability handling
 process
 ([apache.org/security/committers.html#possible](https://apache.org/security/committers.html#possible)).
 The team may commit the fix to the public repository **before** the release, using a neutral commit
-message that does not state its security nature. In severe cases, the commit and release are made in a
-private repository, and the fix is made public only at the time of the release.
+message that does not state its security nature; in severe cases the commit and release are made in a
+private repository and the fix is made public only at release time.
+
+As a contributor, do **not** push, commit publicly, or open a PR for a fix to a non-public security
+issue yourself. When reporting, you may include a suggested fix patch privately in your report to
+`private@pulsar.apache.org` — never in a public commit or PR.
+
+The neutrality rules below are for **whoever commits the fix — i.e. the project team**. Until the
+vulnerability has been publicly announced, the commit message and PR title/body must **not** reveal its
+security nature, even when the fix touches security-adjacent code (authentication/authorization,
+deserialization, TLS, networking). Describe the behaviour change neutrally; a commit or PR that
+advertises "fixes the CVE", "security fix", or "patches the vulnerability" discloses the issue before
+it is announced and defeats coordinated disclosure.
+
+The same discretion applies to **everyone** — and identically to any AI tooling acting on a
+contributor's behalf — in public GitHub issues, discussions, and review comments until the
+announcement.
+
+**Already-public CVEs in dependencies are an exception.** The rules above concern *non-public* Pulsar
+vulnerabilities. A PR or commit that upgrades a dependency to address an **already publicly disclosed**
+CVE in that dependency does **not** follow them — the CVE is already public. Name its id directly in
+the PR title and/or description (use the description when there are several CVE ids).
 
 ## Checking exposure to an already-public CVE
 

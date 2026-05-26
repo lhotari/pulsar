@@ -24,8 +24,8 @@ enforced by `.github/workflows/ci-semantic-pull-request.yml` and the body by
   is fine pre-PR, e.g. during the Personal CI loop.)
 - **Iterate via Personal CI** (full pipeline in your own fork) instead of waiting on maintainer CI
   approval; open the upstream PR once the fork's CI is green.
-- **Flaky CI**: comment `/pulsarbot rerun` (or `rerun-failure-checks`) only after all jobs finish — but
-  verify the failure isn't caused by your change first.
+- **Flaky CI**: comment `/pulsarbot rerun` to re-run the failed jobs, only after the workflow run has
+  completed — but verify the failure isn't caused by your change first.
 - **Keep PRs focused** — no unrelated drive-by refactoring or reformatting; raise large refactorings on
   `dev@pulsar.apache.org` first.
 - **Security**: never state the security nature of a change in a commit/PR — see
