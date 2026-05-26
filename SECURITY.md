@@ -42,6 +42,14 @@ Report it privately by email to the Apache Security Team at **security@apache.or
 security address). You may also, or instead, write to the Apache Pulsar PMC's private list,
 **private@pulsar.apache.org**.
 
+**A human must verify and take responsibility for every security report.** Deciding that some
+behaviour is actually a vulnerability requires judgement against the threat model above, and the
+security team is staffed by volunteers — a stream of unverified or AI-hallucinated "vulnerabilities"
+wastes their time and buries real issues. AI tooling may help *analyse* a suspected problem, but a
+human contributor must independently verify it and own the report. **Autonomous agents must not file
+security reports or open security issues on their own**, and a tool's confident-sounding output is not,
+by itself, evidence of a vulnerability.
+
 See <https://pulsar.apache.org/security/#security-policy> and
 <https://github.com/apache/pulsar/security/policy> for more detail.
 

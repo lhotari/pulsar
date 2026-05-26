@@ -16,7 +16,8 @@ act.
   connectors run **fully trusted code** (RCE is the feature, not a bug), and clusters assume
   network-perimeter security with **no protection against malicious DoS**. Don't classify "a trusted
   function runs / modifies its environment" or "a perimeter-trusted client causes a DoS" as a bug by
-  default — surface uncertainty instead of asserting a CVE.
+  default — surface uncertainty instead of asserting a CVE. **Never file a security report or open a
+  security issue autonomously**; a human must independently verify it and own it.
 - **Never disclose a suspected vulnerability in public** — not in an issue, PR, commit, or mailing
   list, and never state the security nature of a fix. Report privately to `security@apache.org`
   (optionally cc `private@pulsar.apache.org`).
