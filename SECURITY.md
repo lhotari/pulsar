@@ -25,7 +25,7 @@ Therefore, Pulsar Functions and connectors must only run code that is **fully tr
 
 **Clusters rely on network-perimeter security.** Pulsar is designed to be deployed behind a trusted
 network perimeter where only trusted users can reach the cluster. The project does **not** implement
-controls against malicious **denial-of-service (DoS)** attacks. Rate limiting exists to mitigate
+explicit controls against malicious **denial-of-service (DoS)** attacks. Rate limiting exists to mitigate
 *unintentional* DoS — e.g. improper configuration or thundering-herd effects — but it is **not** a
 defense against a deliberate DoS by an attacker.
 

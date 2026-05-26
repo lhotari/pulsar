@@ -30,7 +30,7 @@ Pulsar's security model is not formally defined. Two assumptions decide whether 
   Kubernetes runtime alone does not restrict cluster resource access; hardening hooks exist but the
   hardening itself is not shipped.
 - **Clusters assume network-perimeter security.** Only trusted users should reach the cluster. There
-  is **no protection against malicious DoS**; rate limits address only *unintentional* DoS
+  is **no explicit protection against malicious DoS**; rate limits address only *unintentional* DoS
   (misconfiguration, thundering herd).
 
 When triaging, do **not** classify "a trusted function executes/modifies its environment" or "a
