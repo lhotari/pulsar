@@ -59,7 +59,11 @@ Personal CI loop on a fork.
   jobs are still running or queued). Note that for fork PRs a maintainer must approve each run (again
   after new pushes), which is why Personal CI is the better loop for iterating on genuine failures.
   Don't dismiss a failure as "flaky" without checking it isn't caused by the change.
-- **Keep commits focused** — a fix, a refactor, and a formatting pass are separate commits/PRs.
+- **Keep commits and PRs focused** — a fix, a refactor, and a formatting pass are separate
+  commits/PRs. Don't bundle unrelated drive-by refactoring into a feature/bug-fix PR, and **don't
+  reformat unrelated files or lines** (whitespace, import reordering, re-wrapping) that your change
+  doesn't touch — it hides the real diff and pollutes `git blame`. Raise large refactorings on
+  `dev@pulsar.apache.org` first rather than opening (or auto-generating) sweeping refactor PRs.
 - **Security:** never describe the security nature of a change in a commit/PR — see
   [`pulsar-security`](../pulsar-security/SKILL.md).
 

@@ -26,6 +26,25 @@ guardrails on top of it.
   holding the key components instead of concatenating a `java.lang.String` (e.g. `a + ":" + b`).
   A record key gives a correct `equals`/`hashCode`, keeps the key type-safe, and avoids
   delimiter/escaping bugs.
+- **Use the narrowest interface type** for fields, parameters, variables, and return types — `java.util.Map`,
+  `SequencedMap`, `SortedMap`, `Collection`, `List` — rather than a concrete implementation such as
+  `TreeMap`. Keep the concrete type only where its behaviour is actually required (e.g. instantiate a
+  `TreeMap` for stable key-ordered iteration) and still expose it through the interface type.
+- **Minimize method and constructor parameters.** Don't pass values that are already reachable from a
+  context object a method receives — read them from it (e.g. from `PublishContext`) instead of adding
+  redundant parameters. For a constructor (or factory) with many parameters, use a **builder**: the
+  project uses Lombok-generated builders (`@Builder`) for most internal classes. `@Builder` also works
+  on a Java `record`, which pairs well with preferring records (above) — a record plus `@Builder` is a
+  clean way to pass many values without a long parameter list. **Don't use Lombok
+  `@Builder` on public client-API classes** — it's harder to maintain and its default builder class
+  name carries no meaningful context; hand-write the builder there, or if Lombok is used set an
+  explicit, meaningful `builderClassName`.
+- **Name things for intent.** Name a boolean-returning method as a query (`shouldSkipChunk`, not
+  `skipChunk`); name methods, fields, and metrics after the effect they describe rather than vague
+  terms (prefer e.g. `truncated` / `migrationSegment` over `overflow` / `special`).
+- **Construct via factory methods, not internal implementation types.** Use the provided factory
+  (e.g. `PositionFactory.create(...)`) instead of referencing an internal class such as
+  `ImmutablePositionImpl` directly.
 
 ## Asynchronous programming
 
@@ -49,6 +68,13 @@ APIs over `ListenableFuture` for new code.
 - **Avoid nested futures** such as `CompletableFuture<CompletableFuture<T>>`; flatten with
   `thenCompose`.
 - Prefer **`OrderedExecutor`** for ordered asynchronous work.
+- If an operation performs IO (creating authentication, starting a transaction, etc.), it should
+  return a `CompletableFuture` rather than block.
+- **Converting an existing synchronous-throwing method to return a failed future is not a mechanical
+  change** — evaluate each call site first. Some callers historically rely on the exception being
+  thrown *before* the async work starts, so a blanket conversion can change behaviour and introduce
+  instability in untested error paths. Use a shared helper (e.g. a `checkArgumentAsync` in `FutureUtil`)
+  to validate arguments without duplicating the try/catch in every method.
 
 ## Concurrency
 
@@ -56,6 +82,10 @@ APIs over `ListenableFuture` for new code.
 - Protect shared mutable state; prefer fine-grained synchronization; ensure mutations occur on the
   intended thread. Prefer the **single-writer principle** — design so a given piece of state is
   mutated by only one thread — to avoid concurrent mutation entirely.
+- **Minimize work while holding a lock.** Capture the state you need into local variables inside the
+  synchronized block, then run callbacks, listeners, and IO *outside* it. Never call out to
+  listener/callback code while holding a lock — narrowing lock scope has fixed real deadlocks and
+  contention in Pulsar.
 - Give threads **meaningful names** for diagnostics.
 - When creating thread pools, prefer Netty's **`io.netty.util.concurrent.DefaultThreadFactory`**. It
   produces **`FastThreadLocalThread`** instances, on which `FastThreadLocal` lookups are much faster
@@ -155,6 +185,23 @@ a concurrency fix is correct:
   Do not introduce new `Recycler` usage. See
   [PIP-443: Stop using Netty Recycler in new code](pip/pip-443.md).
 
+## Performance
+
+- **Back optimizations with evidence** — a JMH benchmark (see *Testing conventions*) or a profile —
+  not intuition; and measure on JIT-warmed code (see *Reproducing concurrency / memory-visibility
+  bugs* for why warm-up matters).
+- **On hot paths** (dispatch, IO, per-message code): avoid `String.format` (build the string directly),
+  avoid `Enum.values()` (match values explicitly), and avoid unnecessary allocation and locking. Prefer
+  lock-free or single-writer designs over synchronization where practical.
+- **Don't add overhead to an already-overloaded system.** Avoid doing work and then discarding it
+  (e.g. reading entries from BookKeeper only to drop them before dispatch); extra work under high load
+  causes cascading failures. Acquire or estimate up front and reconcile afterwards instead.
+- **Bound in-memory caches** with a size or byte limit plus eviction, and de-duplicate repeated
+  `String`s (cluster / tenant / namespace ids) with `org.apache.pulsar.common.util.StringInterner` to
+  avoid heap duplication.
+- Don't pre-emptively micro-optimize elsewhere — favour clear, correct code, and let ZGC handle
+  short-lived allocations (see *Resource and memory management*).
+
 ## Configuration
 
 When adding configuration options: use clear, descriptive names; provide sensible defaults; update
@@ -176,13 +223,75 @@ Pulsar maintains strong compatibility guarantees. Changes must not break public 
 compatibility, wire-protocol compatibility, or serialized/metadata formats. Servers must work with
 both older and newer clients. Flag any change that may break compatibility.
 
+**Plugin / SPI extension points are public API.** Pulsar has many pluggable interfaces selected by a
+`*ClassName` configuration setting — e.g. `LoadManager`, `LedgerOffloaderFactory`,
+`AuthorizationProvider` / `AuthenticationProvider`, `EntryFilter`, `TopicFactory`, `BrokerInterceptor`,
+dispatcher / delayed-delivery-tracker factories, `CustomCommand`. Third parties ship implementations of
+these in production. Changing such an interface — or a `protected` member of a class meant for
+extension, such as `PulsarWebResource`, `PersistentTopic`, or `Producer` — breaks those implementations.
+Treat these as public API: the change generally needs a PIP, and breaking changes must not land in
+maintenance-branch backports (keep deprecated bridge methods that delegate to the new form instead).
+When you must add a method to such an interface, give it a **`default` implementation** (e.g. one
+throwing `UnsupportedOperationException`) so existing third-party implementors still compile — this
+also keeps the change source-compatible enough to backport.
+
+**Don't leak third-party types through public or plugin interfaces.** Exposing library types such as
+Netty or AsyncHttpClient classes in a public / plugin API breaks consumers of the **shaded** Pulsar
+client (the shaded and unshaded classes differ) and couples callers to the implementation — provide a
+Pulsar-owned abstraction instead. Changing a documented behaviour or guarantee (e.g. the
+exclusive-producer guarantees of PIP-68, or default rate-limiter behaviour) likewise needs a PIP and a
+dev@ discussion, not just a code change.
+
+**Introduce changes behind a backward-compatible default.** Prefer making new or changed behaviour
+opt-in via configuration rather than silently changing what existing deployments do. Behaviour that can
+cause data loss (e.g. skipping unrecoverable data) must be gated behind an explicit flag (such as
+`autoSkipNonRecoverableData`), defaulting to the safe/old behaviour.
+
 ## Testing conventions
+
+Most of Pulsar's so-called **"unit tests"** (under each module's `src/test`, run with
+`./gradlew :<module>:test`) are in fact **integration-style** — they bring up a real in-JVM broker via
+`MockedPulsarServiceBaseTest` / `pulsarTestContext` rather than testing a class in isolation. The
+**actual integration tests** live under `tests/` and run against a Pulsar **Docker test image** with
+Testcontainers (see [`CONTRIBUTING.md`](CONTRIBUTING.md#integration-tests)). "Unit test" below means
+the former.
+
+Ideally this would not be necessary: well-designed code lets genuine **units be unit-tested in
+isolation**, with collaborators behind narrow interfaces that can be substituted by simple
+fakes/mocks **without excessive mocking**. Excessive mocking is a design smell (tight coupling), not a
+reason to abandon unit testing. Much existing Pulsar code isn't factored this way, which is why
+integration-style tests are the pragmatic default today — but when you write or refactor code, prefer
+the design that makes a true, isolated unit test possible.
 
 - **TestNG + Mockito.** Prefer **AssertJ** assertions with descriptions over TestNG asserts; use
   **Awaitility** (with AssertJ) for asynchronous conditions instead of `sleep`-based timing. Add
-  timeouts to prevent hangs.
+  timeouts to prevent hangs. Use Awaitility only when polling/retrying for a condition:
+  `untilAsserted(...)` retries assertions until they pass, `until(...)` waits for a boolean to become
+  `true` — don't swap the two.
 - Every feature or bug fix should include tests covering edge cases and failure scenarios; tests must
   be deterministic and stable. Integration tests may be required for distributed components.
+- **For code that isn't factored for isolation, prefer an integration-style test over heavy mocking.**
+  Reproduce the real production scenario with `MockedPulsarServiceBaseTest` / `pulsarTestContext`
+  rather than mocking a web of internal collaborators.
+  Inject faults through the test infrastructure — e.g.
+  `pulsarTestContext.getMockBookKeeper().setReadHandleInterceptor(...)` to simulate read failures or
+  delays — and capture log output with `org.apache.pulsar.utils.TestLogAppender` to assert behaviour.
+  A bug-fix test should **fail against the unpatched code for the actual reason**, not because the test
+  forces internal state.
+- **For new integration-style tests, prefer `SharedPulsarBaseTest`.** It shares a single
+  `SharedPulsarCluster` and its components for the whole **test-JVM lifecycle** (avoiding per-test
+  broker startup cost), while `admin` / `pulsarClient` are shared **per test class** (initialized once
+  per class). Each test method gets **its own namespace** (created before the method, force-deleted
+  after). Get that namespace with `getNamespace()` and create topic names with `newTopicName()` —
+  never hardcode namespace or topic names, because the runtime is shared across all tests in the JVM.
+  (The shared runtime is also why `ThreadLeakDetectorListener` mis-reports leaks with this base
+  class — see above.)
+- **Don't mutate private/internal state to force a condition.** If a test has to reach into internal
+  fields to trigger the path under test, it usually isn't representative — drive the real path instead.
+- It's fine to **add a new, cleanly-written test class** instead of extending an existing one whose
+  base class or style makes the new case hard to read; existing Pulsar tests are not always good models.
+- For asynchronous interactions, verify with Mockito's `timeout(...)` (e.g.
+  `verify(x, timeout(2000)).foo()`) rather than fixed sleeps.
 - **Validate performance optimizations with a benchmark.** Prefer adding a **JMH benchmark** under the
   `microbench/` subproject that simulates a usage pattern realistic for Pulsar production, so the
   optimization is backed by evidence rather than intuition. See `microbench/README.md` for how to run

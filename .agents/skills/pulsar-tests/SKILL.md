@@ -49,6 +49,21 @@ failure / flake.
     Don't treat it as a real bug on its own; corroborate first.
 - **Don't fabricate assertions or test names** — verify symbols exist.
 - For a **bugfix**, add a regression test and confirm it fails before the fix and passes after.
+- **Most Pulsar "unit tests" are integration-style** (real in-JVM broker via
+  `MockedPulsarServiceBaseTest` / `pulsarTestContext`); the container-based integration tests are
+  separate (under `tests/`). When code isn't factored for isolation, prefer an integration-style test
+  over mocking a web of internal collaborators; inject faults via the test infrastructure (e.g.
+  `pulsarTestContext.getMockBookKeeper().setReadHandleInterceptor(...)`) and assert on logs with
+  `TestLogAppender`. But when you write or refactor code, prefer a design that allows a true isolated
+  unit test (collaborators behind narrow interfaces, light mocking) — excessive mocking is a design
+  smell, not the goal. The regression test must fail on the unpatched code for the *actual* reason —
+  not because it mutates internal state. Adding a clean new test class is fine when an existing one's
+  style/base class gets in the way. See
+  [`CODING.md` → Testing conventions](../../../CODING.md#testing-conventions).
+- **Prefer `SharedPulsarBaseTest` for new integration-style tests.** It shares one
+  `SharedPulsarCluster` for the test-JVM lifecycle and gives each test method its own namespace. Use
+  `getNamespace()` for the namespace and `newTopicName()` for topic names; never hardcode namespace or
+  topic names (the runtime is shared across tests).
 - **Concurrency / memory-visibility bugs** are timing- and platform-dependent and easily masked — a
   clean run is weak evidence a fix is correct. See
   [`CODING.md` → Reproducing concurrency / memory-visibility bugs](../../../CODING.md#reproducing-concurrency--memory-visibility-bugs)

@@ -52,6 +52,9 @@ with a `SKILL.md`:
 6. **Security:** never disclose a vulnerability — or the security nature of a change — in a public
    issue, PR, or commit. See [`SECURITY.md`](SECURITY.md) /
    [`pulsar-security`](.agents/skills/pulsar-security/SKILL.md).
+7. **Stay in scope.** Keep a change focused on its task; don't bundle unrelated drive-by refactors or
+   generate broad mass-refactoring PRs. Discuss large refactorings on `dev@pulsar.apache.org` first.
+   See [`CONTRIBUTING.md`](CONTRIBUTING.md#pull-requests).
 
 ## Where to ask
 

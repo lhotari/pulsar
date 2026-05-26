@@ -54,6 +54,10 @@ this skill cites them and adds the guardrails below.
   `pulsar-client/` is project `:pulsar-client-original`).
 - **After any dependency change, run `./gradlew checkBinaryLicense`** and update the binary
   distribution `LICENSE`/`NOTICE` accordingly. Justify a genuinely new dependency.
+- **Published modules must not depend on internal modules.** A public/published module cannot reference
+  internal-only projects in `api`/`implementation` (compile/runtime) scope — that artifact would be
+  unresolvable from Maven Central. Modules are **not** published by default; opt a public library in
+  via the `pulsar.public-java-library-conventions` plugin.
 - **Don't fabricate plugin/DSL/task names** — verify they exist in the build.
 
 ## Validation checklist
