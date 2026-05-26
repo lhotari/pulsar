@@ -2,14 +2,18 @@
 
 Apache Pulsar is a distributed pub-sub messaging and streaming platform. The codebase is
 performance-critical, heavily asynchronous, and concurrency-sensitive (brokers, storage,
-networking). The authoritative documentation lives at <https://pulsar.apache.org>; this file is a
-map of the repository for contributors (and AI coding agents) who need to find their way around the
-modules quickly.
+networking). The authoritative documentation lives at <https://pulsar.apache.org> — see the
+[Architecture Overview](https://pulsar.apache.org/docs/4.2.x/concepts-architecture-overview/) for the
+conceptual model. For a deeper, generated architecture description see
+[DeepWiki](https://deepwiki.com/apache/pulsar); coding agents can install the
+[DeepWiki MCP](https://docs.devin.ai/work-with-devin/deepwiki-mcp) for richer coverage of Pulsar's
+architecture. This file is a map of the repository for contributors (and AI coding agents) who need to
+find their way around the modules quickly.
 
 ## Big picture
 
 Pulsar separates a **stateless serving layer** (brokers) from **durable storage** (Apache
-BookKeeper) and a **metadata store** (ZooKeeper / etcd / others). The Gradle modules layer
+BookKeeper) and a **metadata store** (Oxia / ZooKeeper). The Gradle modules layer
 accordingly:
 
 - **`pulsar-client-api`, `pulsar-client-admin-api`** — public, backward-compatible interfaces only.
@@ -20,7 +24,7 @@ accordingly:
 - **`pulsar-common`** — wire protocol and shared types. Protobuf / lightproto messages are
   **generated** into `generated-lightproto/` / `generated-sources/` (excluded from checkstyle and
   spotless).
-- **`pulsar-metadata`** — pluggable metadata store abstraction (ZooKeeper, etcd, RocksDB, memory)
+- **`pulsar-metadata`** — pluggable metadata store abstraction (Oxia / ZooKeeper, plus RocksDB and memory)
   used by broker and bookkeeper.
 - **`managed-ledger`** — the storage abstraction over **Apache BookKeeper**: append-only ledgers +
   cursors that track consumer/subscription positions. This is the durability layer the broker reads
