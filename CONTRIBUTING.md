@@ -19,6 +19,161 @@
 
 -->
 
-## Contributing to Apache Pulsar
+# Contributing to Apache Pulsar
 
-We would love for you to contribute to Apache Pulsar and make it even better! Please check the [Apache Pulsar Contributing Guide](https://pulsar.apache.org/contribute/) before starting to work on the project.
+We would love for you to contribute to Apache Pulsar and make it even better! The **authoritative**
+contributor guide is the [Apache Pulsar Contributing Guide](https://pulsar.apache.org/contribute/) —
+please read it before starting. This file is a quick, in-repo reference for the local development
+workflow (build, test, PR, CI); for the big-picture module map see [`ARCHITECTURE.md`](ARCHITECTURE.md)
+and for code style see [`CODING.md`](CODING.md).
+
+## Prerequisites
+
+- **JDK 21 or 25** is required to build (`master`). Bytecode targets Java 17. `zip` is also needed.
+  (`-PskipJavaVersionCheck` bypasses the JDK version check.)
+- Use the bundled Gradle wrapper `./gradlew` (Linux/macOS) or `gradlew.bat` (Windows) — no separate
+  Gradle install is needed. See the
+  [build-tooling setup guide](https://pulsar.apache.org/contribute/setup-buildtools/) and
+  [IDE setup guide](https://pulsar.apache.org/contribute/setup-ide/).
+
+## Build
+
+```bash
+# Compile and assemble everything (or a single module)
+./gradlew assemble
+./gradlew :pulsar-broker:assemble
+
+# Lint / verify (license headers, formatting, checkstyle) — run before pushing
+./gradlew rat spotlessCheck checkstyleMain checkstyleTest
+./gradlew spotlessApply            # auto-fix license headers/formatting
+
+# Verify bundled-dependency LICENSE/NOTICE coverage (run after changing a runtime dependency)
+./gradlew checkBinaryLicense
+
+# Start a standalone Pulsar service (broker + bookie + metadata in one JVM)
+bin/pulsar standalone
+
+# Build docker images apachepulsar/pulsar(-all):latest
+./gradlew docker        # or docker-all
+```
+
+## Running tests
+
+```bash
+# Always scope test runs with --tests — running a whole module's test task is slow.
+# Run a single test class
+./gradlew :pulsar-client-original:test --tests "ConsumerBuilderImplTest"
+# Run a single test method
+./gradlew :pulsar-client-original:test --tests "ConsumerBuilderImplTest.<methodName>"
+# Run all tests in a specific package
+./gradlew :pulsar-broker:test --tests "org.apache.pulsar.broker.admin.*"
+```
+
+> Note the [module-name-vs-directory gotcha](ARCHITECTURE.md#module-name-vs-directory-name-gotcha):
+> directory `pulsar-client/` is the Gradle project `:pulsar-client-original`.
+
+### Test groups (TestNG)
+
+Tests use **TestNG** and are tagged with `@Test(groups = "...")`. By default the build **excludes the
+`quarantine` and `flaky` groups** (`excludedTestGroups` default = `quarantine,flaky`), so to run a
+single test that lives in one of those groups you must clear the exclusion:
+
+```bash
+# Run a specific test that is in the flaky/quarantine group (otherwise excluded by default)
+./gradlew :pulsar-broker:test -PexcludedTestGroups='' --tests "<SomeFlakyTest>"
+```
+
+CI selects whole groups with `-PtestGroups=<groups>` and `-PexcludedTestGroups=<groups>` (e.g.
+`broker,broker-admin`); locally prefer `--tests` to scope to specific classes instead of running an
+entire group. CI splits `pulsar-broker` tests into groups (see
+`pulsar-build/run_unit_group_gradle.sh` and `gradle/verify-test-groups.gradle.kts`). Tests with no
+group are treated as `other` at runtime. `./gradlew verifyTestGroups` reports group assignments and
+flags tests not covered by any CI group.
+
+Other test-related properties: `-PtestJavaVersion=17` (run tests on a different JDK toolchain),
+`-PtestRetryCount=N`, `-PtestFailFast=true|false`, `-PprotobufVersion=4.31.1` (protobuf v4
+compatibility tests).
+
+Failed tests are retried once by default (`testRetryCount=1`; `0` when running inside the IDE). When
+running tests locally, prefer **`-PtestRetryCount=0`** to catch failures (including flakiness) early
+instead of having retries mask them.
+
+### Integration tests
+
+Integration tests live in `tests/` (see `tests/README.md`). They use
+[Testcontainers](https://www.testcontainers.org/) to bring up Pulsar services in Docker, so **Docker
+must be installed and running**. Build the test image first, then run the tests.
+
+The full integration suite is heavy and slow. **In local development, always run individual
+integration tests** rather than the whole suite — pass `--tests` to select a class (TestNG then
+discovers it directly from the classpath):
+
+```bash
+./gradlew :tests:latest-version-image:dockerBuild     # build the docker test image
+./gradlew :tests:integration:integrationTest --tests "org.apache.pulsar.tests.integration.<TestClass>"
+```
+
+To run the **entire** integration test set, use **Personal CI** (below) rather than running it
+locally. (`integrationTest` also accepts `-PtestGroups` / `-PexcludedTestGroups` and
+`-PintegrationTestSuiteFile=<suite>.xml` to pick a specific TestNG suite.)
+
+### Running the full CI pipeline (Personal CI)
+
+The full test suite is large and slow to run locally. While iterating on a change, run only the
+narrowly-scoped tests relevant to the change (a single test class or package, see above) rather than
+a module's entire test task. To validate a larger change against the **full** CI pipeline, do not run
+everything locally — use **Personal CI**, which runs Pulsar's CI workflows in the contributor's own
+GitHub fork.
+
+If Personal CI is not yet set up, follow the
+[Personal CI documentation](https://pulsar.apache.org/contribute/personal-ci/) to enable it on your
+fork. Once it is set up, the loop is:
+
+1. Keep the local `master` up-to-date with `apache/pulsar` and rebase the feature branch on it.
+2. Push the feature branch to the **fork** to trigger CI runs there. CI runs against the PR opened in
+   your own fork (it is normal to have a PR open in the fork *and* a PR for the same branch open in
+   `apache/pulsar` at the same time).
+3. Monitor CI status on the fork and fix failures.
+4. Open the PR to `apache/pulsar` only after the fork's CI is green.
+
+Once the PR to `apache/pulsar` has been opened, stop rebasing as part of this loop: step 1's rebase
+no longer applies — bring in upstream changes by merging instead (see [Pull requests](#pull-requests)).
+
+## Pull requests
+
+PRs must follow `.github/PULL_REQUEST_TEMPLATE.md`. PR titles follow the
+`[<type>][<optional scope>] <description>` convention (e.g. `[fix][broker] ...`,
+`[improve][build] ...`) — refer to `.github/workflows/ci-semantic-pull-request.yml` for the valid
+`[type]` and `[scope]` prefixes, which are enforced by CI. The `<description>` should be in
+imperative form, like a good commit message's subject line.
+
+**Describe the change.** The PR description must cover, at minimum, the **Motivation (why?)** and the
+**Modifications (what / how?)** — these map to the corresponding sections of the PR template. A title
+alone, or a description that only restates the title, is not sufficient.
+
+**Never rebase a PR branch once the PR is opened in `apache/pulsar`.** Rebasing rewrites history and
+disrupts reviewers (it invalidates review comments and makes incremental diffs unreadable). To bring
+in upstream changes, instead fetch from the `apache/pulsar` remote and **merge** its `master` into the
+PR branch:
+
+```bash
+git fetch <apache-pulsar-remote>          # e.g. `upstream` or `apache`
+git merge <apache-pulsar-remote>/master
+```
+
+(Rebasing onto an updated `master` is fine *before* the PR is opened — see the Personal CI loop above
+— but not after.)
+
+## Reporting security vulnerabilities
+
+See [`SECURITY.md`](SECURITY.md) and <https://pulsar.apache.org/security/>. In short: report a
+suspected vulnerability **privately** (never in a public issue, PR, or commit), and never reveal the
+security nature of a change in public until it is announced. An **already-public** CVE that you only
+want to check Pulsar's exposure to is *not* a private disclosure — search the CVE id in apache/pulsar
+PRs/issues first, then ask via a GitHub issue or dev@pulsar.apache.org.
+
+## AI coding agents
+
+If you use an AI coding assistant (Claude Code, Copilot, Cursor, Gemini, Codex, Aider, …), see
+[`AGENTS.md`](AGENTS.md) for an index of the agent-facing guidance and the task-specific skills under
+[`.agents/skills/`](.agents/skills/).
