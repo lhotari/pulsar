@@ -15,6 +15,18 @@ guardrails on top of it.
 - Every `TODO` must reference a GitHub issue, e.g. `// TODO: https://github.com/apache/pulsar/issues/XXXX`.
 - Checkstyle config: `buildtools/src/main/resources/pulsar/checkstyle.xml`. Lombok is enabled.
 
+## Data types
+
+- **Don't return generic tuples.** Instead of returning `org.apache.commons.lang3.tuple.Pair<L, R>`
+  (or a similar generic tuple type), define a small, purpose-named **Java `record`** inline in the
+  class that declares the method, with field names that document what the values mean. Give the record
+  the **same visibility as the method** that returns it — `public`, package-private (default), or
+  `private`.
+- **Prefer record keys over concatenated strings.** For a composite `Map` key, use a small `record`
+  holding the key components instead of concatenating a `java.lang.String` (e.g. `a + ":" + b`).
+  A record key gives a correct `equals`/`hashCode`, keeps the key type-safe, and avoids
+  delimiter/escaping bugs.
+
 ## Asynchronous programming
 
 Pulsar relies heavily on `CompletableFuture` and asynchronous pipelines. Prefer `CompletableFuture`
