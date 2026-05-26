@@ -37,8 +37,9 @@ Personal CI loop on a fork.
   enforced by `.github/workflows/ci-semantic-pull-request.yml` — read it rather than guessing.
   `<description>` is imperative, like a commit subject.
 - **PR description must cover Motivation (why?) and Modifications (what/how?)** per the template — a
-  title alone, or a description restating the title, is not enough. Add `Fixes #N` / `Main Issue: #N`
-  / `PIP: #N` when applicable.
+  title alone, or a description restating the title, is not enough. Link the issue when applicable:
+  `Fixes #N` (or equivalently `Closes #N`) for an issue the PR resolves, `Main Issue: #N` for one task
+  of a larger issue, and `PIP: #N` for a proposal.
 - **Never rebase once the PR is open in `apache/pulsar`** — it invalidates review comments and
   incremental diffs. Bring in upstream changes by merging:
 

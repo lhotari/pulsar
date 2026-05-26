@@ -149,7 +149,9 @@ imperative form, like a good commit message's subject line.
 
 **Describe the change.** The PR description must cover, at minimum, the **Motivation (why?)** and the
 **Modifications (what / how?)** — these map to the corresponding sections of the PR template. A title
-alone, or a description that only restates the title, is not sufficient.
+alone, or a description that only restates the title, is not sufficient. Link the related issue with
+`Fixes #N` (or equivalently `Closes #N`) for an issue the PR resolves, `Main Issue: #N` for one task
+of a larger issue, or `PIP: #N` for a proposal.
 
 **Never rebase a PR branch once the PR is opened in `apache/pulsar`.** Rebasing rewrites history and
 disrupts reviewers (it invalidates review comments and makes incremental diffs unreadable). To bring
