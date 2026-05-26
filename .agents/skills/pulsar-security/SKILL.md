@@ -1,6 +1,6 @@
 ---
 name: pulsar-security
-description: Guardrails for handling security topics in Apache Pulsar — reporting a vulnerability through the private ASF channels (never a public issue, PR, or commit), and checking whether Pulsar is exposed to an already-public CVE. Use when a task involves a suspected vulnerability, a CVE, security advisories, or questions about supported/patched versions.
+description: Guardrails for handling security topics in Apache Pulsar — Pulsar's (informal) security model and threat scope, reporting a vulnerability through the private ASF channels (never a public issue, PR, or commit), and checking whether Pulsar is exposed to an already-public CVE. Use when a task involves a suspected vulnerability, a CVE, security advisories, deciding whether some behaviour (e.g. functions running code, or DoS) is in scope, or questions about supported/patched versions.
 license: Apache-2.0
 compatibility: claude, codex, copilot, cursor, gemini, aider
 metadata:
@@ -15,8 +15,27 @@ Guardrails for security-related work. Canonical policy: [`SECURITY.md`](../../..
 
 ## When to use this skill
 
-Use it when a task touches a suspected or reported vulnerability, a CVE, a security advisory, or
-questions about which Pulsar versions are supported/patched.
+Use it when a task touches a suspected or reported vulnerability, a CVE, a security advisory,
+deciding whether some behaviour is in scope, or questions about which Pulsar versions are
+supported/patched.
+
+## Security model (scope)
+
+Pulsar's security model is not formally defined. Two assumptions decide whether a report is in scope
+(full text in [`SECURITY.md` → Security model and scope](../../../SECURITY.md#security-model-and-scope)):
+
+- **Functions and connectors run fully trusted code.** The function instance runtime's purpose is to
+  execute user-provided code — **RCE is the feature, not a bug** (the PMC repeatedly receives reports
+  to the contrary). The thread/process runtimes can touch any files/state they can access; the
+  Kubernetes runtime alone does not restrict cluster resource access; hardening hooks exist but the
+  hardening itself is not shipped.
+- **Clusters assume network-perimeter security.** Only trusted users should reach the cluster. There
+  is **no protection against malicious DoS**; rate limits address only *unintentional* DoS
+  (misconfiguration, thundering herd).
+
+When triaging, do **not** classify "a trusted function executes/modifies its environment" or "a
+perimeter-trusted client can overload the cluster" as a vulnerability by default — these are outside
+the model. Surface uncertainty to a human (or the channels above) rather than asserting a CVE.
 
 ## Reporting a (non-public) vulnerability
 
