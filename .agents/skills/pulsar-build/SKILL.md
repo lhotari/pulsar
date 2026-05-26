@@ -1,69 +1,39 @@
 ---
 name: pulsar-build
-description: AI-tooling guardrails for changes to the Apache Pulsar Gradle build. Points at the build conventions in ARCHITECTURE.md (tiered modules, convention plugins under build-logic/, the gradle/libs.versions.toml version catalog, the pulsar-dependencies enforced platform) and adds the AI-specific constraints on top — configuration-cache / configure-on-demand compatibility, no hard-coded versions, update LICENSE/NOTICE after dependency changes. Use when editing build.gradle.kts, settings.gradle.kts, build-logic/, gradle.properties, or gradle/libs.versions.toml.
-license: Apache-2.0
-compatibility: claude, codex, copilot, cursor, gemini, aider
-metadata:
-  audience: contributors to apache/pulsar
-  scope: ai-tooling-build-guardrails
+description: AI guardrails for Gradle build changes (convention plugins, settings, version catalog, dependencies). Use when editing build-logic/, *.gradle.kts, gradle.properties, or gradle/libs.versions.toml.
 ---
 
 # Pulsar build
 
-AI-tooling layer over the Gradle build. The conventions themselves live in
-[`ARCHITECTURE.md`'s "Build infrastructure" section](../../../ARCHITECTURE.md#build-infrastructure);
-this skill cites them and adds the guardrails below.
+AI-tooling layer over [`ARCHITECTURE.md` → Build infrastructure](../../../ARCHITECTURE.md#build-infrastructure)
+(tiers, convention plugins, version catalog, enforced platform, the module-name gotcha) and
+[`CODING.md` → Dependencies](../../../CODING.md#dependencies). Load those for detail.
 
-## When to use this skill
+## When to use
 
-**Use it for:**
-
-- Convention-plugin changes under `build-logic/conventions/` (`pulsar.java-conventions`,
-  `pulsar.code-quality-conventions`, `pulsar.shadow-conventions`, …).
-- `settings.gradle.kts` (module wiring/tiers) and root or module `build.gradle.kts` edits.
-- `gradle.properties`, `gradle/libs.versions.toml` (version catalog), or the `pulsar-dependencies`
-  enforced platform.
-- Adding, removing, or upgrading a runtime or test dependency.
-- Gradle wrapper bumps (`gradle/wrapper/gradle-wrapper.properties`).
-
-**Don't use it for:** production/test source changes — those are
-[`pulsar-tests`](../pulsar-tests/SKILL.md) or the relevant module.
-
-## Read first
-
-- [`ARCHITECTURE.md` → Build infrastructure](../../../ARCHITECTURE.md#build-infrastructure) — tiers,
-  convention plugins, version catalog, enforced platform, the module-name gotcha.
-- [`CODING.md` → Dependencies](../../../CODING.md#dependencies) — which libraries are preferred and
-  the LICENSE/NOTICE obligation.
+Editing `build-logic/`, `settings.gradle.kts`, root/module `build.gradle.kts`, `gradle.properties`,
+`gradle/libs.versions.toml`, the `pulsar-dependencies` platform, or the Gradle wrapper. (Source
+changes belong to [`pulsar-tests`](../pulsar-tests/SKILL.md) or the module itself.)
 
 ## Guardrails
 
-- **Edit shared config in the convention plugins, not per-module.** Compile/test/dependency defaults
-  belong in `build-logic/conventions/`; don't duplicate them across module build scripts.
-- **Versions come from the catalog.** Reference `libs.*` / the `pulsar-dependencies` platform; never
-  hard-code a version string in a build script. Add or change versions in
-  `gradle/libs.versions.toml`.
-- **Stay configuration-cache and configure-on-demand compatible.** Both are enabled
-  (`org.gradle.configuration-cache=true`, `org.gradle.configureondemand=true`). Any task on a
-  commonly-run path (`assemble`, `test`, `integrationTest`, `rat`/`spotlessCheck`/`checkstyle*`,
-  `checkBinaryLicense`, `docker*`) must not read mutable state at execution time or access `Project`
-  in task actions — use `Provider` / value sources. **Verify with `--configuration-cache`.**
-  Tooling/one-off tasks (e.g. `verifyTestGroups`, dependency reports) may be exempt.
-- **Follow [Gradle best practices](https://docs.gradle.org/current/userguide/best_practices_index.html).**
-- **Use the real Gradle project path** (mind the module-name-vs-directory gotcha — directory
-  `pulsar-client/` is project `:pulsar-client-original`).
-- **After any dependency change, run `./gradlew checkBinaryLicense`** and update the binary
-  distribution `LICENSE`/`NOTICE` accordingly. Justify a genuinely new dependency.
-- **Published modules must not depend on internal modules.** A public/published module cannot reference
-  internal-only projects in `api`/`implementation` (compile/runtime) scope — that artifact would be
-  unresolvable from Maven Central. Modules are **not** published by default; opt a public library in
-  via the `pulsar.public-java-library-conventions` plugin.
-- **Don't fabricate plugin/DSL/task names** — verify they exist in the build.
+- **Edit shared config in `build-logic/conventions/`**, not per-module.
+- **Versions come from `gradle/libs.versions.toml`** (`libs.*` / `pulsar-dependencies`) — never
+  hardcode a version in a build script.
+- **Keep tasks configuration-cache and configure-on-demand compatible** (both are enabled): no
+  mutable-state reads or `Project` access in task actions — use `Provider` / value sources. Verify
+  with `--configuration-cache`. One-off tooling tasks may be exempt. Follow
+  [Gradle best practices](https://docs.gradle.org/current/userguide/best_practices_index.html).
+- **Use the real Gradle project path** (`pulsar-client/` is `:pulsar-client-original`).
+- **After a dependency change**, run `./gradlew checkBinaryLicense` and update the distribution
+  LICENSE/NOTICE; justify any genuinely new dependency.
+- **Published modules must not depend on internal modules** (compile/runtime) — the artifact would be
+  unresolvable from Maven Central. Modules aren't published unless they apply
+  `pulsar.public-java-library-conventions`.
+- **Don't fabricate plugin / DSL / task names** — verify they exist.
 
-## Validation checklist
+## Before you finish
 
-- [ ] `./gradlew help --configuration-cache` (and the affected task with `--configuration-cache`)
-      succeeds with no config-cache problems.
-- [ ] `./gradlew assemble` (or the affected module's `assemble`) passes.
-- [ ] `./gradlew rat spotlessCheck checkstyleMain checkstyleTest` passes.
-- [ ] If dependencies changed: `./gradlew checkBinaryLicense` passes and LICENSE/NOTICE are updated.
+- [ ] The affected task and `./gradlew help` run clean with `--configuration-cache`.
+- [ ] `assemble` and `rat spotlessCheck checkstyleMain checkstyleTest` pass.
+- [ ] Dependency change → `checkBinaryLicense` passes and LICENSE/NOTICE are updated.

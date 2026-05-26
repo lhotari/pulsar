@@ -206,11 +206,16 @@ git merge <apache-pulsar-remote>/master
 
 ### Branches and backports
 
-Target `master` first. Once the change is merged, cherry-pick it to the relevant maintenance branches
-(`branch-4.2`, `branch-4.1`, `branch-4.0`, …) as needed; bug and security fixes are backported per the
+Target `master` first. Once the change is merged, **project maintainers handle backporting** a bug or
+security fix to the supported maintenance branches (`branch-4.2`, `branch-4.0`, …) when
+the bug is also present there, per the
 [release/support policy](https://pulsar.apache.org/contribute/release-policy/). New **features** are
 **not** added to LTS / maintenance branches without a dev@pulsar.apache.org discussion (and usually a
 PIP), to avoid regressions in stable releases.
+
+Backporting is done by **cherry-picking commits in their original merge order**, which avoids
+unnecessary merge conflicts; sometimes a dependent change must be cherry-picked before the fix itself.
+AI tools are effective at resolving the merge conflicts that arise during a backport.
 
 ## Reporting security vulnerabilities
 
