@@ -49,6 +49,10 @@ failure / flake.
     Don't treat it as a real bug on its own; corroborate first.
 - **Don't fabricate assertions or test names** — verify symbols exist.
 - For a **bugfix**, add a regression test and confirm it fails before the fix and passes after.
+- **Concurrency / memory-visibility bugs** are timing- and platform-dependent and easily masked — a
+  clean run is weak evidence a fix is correct. See
+  [`CODING.md` → Reproducing concurrency / memory-visibility bugs](../../../CODING.md#reproducing-concurrency--memory-visibility-bugs)
+  (JIT warm-up rounds, interpreted-vs-compiled differences, multi-socket/NUMA hardware).
 
 ## Validation checklist
 

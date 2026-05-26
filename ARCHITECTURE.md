@@ -42,6 +42,37 @@ accordingly:
   `pulsar-client-admin-shaded` produce relocated fat jars; `distribution/*` assembles
   server/shell/offloader tarballs.
 
+## Concurrency model (a known gap)
+
+Pulsar does **not** have a clearly established, documented concurrency model, which makes it hard to
+evaluate whether a given piece of code is correct by construction. (Contrast Netty, which has a clear
+rule: all handling on the IO thread is non-blocking, which by extension means avoiding synchronization
+and locks on that path.) Pulsar does not strictly follow such a rule; modern JVMs and hardware
+optimize `synchronized` code well enough that this has not blocked high performance, but it does make
+reasoning about correctness harder than it needs to be.
+
+Conventions that **should** be documented (and largely are not yet):
+
+- which work belongs on the network-connection **event loop** vs. other threads;
+- how the various **thread pools** are intended to be used, and what kind of work belongs on each;
+- how threads are expected to **hand off state** to each other;
+- when a `CompletableFuture`'s **completion thread should be switched** to another thread, and which one;
+- **concurrency limits** for asynchronous tasks;
+- preferring the **single-writer principle** to avoid concurrent state mutation.
+
+Until such a model is written down, follow the surrounding code's conventions and the Java-Memory-Model
+rules in [`CODING.md`](CODING.md#concurrency). Once a model is defined, it becomes far more tractable to
+"lift and shift" existing code toward it and enforce the rules consistently rather than having each
+contributor rediscover the conventions case by case.
+
+## Backpressure
+
+Closely tied to the concurrency model is **backpressure** — how the system avoids accepting more work
+than it can handle, particularly with respect to memory. The memory side is described in
+[PIP-442 "Existing Broker Memory Management"](pip/pip-442.md#existing-broker-memory-management). Broader
+backpressure (beyond memory) is not yet documented and would benefit from being defined alongside the
+concurrency model.
+
 ## Build infrastructure
 
 The build is **Gradle** (migrated from Maven via PIP-463; much existing tooling and docs elsewhere

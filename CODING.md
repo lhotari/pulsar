@@ -42,8 +42,72 @@ APIs over `ListenableFuture` for new code.
 
 - Public classes should be **thread-safe**; annotate non-thread-safe ones with `@NotThreadSafe`.
 - Protect shared mutable state; prefer fine-grained synchronization; ensure mutations occur on the
-  intended thread.
+  intended thread. Prefer the **single-writer principle** — design so a given piece of state is
+  mutated by only one thread — to avoid concurrent mutation entirely.
 - Give threads **meaningful names** for diagnostics.
+- When creating thread pools, prefer Netty's **`io.netty.util.concurrent.DefaultThreadFactory`**. It
+  produces **`FastThreadLocalThread`** instances, on which `FastThreadLocal` lookups are much faster
+  than on a plain `Thread` — this matters on Netty-heavy paths (e.g. the pooled `ByteBuf` allocator and
+  other Netty internals that rely on `FastThreadLocal`) — and it also assigns meaningful, prefixed
+  thread names.
+
+Note that Pulsar does not yet have a documented, project-wide concurrency model; see
+[`ARCHITECTURE.md` → Concurrency model](ARCHITECTURE.md#concurrency-model-a-known-gap) for the
+conventions that *should* govern threads, thread pools, and event loops.
+
+### The Java Memory Model is what makes concurrent code correct
+
+Historically, several hard-to-investigate Pulsar bugs have come from misconceptions about Java
+synchronization:
+
+- **A `synchronized` method or block is not, on its own, thread-safe.** `synchronized` provides its
+  visibility and ordering guarantees only when the **same monitor/lock guards both the reads and the
+  writes** of the shared state. Synchronizing on an arbitrary monitor while another thread accesses
+  the same field without that monitor guarantees nothing.
+- On 64-bit JVMs a field's value is **never corrupted** — a read always returns some value that was
+  actually written. What goes wrong is **visibility**: without a happens-before relationship,
+  different threads can observe different values, or a thread may never see an updated value at all.
+  Establish happens-before with `synchronized`, `volatile`, `final`, or `java.util.concurrent`
+  constructs.
+- **A field accessed by more than one thread needs explicit visibility.** If multiple threads read
+  and write a field, make it `volatile` (or guard every access — both reads and writes — with the
+  same lock); otherwise a writing thread's update may never become visible to a reading thread.
+  `volatile` gives visibility for that single field but does **not** make compound updates
+  (read-modify-write, check-then-act) atomic — use `java.util.concurrent` atomics/locks for those.
+- Visibility is per-field, so a mutable object can be observed **partially updated** — some field
+  writes visible to a reader, others not.
+- The only way to make concurrent code reliably correct is to **conform to the Java Memory Model**.
+  **Benign data races** are sometimes acceptable, and Pulsar has code that relies on this by design —
+  but that must be a deliberate, documented choice, not an accident.
+- **Prefer immutable objects** to sidestep these visibility and mutation hazards. Two distinct notions:
+  - An object is **immutable** when all its fields are `final` *and* every nested instance it
+    references is itself immutable (a Java `record` is the common case). Immutability must hold for the
+    whole reachable graph — synchronization around a holder buys nothing if a referenced object can
+    still be mutated independently without its own synchronization.
+  - An object is **effectively immutable** when its state is never modified after construction but its
+    fields are not all `final`.
+- **How they must be published differs:**
+  - An **immutable** object benefits from the JMM's final-field **safe initialization** guarantee — a
+    thread that observes the reference sees the fully-constructed state even when the reference was
+    published through a data race — so it needs **no** safe publication.
+  - An **effectively immutable** object does **not** get that guarantee and must be shared via **safe
+    publication**: a `final` or `volatile` field, or a `java.util.concurrent` construct (e.g. putting
+    it into a `ConcurrentHashMap`).
+
+  See [Safe initialization](https://shipilev.net/blog/2014/safe-public-construction/#_safe_initialization).
+
+### Reproducing concurrency / memory-visibility bugs
+
+These bugs are timing- and platform-dependent and easily masked, so a clean run is weak evidence that
+a concurrency fix is correct:
+
+- Interpreted and JIT-compiled code can behave very differently. Reproductions often need several
+  **warm-up rounds with a short pause** between them so the JIT compiler kicks in; the JIT is tiered,
+  asynchronous, and multi-threshold, so a short-running test may never trigger compilation. JVM flags
+  can force earlier compilation, and which execution paths are exercised affects what gets compiled.
+- Some races surface only on specific **hardware/OS** combinations — classically **multi-socket /
+  multi-NUMA** machines, whose weaker cross-socket memory ordering exposes races that never appear on
+  a single-socket machine.
 
 ## Logging
 
@@ -71,6 +135,13 @@ APIs over `ListenableFuture` for new code.
   try-with-resources.
 - For internal networking/messaging paths, prefer **Netty `ByteBuf`** over `ByteBuffer` unless an
   external API requires `ByteBuffer`. Release ref-counted buffers you allocate.
+- **Don't hand-optimize object allocation away.** Pulsar is intended to run on **ZGC**, whose
+  collection overhead is very low, so the extra short-lived allocations from favouring immutable
+  objects (see *Concurrency* above) are cheap. Much older Pulsar code minimizes allocation by pooling
+  objects with Netty's `Recycler`; this is **no longer recommended for new code** — under ZGC the
+  `Recycler` often *costs* more CPU than it saves versus simply letting the GC reclaim the objects.
+  Do not introduce new `Recycler` usage. See
+  [PIP-443: Stop using Netty Recycler in new code](pip/pip-443.md).
 
 ## Configuration
 
@@ -100,6 +171,10 @@ both older and newer clients. Flag any change that may break compatibility.
   timeouts to prevent hangs.
 - Every feature or bug fix should include tests covering edge cases and failure scenarios; tests must
   be deterministic and stable. Integration tests may be required for distributed components.
+- **Validate performance optimizations with a benchmark.** Prefer adding a **JMH benchmark** under the
+  `microbench/` subproject that simulates a usage pattern realistic for Pulsar production, so the
+  optimization is backed by evidence rather than intuition. See `microbench/README.md` for how to run
+  JMH benchmarks.
 - **No reflection to access private state in tests** (`WhiteboxImpl.getInternalState` /
   `setInternalState`, `Field.setAccessible(true)`, `Method.setAccessible(true)`, and similar).
   Instead expose what the test needs through a **package-private** `@VisibleForTesting` accessor and
