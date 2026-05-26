@@ -45,11 +45,12 @@ outside the model. Surface uncertainty to a human (or the channels above) rather
   `private@pulsar.apache.org`. Follow <https://pulsar.apache.org/security/#security-policy> and
   <https://github.com/apache/pulsar/security/policy>.
 - When a change fixes a non-public security issue, **do not state its security nature** in the commit
-  message, PR title, or PR body — and **do not push, commit publicly, or open a PR for the fix until
-  the Apache Pulsar PMC has responded with a go-ahead.** The fix must be coordinated through the ASF
-  security vulnerability handling process
-  ([apache.org/security/committers.html#possible](https://apache.org/security/committers.html#possible)),
-  not pushed ahead of the coordinated disclosure timeline.
+  message, PR title, or PR body, and **do not push, commit publicly, or open a PR for the fix.**
+  **The project team commits the fix**, coordinated through the ASF security vulnerability handling
+  process
+  ([apache.org/security/committers.html#possible](https://apache.org/security/committers.html#possible)).
+  A reporter may share a suggested fix patch privately by including it in the report to
+  `private@pulsar.apache.org` — never via a public commit or PR.
 
 ## Checking exposure to an already-public CVE
 

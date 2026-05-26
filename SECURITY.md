@@ -55,10 +55,12 @@ CVE", "security fix", or "patches the vulnerability" discloses the issue before 
 defeats the coordinated-disclosure process above.
 
 Moreover, a fix for a non-public security issue must **not** be pushed, committed publicly, or opened
-as a PR until the Apache Pulsar PMC has responded with a go-ahead. The fix is coordinated through the
-ASF security vulnerability handling process
-([apache.org/security/committers.html#possible](https://apache.org/security/committers.html#possible))
-— it must not run ahead of the coordinated-disclosure timeline.
+as a PR. **The project team commits the fix**, coordinated through the ASF security vulnerability
+handling process
+([apache.org/security/committers.html#possible](https://apache.org/security/committers.html#possible)),
+so it does not run ahead of the coordinated-disclosure timeline. When reporting, you may include a
+suggested fix patch privately in your report to `private@pulsar.apache.org` — never in a public
+commit or PR.
 
 This applies to every contributor, and identically to any AI tooling acting on a contributor's behalf.
 
