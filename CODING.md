@@ -137,7 +137,7 @@ When reviewing a pull request, verify:
 - Java coding conventions are followed.
 - Thread-safety risks; no blocking operations in async paths; correct `CompletableFuture` usage.
 - No unnecessary dependencies; LICENSE/NOTICE updated when dependencies change.
-- Logging follows the guidelines above (slog, levels, structured attributes).
+- Logging follows the guidelines above ([slog](https://github.com/merlimat/slog), levels, structured attributes).
 - Backward compatibility is preserved.
 - Tests exist and are appropriate; reflection-based access to private state is flagged with a
   `@VisibleForTesting` package-private accessor suggested instead.

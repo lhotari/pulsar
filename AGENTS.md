@@ -15,7 +15,7 @@ thread safety, performance, maintainability, and backward compatibility**.
 |-----|---------|
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Local dev workflow: build, lint, running tests & test groups, integration tests, Personal CI, PR conventions, security reporting. |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Big-picture module map, the Gradle build infrastructure, the module-name-vs-directory gotcha, and the `pip/` proposals. |
-| [`CODING.md`](CODING.md) | Coding conventions: style, async/`CompletableFuture`, concurrency, logging (slog), dependencies, backward compatibility, testing, and the review checklist. |
+| [`CODING.md`](CODING.md) | Coding conventions: style, async/`CompletableFuture`, concurrency, logging ([slog](https://github.com/merlimat/slog)), dependencies, backward compatibility, testing, and the review checklist. |
 | [`SECURITY.md`](SECURITY.md) | Reporting a vulnerability, disclosure hygiene, and checking exposure to an already-public CVE. |
 
 The authoritative project documentation is at <https://pulsar.apache.org>; the files above and the
@@ -43,7 +43,8 @@ with a `SKILL.md`:
    serialized/metadata formats. Servers must interoperate with older and newer clients.
 2. **Never block on async/event-loop threads;** methods returning `CompletableFuture` must not throw
    synchronously. See [`CODING.md`](CODING.md#asynchronous-programming).
-3. **Logging:** prefer slog via `@CustomLog`; default new logs to `TRACE`/`DEBUG`, not `INFO`.
+3. **Logging:** prefer [slog](https://github.com/merlimat/slog) via `@CustomLog`; default new logs to
+   `TRACE`/`DEBUG`, not `INFO`.
 4. **Tests:** scope runs with `--tests`; no reflection into private state (use a `@VisibleForTesting`
    package-private accessor); release buffers and resources.
 5. **PRs:** semantic `[type][scope]` title; describe **motivation** and **modifications**; do not
