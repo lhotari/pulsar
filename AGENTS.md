@@ -9,6 +9,26 @@ Apache Pulsar is a distributed pub-sub messaging and streaming platform. The cod
 performance-critical, heavily asynchronous, and concurrency-sensitive. Prioritize **correctness,
 thread safety, performance, maintainability, and backward compatibility**.
 
+## Licensing and provenance (read first)
+
+Apache Pulsar is licensed under the Apache License 2.0, and all contributions must meet the ASF's
+[Generative Tooling guidance](https://www.apache.org/legal/generative-tooling.html):
+
+- **A human is in the loop and is accountable.** Every pull request and every security report must be
+  submitted by a human contributor who has reviewed and verified the change and takes responsibility
+  for it. Fully autonomous agents (e.g. OpenClaw-style bots) opening PRs or filing reports on their own
+  are not acceptable — the AI assists, the human is accountable.
+- **Don't introduce code of incompatible or unknown provenance.** Never copy verbatim from
+  GPL/AGPL/LGPL, proprietary, or unlicensed sources (including Stack Overflow / blog / forum snippets of
+  unclear licensing), and don't use a tool whose terms restrict the output inconsistently with open
+  source. Reimplement from specifications or Apache-compatible sources, and follow the
+  [ASF 3rd Party Licensing Policy](https://www.apache.org/legal/resolved.html).
+- **Every new source file needs the ASF license header** (Spotless enforces this — copy the form from
+  an existing `.java` file).
+- **Consider attributing AI assistance.** When AI tooling assisted on a change, consider adding an
+  `Assisted-by: <tool/version>` commit trailer (the default, since a human still does the final
+  review); `Generated-by: <tool/version>` is for minimally-modified generated output.
+
 ## Canonical docs (read the one that fits the task)
 
 | Doc | Use for |
