@@ -49,7 +49,7 @@ public final class MultipleListenerValidator {
     static String formatHostPort(URI uri) {
         String host = uri.getHost();
         if (host == null) {
-            throw new IllegalArgumentException("host must not be null")
+            throw new IllegalArgumentException("host must not be null");
         }
         String unbracketed = host.startsWith("[") && host.endsWith("]")
                 ? host.substring(1, host.length() - 1) : host;
