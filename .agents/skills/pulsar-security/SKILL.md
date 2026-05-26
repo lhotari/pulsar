@@ -6,7 +6,8 @@ description: AI guardrails for security topics — Pulsar's threat scope, privat
 # Pulsar security
 
 AI-tooling layer over [`SECURITY.md`](../../../SECURITY.md) — the policy, the security model, and the
-reporting / CVE-checking steps. Load it for the full detail; the points below are how an agent should
+reporting / CVE-checking steps (latest at <https://github.com/apache/pulsar/security/policy>; prefer it
+over a possibly-stale fork copy). Load it for the full detail; the points below are how an agent should
 act.
 
 ## Guardrails

@@ -219,7 +219,8 @@ AI tools are effective at resolving the merge conflicts that arise during a back
 
 ## Reporting security vulnerabilities
 
-See [`SECURITY.md`](SECURITY.md) and <https://pulsar.apache.org/security/>. In short: report a
+See [`SECURITY.md`](SECURITY.md) (latest at <https://github.com/apache/pulsar/security/policy>) and
+<https://pulsar.apache.org/security/>. In short: report a
 suspected vulnerability **privately** (never in a public issue, PR, or commit), and never reveal the
 security nature of a change in public until it is announced. An **already-public** CVE that you only
 want to check Pulsar's exposure to is *not* a private disclosure — search the CVE id in apache/pulsar

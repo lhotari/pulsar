@@ -188,53 +188,16 @@ There is also a guide for [setting up the tooling for building Pulsar](https://p
 
 ### Build
 
-Compile and assemble:
-
 ```bash
-./gradlew assemble
+./gradlew assemble                                                       # compile and assemble
+./gradlew :pulsar-client-original:test --tests "ConsumerBuilderImplTest" # run a single test
+bin/pulsar standalone                                                    # run a standalone service
 ```
 
-Check source code license headers and formatting:
-
-```bash
-./gradlew rat spotlessCheck checkstyleMain checkstyleTest
-```
-
-Check that bundled dependencies are properly recorded in the binary distribution `LICENSE` and `NOTICE` files. Run this after adding, removing, or upgrading a runtime dependency to confirm the corresponding entry has been added to (or removed from) the LICENSE file. The task builds the binary distribution tarballs as needed:
-
-```bash
-./gradlew checkBinaryLicense
-```
-
-Compile and assemble individual module:
-
-```bash
-./gradlew :pulsar-broker:assemble
-```
-
-Run Unit Tests:
-
-```bash
-./gradlew test
-```
-
-Run Individual Unit Test:
-
-```bash
-./gradlew :pulsar-client-original:test --tests "ConsumerBuilderImplTest"
-```
-
-Run Selected Test packages:
-
-```bash
-./gradlew :pulsar-broker:test --tests "org.apache.pulsar.*"
-```
-
-Start standalone Pulsar service:
-
-```bash
-$ bin/pulsar standalone
-```
+For the full build, lint, and test workflow — test groups, integration tests, Personal CI, and PR
+conventions — see [`CONTRIBUTING.md`](CONTRIBUTING.md). For the module map and Gradle build system see
+[`ARCHITECTURE.md`](ARCHITECTURE.md), and for coding conventions see [`CODING.md`](CODING.md). AI coding
+agents should start from [`AGENTS.md`](AGENTS.md).
 
 Check https://pulsar.apache.org for documentation and examples.
 
@@ -301,17 +264,15 @@ You can self-register at https://communityinviter.com/apps/apache-pulsar/apache-
 
 ## Security Policy
 
-If you find a security issue with Pulsar then please [read the security policy](https://pulsar.apache.org/security/#security-policy). It is critical to avoid public disclosure.
+See the [Pulsar security policy](https://github.com/apache/pulsar/security/policy) for the full policy. In short: **never disclose a suspected vulnerability publicly** (issue, PR, or discussion) before a fix is released, and a human must verify and take responsibility for a report — autonomous agents must not file security reports on their own.
 
 ### Reporting a security vulnerability
 
-To report a vulnerability for Pulsar, contact the [Apache Security Team](https://www.apache.org/security/). When reporting a vulnerability to [security@apache.org](mailto:security@apache.org), you can copy your email to [private@pulsar.apache.org](mailto:private@pulsar.apache.org) to send your report to the Apache Pulsar Project Management Committee. This is a private mailing list.
-
-https://github.com/apache/pulsar/security/policy contains more details.
+Report privately by email to the [Apache Security Team](https://www.apache.org/security/) at [security@apache.org](mailto:security@apache.org); you may also copy the Apache Pulsar PMC's private list, [private@pulsar.apache.org](mailto:private@pulsar.apache.org). See the [Pulsar security policy](https://github.com/apache/pulsar/security/policy) for more detail.
 
 ### Checking exposure to an already-public CVE
 
-For already-public CVEs where you want to check Pulsar's exposure, the right venue is a GitHub issue on apache/pulsar or a question on the dev@pulsar.apache.org mailing list. Before asking about an already-public CVE and whether it's already fixed in Pulsar, search PRs and issues with the CVE id at https://github.com/apache/pulsar/pulls (also check issues and closed PRs/issues). Pulsar project's supported versions are available at https://pulsar.apache.org/contribute/release-policy/. Users should upgrade to supported versions to receive security updates.
+An already-public CVE is **not** a private disclosure. Search PRs and issues by the CVE id at <https://github.com/apache/pulsar/pulls> (including closed ones), then ask via a GitHub issue or the dev@pulsar.apache.org mailing list if needed. Pulsar's supported versions are listed at <https://pulsar.apache.org/contribute/release-policy/>; upgrade to a supported version to receive security updates. See the [Pulsar security policy](https://github.com/apache/pulsar/security/policy).
 
 ## License
 

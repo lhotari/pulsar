@@ -1,8 +1,10 @@
 # Security Policy
 
 The authoritative policy is at <https://pulsar.apache.org/security/>; the Apache Software Foundation's
-general process is at <https://www.apache.org/security/>. The summary below is what contributors (and
-any AI tooling acting on their behalf) must follow.
+general process is at <https://www.apache.org/security/>. The latest version of this file is maintained
+at <https://github.com/apache/pulsar/security/policy> — in a fork, check there rather than a
+possibly-stale local copy. The summary below is what contributors (and any AI tooling acting on their
+behalf) must follow.
 
 ## Security model and scope
 
