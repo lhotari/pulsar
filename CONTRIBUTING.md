@@ -143,7 +143,9 @@ no longer applies — bring in upstream changes by merging instead (see [Pull re
 
 Pulsar has a large number of flaky tests, so GitHub Actions jobs on a PR sometimes fail for reasons
 unrelated to the change. When a failure appears to be flakiness rather than a regression caused by the
-PR, comment **`/pulsarbot rerun`** on the PR to re-run the failed workflows.
+PR, comment **`/pulsarbot rerun`** on the PR to re-run the failed workflows. `/pulsarbot rerun` only
+takes effect once **all** jobs from the previous run have completed, so wait for the run to finish
+(including any still-running or queued jobs) before commenting.
 
 For a PR from a fork, a project maintainer must **approve** the workflow runs before they execute, and
 approval is required again whenever new changes are pushed. This adds latency to each run and makes it
