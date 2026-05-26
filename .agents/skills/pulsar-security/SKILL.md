@@ -34,8 +34,8 @@ Pulsar's security model is not formally defined. Two assumptions decide whether 
   (misconfiguration, thundering herd).
 
 When triaging, do **not** classify "a trusted function executes/modifies its environment" or "a
-perimeter-trusted client can overload the cluster" as a vulnerability by default — these are outside
-the model. Surface uncertainty to a human (or the channels above) rather than asserting a CVE.
+perimeter-trusted client can cause a denial-of-service" as a vulnerability by default — these are
+outside the model. Surface uncertainty to a human (or the channels above) rather than asserting a CVE.
 
 ## Reporting a (non-public) vulnerability
 

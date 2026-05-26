@@ -30,8 +30,8 @@ controls against malicious **denial-of-service (DoS)** attacks. Rate limiting ex
 defense against a deliberate DoS by an attacker.
 
 Reports that amount to "a trusted function can run code / modify its environment" or "a
-perimeter-trusted client can overload the cluster" generally fall **outside** Pulsar's threat model.
-When in doubt, ask through the channels below rather than assuming.
+perimeter-trusted client can cause a denial-of-service" generally fall **outside** Pulsar's threat
+model. When in doubt, ask through the channels below rather than assuming.
 
 ## Reporting a vulnerability
 
