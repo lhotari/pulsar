@@ -309,6 +309,10 @@ To report a vulnerability for Pulsar, contact the [Apache Security Team](https:/
 
 https://github.com/apache/pulsar/security/policy contains more details.
 
+### Checking exposure to an already-public CVE
+
+For already-public CVEs where you want to check Pulsar's exposure, the right venue is a GitHub issue on apache/pulsar or a question on the dev@pulsar.apache.org mailing list. Before asking about an already-public CVE and whether it's already fixed in Pulsar, search PRs and issues with the CVE id at https://github.com/apache/pulsar/pulls (also check issues and closed PRs/issues). Pulsar project's supported versions are available at https://pulsar.apache.org/contribute/release-policy/. Users should upgrade to supported versions to receive security updates.
+
 ## License
 
 Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0

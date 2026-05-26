@@ -79,11 +79,17 @@ When introducing a new dependency:
 
 # Logging Guidelines
 
-* Use **SLF4J** for logging.
+* Prefer the **[slog](https://github.com/merlimat/slog)** library (`io.github.merlimat.slog`) for logging.
+* Instantiate the logger with Lombok's **`@CustomLog`** annotation, which is configured in `lombok.config` to create an `io.github.merlimat.slog.Logger` (`io.github.merlimat.slog.Logger.get(TYPE)`).
+* **SLF4J** is still available but is **considered deprecated** for Pulsar logging. Do not introduce new SLF4J loggers; flag new SLF4J usage in review and suggest `@CustomLog` (slog) instead.
 * Do **not use** `System.out` or `System.err`.
 * Assume production commonly runs at **INFO** log level.
+* **Default new log statements to `TRACE` or `DEBUG`, not `INFO`.** Existing Pulsar code overuses `INFO`, which produces excessively noisy production logs. Use `TRACE` for fine-grained/low-level detail, `DEBUG` for diagnostics that could reasonably be enabled in production without flooding the logs, and reserve `INFO` for low-frequency, significant lifecycle/state-change events. Flag new `INFO`-level logging that would be better at `DEBUG`/`TRACE`.
 * Avoid excessive logging in hot paths.
-* Guard expensive `DEBUG` and `TRACE` logging with `log.isDebugEnabled()` or `log.isTraceEnabled()`.
+* With slog, attach data as **structured attributes** (`log.info().attr("topic", topic).log("Published")`) instead of interpolating it into the message string.
+* For expensive `DEBUG`/`TRACE` values, do not guard with `log.isDebugEnabled()`/`log.isTraceEnabled()`. Instead use slog's lazy evaluation, which only runs when the level is enabled:
+  * pass a supplier lambda as the attribute value — `log.debug().attr("dump", () -> expensiveDump()).log("...")`, or
+  * use the deferred event form — `log.debug(e -> e.attr("dump", expensiveDump()).log("..."))`.
 * Avoid logging stack traces at `INFO` and lower levels.
 
 Log messages should be:
@@ -115,6 +121,17 @@ Avoid leaks for:
 
 For internal networking/messaging paths, prefer **Netty `ByteBuf`** over `ByteBuffer` unless an external API requires
 `ByteBuffer`.
+
+## Resource Cleanup in Tests
+
+Tests must also close/release everything they allocate — shut down executors/clients/services and release
+Netty `ByteBuf`s (and other reference-counted buffers). The test harness runs leak detectors
+(`ThreadLeakDetectorListener`, Netty pooled-allocator/`ByteBuf` leak detection enabled via
+`-Dpulsar.allocator.pooled=true`) that fail the build on thread or buffer leaks.
+
+When a leak is reported by a test, treat it as a **likely bug in the production code** (a missing close or
+`release()` in the code under test), not merely test noise. Fix the root cause rather than working around it
+in the test or disabling the detector.
 
 ---
 
