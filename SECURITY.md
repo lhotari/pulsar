@@ -54,15 +54,18 @@ networking). Describe the behaviour change neutrally. A public commit or PR that
 CVE", "security fix", or "patches the vulnerability" discloses the issue before it is announced and
 defeats the coordinated-disclosure process above.
 
-Moreover, a fix for a non-public security issue must **not** be pushed, committed publicly, or opened
-as a PR. **The project team commits the fix**, coordinated through the ASF security vulnerability
-handling process
-([apache.org/security/committers.html#possible](https://apache.org/security/committers.html#possible)),
-so it does not run ahead of the coordinated-disclosure timeline. When reporting, you may include a
-suggested fix patch privately in your report to `private@pulsar.apache.org` — never in a public
-commit or PR.
+Do **not** push, commit publicly, or open a PR for a fix to a non-public security issue. When
+reporting, you may include a suggested fix patch privately in your report to
+`private@pulsar.apache.org` — never in a public commit or PR.
 
 This applies to every contributor, and identically to any AI tooling acting on a contributor's behalf.
+
+The **project team** commits the fix, coordinated through the ASF security vulnerability handling
+process
+([apache.org/security/committers.html#possible](https://apache.org/security/committers.html#possible)).
+The team may commit the fix to the public repository **before** the release, using a neutral commit
+message that does not state its security nature. In severe cases, the commit and release are made in a
+private repository, and the fix is made public only at the time of the release.
 
 ## Checking exposure to an already-public CVE
 

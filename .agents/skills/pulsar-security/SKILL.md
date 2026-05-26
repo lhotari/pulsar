@@ -44,13 +44,16 @@ outside the model. Surface uncertainty to a human (or the channels above) rather
 - Report privately to the ASF Security Team (`security@apache.org`), optionally copying
   `private@pulsar.apache.org`. Follow <https://pulsar.apache.org/security/#security-policy> and
   <https://github.com/apache/pulsar/security/policy>.
-- When a change fixes a non-public security issue, **do not state its security nature** in the commit
-  message, PR title, or PR body, and **do not push, commit publicly, or open a PR for the fix.**
-  **The project team commits the fix**, coordinated through the ASF security vulnerability handling
-  process
-  ([apache.org/security/committers.html#possible](https://apache.org/security/committers.html#possible)).
-  A reporter may share a suggested fix patch privately by including it in the report to
-  `private@pulsar.apache.org` — never via a public commit or PR.
+- **Do not push, commit publicly, or open a PR for the fix yourself.** You may share a suggested fix
+  patch privately by including it in the report to `private@pulsar.apache.org` — never via a public
+  commit or PR.
+
+The **project team** commits the fix, coordinated through the ASF security vulnerability handling
+process
+([apache.org/security/committers.html#possible](https://apache.org/security/committers.html#possible)).
+The team may commit the fix to the public repository **before** the release, using a neutral commit
+message that does not state its security nature. In severe cases, the commit and release are made in a
+private repository, and the fix is made public only at the time of the release.
 
 ## Checking exposure to an already-public CVE
 
