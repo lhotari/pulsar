@@ -56,4 +56,4 @@ with a `SKILL.md`:
 ## Where to ask
 
 - Dev mailing list: <dev@pulsar.apache.org> · Slack: <https://apache-pulsar.slack.com/>
-- Issues: <https://github.com/apache/pulsar/issues>
+- Issues: <https://github.com/apache/pulsar/issues> · Discussions: <https://github.com/apache/pulsar/discussions>
