@@ -139,6 +139,18 @@ fork. Once it is set up, the loop is:
 Once the PR to `apache/pulsar` has been opened, stop rebasing as part of this loop: step 1's rebase
 no longer applies — bring in upstream changes by merging instead (see [Pull requests](#pull-requests)).
 
+### Retrying CI after flaky-test failures
+
+Pulsar has a large number of flaky tests, so GitHub Actions jobs on a PR sometimes fail for reasons
+unrelated to the change. When a failure appears to be flakiness rather than a regression caused by the
+PR, comment **`/pulsarbot rerun`** on the PR to re-run the failed workflows.
+
+For a PR from a fork, a project maintainer must **approve** the workflow runs before they execute, and
+approval is required again whenever new changes are pushed. This adds latency to each run and makes it
+slow to tell flaky failures apart from genuine ones. Setting up **Personal CI** (above) sidesteps this
+— the full pipeline runs in your own fork without maintainer approval — so it is especially useful when
+a PR has legitimate test failures that you need to iterate on.
+
 ## Pull requests
 
 PRs must follow `.github/PULL_REQUEST_TEMPLATE.md`. PR titles follow the

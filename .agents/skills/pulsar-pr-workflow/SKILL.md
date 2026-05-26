@@ -53,6 +53,11 @@ Personal CI loop on a fork.
   **fork** to trigger CI, fix failures, and open the PR to `apache/pulsar` only when the fork's CI is
   green. A PR can be open in both the fork and `apache/pulsar` at once. After the upstream PR is open,
   switch from rebase to merge (above).
+- **Flaky CI:** Pulsar has many flaky tests, so GitHub Actions jobs on a PR can fail unrelated to the
+  change. When a failure looks like flakiness, comment **`/pulsarbot rerun`** to re-run the failed
+  workflows. Note that for fork PRs a maintainer must approve each run (again after new pushes), which
+  is why Personal CI is the better loop for iterating on genuine failures. Don't dismiss a failure as
+  "flaky" without checking it isn't caused by the change.
 - **Keep commits focused** — a fix, a refactor, and a formatting pass are separate commits/PRs.
 - **Security:** never describe the security nature of a change in a commit/PR — see
   [`pulsar-security`](../pulsar-security/SKILL.md).
