@@ -38,8 +38,10 @@ Apache Pulsar is licensed under the Apache License 2.0, and all contributions mu
 | [`CODING.md`](CODING.md) | Coding conventions: style, async/`CompletableFuture`, concurrency, logging ([slog](https://github.com/merlimat/slog)), dependencies, backward compatibility, testing, and the review checklist. |
 | [`SECURITY.md`](SECURITY.md) | Reporting a vulnerability, disclosure hygiene, and checking exposure to an already-public CVE. |
 
-The authoritative project documentation is at <https://pulsar.apache.org>; the files above and the
-website remain the source of truth — this guide just layers AI-specific pointers on top. For
+The authoritative project documentation is at <https://pulsar.apache.org>, whose source lives in the
+[`apache/pulsar-site`](https://github.com/apache/pulsar-site) repository (where documentation changes
+are contributed). The files above and the website remain the source of truth — this guide just layers
+AI-specific pointers on top. For
 [`SECURITY.md`](SECURITY.md) specifically, always check the latest at
 <https://github.com/apache/pulsar/security/policy> rather than a possibly-stale fork copy.
 
