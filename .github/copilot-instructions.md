@@ -125,13 +125,18 @@ For internal networking/messaging paths, prefer **Netty `ByteBuf`** over `ByteBu
 ## Resource Cleanup in Tests
 
 Tests must also close/release everything they allocate — shut down executors/clients/services and release
-Netty `ByteBuf`s (and other reference-counted buffers). The test harness runs leak detectors
-(`ThreadLeakDetectorListener`, Netty pooled-allocator/`ByteBuf` leak detection enabled via
-`-Dpulsar.allocator.pooled=true`) that fail the build on thread or buffer leaks.
+Netty `ByteBuf`s (and other reference-counted buffers).
 
-When a leak is reported by a test, treat it as a **likely bug in the production code** (a missing close or
-`release()` in the code under test), not merely test noise. Fix the root cause rather than working around it
-in the test or disabling the detector.
+* A reported **`ByteBuf`/buffer leak** (Netty pooled-allocator leak detection, enabled via
+  `-Dpulsar.allocator.pooled=true`) is a **real bug**. Fix the root cause — the missing `release()` in the
+  code under test — rather than working around it in the test or suppressing the detector.
+* **Thread leaks** reported by `ThreadLeakDetectorListener` are currently **not a reliable signal**. The
+  detector produces a high rate of false positives — notably with `SharedPulsarBaseTest`, and whenever the
+  `THREAD_LEAK_DETECTOR_WAIT_MILLIS` environment value is not set high enough (≈`10000` is recommended) to
+  let asynchronous shutdown complete before the check runs. That wait setting only takes effect when the
+  **Gradle daemon is disabled** (`--no-daemon`). Because of these false positives, do not rely on
+  `ThreadLeakDetectorListener` alone to conclude that a change is thread-leak-free; corroborate before
+  treating a reported thread leak as a real bug.
 
 ---
 
