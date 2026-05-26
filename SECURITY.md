@@ -37,7 +37,8 @@ message that does not state its security nature; in severe cases the commit and 
 private repository and the fix is made public only at release time.
 
 As a contributor, do **not** push, commit publicly, or open a PR for a fix to a non-public security
-issue yourself. When reporting, you may include a suggested fix patch privately in your report to
+issue yourself — **including in a public fork**, since a public-fork commit or PR is itself a
+disclosure. When reporting, you may include a suggested fix patch privately in your report to
 `private@pulsar.apache.org` — never in a public commit or PR.
 
 The neutrality rules below are for **whoever commits the fix — i.e. the project team**. Until the

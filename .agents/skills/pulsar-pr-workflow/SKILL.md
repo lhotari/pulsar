@@ -28,8 +28,13 @@ enforced by `.github/workflows/ci-semantic-pull-request.yml` and the body by
   completed — but verify the failure isn't caused by your change first.
 - **Keep PRs focused** — no unrelated drive-by refactoring or reformatting; raise large refactorings on
   `dev@pulsar.apache.org` first.
-- **Security**: never state the security nature of a change in a commit/PR — see
-  [`pulsar-security`](../pulsar-security/SKILL.md).
+- **Security**: never state the security nature of a change in a commit/PR **while a vulnerability is
+  undisclosed** — those fixes are handled privately by the project team. Others must not create any
+  commits or PRs to address such an issue, **including in a public fork** (a public-fork commit or PR is
+  itself a disclosure); share a suggested patch privately instead (see `pulsar-security`). A **public
+  dependency update that addresses an already-disclosed CVE is the opposite**: use a `[fix][sec]` title
+  and name the CVE id(s) in the title or description. See [`pulsar-security`](../pulsar-security/SKILL.md)
+  and [`SECURITY.md`](../../../SECURITY.md).
 
 ## Before you finish
 
