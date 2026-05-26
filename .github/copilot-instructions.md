@@ -332,6 +332,19 @@ Integration tests may be required for distributed components.
 
 ---
 
+# Pull Request Description
+
+Every pull request must describe the change so reviewers have the context they need. At a minimum, the
+description should cover:
+
+* **Motivation (why?)** — the context and the problem being solved.
+* **Modifications (what / how?)** — what was changed and how it addresses the problem.
+
+These map to the **Motivation** and **Modifications** sections of `.github/PULL_REQUEST_TEMPLATE.md`. A title
+alone, or a description that only restates the title, is not sufficient.
+
+---
+
 # Pull Request Review Guidance
 
 When reviewing a pull request, Copilot should:
@@ -346,5 +359,7 @@ When reviewing a pull request, Copilot should:
 * suggest missing tests when appropriate
 * flag reflection-based access to private fields or methods in tests (e.g. `WhiteboxImpl`,
   `setAccessible(true)`) and recommend a package-private `@VisibleForTesting` accessor instead
+* check that the PR description adequately explains the change — add a comment asking for a proper
+  description (at least the motivation and the modifications) unless this is already covered
 
 Focus feedback on correctness, reliability, and maintainability.
