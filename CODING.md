@@ -27,6 +27,7 @@ for the agent-specific guardrails on top of it.
   slog's lazy form — `log.debug().attr("dump", () -> expensiveDump()).log("...")` or
   `log.debug(e -> e.attr("dump", expensiveDump()).log("..."))`.
 - Avoid logging on hot paths, and stack traces at `INFO` or lower.
+- Use `DEBUG` in a way where it could be enabled in production without causing too many log entries. Use `TRACE` for more detailed information.
 
 ## Asynchronous programming
 
