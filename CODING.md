@@ -79,6 +79,15 @@ Pulsar relies heavily on `CompletableFuture`; prefer it over `ListenableFuture` 
   on the throw happening *before* the async work starts, so evaluate each call site. Use a shared
   `checkArgumentAsync` helper (in `FutureUtil`) to validate without duplicating try/catch.
 
+- **Limit concurrency and handle backpressure.** Firing many async operations at once can overwhelm the
+  system. Options:
+  - **`com.spotify.futures.ConcurrencyReducer`** — caps in-flight futures at a configurable limit (used
+    in the Admin client to bound concurrent requests per broker).
+  - **`org.apache.pulsar.common.util.FutureUtil.Sequencer`** — runs async operations sequentially.
+  - **`org.apache.pulsar.common.semaphore.AsyncSemaphoreImpl`** — a non-blocking semaphore with a
+    per-operation cost that queues callers instead of failing when the limit is reached. Preferred over
+    `ConcurrencyReducer` for request-driven cases that need a timeout on permit acquisition.
+
 ## Testing conventions
 
 Most Pulsar **"unit tests"** (`src/test`, run with `./gradlew :<module>:test`) are actually
