@@ -42,9 +42,7 @@ Apache Pulsar is licensed under the Apache License 2.0, and all contributions mu
 The authoritative project documentation is at <https://pulsar.apache.org>, whose source lives in the
 [`apache/pulsar-site`](https://github.com/apache/pulsar-site) repository (where documentation changes
 are contributed). The files above and the website remain the source of truth — this guide just layers
-AI-specific pointers on top. For
-[`SECURITY.md`](SECURITY.md) specifically, always check the latest at
-<https://github.com/apache/pulsar/security/policy> rather than a possibly-stale fork copy.
+AI-specific pointers on top.
 
 ## Agent guardrails
 
@@ -57,7 +55,7 @@ A few rules matter specifically when an AI tool makes the change, on top of the 
 - **Confirm state-changing actions.** Get the user's explicit confirmation before pushing, opening or
   updating a PR, or posting a comment. Being asked to start a task is not standing authorization for
   these outward-facing actions — see *Licensing and provenance* above.
-- **A clean local run is weak evidence for concurrency/visibility fixes** (timing- and
+- **A clean local run is weak evidence for concurrency/data race fixes** (timing- and
   platform-dependent). See [`CODING.md`](CODING.md#reproducing-concurrency--memory-visibility-bugs).
 
 ## Critical rules

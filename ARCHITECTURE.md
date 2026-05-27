@@ -2,7 +2,9 @@
 
 Apache Pulsar is a distributed pub-sub messaging and streaming platform. The codebase is
 performance-critical, heavily asynchronous, and concurrency-sensitive (brokers, storage,
-networking). The authoritative documentation lives at <https://pulsar.apache.org> — see the
+networking).
+
+The authoritative documentation lives at <https://pulsar.apache.org> — see the
 [Architecture Overview](https://pulsar.apache.org/docs/4.2.x/concepts-architecture-overview/) for the
 conceptual model. For a deeper, generated architecture description see
 [DeepWiki](https://deepwiki.com/apache/pulsar); coding agents can install the
@@ -46,6 +48,25 @@ accordingly:
   `pulsar-client-admin-shaded` produce relocated fat jars; `distribution/*` assembles
   server/shell/offloader tarballs.
 
+## Build and module layout
+
+The Gradle build infrastructure — convention plugins under `build-logic/`, the
+`gradle/libs.versions.toml` version catalog, the enforced `pulsar-dependencies` platform, the
+dependency tiers in `settings.gradle.kts`, and the configuration-cache / configure-on-demand
+requirements — is documented in [`BUILDING.md`](BUILDING.md), together with the
+[module-name-vs-directory gotcha](BUILDING.md#module-name-vs-directory-name-gotcha) (e.g. directory
+`pulsar-client/` is the Gradle project `:pulsar-client-original`).
+
+## Pulsar Improvement Proposals (`pip/`)
+
+The **`pip/`** directory holds **Pulsar Improvement Proposals** (`pip-<N>.md`) — the design
+documents for significant changes, referenced as `PIP-<N>` throughout commit messages and code (e.g.
+PIP-463 = Maven→Gradle migration, PIP-465 = IO connectors moved out, PIP-466/468 = V5 client).
+`pip/README.md` describes the process and `pip/TEMPLATE.md` is the proposal template. Consult the
+relevant PIP for the rationale behind a non-trivial feature or architectural decision. A PIP **number
+is reserved by the first `dev@pulsar.apache.org` thread that uses it** — start the discussion to claim
+the next free number.
+
 ## Concurrency model (a known gap)
 
 Pulsar does **not** have a clearly established, documented concurrency model, which makes it hard to
@@ -76,22 +97,3 @@ than it can handle, particularly with respect to memory. The memory side is desc
 [PIP-442 "Existing Broker Memory Management"](pip/pip-442.md#existing-broker-memory-management). Broader
 backpressure (beyond memory) is not yet documented and would benefit from being defined alongside the
 concurrency model.
-
-## Build and module layout
-
-The Gradle build infrastructure — convention plugins under `build-logic/`, the
-`gradle/libs.versions.toml` version catalog, the enforced `pulsar-dependencies` platform, the
-dependency tiers in `settings.gradle.kts`, and the configuration-cache / configure-on-demand
-requirements — is documented in [`BUILDING.md`](BUILDING.md), together with the
-[module-name-vs-directory gotcha](BUILDING.md#module-name-vs-directory-name-gotcha) (e.g. directory
-`pulsar-client/` is the Gradle project `:pulsar-client-original`).
-
-## Pulsar Improvement Proposals (`pip/`)
-
-The **`pip/`** directory holds **Pulsar Improvement Proposals** (`pip-<N>.md`) — the design
-documents for significant changes, referenced as `PIP-<N>` throughout commit messages and code (e.g.
-PIP-463 = Maven→Gradle migration, PIP-465 = IO connectors moved out, PIP-466/468 = V5 client).
-`pip/README.md` describes the process and `pip/TEMPLATE.md` is the proposal template. Consult the
-relevant PIP for the rationale behind a non-trivial feature or architectural decision. A PIP **number
-is reserved by the first `dev@pulsar.apache.org` thread that uses it** — start the discussion to claim
-the next free number.
