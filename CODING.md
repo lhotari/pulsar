@@ -37,10 +37,44 @@ Pulsar relies heavily on `CompletableFuture`; prefer it over `ListenableFuture` 
   the returned future — `return CompletableFuture.failedFuture(e);` — including for argument validation
   (`if (arg == null) return CompletableFuture.failedFuture(new IllegalArgumentException("arg"));`).
   Throwing *inside* a stage (`thenApply`, `thenCompose`, `handle`, `whenComplete`, …) is fine.
+
+  Avoid (escapes synchronously; a caller chaining `.exceptionally(...)` never sees it):
+
+  ```java
+  CompletableFuture<T> process(String arg) {
+      if (arg == null) {
+          throw new IllegalArgumentException("arg");
+      }
+      return doProcessAsync(arg);
+  }
+  ```
+
+  Prefer (report the validation failure through the returned future):
+
+  ```java
+  CompletableFuture<T> process(String arg) {
+      if (arg == null) {
+          return CompletableFuture.failedFuture(new IllegalArgumentException("arg"));
+      }
+      return doProcessAsync(arg);
+  }
+  ```
 - **Never block on event-loop / async-execution threads** — no `Thread.sleep`, `Future.get()`,
   `CompletableFuture.join()`, or blocking IO. An operation that performs IO should return a future.
 - **Avoid nested futures** (`CompletableFuture<CompletableFuture<T>>`); flatten with `thenCompose`.
   Prefer **`OrderedExecutor`** for ordered asynchronous work.
+
+  Avoid (`thenApply` on a future-returning function yields `CompletableFuture<CompletableFuture<R>>`):
+
+  ```java
+  return firstAsync(arg).thenApply(v -> secondAsync(v));
+  ```
+
+  Prefer (`thenCompose` flattens it to `CompletableFuture<R>`):
+
+  ```java
+  return firstAsync(arg).thenCompose(v -> secondAsync(v));
+  ```
 - **Converting a synchronous-throwing method to a failed future is not mechanical** — some callers rely
   on the throw happening *before* the async work starts, so evaluate each call site. Use a shared
   `checkArgumentAsync` helper (in `FutureUtil`) to validate without duplicating try/catch.
@@ -94,9 +128,37 @@ but much existing code isn't, so integration-style is the pragmatic default. See
 - **Don't return generic tuples.** Instead of `org.apache.commons.lang3.tuple.Pair<L, R>` (or a similar
   tuple type), define a small, purpose-named **Java `record`** inline in the class that declares the
   method, with the **same visibility as the method** (`public`, package-private, or `private`).
+
+  Avoid (positional and untyped; call sites read `getLeft()` / `getRight()`):
+
+  ```java
+  private Pair<Integer, Integer> minMax(Collection<Integer> values) { ... }
+  ```
+
+  Prefer (a purpose-named record with the same visibility as the method):
+
+  ```java
+  private record MinMax(int min, int max) {}
+  private MinMax minMax(Collection<Integer> values) { ... }
+  ```
 - **Prefer record keys over concatenated strings.** For a composite `Map` key, use a small `record`
   instead of concatenating a `String` (e.g. `a + ":" + b`) — correct `equals`/`hashCode`, type-safe,
   no delimiter/escaping bugs.
+
+  Avoid (delimiter collisions when a value contains `:`; no type safety):
+
+  ```java
+  Map<String, V> map = new HashMap<>();
+  map.get(a + ":" + b);
+  ```
+
+  Prefer (a small record key with correct `equals`/`hashCode`):
+
+  ```java
+  record Key(String a, String b) {}
+  Map<Key, V> map = new HashMap<>();
+  map.get(new Key(a, b));
+  ```
 - **Don't use `@Builder` on public client-API classes** (harder to maintain backwards compatibility) — hand-write the builder.
 - **Name methods for intent.** A method's name should reveal what it does. Query methods read like
   queries (`shouldSkipChunk`, not `skipChunk`); methods that mutate state or perform an action are
