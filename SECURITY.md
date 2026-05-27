@@ -12,8 +12,9 @@ Do **not** open a public GitHub issue, pull request, or discussion for a suspect
 that defeats coordinated disclosure.
 
 Report it privately by email to the Apache Security Team at **security@apache.org** (the ASF's central
-security address). You may also, or instead, write to the Apache Pulsar PMC's private list,
-**private@pulsar.apache.org**.
+security address). When reporting to **security@apache.org**, you can copy your email to the Apache
+Pulsar PMC's private list, **private@pulsar.apache.org**, to send your report to the Project Management
+Committee as well.
 
 **A human must verify and take responsibility for every security report.** Deciding that some
 behaviour is actually a vulnerability requires judgement against Pulsar's threat model (see
