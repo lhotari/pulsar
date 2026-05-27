@@ -4,8 +4,10 @@ Apache Pulsar uses a **Gradle** build (migrated from Maven via PIP-463; some old
 elsewhere still reference Maven). Use the bundled wrapper `./gradlew` (Linux/macOS) or `gradlew.bat`
 (Windows) — no separate Gradle install is needed. For local-environment setup see the
 [build-tooling setup guide](https://pulsar.apache.org/contribute/setup-buildtools/) and the
-[IDE setup guide](https://pulsar.apache.org/contribute/setup-ide/). For how to *run tests* see
-[`CONTRIBUTING.md` → Running tests](CONTRIBUTING.md#running-tests); for the module map see
+[IDE setup guide](https://pulsar.apache.org/contribute/setup-ide/). For running tests and the rest of
+the contribution workflow — test groups, integration tests, Personal CI, and PR conventions — see
+[`CONTRIBUTING.md`](CONTRIBUTING.md) (in particular
+[Running tests](CONTRIBUTING.md#running-tests)); for the module map see
 [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## Prerequisites
