@@ -78,15 +78,17 @@ When editing `build-logic/`, `settings.gradle.kts`, a module `build.gradle.kts`,
   `Provider` / value sources instead, and verify with `--configuration-cache`. Tasks reached by the
   common flows (`assemble`, `test`, `integrationTest`, `rat` / `spotlessCheck` / `checkstyle*`,
   `checkBinaryLicense`, `docker*`) must be compatible; one-off tooling tasks not part of those flows
-  (e.g. `verifyTestGroups`, ad-hoc maintenance/report tasks) may be exempt. Follow the
-  [Gradle best practices](https://docs.gradle.org/current/userguide/best_practices_index.html).
+  (e.g. `verifyTestGroups`, ad-hoc maintenance/report tasks) may be exempt.
 - **Published modules must not depend on internal modules** at compile/runtime scope — the artifact
   would be unresolvable from Maven Central. A module is published only when it applies
   `pulsar.public-java-library-conventions`.
 - **After a dependency change**, run `./gradlew checkBinaryLicense` and update the distribution
   `LICENSE`/`NOTICE`; justify any genuinely new dependency (see
   [`CODING.md` → Dependencies](CODING.md#dependencies)).
-- **Follow the [Gradle best practices](https://github.com/gradle/gradle/blob/master/platforms/documentation/docs/src/docs/userguide/best-practices/best_practices_index.adoc)**.
+- **Follow the [Gradle best practices](https://docs.gradle.org/current/userguide/best_practices_index.html)**
+  — AI agents should instead read the
+  [AsciiDoc source](https://github.com/gradle/gradle/blob/master/platforms/documentation/docs/src/docs/userguide/best-practices/best_practices_index.adoc),
+  which is plain text and cheaper to parse than the rendered HTML page.
 
 Before finishing a build change, confirm the affected task and `./gradlew help` run clean with
 `--configuration-cache`, and that `assemble` and `rat spotlessCheck checkstyleMain checkstyleTest`
