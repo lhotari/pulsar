@@ -25,8 +25,7 @@ independently verify it and own the report. **Autonomous agents must not file se
 security issues on their own**, and a tool's confident-sounding output is not, by itself, evidence of a
 vulnerability.
 
-See <https://pulsar.apache.org/security/#security-policy> and
-<https://github.com/apache/pulsar/security/policy> for more detail.
+See <https://pulsar.apache.org/security/#security-policy> for more details.
 
 ## Disclosure hygiene for contributors
 
@@ -74,10 +73,9 @@ Pulsar's security model is not formally/explicitly defined. Two long-standing de
 matter when deciding whether something is actually a vulnerability:
 
 **Pulsar Functions and connectors execute fully trusted code.** The function instance runtime exists
-to run user-provided code — *remote code execution is its core purpose, not a flaw.* (The Pulsar PMC
-has repeatedly received reports claiming that "the function instance runtime allows running
-user-provided code and results in an RCE"; this is expected, by-design behaviour, not a security
-issue.) The available execution models also let the code modify its environment:
+to run user-provided code — *remote code execution is its core purpose, not a flaw.* (There have been
+some reports claiming that "the function instance runtime allows running user-provided code and results
+in an RCE"; this is expected, by-design behaviour, not a security issue.) The available execution models also let the code modify its environment:
 
 - The **thread** and **process** runtimes can read or modify any files and state accessible to the
   process they run in.
