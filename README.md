@@ -95,7 +95,6 @@ components in the Pulsar ecosystem, including connectors, adapters, and other la
 
 - [Pulsar Connectors](https://github.com/apache/pulsar-connectors) (bundled as [pulsar-io](pulsar-io))
 - [Pulsar Translation](https://github.com/apache/pulsar-translation)
-- [Pulsar SQL (Pulsar Presto Connector)](https://github.com/apache/pulsar-presto) (bundled as [pulsar-sql](pulsar-sql))
 - [Ruby Client](https://github.com/apache/pulsar-client-ruby)
 
 ## Pulsar Runtime Java Version Recommendation
@@ -163,6 +162,9 @@ Docker image Java runtime: 17
 
 ## Build Pulsar
 
+The quick start below covers the essentials; see [`BUILDING.md`](BUILDING.md) for the full build
+guide (prerequisites, build/lint commands, the Gradle build infrastructure, and how to change the build).
+
 ### Requirements
 
 - JDK
@@ -194,8 +196,9 @@ There is also a guide for [setting up the tooling for building Pulsar](https://p
 bin/pulsar standalone                                                    # run a standalone service
 ```
 
-For the full build, lint, and test workflow — test groups, integration tests, Personal CI, and PR
-conventions — see [`CONTRIBUTING.md`](CONTRIBUTING.md). For the module map and Gradle build system see
+For the full build, lint, and dependency workflow — including the Gradle build infrastructure — see
+[`BUILDING.md`](BUILDING.md). For the test and PR workflow — test groups, integration tests, Personal
+CI, and PR conventions — see [`CONTRIBUTING.md`](CONTRIBUTING.md). For the module map see
 [`ARCHITECTURE.md`](ARCHITECTURE.md), and for coding conventions see [`CODING.md`](CODING.md). AI coding
 agents should start from [`AGENTS.md`](AGENTS.md).
 

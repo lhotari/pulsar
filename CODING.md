@@ -4,8 +4,7 @@ Apache Pulsar follows the Sun Java Coding Conventions with additional project-sp
 codebase is performance-critical, asynchronous, and concurrency-sensitive, so code review
 prioritizes **correctness, thread safety, performance, maintainability, and backward
 compatibility**. This file is the canonical coding reference for both human contributors and AI
-coding agents; the task skills under [`.agents/skills/`](.agents/skills/) layer AI-specific
-guardrails on top of it.
+coding agents; see [`AGENTS.md`](AGENTS.md) for the agent-specific guardrails that apply on top of it.
 
 ## Style
 

@@ -2,8 +2,8 @@
 
 Supplemental guidance for AI coding assistants (Claude Code, Copilot, Cursor, Gemini, Codex, Aider,
 and similar tools) working in this repository. Keep this file short — it is a **router**. The detail
-lives in the human-facing docs and the task skills, which you should load **on demand** rather than
-pulling everything into context up front.
+lives in the human-facing docs linked below; read the one that fits your task rather than pulling
+everything into context up front.
 
 Apache Pulsar is a distributed pub-sub messaging and streaming platform. The codebase is
 performance-critical, heavily asynchronous, and concurrency-sensitive. Prioritize **correctness,
@@ -33,8 +33,9 @@ Apache Pulsar is licensed under the Apache License 2.0, and all contributions mu
 
 | Doc | Use for |
 |-----|---------|
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Local dev workflow: build, lint, running tests & test groups, integration tests, Personal CI, PR conventions, security reporting. |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Big-picture module map, the Gradle build infrastructure, the module-name-vs-directory gotcha, and the `pip/` proposals. |
+| [`BUILDING.md`](BUILDING.md) | Building: prerequisites (JDK), build/lint commands, the Gradle build infrastructure (convention plugins, version catalog, enforced platform), the module-name-vs-directory gotcha, and how to change the build. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Local dev workflow: running tests & test groups, integration tests, Personal CI, PR conventions, security reporting. |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Big-picture module map, the concurrency model and backpressure, and the `pip/` proposals. |
 | [`CODING.md`](CODING.md) | Coding conventions: style, async/`CompletableFuture`, concurrency, logging ([slog](https://github.com/merlimat/slog)), dependencies, backward compatibility, testing, and the review checklist. |
 | [`SECURITY.md`](SECURITY.md) | Reporting a vulnerability, disclosure hygiene, and checking exposure to an already-public CVE. |
 
@@ -45,21 +46,19 @@ AI-specific pointers on top. For
 [`SECURITY.md`](SECURITY.md) specifically, always check the latest at
 <https://github.com/apache/pulsar/security/policy> rather than a possibly-stale fork copy.
 
-## Skills
+## Agent guardrails
 
-> **Before writing or modifying code in an area below, read the matching skill file first.** Each
-> skill is more focused than the canonical docs and adds AI-specific guardrails; it tells you what to
-> verify and points back into the docs above. Load it on demand to keep context small.
+A few rules matter specifically when an AI tool makes the change, on top of the canonical docs above:
 
-Task-specific guidance lives under [`.agents/skills/`](.agents/skills/), each in its own directory
-with a `SKILL.md`:
-
-| Skill | Use for |
-|-------|---------|
-| [`pulsar-build`](.agents/skills/pulsar-build/SKILL.md) | Editing the Gradle build — convention plugins under `build-logic/`, `settings.gradle.kts`, `gradle/libs.versions.toml`, dependency changes. Enforces configuration-cache / configure-on-demand compatibility and LICENSE/NOTICE upkeep. |
-| [`pulsar-tests`](.agents/skills/pulsar-tests/SKILL.md) | Writing or running tests — TestNG groups, `--tests` scoping, AssertJ/Awaitility, no-reflection rule, buffer/thread leak detectors, retry count. |
-| [`pulsar-pr-workflow`](.agents/skills/pulsar-pr-workflow/SKILL.md) | Branching, commits, semantic PR titles, PR descriptions, the Personal CI loop, and the never-rebase-after-open / merge-instead rule. |
-| [`pulsar-security`](.agents/skills/pulsar-security/SKILL.md) | Reporting a vulnerability or checking Pulsar's exposure to an already-public CVE. |
+- **Verify, don't fabricate.** Before you use a class, method, field, configuration key, Gradle task,
+  plugin, or DSL name, confirm it actually exists (search the code or the build files) — don't invent
+  APIs, test assertions, or symbol names. Don't assert a CVE is "fixed" / "not affected" without
+  checking the merged PRs and the shipped version.
+- **Confirm state-changing actions.** Get the user's explicit confirmation before pushing, opening or
+  updating a PR, or posting a comment. Being asked to start a task is not standing authorization for
+  these outward-facing actions — see *Licensing and provenance* above.
+- **A clean local run is weak evidence for concurrency/visibility fixes** (timing- and
+  platform-dependent). See [`CODING.md`](CODING.md#reproducing-concurrency--memory-visibility-bugs).
 
 ## Critical rules
 
@@ -74,8 +73,7 @@ with a `SKILL.md`:
 5. **PRs:** semantic `[type][scope]` title; describe **motivation** and **modifications**; do not
    rebase once the PR is open in `apache/pulsar` — merge upstream `master` instead.
 6. **Security:** never disclose a vulnerability — or the security nature of a change — in a public
-   issue, PR, or commit. See [`SECURITY.md`](SECURITY.md) /
-   [`pulsar-security`](.agents/skills/pulsar-security/SKILL.md).
+   issue, PR, or commit. See [`SECURITY.md`](SECURITY.md).
 7. **Stay in scope.** Keep a change focused on its task; don't bundle unrelated drive-by refactors or
    generate broad mass-refactoring PRs. Discuss large refactorings on `dev@pulsar.apache.org` first.
    See [`CONTRIBUTING.md`](CONTRIBUTING.md#pull-requests).

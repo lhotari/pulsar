@@ -77,45 +77,14 @@ than it can handle, particularly with respect to memory. The memory side is desc
 backpressure (beyond memory) is not yet documented and would benefit from being defined alongside the
 concurrency model.
 
-## Build infrastructure
+## Build and module layout
 
-The build is **Gradle** (migrated from Maven via PIP-463; much existing tooling and docs elsewhere
-still reference Maven). Use the wrapper `./gradlew` — no separate Gradle install needed. **JDK 21 or
-25 is required to run the build** (`-PskipJavaVersionCheck` bypasses the check). Bytecode targets
-Java 17 (`options.release = 17`).
-
-- `settings.gradle.kts` — all modules, organized in dependency tiers (Tier 0 has no internal deps,
-  higher tiers build on lower ones).
-- `build-logic/conventions/` — convention plugins (`pulsar.java-conventions`,
-  `pulsar.code-quality-conventions`, `pulsar.shadow-conventions`, etc.) applied by modules. This is
-  where shared compile/test/dependency config lives — edit conventions here rather than duplicating
-  config across modules.
-- `gradle/libs.versions.toml` — version catalog (single source of truth for dependency versions;
-  `libs.*` references in build scripts).
-- `pulsar-dependencies` — enforced platform (BOM) pinning all dependency versions; applied to every
-  module.
-
-When changing the build, **follow the [Gradle best practices](https://docs.gradle.org/current/userguide/best_practices_index.html)**.
-The build enables both the **configuration cache** (`org.gradle.configuration-cache=true`) and
-**configure-on-demand** (`org.gradle.configureondemand=true`), so any task used by a commonly-run
-task (`assemble`, `test`, `integrationTest`, `rat` / `spotlessCheck` / `checkstyle*`,
-`checkBinaryLicense`, `docker*`, etc.) **must be configuration-cache and configure-on-demand
-compatible** — no reading of mutable state at execution time, no `Project` access in task actions,
-use `Provider` / value sources instead. Verify with `--configuration-cache`. Tooling/one-off tasks
-that are not part of these common flows (e.g. `verifyTestGroups`, dependency-report and ad-hoc
-maintenance tasks) may be exempt.
-
-### Module name vs. directory name gotcha
-
-Several Gradle project paths do **not** match their directory because the Maven artifactId is
-preserved. Most importantly:
-
-- Directory `pulsar-client/` → project **`:pulsar-client-original`**
-- Directory `pulsar-client-admin/` → project **`:pulsar-client-admin-original`**
-- Directory `pulsar-functions/localrun/` → project `:pulsar-functions:pulsar-functions-local-runner-original`
-
-Always use the Gradle project path (left of any `--tests`), e.g. `./gradlew :pulsar-client-original:test`.
-Check `settings.gradle.kts` when a path is ambiguous.
+The Gradle build infrastructure — convention plugins under `build-logic/`, the
+`gradle/libs.versions.toml` version catalog, the enforced `pulsar-dependencies` platform, the
+dependency tiers in `settings.gradle.kts`, and the configuration-cache / configure-on-demand
+requirements — is documented in [`BUILDING.md`](BUILDING.md), together with the
+[module-name-vs-directory gotcha](BUILDING.md#module-name-vs-directory-name-gotcha) (e.g. directory
+`pulsar-client/` is the Gradle project `:pulsar-client-original`).
 
 ## Pulsar Improvement Proposals (`pip/`)
 
