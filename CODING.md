@@ -81,29 +81,27 @@ but much existing code isn't, so integration-style is the pragmatic default. See
 - **Validate performance optimizations with a JMH benchmark** under `microbench/`, simulating a
   realistic production usage pattern (see `microbench/README.md`).
 
-## Data types
+## General recommendations
 
+- **Use the narrowest interface type** for fields, parameters, variables, and returns (`Map`,
+  `SequencedMap`, `SortedMap`, `Collection`, `List`) rather than a concrete type like `TreeMap`. Keep
+  the concrete type only where its behaviour is required (e.g. a `TreeMap` for key-ordered iteration),
+  still exposed through the interface.
+- **Minimize method and constructor parameters.** For a constructor with many parameters,
+  use a **builder** — the project uses Lombok `@Builder` for most internal classes, and it works on a
+  `record` too. Consider refactoring by moving related methods to a separate class when it's a better fit.
 - **Don't return generic tuples.** Instead of `org.apache.commons.lang3.tuple.Pair<L, R>` (or a similar
   tuple type), define a small, purpose-named **Java `record`** inline in the class that declares the
   method, with the **same visibility as the method** (`public`, package-private, or `private`).
 - **Prefer record keys over concatenated strings.** For a composite `Map` key, use a small `record`
   instead of concatenating a `String` (e.g. `a + ":" + b`) — correct `equals`/`hashCode`, type-safe,
   no delimiter/escaping bugs.
-- **Use the narrowest interface type** for fields, parameters, variables, and returns (`Map`,
-  `SequencedMap`, `SortedMap`, `Collection`, `List`) rather than a concrete type like `TreeMap`. Keep
-  the concrete type only where its behaviour is required (e.g. a `TreeMap` for key-ordered iteration),
-  still exposed through the interface.
-- **Minimize method and constructor parameters.** Don't pass values already reachable from a context
-  object the method receives (e.g. read from `PublishContext`). For a constructor with many parameters,
-  use a **builder** — the project uses Lombok `@Builder` for most internal classes, and it works on a
-  `record` too. **Don't use `@Builder` on public client-API classes** (hard to maintain, meaningless
-  default builder name) — hand-write the builder or set an explicit `builderClassName`.
-- **Name for intent.** Name a boolean-returning method as a query (`shouldSkipChunk`, not `skipChunk`);
-  name methods/fields/metrics after the effect (prefer `truncated` / `migrationSegment` over
-  `overflow` / `special`).
-- **Construct via factory methods, not internal implementation types** (e.g. `PositionFactory.create(...)`,
-  not `new ImmutablePositionImpl(...)`).
-
+- **Don't use `@Builder` on public client-API classes** (harder to maintain backwards compatibility) — hand-write the builder.
+- **Name methods for intent.** A method's name should reveal what it does. Query methods read like
+  queries (`shouldSkipChunk`, not `skipChunk`); methods that mutate state or perform an action are
+  named for that action. **Reserve the `get` prefix for pure queries** — using it for a method that
+  mutates state, or otherwise does more than return a value is strongly discouraged.
+ 
 ## Dependencies
 
 Prefer existing dependencies over new libraries. Pulsar commonly uses Apache Commons / Guava
@@ -201,8 +199,8 @@ Focus feedback on correctness, reliability, and maintainability.
   while holding a lock (this has fixed real deadlocks and contention).
 - Give threads **meaningful names**. When creating thread pools, prefer Netty's
   **`io.netty.util.concurrent.DefaultThreadFactory`** — it produces **`FastThreadLocalThread`**
-  instances (much faster `FastThreadLocal` lookups, which matter on Netty paths like the pooled
-  `ByteBuf` allocator) and assigns prefixed names.
+  instances (lower overhead `FastThreadLocal` lookups, which matter on Netty paths like the pooled
+  `ByteBuf` allocator) and assigns prefixed thread names.
 
 Pulsar has no documented, project-wide concurrency model yet; see
 [`ARCHITECTURE.md` → Concurrency model](ARCHITECTURE.md#concurrency-model-a-known-gap) for the
