@@ -126,9 +126,13 @@ configuration setting — e.g. `LoadManager`, `LedgerOffloaderFactory`, `Authori
 delayed-delivery-tracker factories, `CustomCommand` — and third parties ship implementations. Changing
 such an interface, or a `protected` member of an extensible class (`PulsarWebResource`,
 `PersistentTopic`, `Producer`), breaks them: it generally needs a PIP and must not land in
-maintenance-branch backports. When you must add a method, give it a **`default` implementation** (e.g.
-throwing `UnsupportedOperationException`) so existing implementors still compile and the change stays
-backport-safe.
+maintenance-branch backports.
+
+**Design interface changes for backward compatibility.** When you add a method to such an interface,
+prefer a `default` implementation that delegates to an existing method, so older third-party
+implementations keep working unchanged. If no sensible delegation exists, add a separate
+capability-query method (e.g. `boolean supportsX()`) the broker checks at runtime, so it can support
+older implementations gracefully instead of depending on the new method.
 
 **Don't leak third-party types through public/plugin interfaces.** Exposing Netty or AsyncHttpClient
 classes breaks consumers of the **shaded** client (shaded vs. unshaded classes differ) and couples

@@ -24,15 +24,39 @@
 We would love for you to contribute to Apache Pulsar and make it even better! The **authoritative**
 contributor guide is the [Apache Pulsar Contributing Guide](https://pulsar.apache.org/contribute/) —
 please read it before starting. This file is a quick, in-repo reference for the local development
-workflow (test, PR, CI). For building see [`BUILDING.md`](BUILDING.md); for the big-picture module map
-see [`ARCHITECTURE.md`](ARCHITECTURE.md); and for code style see [`CODING.md`](CODING.md).
+workflow (build, test, PR, CI). For the big-picture module map and the Gradle build infrastructure see
+[`ARCHITECTURE.md`](ARCHITECTURE.md); for code style see [`CODING.md`](CODING.md).
 
 ## Building
 
-See [`BUILDING.md`](BUILDING.md) for prerequisites (JDK 21/25), the common build and lint commands
-(`./gradlew assemble`, `rat spotlessCheck checkstyleMain checkstyleTest`, `checkBinaryLicense`, …),
-the Gradle build infrastructure, and how to change the build. The rest of this guide covers the test
-and PR workflow.
+**JDK 21 or 25** is required to build `master` (bytecode targets Java 17; `-PskipJavaVersionCheck`
+bypasses the check); `zip` is also needed. Use the bundled wrapper `./gradlew` (Linux/macOS) or
+`gradlew.bat` (Windows) — no separate Gradle install. See the
+[build-tooling setup guide](https://pulsar.apache.org/contribute/setup-buildtools/) and the
+[IDE setup guide](https://pulsar.apache.org/contribute/setup-ide/).
+
+```bash
+# Compile and assemble everything (or a single module)
+./gradlew assemble
+./gradlew :pulsar-broker:assemble
+
+# Lint / verify (license headers, formatting, checkstyle) — run before pushing
+./gradlew rat spotlessCheck checkstyleMain checkstyleTest
+./gradlew spotlessApply            # auto-fix license headers/formatting
+
+# Verify bundled-dependency LICENSE/NOTICE coverage (after changing a runtime dependency)
+./gradlew checkBinaryLicense
+
+# Start a standalone Pulsar service (broker + bookie + metadata in one JVM)
+bin/pulsar standalone
+
+# Build docker images apachepulsar/pulsar(-all):latest
+./gradlew docker        # or docker-all
+```
+
+For the Gradle build infrastructure and how to change build files (convention plugins, version
+catalog, configuration-cache rules), see
+[`ARCHITECTURE.md` → Build infrastructure](ARCHITECTURE.md#build-infrastructure).
 
 ## Running tests
 
@@ -51,7 +75,7 @@ The **container-based integration tests** that run against a Pulsar Docker image
 ./gradlew :pulsar-broker:test --tests "org.apache.pulsar.broker.admin.*"
 ```
 
-> Note the [module-name-vs-directory gotcha](BUILDING.md#module-name-vs-directory-name-gotcha):
+> Note the [module-name-vs-directory gotcha](ARCHITECTURE.md#module-name-vs-directory-name-gotcha):
 > directory `pulsar-client/` is the Gradle project `:pulsar-client-original`.
 
 ### Test groups (TestNG)
@@ -205,6 +229,6 @@ PRs/issues first, then ask via a GitHub issue or dev@pulsar.apache.org.
 ## AI coding agents
 
 If you use an AI coding assistant (Claude Code, Copilot, Cursor, Gemini, Codex, Aider, …), see
-[`AGENTS.md`](AGENTS.md) for the agent-facing guidance — a routing index into [`BUILDING.md`](BUILDING.md),
-this guide, [`ARCHITECTURE.md`](ARCHITECTURE.md), [`CODING.md`](CODING.md), and [`SECURITY.md`](SECURITY.md),
-plus the guardrails that apply specifically to AI-made changes.
+[`AGENTS.md`](AGENTS.md) for the agent-facing guidance — a routing index into this guide,
+[`ARCHITECTURE.md`](ARCHITECTURE.md), [`CODING.md`](CODING.md), and [`SECURITY.md`](SECURITY.md), plus
+the guardrails that apply specifically to AI-made changes.

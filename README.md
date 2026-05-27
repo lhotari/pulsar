@@ -162,8 +162,9 @@ Docker image Java runtime: 17
 
 ## Build Pulsar
 
-The quick start below covers the essentials; see [`BUILDING.md`](BUILDING.md) for the full build
-guide (prerequisites, build/lint commands, the Gradle build infrastructure, and how to change the build).
+The quick start below covers the essentials; see [`CONTRIBUTING.md` → Building](CONTRIBUTING.md#building)
+for the full build and lint commands, and [`ARCHITECTURE.md` → Build infrastructure](ARCHITECTURE.md#build-infrastructure)
+for the Gradle build infrastructure and how to change build files.
 
 ### Requirements
 
@@ -196,11 +197,10 @@ There is also a guide for [setting up the tooling for building Pulsar](https://p
 bin/pulsar standalone                                                    # run a standalone service
 ```
 
-For the full build, lint, and dependency workflow — including the Gradle build infrastructure — see
-[`BUILDING.md`](BUILDING.md). For the test and PR workflow — test groups, integration tests, Personal
-CI, and PR conventions — see [`CONTRIBUTING.md`](CONTRIBUTING.md). For the module map see
-[`ARCHITECTURE.md`](ARCHITECTURE.md), and for coding conventions see [`CODING.md`](CODING.md). AI coding
-agents should start from [`AGENTS.md`](AGENTS.md).
+For the full build, lint, test, and PR workflow — test groups, integration tests, Personal CI, and PR
+conventions — see [`CONTRIBUTING.md`](CONTRIBUTING.md). For the module map and the Gradle build
+infrastructure see [`ARCHITECTURE.md`](ARCHITECTURE.md), and for coding conventions see
+[`CODING.md`](CODING.md). AI coding agents should start from [`AGENTS.md`](AGENTS.md).
 
 Check https://pulsar.apache.org for documentation and examples.
 

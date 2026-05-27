@@ -48,15 +48,6 @@ accordingly:
   `pulsar-client-admin-shaded` produce relocated fat jars; `distribution/*` assembles
   server/shell/offloader tarballs.
 
-## Build and module layout
-
-The Gradle build infrastructure — convention plugins under `build-logic/`, the
-`gradle/libs.versions.toml` version catalog, the enforced `pulsar-dependencies` platform, the
-dependency tiers in `settings.gradle.kts`, and the configuration-cache / configure-on-demand
-requirements — is documented in [`BUILDING.md`](BUILDING.md), together with the
-[module-name-vs-directory gotcha](BUILDING.md#module-name-vs-directory-name-gotcha) (e.g. directory
-`pulsar-client/` is the Gradle project `:pulsar-client-original`).
-
 ## Pulsar Improvement Proposals (`pip/`)
 
 The **`pip/`** directory holds **Pulsar Improvement Proposals** (`pip-<N>.md`) — the design
@@ -97,3 +88,63 @@ than it can handle, particularly with respect to memory. The memory side is desc
 [PIP-442 "Existing Broker Memory Management"](pip/pip-442.md#existing-broker-memory-management). Broader
 backpressure (beyond memory) is not yet documented and would benefit from being defined alongside the
 concurrency model.
+
+## Build infrastructure
+
+Apache Pulsar uses a **Gradle** build (migrated from Maven via PIP-463; some older tooling and docs
+elsewhere still reference Maven). The wrapper `./gradlew` requires **JDK 21 or 25** (bytecode targets
+Java 17). See [`CONTRIBUTING.md` → Building](CONTRIBUTING.md#building) for the build and lint commands.
+
+- `settings.gradle.kts` — all modules, organized in dependency tiers (Tier 0 has no internal deps,
+  higher tiers build on lower ones).
+- `build-logic/conventions/` — convention plugins (`pulsar.java-conventions`,
+  `pulsar.code-quality-conventions`, `pulsar.shadow-conventions`, etc.) applied by modules. Shared
+  compile/test/dependency config lives here — edit it here rather than duplicating across modules.
+- `gradle/libs.versions.toml` — version catalog (single source of truth for dependency versions;
+  referenced as `libs.*` in build scripts).
+- `pulsar-dependencies` — enforced platform (BOM) pinning all dependency versions; applied to every
+  module.
+
+The build enables both the **configuration cache** (`org.gradle.configuration-cache=true`) and
+**configure-on-demand** (`org.gradle.configureondemand=true`).
+
+### Module name vs. directory name gotcha
+
+Several Gradle project paths do **not** match their directory because the Maven artifactId is
+preserved. Most importantly:
+
+- Directory `pulsar-client/` → project **`:pulsar-client-original`**
+- Directory `pulsar-client-admin/` → project **`:pulsar-client-admin-original`**
+- Directory `pulsar-functions/localrun/` → project `:pulsar-functions:pulsar-functions-local-runner-original`
+
+Always use the Gradle project path (left of any `--tests`), e.g. `./gradlew :pulsar-client-original:test`.
+Check `settings.gradle.kts` when a path is ambiguous.
+
+### Changing the build
+
+When editing `build-logic/`, `settings.gradle.kts`, a module `build.gradle.kts`, `gradle.properties`,
+`gradle/libs.versions.toml`, or the `pulsar-dependencies` platform:
+
+- **Edit shared config in `build-logic/conventions/`**, not per-module.
+- **Versions come from `gradle/libs.versions.toml`** (`libs.*` / `pulsar-dependencies`) — never
+  hardcode a version in a build script.
+- **Keep tasks configuration-cache and configure-on-demand compatible** (both are enabled): no reading
+  of mutable state at execution time and no `Project` access in task actions — use `Provider` / value
+  sources, and verify with `--configuration-cache`. Tasks reached by the common flows (`assemble`,
+  `test`, `integrationTest`, `rat` / `spotlessCheck` / `checkstyle*`, `checkBinaryLicense`, `docker*`)
+  must be compatible; one-off tooling tasks not part of those flows (e.g. `verifyTestGroups`, ad-hoc
+  report tasks) may be exempt.
+- **Published modules must not depend on internal modules** at compile/runtime scope — the artifact
+  would be unresolvable from Maven Central. A module is published only when it applies
+  `pulsar.public-java-library-conventions`.
+- **After a dependency change**, run `./gradlew checkBinaryLicense` and update the distribution
+  `LICENSE`/`NOTICE`; justify any genuinely new dependency (see
+  [`CODING.md` → Dependencies](CODING.md#dependencies)).
+- **Follow the [Gradle best practices](https://docs.gradle.org/current/userguide/best_practices_index.html)**
+  — AI agents should read the
+  [AsciiDoc source](https://github.com/gradle/gradle/blob/master/platforms/documentation/docs/src/docs/userguide/best-practices/best_practices_index.adoc),
+  which is plain text and cheaper to parse than the rendered HTML.
+
+Before finishing a build change, confirm the affected task and `./gradlew help` run clean with
+`--configuration-cache`, and that `assemble` and `rat spotlessCheck checkstyleMain checkstyleTest` pass
+(plus `checkBinaryLicense` if a dependency changed).

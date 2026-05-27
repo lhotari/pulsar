@@ -33,9 +33,8 @@ Apache Pulsar is licensed under the Apache License 2.0, and all contributions mu
 
 | Doc | Use for |
 |-----|---------|
-| [`BUILDING.md`](BUILDING.md) | Building: prerequisites (JDK), build/lint commands, the Gradle build infrastructure (convention plugins, version catalog, enforced platform), the module-name-vs-directory gotcha, and how to change the build. |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Local dev workflow: running tests & test groups, integration tests, Personal CI, PR conventions, security reporting. |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Big-picture module map, the concurrency model and backpressure, and the `pip/` proposals. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Local dev workflow: building (prerequisites, build/lint commands), running tests & test groups, integration tests, Personal CI, PR conventions, security reporting. |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Big-picture module map, the Gradle build infrastructure and how to change build files (convention plugins, version catalog, the module-name-vs-directory gotcha), the concurrency model and backpressure, and the `pip/` proposals. |
 | [`CODING.md`](CODING.md) | Coding conventions: style, async/`CompletableFuture`, concurrency, logging ([slog](https://github.com/merlimat/slog)), dependencies, backward compatibility, testing, and the review checklist. |
 | [`SECURITY.md`](SECURITY.md) | Reporting a vulnerability, disclosure hygiene, and checking exposure to an already-public CVE. |
 
