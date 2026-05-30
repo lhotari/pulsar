@@ -35,7 +35,7 @@ dependencies {
     implementation(libs.aws.java.sdk.core)
     implementation(libs.aws.java.sdk.sts)
     runtimeOnly(libs.jakarta.xml.bind.api)
-    runtimeOnly(libs.jakarta.activation)
+    runtimeOnly(libs.angus.activation)
 
     testImplementation(project(":managed-ledger"))
     testImplementation(project(":testmocks"))
