@@ -24,6 +24,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -46,7 +47,6 @@ import org.apache.pulsar.common.api.proto.CommandAck;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.api.proto.TxnAction;
 import org.apache.pulsar.common.intercept.InterceptException;
-import org.eclipse.jetty.server.Response;
 
 
 @CustomLog
@@ -229,14 +229,8 @@ public class CounterBrokerInterceptor implements BrokerInterceptor {
         log.debug().attr("count", count)
                 .attr("url", ((HttpServletRequest) request).getRequestURL().toString())
                 .attr("response", response).log("On Webservice response");
-        if (response instanceof Response) {
-            Response res = (Response) response;
-            responseList.add(new ResponseEvent(res.getRequest().getHttpURI().getPath(), res.getStatus()));
-        } else if (response instanceof org.eclipse.jetty.ee8.nested.Response) {
-            org.eclipse.jetty.ee8.nested.Response res = (org.eclipse.jetty.ee8.nested.Response) response;
-            responseList.add(
-                    new ResponseEvent(res.getHttpChannel().getRequest().getHttpURI().getPath(), res.getStatus()));
-        }
+        responseList.add(new ResponseEvent(((HttpServletRequest) request).getRequestURI(),
+                ((HttpServletResponse) response).getStatus()));
     }
 
 
