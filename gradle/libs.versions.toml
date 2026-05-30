@@ -298,7 +298,7 @@ simpleclient = { module = "io.prometheus:simpleclient", version.ref = "prometheu
 simpleclient-hotspot = { module = "io.prometheus:simpleclient_hotspot", version.ref = "prometheus" }
 simpleclient-caffeine = { module = "io.prometheus:simpleclient_caffeine", version.ref = "prometheus" }
 simpleclient-httpserver = { module = "io.prometheus:simpleclient_httpserver", version.ref = "prometheus" }
-simpleclient-servlet = { module = "io.prometheus:simpleclient_servlet_jakarta", version.ref = "prometheus" }
+simpleclient-servlet = { module = "io.prometheus:simpleclient_servlet", version.ref = "prometheus" }
 simpleclient-common = { module = "io.prometheus:simpleclient_common", version.ref = "prometheus" }
 simpleclient-log4j2 = { module = "io.prometheus:simpleclient_log4j2", version.ref = "prometheus" }
 prometheus-jmx-collector = { module = "io.prometheus.jmx:collector", version.ref = "prometheus-jmx" }
