@@ -461,6 +461,9 @@ public class ConnectionPool implements AutoCloseable {
     @Override
     public void close() throws Exception {
         closeAllConnections();
+        if (channelInitializerHandler != null) {
+            channelInitializerHandler.close();
+        }
         if (shouldCloseDnsResolver) {
             addressResolver.close();
         }

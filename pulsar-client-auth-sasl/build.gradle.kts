@@ -23,6 +23,7 @@ plugins {
 
 dependencies {
     implementation(libs.slog)
+    api(project(":pulsar-client-api-v5"))
     compileOnly(project(":pulsar-client-original"))
     implementation(project(":pulsar-common"))
     implementation(libs.guava)

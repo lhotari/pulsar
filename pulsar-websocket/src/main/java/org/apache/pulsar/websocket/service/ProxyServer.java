@@ -21,13 +21,13 @@ package org.apache.pulsar.websocket.service;
 import jakarta.servlet.Servlet;
 import jakarta.servlet.ServletException;
 import java.net.MalformedURLException;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import lombok.CustomLog;
 import org.apache.pulsar.broker.PulsarServerException;
@@ -36,9 +36,12 @@ import org.apache.pulsar.broker.web.JsonMapperProvider;
 import org.apache.pulsar.broker.web.WebExecutorThreadPool;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.util.ExecutorProvider;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
+import org.apache.pulsar.common.tls.DefaultTlsMaterialProviderInitContext;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialSource;
+import org.apache.pulsar.common.tls.PulsarTlsEngineProvider;
+import org.apache.pulsar.common.tls.ServerTlsPurposeContext;
+import org.apache.pulsar.common.tls.ServerTlsPurposeContext.ServerPurpose;
 import org.apache.pulsar.jetty.tls.JettySslContextFactory;
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
@@ -70,7 +73,7 @@ public class ProxyServer {
 
     private ServerConnector connector;
     private ServerConnector connectorTls;
-    private PulsarSslFactory sslFactory;
+    private FileBasedTlsMaterialProvider tlsMaterialProvider;
     private ScheduledExecutorService scheduledExecutorService;
 
     public ProxyServer(WebSocketProxyConfiguration config)
@@ -105,22 +108,21 @@ public class ProxyServer {
         // TLS enabled connector
         if (config.getWebServicePortTls().isPresent()) {
             try {
-                PulsarSslConfiguration sslConfiguration = buildSslConfiguration(config);
-                this.sslFactory = new DefaultPulsarSslFactory();
-                this.sslFactory.initialize(sslConfiguration);
-                this.sslFactory.createInternalSslContext();
+                // PIP-478: resolve the web-socket proxy web-service TLS material through the framework
+                // provider/engine. The provider owns periodic file-rotation polling; the Jetty factory
+                // reads the (engine-cached, hot-reloaded) JDK SSLContext lazily on every request.
                 this.scheduledExecutorService = Executors
                         .newSingleThreadScheduledExecutor(new ExecutorProvider
                                 .ExtendedThreadFactory("proxy-websocket-ssl-refresh"));
-                if (config.getTlsCertRefreshCheckDurationSec() > 0) {
-                    this.scheduledExecutorService.scheduleWithFixedDelay(this::refreshSslContext,
-                            config.getTlsCertRefreshCheckDurationSec(),
-                            config.getTlsCertRefreshCheckDurationSec(),
-                            TimeUnit.SECONDS);
-                }
+                this.tlsMaterialProvider = buildTlsMaterialProvider(config);
+                this.tlsMaterialProvider.initialize(new DefaultTlsMaterialProviderInitContext(
+                        scheduledExecutorService, Clock.systemUTC(), "pulsar-websocket")).join();
+                PulsarTlsEngineProvider engineProvider = new PulsarTlsEngineProvider(tlsMaterialProvider);
+                ServerTlsPurposeContext webPurpose = ServerTlsPurposeContext.of(ServerPurpose.WEB_SERVICE);
                 SslContextFactory.Server sslCtxFactory =
                         JettySslContextFactory.createSslContextFactory(config.getTlsProvider(),
-                                sslFactory, config.isTlsRequireTrustedClientCertOnConnect(),
+                                () -> engineProvider.getJdkSslContext(webPurpose).join(),
+                                config.isTlsRequireTrustedClientCertOnConnect(),
                                 config.getWebServiceTlsCiphers(), config.getWebServiceTlsProtocols());
                 List<ConnectionFactory> connectionFactories = new ArrayList<>();
                 if (config.isWebServiceHaProxyProtocolEnabled()) {
@@ -208,6 +210,10 @@ public class ProxyServer {
     public void stop() throws Exception {
         server.stop();
         executorService.stop();
+        if (tlsMaterialProvider != null) {
+            tlsMaterialProvider.close();
+            tlsMaterialProvider = null;
+        }
         if (scheduledExecutorService != null) {
             scheduledExecutorService.shutdownNow();
         }
@@ -229,32 +235,37 @@ public class ProxyServer {
         }
     }
 
-    protected PulsarSslConfiguration buildSslConfiguration(WebSocketProxyConfiguration config) {
-        return PulsarSslConfiguration.builder()
-                .tlsKeyStoreType(config.getTlsKeyStoreType())
-                .tlsKeyStorePath(config.getTlsKeyStore())
-                .tlsKeyStorePassword(config.getTlsKeyStorePassword())
-                .tlsTrustStoreType(config.getTlsTrustStoreType())
-                .tlsTrustStorePath(config.getTlsTrustStore())
-                .tlsTrustStorePassword(config.getTlsTrustStorePassword())
+    /**
+     * Build an (uninitialized) {@link FileBasedTlsMaterialProvider} for the web-socket proxy's
+     * web-service TLS material (PIP-478), registered for the {@link ServerPurpose#WEB_SERVICE} purpose.
+     * The provider's file-rotation poll interval mirrors {@code tlsCertRefreshCheckDurationSec}.
+     *
+     * @param config the web-socket proxy configuration
+     * @return an uninitialized provider
+     */
+    protected FileBasedTlsMaterialProvider buildTlsMaterialProvider(WebSocketProxyConfiguration config) {
+        long refresh = config.getTlsCertRefreshCheckDurationSec();
+        int refreshSeconds = refresh <= 0 ? 300 : (int) Math.min(refresh, Integer.MAX_VALUE);
+        FileBasedTlsMaterialProvider provider = new FileBasedTlsMaterialProvider(refreshSeconds);
+        FileBasedTlsMaterialSource.Builder builder = FileBasedTlsMaterialSource.builder()
+                .tlsProvider(config.getTlsProvider())
                 .tlsCiphers(config.getWebServiceTlsCiphers())
                 .tlsProtocols(config.getWebServiceTlsProtocols())
-                .tlsTrustCertsFilePath(config.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(config.getTlsCertificateFilePath())
-                .tlsKeyFilePath(config.getTlsKeyFilePath())
                 .allowInsecureConnection(config.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(config.isTlsRequireTrustedClientCertOnConnect())
-                .tlsEnabledWithKeystore(config.isTlsEnabledWithKeyStore())
-                .serverMode(true)
-                .isHttps(true)
-                .build();
-    }
-
-    protected void refreshSslContext() {
-        try {
-            this.sslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
+                .requireTrustedClientCertOnConnect(config.isTlsRequireTrustedClientCertOnConnect());
+        if (config.isTlsEnabledWithKeyStore()) {
+            builder.keyStoreType(config.getTlsKeyStoreType())
+                    .keyStorePath(config.getTlsKeyStore())
+                    .keyStorePassword(config.getTlsKeyStorePassword())
+                    .trustStoreType(config.getTlsTrustStoreType())
+                    .trustStorePath(config.getTlsTrustStore())
+                    .trustStorePassword(config.getTlsTrustStorePassword());
+        } else {
+            builder.certificateFilePath(config.getTlsCertificateFilePath())
+                    .keyFilePath(config.getTlsKeyFilePath())
+                    .trustCertsFilePath(config.getTlsTrustCertsFilePath());
         }
+        provider.registerSource(ServerTlsPurposeContext.of(ServerPurpose.WEB_SERVICE), builder.build());
+        return provider;
     }
 }

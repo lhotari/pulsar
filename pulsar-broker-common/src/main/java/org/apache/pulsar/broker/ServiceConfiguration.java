@@ -52,7 +52,6 @@ import org.apache.pulsar.common.policies.data.TopicType;
 import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.sasl.SaslConstants;
 import org.apache.pulsar.common.topics.TopicsPattern;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
 import org.apache.pulsar.common.util.DirectMemoryUtils;
 import org.apache.pulsar.metadata.api.MetadataStoreFactory;
 import org.apache.pulsar.metadata.impl.ZKMetadataStore;
@@ -1891,7 +1890,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
             category = CATEGORY_TLS,
             doc = "SSL Factory Plugin class to provide SSLEngine and SSLContext objects. The default "
                     + " class used is DefaultSslFactory.")
-    private String sslFactoryPlugin = DefaultPulsarSslFactory.class.getName();
+    private String sslFactoryPlugin = "org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider";
     @FieldContext(
             category = CATEGORY_TLS,
             doc = "SSL Factory plugin configuration parameters.")
@@ -4130,7 +4129,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
             category = CATEGORY_TLS,
             doc = "SSL Factory Plugin class used by internal client to provide SSLEngine and SSLContext objects. "
                     + "The default class used is DefaultSslFactory.")
-    private String brokerClientSslFactoryPlugin = DefaultPulsarSslFactory.class.getName();
+    private String brokerClientSslFactoryPlugin = "org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider";
     @FieldContext(
             category = CATEGORY_TLS,
             doc = "SSL Factory plugin configuration parameters used by internal client.")

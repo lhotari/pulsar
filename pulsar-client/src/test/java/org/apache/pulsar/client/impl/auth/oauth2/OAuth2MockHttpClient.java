@@ -19,9 +19,10 @@
 package org.apache.pulsar.client.impl.auth.oauth2;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mockConstruction;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
+import static org.mockito.Mockito.when;
+import java.util.concurrent.CompletableFuture;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider;
 import org.asynchttpclient.DefaultAsyncHttpClient;
 import org.mockito.MockedConstruction;
 
@@ -35,12 +36,16 @@ final class OAuth2MockHttpClient {
         void run() throws Exception;
     }
 
+    /**
+     * Run {@code runnable} with the OAuth2 flow's TLS material provider and async HTTP client mocked, so
+     * tests that exercise parameter parsing can configure TLS cert/key paths without those files existing
+     * (PIP-478: {@code FlowBase} now builds a {@link FileBasedTlsMaterialProvider} instead of the removed
+     * {@code DefaultPulsarSslFactory}).
+     */
     static void withMockedSslFactory(ThrowingRunnable runnable) throws Exception {
-        try (MockedConstruction<DefaultPulsarSslFactory> ignoredSslFactory =
-                     mockConstruction(DefaultPulsarSslFactory.class, (mock, context) -> {
-                         doNothing().when(mock).initialize(any());
-                         doNothing().when(mock).createInternalSslContext();
-                     });
+        try (MockedConstruction<FileBasedTlsMaterialProvider> ignoredTlsProvider =
+                     mockConstruction(FileBasedTlsMaterialProvider.class, (mock, context) ->
+                         when(mock.initialize(any())).thenReturn(CompletableFuture.completedFuture(null)));
              MockedConstruction<DefaultAsyncHttpClient> ignoredHttpClient =
                      mockConstruction(DefaultAsyncHttpClient.class)) {
             runnable.run();

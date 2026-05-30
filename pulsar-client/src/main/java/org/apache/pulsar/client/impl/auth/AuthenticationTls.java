@@ -19,39 +19,45 @@
 package org.apache.pulsar.client.impl.auth;
 
 import com.google.common.annotations.VisibleForTesting;
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
-import org.apache.pulsar.client.impl.AuthenticationUtil;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
+import org.apache.pulsar.client.impl.auth.v5.TlsAuthenticationV5;
+import org.apache.pulsar.client.impl.auth.v5.V5AuthContexts;
+import org.apache.pulsar.common.api.AuthData;
 
 /**
+ * This plugin requires these parameters.
  *
- * This plugin requires these parameters
+ * <p>tlsCertFile: A file path for a client certificate. tlsKeyFile: A file path for a client private key.
  *
- * tlsCertFile: A file path for a client certificate. tlsKeyFile: A file path for a client private key.
- *
+ * <p>PIP-478: this v4 plugin is a thin shim over the v5-native {@link TlsAuthenticationV5}. mTLS
+ * authenticates via the TLS handshake, so the binary-protocol credential carries the {@code tls} auth
+ * method with empty {@code auth_data}; the v4 surface (including {@link #getAuthData()} returning
+ * {@link AuthenticationDataTls}, which feeds the client's TLS material override path) is preserved for
+ * source compatibility. {@link AsyncAuthenticationDriver} lets {@code ClientCnx} drive it on the
+ * non-blocking async path.
  */
-public class AuthenticationTls implements Authentication, EncodedAuthenticationParameterSupport {
+public class AuthenticationTls implements Authentication, EncodedAuthenticationParameterSupport,
+        AsyncAuthenticationDriver {
     static final String AUTH_METHOD_NAME = "tls";
     private static final long serialVersionUID = 1L;
 
-    private String certFilePath;
-    private String keyFilePath;
-    @SuppressFBWarnings(value = "SE_BAD_FIELD", justification = "Using custom serializer which Findbugs can't detect")
-    private Supplier<ByteArrayInputStream> certStreamProvider, keyStreamProvider, trustStoreStreamProvider;
+    private final TlsAuthenticationV5 delegate;
 
     public AuthenticationTls() {
+        this.delegate = new TlsAuthenticationV5();
     }
 
     public AuthenticationTls(String certFilePath, String keyFilePath) {
-        this.certFilePath = certFilePath;
-        this.keyFilePath = keyFilePath;
+        this.delegate = new TlsAuthenticationV5(certFilePath, keyFilePath);
     }
 
     public AuthenticationTls(Supplier<ByteArrayInputStream> certStreamProvider,
@@ -61,14 +67,12 @@ public class AuthenticationTls implements Authentication, EncodedAuthenticationP
 
     public AuthenticationTls(Supplier<ByteArrayInputStream> certStreamProvider,
             Supplier<ByteArrayInputStream> keyStreamProvider, Supplier<ByteArrayInputStream> trustStoreStreamProvider) {
-        this.certStreamProvider = certStreamProvider;
-        this.keyStreamProvider = keyStreamProvider;
-        this.trustStoreStreamProvider = trustStoreStreamProvider;
+        this.delegate = new TlsAuthenticationV5(certStreamProvider, keyStreamProvider, trustStoreStreamProvider);
     }
 
     @Override
     public void close() throws IOException {
-        // noop
+        delegate.close();
     }
 
     @Override
@@ -80,10 +84,11 @@ public class AuthenticationTls implements Authentication, EncodedAuthenticationP
     @Override
     public AuthenticationDataProvider getAuthData() throws PulsarClientException {
         try {
-            if (certFilePath != null && keyFilePath != null) {
-                return new AuthenticationDataTls(certFilePath, keyFilePath);
-            } else if (certStreamProvider != null && keyStreamProvider != null) {
-                return new AuthenticationDataTls(certStreamProvider, keyStreamProvider, trustStoreStreamProvider);
+            if (delegate.certFilePath() != null && delegate.keyFilePath() != null) {
+                return new AuthenticationDataTls(delegate.certFilePath(), delegate.keyFilePath());
+            } else if (delegate.certStreamProvider() != null && delegate.keyStreamProvider() != null) {
+                return new AuthenticationDataTls(delegate.certStreamProvider(), delegate.keyStreamProvider(),
+                        delegate.trustStoreStreamProvider());
             }
         } catch (Exception e) {
             throw new PulsarClientException(e);
@@ -93,56 +98,56 @@ public class AuthenticationTls implements Authentication, EncodedAuthenticationP
 
     @Override
     public void configure(String encodedAuthParamString) {
-        Map<String, String> authParamsMap = null;
-        try {
-            authParamsMap = AuthenticationUtil.configureFromJsonString(encodedAuthParamString);
-        } catch (Exception e) {
-            // auth-param is not in json format
-        }
-        authParamsMap = (authParamsMap == null || authParamsMap.isEmpty())
-                ? AuthenticationUtil.configureFromPulsar1AuthParamString(encodedAuthParamString)
-                : authParamsMap;
-        setAuthParams(authParamsMap);
+        delegate.configureEncoded(encodedAuthParamString);
     }
 
     @Override
     @Deprecated
     public void configure(Map<String, String> authParams) {
-        setAuthParams(authParams);
+        delegate.configure(authParams);
     }
 
     @Override
     public void start() throws PulsarClientException {
-        // noop
+        // noop — the v5-native delegate has no initialization I/O for mTLS
     }
 
-    private void setAuthParams(Map<String, String> authParams) {
-        certFilePath = authParams.get("tlsCertFile");
-        keyFilePath = authParams.get("tlsKeyFile");
+    // --- AsyncAuthenticationDriver: route ClientCnx through the v5-native async path ---
+
+    @Override
+    public CompletableFuture<AuthData> getAuthDataAsync(String brokerHostName) {
+        // mTLS authenticates via the TLS handshake; the connect command carries empty auth data.
+        return delegate.getAuthDataAsync(V5AuthContexts.binaryCallContext(brokerHostName, 0))
+                .thenApply(d -> AuthData.of(d.authData()));
+    }
+
+    @Override
+    public CompletableFuture<AuthData> authenticateAsync(AuthData challenge, String brokerHostName) {
+        return getAuthDataAsync(brokerHostName);
     }
 
     @VisibleForTesting
     public String getCertFilePath() {
-        return certFilePath;
+        return delegate.certFilePath();
     }
 
     @VisibleForTesting
     public String getKeyFilePath() {
-        return keyFilePath;
+        return delegate.keyFilePath();
     }
 
     @VisibleForTesting
     Supplier<ByteArrayInputStream> getCertStreamProvider() {
-        return certStreamProvider;
+        return delegate.certStreamProvider();
     }
 
     @VisibleForTesting
     Supplier<ByteArrayInputStream> getKeyStreamProvider() {
-        return keyStreamProvider;
+        return delegate.keyStreamProvider();
     }
 
     @VisibleForTesting
     Supplier<ByteArrayInputStream> getTrustStoreStreamProvider() {
-        return trustStoreStreamProvider;
+        return delegate.trustStoreStreamProvider();
     }
 }

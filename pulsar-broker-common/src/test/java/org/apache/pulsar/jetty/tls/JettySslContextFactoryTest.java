@@ -24,6 +24,7 @@ import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLHandshakeException;
 import lombok.Cleanup;
@@ -37,9 +38,11 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialSource;
+import org.apache.pulsar.common.tls.PulsarTlsEngineProvider;
+import org.apache.pulsar.common.tls.ServerTlsPurposeContext;
+import org.apache.pulsar.common.tls.TlsPurposeContext;
 import org.apache.pulsar.common.util.SecurityUtility;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
@@ -49,25 +52,37 @@ import org.testng.annotations.Test;
 @CustomLog
 public class JettySslContextFactoryTest {
 
+    private static final TlsPurposeContext WEB_PURPOSE =
+            ServerTlsPurposeContext.of(ServerTlsPurposeContext.ServerPurpose.WEB_SERVICE);
+
+    /**
+     * Build a Jetty {@link SslContextFactory.Server} from PEM server material via the PIP-478
+     * {@link FileBasedTlsMaterialProvider} / {@link PulsarTlsEngineProvider} pipeline.
+     */
+    private static SslContextFactory.Server buildServerSslContextFactory(Set<String> ciphers,
+            Set<String> protocols) throws Exception {
+        FileBasedTlsMaterialSource source = FileBasedTlsMaterialSource.builder()
+                .trustCertsFilePath(Resources.getResource("ssl/my-ca/ca.pem").getPath())
+                .certificateFilePath(Resources.getResource("ssl/my-ca/server-ca.pem").getPath())
+                .keyFilePath(Resources.getResource("ssl/my-ca/server-key.pem").getPath())
+                .allowInsecureConnection(false)
+                .requireTrustedClientCertOnConnect(true)
+                .tlsCiphers(ciphers)
+                .tlsProtocols(protocols)
+                .build();
+        FileBasedTlsMaterialProvider provider = new FileBasedTlsMaterialProvider();
+        provider.registerSource(WEB_PURPOSE, source);
+        PulsarTlsEngineProvider engineProvider = new PulsarTlsEngineProvider(provider);
+        return JettySslContextFactory.createSslContextFactory(null,
+                () -> engineProvider.getJdkSslContext(WEB_PURPOSE).join(), true, ciphers, protocols);
+    }
+
     @Test
     public void testJettyTlsServerTls() throws Exception {
         @Cleanup("stop")
         Server server = new Server();
         List<ServerConnector> connectors = new ArrayList<>();
-        PulsarSslConfiguration sslConfiguration = PulsarSslConfiguration.builder()
-                .tlsTrustCertsFilePath(Resources.getResource("ssl/my-ca/ca.pem").getPath())
-                .tlsCertificateFilePath(Resources.getResource("ssl/my-ca/server-ca.pem").getPath())
-                .tlsKeyFilePath(Resources.getResource("ssl/my-ca/server-key.pem").getPath())
-                .allowInsecureConnection(false)
-                .requireTrustedClientCertOnConnect(true)
-                .tlsEnabledWithKeystore(false)
-                .isHttps(true)
-                .build();
-        PulsarSslFactory sslFactory = new DefaultPulsarSslFactory();
-        sslFactory.initialize(sslConfiguration);
-        sslFactory.createInternalSslContext();
-        SslContextFactory.Server factory = JettySslContextFactory.createSslContextFactory(null,
-                sslFactory, true, null, null);
+        SslContextFactory.Server factory = buildServerSslContextFactory(null, null);
 
         ServerConnector connector = new ServerConnector(server, factory);
         connector.setPort(0);
@@ -92,25 +107,7 @@ public class JettySslContextFactoryTest {
         @Cleanup("stop")
         Server server = new Server();
         List<ServerConnector> connectors = new ArrayList<>();
-        PulsarSslConfiguration sslConfiguration = PulsarSslConfiguration.builder()
-                .tlsProtocols(new HashSet<String>() {
-                    {
-                        this.add("TLSv1.3");
-                    }
-                })
-                .tlsTrustCertsFilePath(Resources.getResource("ssl/my-ca/ca.pem").getPath())
-                .tlsCertificateFilePath(Resources.getResource("ssl/my-ca/server-ca.pem").getPath())
-                .tlsKeyFilePath(Resources.getResource("ssl/my-ca/server-key.pem").getPath())
-                .allowInsecureConnection(false)
-                .requireTrustedClientCertOnConnect(true)
-                .tlsEnabledWithKeystore(false)
-                .isHttps(true)
-                .build();
-        PulsarSslFactory sslFactory = new DefaultPulsarSslFactory();
-        sslFactory.initialize(sslConfiguration);
-        sslFactory.createInternalSslContext();
-        SslContextFactory.Server factory = JettySslContextFactory.createSslContextFactory(null,
-                sslFactory, true, null,
+        SslContextFactory.Server factory = buildServerSslContextFactory(null,
                 new HashSet<String>() {
                     {
                         this.add("TLSv1.3");
@@ -140,30 +137,7 @@ public class JettySslContextFactoryTest {
         @Cleanup("stop")
         Server server = new Server();
         List<ServerConnector> connectors = new ArrayList<>();
-        PulsarSslConfiguration sslConfiguration = PulsarSslConfiguration.builder()
-                .tlsCiphers(new HashSet<String>() {
-                    {
-                        this.add("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256");
-                    }
-                })
-                .tlsProtocols(new HashSet<String>() {
-                    {
-                        this.add("TLSv1.3");
-                    }
-                })
-                .tlsTrustCertsFilePath(Resources.getResource("ssl/my-ca/ca.pem").getPath())
-                .tlsCertificateFilePath(Resources.getResource("ssl/my-ca/server-ca.pem").getPath())
-                .tlsKeyFilePath(Resources.getResource("ssl/my-ca/server-key.pem").getPath())
-                .allowInsecureConnection(false)
-                .requireTrustedClientCertOnConnect(true)
-                .isHttps(true)
-                .tlsEnabledWithKeystore(false)
-                .build();
-        PulsarSslFactory sslFactory = new DefaultPulsarSslFactory();
-        sslFactory.initialize(sslConfiguration);
-        sslFactory.createInternalSslContext();
-        SslContextFactory.Server factory = JettySslContextFactory.createSslContextFactory(null,
-                sslFactory, true,
+        SslContextFactory.Server factory = buildServerSslContextFactory(
                 new HashSet<String>() {
                     {
                         this.add("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256");

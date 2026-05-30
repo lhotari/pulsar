@@ -43,9 +43,10 @@ import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.CharsetUtil;
 import java.net.InetSocketAddress;
+import java.time.Clock;
 import java.util.Arrays;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import lombok.CustomLog;
 import lombok.Getter;
@@ -64,8 +65,12 @@ import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.FrameDecoderUtil;
 import org.apache.pulsar.common.protocol.PulsarDecoder;
 import org.apache.pulsar.common.stats.Rate;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
+import org.apache.pulsar.common.tls.ClientTlsPurposeContext;
+import org.apache.pulsar.common.tls.ClientTlsPurposeContext.ClientPurpose;
+import org.apache.pulsar.common.tls.DefaultTlsMaterialProviderInitContext;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialSource;
+import org.apache.pulsar.common.tls.PulsarTlsEngineProvider;
 import org.apache.pulsar.common.util.SecurityUtility;
 import org.apache.pulsar.common.util.netty.NettyChannelUtil;
 
@@ -91,7 +96,10 @@ public class DirectProxyHandler {
     private final Runnable onHandshakeCompleteAction;
     private final boolean tlsHostnameVerificationEnabled;
     final boolean tlsEnabledWithBroker;
-    private Map<String, PulsarSslFactory> pulsarSslFactoryMap;
+    // PIP-478: the proxy-to-broker (BINARY_CLIENT) TLS engine and its backing material provider.
+    private FileBasedTlsMaterialProvider tlsMaterialProvider;
+    private PulsarTlsEngineProvider tlsEngineProvider;
+    private ScheduledExecutorService tlsRefresher;
 
     @SneakyThrows
     public DirectProxyHandler(ProxyService service, ProxyConnection proxyConnection) {
@@ -106,7 +114,6 @@ public class DirectProxyHandler {
         this.tlsEnabledWithBroker = service.getConfiguration().isTlsEnabledWithBroker();
         this.tlsHostnameVerificationEnabled = service.getConfiguration().isTlsHostnameVerificationEnabled();
         this.onHandshakeCompleteAction = proxyConnection::cancelKeepAliveTask;
-        this.pulsarSslFactoryMap = new ConcurrentHashMap<>();
     }
 
     public void connect(String brokerHostAndPort, InetSocketAddress targetBrokerAddress, int protocolVersion,
@@ -121,30 +128,9 @@ public class DirectProxyHandler {
             inboundChannel.close();
             return;
         }
-        PulsarSslFactory sslFactory =
-                tlsEnabledWithBroker ? pulsarSslFactoryMap.computeIfAbsent(remoteHost, (hostname) -> {
-                    AuthenticationDataProvider authData = null;
-
-                    if (!isEmpty(service.getConfiguration().getBrokerClientAuthenticationPlugin())) {
-                        try {
-                            authData = authentication.getAuthData(remoteHost);
-                        } catch (PulsarClientException e) {
-                            throw new RuntimeException(e);
-                        }
-                    }
-                    PulsarSslConfiguration sslConfiguration =
-                            buildSslConfiguration(service.getConfiguration(), authData);
-                    try {
-                        PulsarSslFactory factory =
-                                (PulsarSslFactory) Class.forName(service.getConfiguration().getSslFactoryPlugin())
-                                        .getConstructor().newInstance();
-                        factory.initialize(sslConfiguration);
-                        factory.createInternalSslContext();
-                        return factory;
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                }) : null;
+        if (tlsEnabledWithBroker) {
+            ensureTlsEngine(remoteHost);
+        }
         ProxyConfiguration config = service.getConfiguration();
 
         // Start the connection attempt.
@@ -172,7 +158,8 @@ public class DirectProxyHandler {
                 if (tlsEnabledWithBroker) {
                     String host = targetBrokerAddress.getHostString();
                     int port = targetBrokerAddress.getPort();
-                    SslHandler handler = new SslHandler(sslFactory.createClientSslEngine(ch.alloc(), host, port));
+                    SslHandler handler = new SslHandler(tlsEngineProvider.createClientSslEngine(
+                            ClientTlsPurposeContext.of(ClientPurpose.BINARY_CLIENT), ch.alloc(), host, port).join());
                     if (tlsHostnameVerificationEnabled) {
                         SecurityUtility.configureSSLHandler(handler);
                     }
@@ -273,6 +260,60 @@ public class DirectProxyHandler {
         if (outboundChannel != null) {
             outboundChannel.close();
         }
+        if (tlsMaterialProvider != null) {
+            tlsMaterialProvider.close();
+            tlsMaterialProvider = null;
+        }
+        if (tlsRefresher != null) {
+            tlsRefresher.shutdownNow();
+            tlsRefresher = null;
+        }
+    }
+
+    /**
+     * Lazily build (once) the proxy-to-broker TLS engine/provider (PIP-478). The broker-client
+     * file-based source supplies the trust/key material and handshake settings; when a broker-client
+     * authentication plugin exposes TLS material (mTLS / keystore auth) it is layered on top through an
+     * {@code AuthenticationDataTlsMaterialSource} so the plugin-provided client certificate takes
+     * precedence — preserving the previous {@code PulsarSslConfiguration.authData} coupling.
+     *
+     * @param remoteHost the broker host used to probe the authentication plugin for TLS material
+     */
+    @SneakyThrows
+    private synchronized void ensureTlsEngine(String remoteHost) {
+        if (tlsEngineProvider != null) {
+            return;
+        }
+        ProxyConfiguration config = service.getConfiguration();
+        AuthenticationDataProvider authData = null;
+        if (!isEmpty(config.getBrokerClientAuthenticationPlugin())) {
+            try {
+                authData = authentication.getAuthData(remoteHost);
+            } catch (PulsarClientException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        FileBasedTlsMaterialProvider provider =
+                new FileBasedTlsMaterialProvider(brokerClientRefreshIntervalSeconds(config));
+        FileBasedTlsMaterialSource source = ProxyTlsMaterialProviders.buildBrokerClientSource(config);
+        ProxyTlsMaterialProviders.registerBrokerClient(provider, source, authData);
+        this.tlsRefresher = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "pulsar-proxy-direct-tls-refresh");
+            t.setDaemon(true);
+            return t;
+        });
+        provider.initialize(new DefaultTlsMaterialProviderInitContext(
+                tlsRefresher, Clock.systemUTC(), "pulsar-proxy-direct")).join();
+        this.tlsMaterialProvider = provider;
+        this.tlsEngineProvider = new PulsarTlsEngineProvider(provider);
+    }
+
+    private static int brokerClientRefreshIntervalSeconds(ProxyConfiguration config) {
+        long configured = config.getTlsCertRefreshCheckDurationSec();
+        if (configured <= 0) {
+            return ProxyTlsMaterialProviders.DEFAULT_REFRESH_INTERVAL_SECONDS;
+        }
+        return (int) Math.min(configured, Integer.MAX_VALUE);
     }
 
     enum BackendState {
@@ -481,30 +522,6 @@ public class DirectProxyHandler {
 
     private void writeAndFlush(ByteBuf cmd) {
         NettyChannelUtil.writeAndFlushWithVoidPromise(outboundChannel, cmd);
-    }
-
-    protected PulsarSslConfiguration buildSslConfiguration(ProxyConfiguration config,
-                                                           AuthenticationDataProvider authData) {
-        return PulsarSslConfiguration.builder()
-                .tlsProvider(config.getBrokerClientSslProvider())
-                .tlsKeyStoreType(config.getBrokerClientTlsKeyStoreType())
-                .tlsKeyStorePath(config.getBrokerClientTlsKeyStore())
-                .tlsKeyStorePassword(config.getBrokerClientTlsKeyStorePassword())
-                .tlsTrustStoreType(config.getBrokerClientTlsTrustStoreType())
-                .tlsTrustStorePath(config.getBrokerClientTlsTrustStore())
-                .tlsTrustStorePassword(config.getBrokerClientTlsTrustStorePassword())
-                .tlsCiphers(config.getBrokerClientTlsCiphers())
-                .tlsProtocols(config.getBrokerClientTlsProtocols())
-                .tlsTrustCertsFilePath(config.getBrokerClientTrustCertsFilePath())
-                .tlsCertificateFilePath(config.getBrokerClientCertificateFilePath())
-                .tlsKeyFilePath(config.getBrokerClientKeyFilePath())
-                .allowInsecureConnection(config.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(false)
-                .tlsEnabledWithKeystore(config.isBrokerClientTlsEnabledWithKeyStore())
-                .tlsCustomParams(config.getBrokerClientSslFactoryPluginParams())
-                .authData(authData)
-                .serverMode(false)
-                .build();
     }
 
 }

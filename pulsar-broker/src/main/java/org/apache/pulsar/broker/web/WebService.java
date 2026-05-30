@@ -29,6 +29,7 @@ import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.URI;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -37,8 +38,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import lombok.CustomLog;
 import lombok.Getter;
 import org.apache.commons.lang3.StringUtils;
@@ -47,10 +46,14 @@ import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.intercept.BrokerInterceptor;
 import org.apache.pulsar.broker.intercept.BrokerInterceptors;
+import org.apache.pulsar.broker.tls.DefaultBrokerTlsMaterialProvider;
 import org.apache.pulsar.broker.validator.BindAddressValidator;
 import org.apache.pulsar.common.configuration.BindAddress;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
+import org.apache.pulsar.common.tls.DefaultTlsMaterialProviderInitContext;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider;
+import org.apache.pulsar.common.tls.PulsarTlsEngineProvider;
+import org.apache.pulsar.common.tls.ServerTlsPurposeContext;
+import org.apache.pulsar.common.tls.ServerTlsPurposeContext.ServerPurpose;
 import org.apache.pulsar.jetty.metrics.JettyStatisticsCollector;
 import org.apache.pulsar.jetty.tls.JettySslContextFactory;
 import org.eclipse.jetty.ee10.servlet.FilterHolder;
@@ -109,8 +112,7 @@ public class WebService implements AutoCloseable {
     private final ServerConnector httpsConnector;
     private final FilterInitializer filterInitializer;
     private JettyStatisticsCollector jettyStatisticsCollector;
-    private PulsarSslFactory sslFactory;
-    private ScheduledFuture<?> sslContextRefreshTask;
+    private FileBasedTlsMaterialProvider tlsMaterialProvider;
 
     @Getter
     private static final DynamicSkipUnknownPropertyHandler sharedUnknownPropertyHandler =
@@ -163,20 +165,17 @@ public class WebService implements AutoCloseable {
         SslContextFactory.Server sslCtxFactory = null;
         if (tlsRequired) {
             try {
-                PulsarSslConfiguration sslConfiguration = buildSslConfiguration(config);
-                this.sslFactory = (PulsarSslFactory) Class.forName(config.getSslFactoryPlugin())
-                        .getConstructor().newInstance();
-                this.sslFactory.initialize(sslConfiguration);
-                this.sslFactory.createInternalSslContext();
-                if (config.getTlsCertRefreshCheckDurationSec() > 0) {
-                    this.sslContextRefreshTask = this.pulsar.getExecutor()
-                            .scheduleWithFixedDelay(this::refreshSslContext,
-                                    config.getTlsCertRefreshCheckDurationSec(),
-                                    config.getTlsCertRefreshCheckDurationSec(),
-                                    TimeUnit.SECONDS);
-                }
+                // PIP-478: resolve the web-service TLS material through the framework provider/engine.
+                // The provider owns periodic file-rotation polling (using the broker executor); the Jetty
+                // factory reads the (engine-cached, hot-reloaded) JDK SSLContext lazily on every request.
+                this.tlsMaterialProvider = DefaultBrokerTlsMaterialProvider.forServer(config);
+                this.tlsMaterialProvider.initialize(new DefaultTlsMaterialProviderInitContext(
+                        pulsar.getExecutor(), Clock.systemUTC(), "pulsar-broker-web")).join();
+                PulsarTlsEngineProvider engineProvider = new PulsarTlsEngineProvider(tlsMaterialProvider);
+                ServerTlsPurposeContext webPurpose = ServerTlsPurposeContext.of(ServerPurpose.WEB_SERVICE);
                 sslCtxFactory = JettySslContextFactory.createSslContextFactory(config.getWebServiceTlsProvider(),
-                        this.sslFactory, config.isTlsRequireTrustedClientCertOnConnect(),
+                        () -> engineProvider.getJdkSslContext(webPurpose).join(),
+                        config.isTlsRequireTrustedClientCertOnConnect(),
                         config.getTlsCiphers(), config.getTlsProtocols());
             } catch (Exception e) {
                 throw new PulsarServerException(e);
@@ -569,8 +568,9 @@ public class WebService implements AutoCloseable {
             jettyStatisticsCollector = null;
         }
         webServiceExecutor.join();
-        if (this.sslContextRefreshTask != null) {
-            this.sslContextRefreshTask.cancel(true);
+        if (this.tlsMaterialProvider != null) {
+            this.tlsMaterialProvider.close();
+            this.tlsMaterialProvider = null;
         }
         webExecutorThreadPoolStats.close();
         this.executorStats.close();
@@ -593,33 +593,4 @@ public class WebService implements AutoCloseable {
         }
     }
 
-    protected PulsarSslConfiguration buildSslConfiguration(ServiceConfiguration serviceConfig) {
-        return PulsarSslConfiguration.builder()
-                .tlsKeyStoreType(serviceConfig.getTlsKeyStoreType())
-                .tlsKeyStorePath(serviceConfig.getTlsKeyStore())
-                .tlsKeyStorePassword(serviceConfig.getTlsKeyStorePassword())
-                .tlsTrustStoreType(serviceConfig.getTlsTrustStoreType())
-                .tlsTrustStorePath(serviceConfig.getTlsTrustStore())
-                .tlsTrustStorePassword(serviceConfig.getTlsTrustStorePassword())
-                .tlsCiphers(serviceConfig.getTlsCiphers())
-                .tlsProtocols(serviceConfig.getTlsProtocols())
-                .tlsTrustCertsFilePath(serviceConfig.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(serviceConfig.getTlsCertificateFilePath())
-                .tlsKeyFilePath(serviceConfig.getTlsKeyFilePath())
-                .allowInsecureConnection(serviceConfig.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(serviceConfig.isTlsRequireTrustedClientCertOnConnect())
-                .tlsEnabledWithKeystore(serviceConfig.isTlsEnabledWithKeyStore())
-                .tlsCustomParams(serviceConfig.getSslFactoryPluginParams())
-                .serverMode(true)
-                .isHttps(true)
-                .build();
-    }
-
-    protected void refreshSslContext() {
-        try {
-            this.sslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
-        }
-    }
 }

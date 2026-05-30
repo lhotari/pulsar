@@ -18,53 +18,70 @@
  */
 package org.apache.pulsar.client.api.v5.auth;
 
-import java.io.Closeable;
-import org.apache.pulsar.client.api.v5.PulsarClientException;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 /**
- * Pluggable authentication provider for Pulsar clients.
+ * Pluggable authentication provider for the Pulsar v5 client (PIP-478).
  *
- * <p>Implementations must be thread-safe.
+ * <p>The core interface carries only lifecycle. The actual credential work lives on opt-in
+ * <em>capability</em> interfaces — segregated by transport (Pulsar binary protocol vs HTTP) and by
+ * style (single-pass vs multi-round challenge/response) — that an implementation declares only when
+ * it supports them:
+ * <ul>
+ *   <li>{@link BinaryProtocolAuthDataProvider} — single-pass credential for the binary protocol</li>
+ *   <li>{@link HttpAuthHeadersProvider} — single-pass credential for HTTP</li>
+ *   <li>{@link ChallengeResponseHandler} — multi-round challenge/response for the binary protocol</li>
+ *   <li>{@link HttpHeaderChallengeResponseHandler} — SASL-style multi-round over HTTP</li>
+ * </ul>
+ * The convenience composites {@link SinglePassAuthentication} and
+ * {@link ChallengeResponseAuthentication} bundle the common combinations.
+ *
+ * <p>All capability methods are asynchronous ({@link CompletableFuture}), so credential acquisition
+ * never blocks the Netty event loop. Implementations must be thread-safe.
  */
-public interface Authentication extends Closeable {
+public interface Authentication extends AutoCloseable {
 
     /**
-     * The authentication method name (e.g., "token", "tls").
+     * Configuration step. Called once by the framework AFTER no-arg construction when the plugin was
+     * loaded reflectively from {@code authPluginClassName} + {@code authParams}. NOT called when the
+     * plugin was constructed programmatically by the user — that path presumes the instance is
+     * already configured. Default: no-op. Implementations override to read their parameters.
      *
-     * @return the authentication method identifier string
+     * <p>Configuration is intentionally separate from {@link #initializeAsync}: configuration is
+     * static plugin-level data (file paths, URLs, scopes); initialization gives the plugin runtime
+     * services and may do I/O.
+     *
+     * @param authParams the parsed authentication parameters
      */
-    String authMethodName();
-
-    /**
-     * Get the authentication data to be sent to the broker.
-     *
-     * @return the authentication data containing credentials for the broker
-     * @throws PulsarClientException if the authentication data could not be obtained
-     */
-    AuthenticationData authData() throws PulsarClientException;
-
-    /**
-     * Get the authentication data for a specific broker host.
-     *
-     * <p>The default implementation delegates to {@link #authData()}.
-     *
-     * @param brokerHostName the hostname of the broker to authenticate against
-     * @return the authentication data containing credentials for the specified broker
-     * @throws PulsarClientException if the authentication data could not be obtained
-     */
-    default AuthenticationData authData(String brokerHostName) throws PulsarClientException {
-        return authData();
+    default void configure(Map<String, String> authParams) {
     }
 
     /**
-     * Initialize the authentication provider. Called once when the client is created.
+     * Initialization step. Called once by the framework with runtime services after configuration.
+     * May do I/O; the returned future completes when the implementation is ready to serve
+     * credentials.
      *
-     * @throws PulsarClientException if initialization fails
+     * @param ctx the runtime services context
+     * @return a future completing when the plugin is ready
      */
-    default void initialize() throws PulsarClientException {
+    CompletableFuture<Void> initializeAsync(AuthenticationInitContext ctx);
+
+    /**
+     * Capability lookup for delegating wrappers. Direct implementations are discovered with
+     * {@code instanceof}; wrappers that delegate to another instance override this to expose the
+     * wrapped capabilities.
+     *
+     * @param kind the capability interface to look up
+     * @param <T>  the capability type
+     * @return the capability if supported
+     */
+    default <T> Optional<T> capability(Class<T> kind) {
+        return kind.isInstance(this) ? Optional.of(kind.cast(this)) : Optional.empty();
     }
 
     @Override
-    default void close() {
+    default void close() throws Exception {
     }
 }

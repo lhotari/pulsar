@@ -1,0 +1,192 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.pulsar.client.api.v5.http;
+
+import java.net.URI;
+import java.time.Duration;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * An immutable HTTP request (PIP-478).
+ *
+ * <p>Construct via {@link #builder(Method, URI)}. The optional {@link Body} is a sealed type so the
+ * set of body shapes ({@link Bytes} or {@link Form}) is closed and exhaustively switchable.
+ */
+public final class HttpRequest {
+
+    /** The HTTP method. */
+    public enum Method {
+        GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH
+    }
+
+    /** A request body. Sealed: either raw {@link Bytes} or a URL-encoded {@link Form}. */
+    public sealed interface Body permits Bytes, Form {
+    }
+
+    /**
+     * A raw byte body with an explicit content type.
+     *
+     * @param content     the body bytes
+     * @param contentType the {@code Content-Type} value
+     */
+    public record Bytes(byte[] content, String contentType) implements Body {
+    }
+
+    /**
+     * An {@code application/x-www-form-urlencoded} body.
+     *
+     * @param fields the form fields (encoded by the implementation)
+     */
+    public record Form(Map<String, String> fields) implements Body {
+        public Form {
+            fields = Map.copyOf(fields);
+        }
+    }
+
+    private final Method method;
+    private final URI uri;
+    private final Map<String, String> headers;
+    private final Body body;
+    private final Duration timeout;
+
+    private HttpRequest(Builder b) {
+        this.method = b.method;
+        this.uri = b.uri;
+        this.headers = Collections.unmodifiableMap(new LinkedHashMap<>(b.headers));
+        this.body = b.body;
+        this.timeout = b.timeout;
+    }
+
+    /**
+     * @return the HTTP method
+     */
+    public Method method() {
+        return method;
+    }
+
+    /**
+     * @return the request URI
+     */
+    public URI uri() {
+        return uri;
+    }
+
+    /**
+     * @return an unmodifiable view of the request headers
+     */
+    public Map<String, String> headers() {
+        return headers;
+    }
+
+    /**
+     * @return the request body, if any
+     */
+    public Optional<Body> body() {
+        return Optional.ofNullable(body);
+    }
+
+    /**
+     * @return a per-request timeout override, if any
+     */
+    public Optional<Duration> timeout() {
+        return Optional.ofNullable(timeout);
+    }
+
+    /**
+     * Create a builder.
+     *
+     * @param method the HTTP method
+     * @param uri    the request URI
+     * @return a new {@link Builder}
+     */
+    public static Builder builder(Method method, URI uri) {
+        return new Builder(method, uri);
+    }
+
+    /**
+     * Builder for {@link HttpRequest}.
+     */
+    public static final class Builder {
+        private final Method method;
+        private final URI uri;
+        private final Map<String, String> headers = new LinkedHashMap<>();
+        private Body body;
+        private Duration timeout;
+
+        private Builder(Method method, URI uri) {
+            this.method = method;
+            this.uri = uri;
+        }
+
+        /**
+         * Add or replace a header.
+         *
+         * @param name  the header name
+         * @param value the header value
+         * @return this builder
+         */
+        public Builder header(String name, String value) {
+            headers.put(name, value);
+            return this;
+        }
+
+        /**
+         * Add all of the given headers.
+         *
+         * @param values the headers to add
+         * @return this builder
+         */
+        public Builder headers(Map<String, String> values) {
+            headers.putAll(values);
+            return this;
+        }
+
+        /**
+         * Set the request body.
+         *
+         * @param body the body
+         * @return this builder
+         */
+        public Builder body(Body body) {
+            this.body = body;
+            return this;
+        }
+
+        /**
+         * Override the default request timeout for this request.
+         *
+         * @param timeout the timeout
+         * @return this builder
+         */
+        public Builder timeout(Duration timeout) {
+            this.timeout = timeout;
+            return this;
+        }
+
+        /**
+         * @return a new immutable {@link HttpRequest}
+         */
+        public HttpRequest build() {
+            return new HttpRequest(this);
+        }
+    }
+}

@@ -122,6 +122,8 @@ public class ProxyService implements Closeable {
 
     private final ScheduledExecutorService statsExecutor;
     private ScheduledExecutorService sslContextRefresher;
+    // PIP-478: retain the TLS channel initializer so its TLS material provider can be released on stop.
+    private ServiceChannelInitializer tlsServiceChannelInitializer;
 
     static final Gauge ACTIVE_CONNECTIONS = Gauge
             .build("pulsar_proxy_active_connections", "Number of connections currently active in the proxy").create()
@@ -287,8 +289,9 @@ public class ProxyService implements Closeable {
                     .newSingleThreadScheduledExecutor(
                             new DefaultThreadFactory("proxy-ssl-context-refresher"));
             ServerBootstrap tlsBootstrap = bootstrap.clone();
-            tlsBootstrap.childHandler(new ServiceChannelInitializer(this, proxyConfig, true,
-                    sslContextRefresher));
+            this.tlsServiceChannelInitializer = new ServiceChannelInitializer(this, proxyConfig, true,
+                    sslContextRefresher);
+            tlsBootstrap.childHandler(tlsServiceChannelInitializer);
             listenChannelTls = tlsBootstrap.bind(proxyConfig.getBindAddress(),
                     proxyConfig.getServicePortTls().get()).sync().channel();
             log.info()
@@ -425,6 +428,11 @@ public class ProxyService implements Closeable {
 
         if (discoveryProvider != null) {
             discoveryProvider.close();
+        }
+
+        if (this.tlsServiceChannelInitializer != null) {
+            this.tlsServiceChannelInitializer.close();
+            this.tlsServiceChannelInitializer = null;
         }
 
         if (this.sslContextRefresher != null) {

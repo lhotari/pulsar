@@ -19,9 +19,9 @@
 package org.apache.pulsar.jetty.tls;
 
 import java.util.Set;
+import java.util.function.Supplier;
 import javax.net.ssl.SSLContext;
 import lombok.CustomLog;
-import org.apache.pulsar.common.util.PulsarSslFactory;
 import org.apache.pulsar.common.util.SecurityUtility;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 
@@ -33,21 +33,34 @@ public class JettySslContextFactory {
         }
     }
 
+    /**
+     * Create a Jetty {@link SslContextFactory.Server} whose {@link SSLContext} is supplied lazily on every
+     * request (PIP-478). The supplier is expected to read from a framework-cached
+     * {@code PulsarTlsEngineProvider#getJdkSslContext}, so certificate rotation is picked up automatically
+     * (the engine provider rebuilds the cached context only when the underlying TLS material changes).
+     *
+     * @param sslProviderString               the JCE provider name, or {@code null}/empty for the default
+     * @param sslContextSupplier              supplies the current {@link SSLContext}
+     * @param requireTrustedClientCertOnConnect whether to require a trusted client certificate (mTLS)
+     * @param ciphers                         enabled cipher suites, or {@code null} for defaults
+     * @param protocols                       enabled protocols, or {@code null} for defaults
+     * @return a configured {@link SslContextFactory.Server}
+     */
     public static SslContextFactory.Server createSslContextFactory(String sslProviderString,
-                                                                   PulsarSslFactory pulsarSslFactory,
+                                                                   Supplier<SSLContext> sslContextSupplier,
                                                                    boolean requireTrustedClientCertOnConnect,
                                                                    Set<String> ciphers, Set<String> protocols) {
-        return new JettySslContextFactory.Server(sslProviderString, pulsarSslFactory,
+        return new JettySslContextFactory.Server(sslProviderString, sslContextSupplier,
                 requireTrustedClientCertOnConnect, ciphers, protocols);
     }
 
     private static class Server extends SslContextFactory.Server {
-        private final PulsarSslFactory pulsarSslFactory;
+        private final Supplier<SSLContext> sslContextSupplier;
 
-        public Server(String sslProviderString, PulsarSslFactory pulsarSslFactory,
+        public Server(String sslProviderString, Supplier<SSLContext> sslContextSupplier,
                       boolean requireTrustedClientCertOnConnect, Set<String> ciphers, Set<String> protocols) {
             super();
-            this.pulsarSslFactory = pulsarSslFactory;
+            this.sslContextSupplier = sslContextSupplier;
 
             if (ciphers != null && ciphers.size() > 0) {
                 this.setIncludeCipherSuites(ciphers.toArray(new String[0]));
@@ -76,7 +89,7 @@ public class JettySslContextFactory {
 
         @Override
         public SSLContext getSslContext() {
-            return this.pulsarSslFactory.getInternalSslContext();
+            return this.sslContextSupplier.get();
         }
     }
 }

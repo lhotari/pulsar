@@ -27,6 +27,9 @@ import jakarta.ws.rs.client.ClientBuilder;
 import jakarta.ws.rs.client.WebTarget;
 import jakarta.ws.rs.core.GenericType;
 import jakarta.ws.rs.core.MediaType;
+import java.io.FileInputStream;
+import java.security.KeyStore;
+import java.security.SecureRandom;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -35,7 +38,9 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import javax.crypto.SecretKey;
+import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
 import lombok.Cleanup;
 import lombok.CustomLog;
 import org.apache.pulsar.broker.authentication.AuthenticationProviderTls;
@@ -50,7 +55,6 @@ import org.apache.pulsar.client.impl.auth.AuthenticationKeyStoreTls;
 import org.apache.pulsar.client.impl.auth.AuthenticationToken;
 import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.TenantInfoImpl;
-import org.apache.pulsar.common.util.keystoretls.KeyStoreSSLContext;
 import org.glassfish.jersey.client.ClientConfig;
 import org.glassfish.jersey.client.ClientProperties;
 import org.glassfish.jersey.jackson.JacksonFeature;
@@ -139,7 +143,7 @@ public class AdminApiKeyStoreTlsAuthTest extends ProducerConsumerBase {
         ClientBuilder clientBuilder = ClientBuilder.newBuilder().withConfig(httpConfig)
             .register(JacksonConfigurator.class).register(JacksonFeature.class);
 
-        SSLContext sslCtx = KeyStoreSSLContext.createClientSslContext(
+        SSLContext sslCtx = createClientSslContextFromKeyStores(
                 KEYSTORE_TYPE,
                 PROXY_KEYSTORE_FILE_PATH,
                 PROXY_KEYSTORE_PW,
@@ -262,5 +266,31 @@ public class AdminApiKeyStoreTlsAuthTest extends ProducerConsumerBase {
         admin.tenants().createTenant("tenant1",
                 new TenantInfoImpl(Set.of("foobar"),
                         Set.of("test")));
+    }
+
+    /**
+     * Build a client {@link SSLContext} from JKS keystores using standard JSSE (PIP-478 removed the
+     * {@code KeyStoreSSLContext} helper this test previously used).
+     */
+    private static SSLContext createClientSslContextFromKeyStores(String keyStoreType, String keyStorePath,
+            String keyStorePassword, String trustStoreType, String trustStorePath, String trustStorePassword)
+            throws Exception {
+        KeyStore keyStore = KeyStore.getInstance(keyStoreType);
+        try (FileInputStream in = new FileInputStream(keyStorePath)) {
+            keyStore.load(in, keyStorePassword.toCharArray());
+        }
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        kmf.init(keyStore, keyStorePassword.toCharArray());
+
+        KeyStore trustStore = KeyStore.getInstance(trustStoreType);
+        try (FileInputStream in = new FileInputStream(trustStorePath)) {
+            trustStore.load(in, trustStorePassword.toCharArray());
+        }
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(trustStore);
+
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), new SecureRandom());
+        return sslContext;
     }
 }

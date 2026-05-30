@@ -45,7 +45,6 @@ import org.apache.pulsar.client.api.ServiceUrlProvider;
 import org.apache.pulsar.client.api.Socks5ProxyScope;
 import org.apache.pulsar.client.impl.auth.AuthenticationDisabled;
 import org.apache.pulsar.client.util.Secret;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
 
 
 /**
@@ -206,9 +205,9 @@ public class ClientConfigurationData implements Serializable, Cloneable {
 
     @ApiModelProperty(
             name = "sslFactoryPlugin",
-            value = "SSL Factory Plugin class to provide SSLEngine and SSLContext objects. The default "
-                    + " class used is DefaultPulsarSslFactory.")
-    private String sslFactoryPlugin = DefaultPulsarSslFactory.class.getName();
+            value = "Deprecated (PIP-478): retained for configuration compatibility. TLS material is now provided "
+                    + "by a PulsarTlsMaterialProvider; the default is the framework's file-based provider.")
+    private String sslFactoryPlugin = "org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider";
 
     @ApiModelProperty(
             name = "sslFactoryPluginParams",

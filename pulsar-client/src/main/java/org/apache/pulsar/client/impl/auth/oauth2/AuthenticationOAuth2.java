@@ -24,10 +24,12 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import lombok.CustomLog;
 import lombok.Data;
 import org.apache.commons.lang3.JavaVersion;
@@ -38,9 +40,12 @@ import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenEndpointAuthMethod;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenResult;
+import org.apache.pulsar.client.impl.auth.v5.V5AuthContexts;
+import org.apache.pulsar.common.api.AuthData;
 import org.apache.pulsar.common.util.Backoff;
 
 /**
@@ -71,7 +76,8 @@ import org.apache.pulsar.common.util.Backoff;
  * This class is intended to be called from multiple threads, and is therefore designed to be thread-safe.
  */
 @CustomLog
-public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticationParameterSupport {
+public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticationParameterSupport,
+        AsyncAuthenticationDriver {
 
     public static final String CONFIG_PARAM_TYPE = "type";
     public static final String CONFIG_PARAM_TOKEN_ENDPOINT_AUTH_METHOD = "tokenEndpointAuthMethod";
@@ -106,6 +112,11 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
     // Only ever updated on the single scheduler thread. Do not need to be volatile.
     private transient Backoff backoff;
     private transient ScheduledFuture<?> nextRefreshAttempt;
+
+    // PIP-478: v5-native body that serves the async (ClientCnx) credential path. Non-transient so the
+    // serializable v4 shim round-trips; its access-token supplier reads this instance's current
+    // cached/refreshed token via the existing synchronous credential path.
+    private final OAuth2AuthenticationV5 delegate = new OAuth2AuthenticationV5(new AccessTokenSupplier(this));
 
     // No args constructor used when creating class with reflection
     public AuthenticationOAuth2() {
@@ -341,6 +352,61 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
                         nextRefreshAttempt.cancel(false);
                     }
                 });
+            }
+        }
+    }
+
+    /**
+     * Returns the current access token, acquiring or refreshing it if necessary via the existing
+     * synchronous credential path. May block on the OAuth2 flow (network I/O), exactly as the v4
+     * {@link #getAuthData()} path already does.
+     *
+     * @return the current OAuth2 access token
+     * @throws PulsarClientException if a token could not be obtained
+     */
+    synchronized String currentAccessToken() throws PulsarClientException {
+        if (isClosed) {
+            throw new PulsarClientException.AlreadyClosedException("Authentication already closed.");
+        }
+        if (this.cachedToken == null || this.cachedToken.isExpired()) {
+            this.authenticate();
+        }
+        return this.cachedToken.getAuthData().getCommandData();
+    }
+
+    // --- AsyncAuthenticationDriver: route ClientCnx through the v5-native async path ---
+
+    @Override
+    public CompletableFuture<AuthData> getAuthDataAsync(String brokerHostName) {
+        return delegate.getAuthDataAsync(V5AuthContexts.binaryCallContext(brokerHostName, 0))
+                .thenApply(d -> AuthData.of(d.authData()));
+    }
+
+    @Override
+    public CompletableFuture<AuthData> authenticateAsync(AuthData challenge, String brokerHostName) {
+        // OAuth2 is single-pass: any challenge (incl. the REFRESH sentinel) is answered by supplying
+        // the current (cached/refreshed) access token.
+        return getAuthDataAsync(brokerHostName);
+    }
+
+    /**
+     * Serializable supplier that reads the owning {@link AuthenticationOAuth2}'s current access token.
+     * Kept as a static nested class (rather than a lambda) so the v5-native delegate serializes.
+     */
+    private static final class AccessTokenSupplier implements Supplier<String>, java.io.Serializable {
+        private static final long serialVersionUID = 1L;
+        private final AuthenticationOAuth2 owner;
+
+        AccessTokenSupplier(AuthenticationOAuth2 owner) {
+            this.owner = owner;
+        }
+
+        @Override
+        public String get() {
+            try {
+                return owner.currentAccessToken();
+            } catch (PulsarClientException e) {
+                throw new RuntimeException("Failed to acquire OAuth2 access token", e);
             }
         }
     }

@@ -23,12 +23,12 @@ import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.format.DateTimeParseException;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import javax.net.ssl.SSLException;
 import lombok.CustomLog;
 import org.apache.commons.lang3.StringUtils;
@@ -38,9 +38,13 @@ import org.apache.pulsar.client.impl.auth.oauth2.protocol.DefaultMetadataResolve
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.Metadata;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.MetadataResolver;
 import org.apache.pulsar.client.util.ExecutorProvider;
-import org.apache.pulsar.client.util.PulsarHttpAsyncSslEngineFactory;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
+import org.apache.pulsar.client.util.PulsarTlsAsyncHttpSslEngineFactory;
+import org.apache.pulsar.common.tls.ClientTlsPurposeContext;
+import org.apache.pulsar.common.tls.DefaultTlsMaterialProviderInitContext;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialSource;
+import org.apache.pulsar.common.tls.PulsarTlsEngineProvider;
+import org.apache.pulsar.common.tls.TlsPurposeContext;
 import org.asynchttpclient.AsyncHttpClient;
 import org.asynchttpclient.DefaultAsyncHttpClient;
 import org.asynchttpclient.DefaultAsyncHttpClientConfig;
@@ -75,10 +79,18 @@ abstract class FlowBase implements Flow {
     private final long autoCertRefreshSeconds;
     protected final String wellKnownMetadataPath;
 
-    protected transient PulsarSslFactory sslFactory;
+    protected transient FileBasedTlsMaterialProvider tlsMaterialProvider;
     protected transient ScheduledExecutorService sslRefreshScheduler;
     protected transient Metadata metadata;
     private transient AsyncHttpClient httpClient;
+
+    /**
+     * The OAuth2 IdP HTTP client must not reuse Pulsar-cluster TLS material; per PIP-478 it uses the
+     * GENERIC client purpose with a dedicated usage identifier so a deployment can pin distinct material.
+     */
+    private static final TlsPurposeContext IDP_TLS_PURPOSE = new ClientTlsPurposeContext(
+            ClientTlsPurposeContext.ClientPurpose.GENERIC,
+            new TlsPurposeContext.UsageIdentifier(FlowBase.class, "idpHttpClient"));
 
     protected FlowBase(URL issuerUrl, Duration connectTimeout, Duration readTimeout, String trustCertsFilePath,
                        String certFile, String keyFile, Duration autoCertRefreshDuration,
@@ -115,18 +127,25 @@ abstract class FlowBase implements Flow {
         }
         if (hasCertFile && hasKeyFile) {
             try {
-                PulsarSslConfiguration sslConfiguration = PulsarSslConfiguration.builder()
-                        .tlsCertificateFilePath(certFile)
-                        .tlsKeyFilePath(keyFile)
-                        .tlsTrustCertsFilePath(trustCertsFilePath)
+                // PIP-478: own a FileBasedTlsMaterialProvider for the IdP HTTP client (GENERIC purpose).
+                int refresh = autoCertRefreshSeconds > 0 ? (int) autoCertRefreshSeconds
+                        : (int) DEFAULT_AUTO_CERT_REFRESH_DURATION.getSeconds();
+                this.sslRefreshScheduler = Executors.newSingleThreadScheduledExecutor(
+                        new ExecutorProvider.ExtendedThreadFactory("oauth2-tls-cert-refresher", true));
+                FileBasedTlsMaterialProvider provider = new FileBasedTlsMaterialProvider(refresh);
+                FileBasedTlsMaterialSource source = FileBasedTlsMaterialSource.builder()
+                        .certificateFilePath(certFile)
+                        .keyFilePath(keyFile)
+                        .trustCertsFilePath(trustCertsFilePath)
                         .allowInsecureConnection(false)
-                        .serverMode(false)
-                        .isHttps(true)
                         .build();
-                sslFactory = new org.apache.pulsar.common.util.DefaultPulsarSslFactory();
-                sslFactory.initialize(sslConfiguration);
-                sslFactory.createInternalSslContext();
-                SslEngineFactory sslEngineFactory = new PulsarHttpAsyncSslEngineFactory(sslFactory, null);
+                provider.registerSource(IDP_TLS_PURPOSE, source);
+                provider.initialize(new DefaultTlsMaterialProviderInitContext(sslRefreshScheduler,
+                        Clock.systemUTC(), "pulsar-oauth2-idp")).join();
+                this.tlsMaterialProvider = provider;
+                PulsarTlsEngineProvider engineProvider = new PulsarTlsEngineProvider(provider);
+                SslEngineFactory sslEngineFactory =
+                        new PulsarTlsAsyncHttpSslEngineFactory(engineProvider, IDP_TLS_PURPOSE, null);
                 confBuilder.setSslEngineFactory(sslEngineFactory);
             } catch (Exception e) {
                 throw new IllegalArgumentException("Invalid TLS client certificate configuration", e);
@@ -145,33 +164,11 @@ abstract class FlowBase implements Flow {
 
     protected synchronized AsyncHttpClient getHttpClient() {
         if (httpClient == null) {
+            // TLS material loading, caching and rotation are owned by the FileBasedTlsMaterialProvider
+            // created in defaultHttpClient() (PIP-478); no separate refresh task is scheduled here.
             httpClient = defaultHttpClient(readTimeout, connectTimeout, trustCertsFilePath, certFile, keyFile);
-            scheduleSslContextRefreshIfEnabled(autoCertRefreshSeconds);
         }
         return httpClient;
-    }
-
-    private void scheduleSslContextRefreshIfEnabled(long refreshSeconds) {
-        if (sslFactory == null || refreshSeconds <= 0 || sslRefreshScheduler != null) {
-            return;
-        }
-        sslRefreshScheduler = Executors.newSingleThreadScheduledExecutor(
-                new ExecutorProvider.ExtendedThreadFactory("oauth2-tls-cert-refresher", true));
-        sslRefreshScheduler.scheduleWithFixedDelay(this::refreshSslContext,
-                refreshSeconds, refreshSeconds, TimeUnit.SECONDS);
-        log.info().attr("refreshSeconds", refreshSeconds).log("Scheduled TLS certificate refresh");
-    }
-
-    private void refreshSslContext() {
-        if (this.sslFactory == null) {
-            return;
-        }
-        try {
-            this.sslFactory.update();
-            log.debug("Successfully refreshed SSL context");
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
-        }
     }
 
     private int getParameterDurationToMillis(String name, Duration value, Duration defaultValue) {
@@ -243,14 +240,14 @@ abstract class FlowBase implements Flow {
 
     @Override
     public void close() throws Exception {
-        if (sslRefreshScheduler != null) {
-            sslRefreshScheduler.shutdownNow();
-        }
         if (httpClient != null) {
             httpClient.close();
         }
-        if (sslFactory != null) {
-            sslFactory.close();
+        if (tlsMaterialProvider != null) {
+            tlsMaterialProvider.close();
+        }
+        if (sslRefreshScheduler != null) {
+            sslRefreshScheduler.shutdownNow();
         }
     }
 }

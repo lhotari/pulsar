@@ -23,6 +23,7 @@ plugins {
 
 dependencies {
     implementation(project(":pulsar-client-api"))
+    api(project(":pulsar-client-api-v5"))
     implementation(project(":pulsar-client-original"))
     implementation(libs.athenz.zts.java.client)
     implementation(libs.athenz.cert.refresher)
