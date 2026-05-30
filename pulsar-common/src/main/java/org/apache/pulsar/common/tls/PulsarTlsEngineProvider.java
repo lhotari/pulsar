@@ -188,6 +188,8 @@ public class PulsarTlsEngineProvider {
         if (purpose.isServer()) {
             boolean clientAuthRequired = material instanceof ServerTlsMaterial server
                     && server.isTrustedClientCertRequired();
+            boolean trustAnyClientCert = material instanceof ServerTlsMaterial server
+                    && server.isTrustAnyClientCert();
             // SecurityUtility has no server overload accepting already-loaded key/cert material, so the
             // server SslContext is assembled here mirroring SecurityUtility's PEM-file server builder
             // (trust certs via an in-memory PEM stream, optional/required client auth).
@@ -199,11 +201,17 @@ public class PulsarTlsEngineProvider {
             if (protocols != null) {
                 builder.protocols(protocols.toArray(new String[0]));
             }
-            try (InputStream trustStream = trustCertsStream(trustCerts)) {
-                if (trustStream != null) {
-                    builder.trustManager(trustStream);
-                } else {
-                    builder.trustManager((File) null);
+            if (trustAnyClientCert) {
+                // Insecure mode (legacy tlsAllowInsecureConnection): accept any client certificate so the
+                // handshake completes and the cert is available for TLS authentication.
+                builder.trustManager(InsecureTrustManagerFactory.INSTANCE);
+            } else {
+                try (InputStream trustStream = trustCertsStream(trustCerts)) {
+                    if (trustStream != null) {
+                        builder.trustManager(trustStream);
+                    } else {
+                        builder.trustManager((File) null);
+                    }
                 }
             }
             builder.clientAuth(clientAuthRequired ? ClientAuth.REQUIRE : ClientAuth.OPTIONAL);
@@ -236,11 +244,15 @@ public class PulsarTlsEngineProvider {
     }
 
     private SSLContext buildJdkContext(TlsMaterial material) throws Exception {
-        boolean trustAnyCaCert = material instanceof ClientTlsMaterial client && client.isTrustAnyCaCert();
+        // Insecure mode: on the client side trust any server cert; on the server side accept any client
+        // cert (the legacy tlsAllowInsecureConnection behaviour, so an untrusted client cert still
+        // completes the handshake and remains available for TLS authentication).
+        boolean trustAny = (material instanceof ClientTlsMaterial client && client.isTrustAnyCaCert())
+                || (material instanceof ServerTlsMaterial server && server.isTrustAnyClientCert());
         X509Certificate[] trustCerts = toArray(material.getTrustCerts());
         X509Certificate[] keyCertChain = toArray(material.getKeyCertChain());
         PrivateKey privateKey = material.getPrivateKey();
-        return SecurityUtility.createSslContext(trustAnyCaCert, trustCerts, keyCertChain, privateKey);
+        return SecurityUtility.createSslContext(trustAny, trustCerts, keyCertChain, privateKey);
     }
 
     /**

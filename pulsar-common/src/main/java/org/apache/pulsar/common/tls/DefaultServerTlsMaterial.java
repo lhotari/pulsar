@@ -39,6 +39,7 @@ public final class DefaultServerTlsMaterial implements ServerTlsMaterial {
     private final List<String> tlsProtocols;
     private final List<String> tlsCiphers;
     private final boolean trustedClientCertRequired;
+    private final boolean trustAnyClientCert;
 
     private DefaultServerTlsMaterial(Builder b) {
         this.privateKey = b.privateKey;
@@ -47,6 +48,7 @@ public final class DefaultServerTlsMaterial implements ServerTlsMaterial {
         this.tlsProtocols = immutable(b.tlsProtocols);
         this.tlsCiphers = immutable(b.tlsCiphers);
         this.trustedClientCertRequired = b.trustedClientCertRequired;
+        this.trustAnyClientCert = b.trustAnyClientCert;
     }
 
     private static <T> List<T> immutable(List<T> in) {
@@ -83,6 +85,11 @@ public final class DefaultServerTlsMaterial implements ServerTlsMaterial {
         return trustedClientCertRequired;
     }
 
+    @Override
+    public boolean isTrustAnyClientCert() {
+        return trustAnyClientCert;
+    }
+
     /**
      * @return a new builder
      */
@@ -99,6 +106,7 @@ public final class DefaultServerTlsMaterial implements ServerTlsMaterial {
             return false;
         }
         return trustedClientCertRequired == that.trustedClientCertRequired
+                && trustAnyClientCert == that.trustAnyClientCert
                 && Objects.equals(privateKey, that.privateKey)
                 && keyCertChain.equals(that.keyCertChain)
                 && trustCerts.equals(that.trustCerts)
@@ -109,7 +117,7 @@ public final class DefaultServerTlsMaterial implements ServerTlsMaterial {
     @Override
     public int hashCode() {
         return Objects.hash(privateKey, keyCertChain, trustCerts, tlsProtocols, tlsCiphers,
-                trustedClientCertRequired);
+                trustedClientCertRequired, trustAnyClientCert);
     }
 
     /**
@@ -122,6 +130,7 @@ public final class DefaultServerTlsMaterial implements ServerTlsMaterial {
         private List<String> tlsProtocols;
         private List<String> tlsCiphers;
         private boolean trustedClientCertRequired = false;
+        private boolean trustAnyClientCert = false;
 
         private Builder() {
         }
@@ -159,6 +168,12 @@ public final class DefaultServerTlsMaterial implements ServerTlsMaterial {
         /** @param trustedClientCertRequired whether a trusted client cert is required (mTLS); @return this builder */
         public Builder trustedClientCertRequired(boolean trustedClientCertRequired) {
             this.trustedClientCertRequired = trustedClientCertRequired;
+            return this;
+        }
+
+        /** @param trustAnyClientCert whether to accept untrusted client certs (insecure); @return this builder */
+        public Builder trustAnyClientCert(boolean trustAnyClientCert) {
+            this.trustAnyClientCert = trustAnyClientCert;
             return this;
         }
 

@@ -30,4 +30,16 @@ public interface ServerTlsMaterial extends TlsMaterial {
     default boolean isTrustedClientCertRequired() {
         return false;
     }
+
+    /**
+     * @return whether any client certificate is accepted without trust-chain validation (the server-side
+     *         counterpart of the legacy {@code tlsAllowInsecureConnection} mode). Default {@code false}.
+     *         When {@code true}, the framework installs a permissive trust manager so that a client
+     *         presenting an untrusted certificate still completes the TLS handshake (the certificate is
+     *         then available for TLS authentication); this matches the pre-PIP-478 behaviour where a
+     *         broker with {@code tlsAllowInsecureConnection=true} accepted untrusted client certificates.
+     */
+    default boolean isTrustAnyClientCert() {
+        return false;
+    }
 }

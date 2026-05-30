@@ -24,7 +24,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -40,12 +39,9 @@ import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
-import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenEndpointAuthMethod;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenResult;
-import org.apache.pulsar.client.impl.auth.v5.V5AuthContexts;
-import org.apache.pulsar.common.api.AuthData;
 import org.apache.pulsar.common.util.Backoff;
 
 /**
@@ -76,8 +72,7 @@ import org.apache.pulsar.common.util.Backoff;
  * This class is intended to be called from multiple threads, and is therefore designed to be thread-safe.
  */
 @CustomLog
-public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticationParameterSupport,
-        AsyncAuthenticationDriver {
+public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticationParameterSupport {
 
     public static final String CONFIG_PARAM_TYPE = "type";
     public static final String CONFIG_PARAM_TOKEN_ENDPOINT_AUTH_METHOD = "tokenEndpointAuthMethod";
@@ -372,21 +367,6 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
             this.authenticate();
         }
         return this.cachedToken.getAuthData().getCommandData();
-    }
-
-    // --- AsyncAuthenticationDriver: route ClientCnx through the v5-native async path ---
-
-    @Override
-    public CompletableFuture<AuthData> getAuthDataAsync(String brokerHostName) {
-        return delegate.getAuthDataAsync(V5AuthContexts.binaryCallContext(brokerHostName, 0))
-                .thenApply(d -> AuthData.of(d.authData()));
-    }
-
-    @Override
-    public CompletableFuture<AuthData> authenticateAsync(AuthData challenge, String brokerHostName) {
-        // OAuth2 is single-pass: any challenge (incl. the REFRESH sentinel) is answered by supplying
-        // the current (cached/refreshed) access token.
-        return getAuthDataAsync(brokerHostName);
     }
 
     /**

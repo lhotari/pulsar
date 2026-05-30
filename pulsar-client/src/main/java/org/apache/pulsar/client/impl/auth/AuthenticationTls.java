@@ -22,16 +22,12 @@ import com.google.common.annotations.VisibleForTesting;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
-import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.impl.auth.v5.TlsAuthenticationV5;
-import org.apache.pulsar.client.impl.auth.v5.V5AuthContexts;
-import org.apache.pulsar.common.api.AuthData;
 
 /**
  * This plugin requires these parameters.
@@ -42,11 +38,11 @@ import org.apache.pulsar.common.api.AuthData;
  * authenticates via the TLS handshake, so the binary-protocol credential carries the {@code tls} auth
  * method with empty {@code auth_data}; the v4 surface (including {@link #getAuthData()} returning
  * {@link AuthenticationDataTls}, which feeds the client's TLS material override path) is preserved for
- * source compatibility. {@link AsyncAuthenticationDriver} lets {@code ClientCnx} drive it on the
- * non-blocking async path.
+ * source compatibility. The plugin keeps the verbatim v4 synchronous connect/refresh path when driven
+ * by {@code ClientCnx}. The async v5 SPI is exercised via the v5-native delegate and the
+ * {@code V5ToV4AuthenticationAdapter}, not by this v4 plugin directly.
  */
-public class AuthenticationTls implements Authentication, EncodedAuthenticationParameterSupport,
-        AsyncAuthenticationDriver {
+public class AuthenticationTls implements Authentication, EncodedAuthenticationParameterSupport {
     static final String AUTH_METHOD_NAME = "tls";
     private static final long serialVersionUID = 1L;
 
@@ -110,20 +106,6 @@ public class AuthenticationTls implements Authentication, EncodedAuthenticationP
     @Override
     public void start() throws PulsarClientException {
         // noop — the v5-native delegate has no initialization I/O for mTLS
-    }
-
-    // --- AsyncAuthenticationDriver: route ClientCnx through the v5-native async path ---
-
-    @Override
-    public CompletableFuture<AuthData> getAuthDataAsync(String brokerHostName) {
-        // mTLS authenticates via the TLS handshake; the connect command carries empty auth data.
-        return delegate.getAuthDataAsync(V5AuthContexts.binaryCallContext(brokerHostName, 0))
-                .thenApply(d -> AuthData.of(d.authData()));
-    }
-
-    @Override
-    public CompletableFuture<AuthData> authenticateAsync(AuthData challenge, String brokerHostName) {
-        return getAuthDataAsync(brokerHostName);
     }
 
     @VisibleForTesting

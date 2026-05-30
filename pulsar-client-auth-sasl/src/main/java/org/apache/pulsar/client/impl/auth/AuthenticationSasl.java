@@ -51,7 +51,6 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import javax.security.auth.login.LoginException;
 import lombok.CustomLog;
 import lombok.SneakyThrows;
@@ -59,13 +58,9 @@ import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
-import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
-import org.apache.pulsar.client.api.v5.auth.AuthChallenge;
-import org.apache.pulsar.client.api.v5.auth.AuthenticationCallContext;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
 import org.apache.pulsar.client.impl.auth.PulsarSaslClient.ClientCallbackHandler;
 import org.apache.pulsar.client.impl.auth.v5.SaslAuthenticationV5;
-import org.apache.pulsar.client.impl.auth.v5.V5AuthContexts;
 import org.apache.pulsar.common.api.AuthData;
 import org.apache.pulsar.common.sasl.JAASCredentialsContainer;
 
@@ -76,14 +71,14 @@ import org.apache.pulsar.common.sasl.JAASCredentialsContainer;
  *   a jaas.conf, which is set by `-Djava.security.auth.login.config=/dir/jaas.conf`
  *   for Kerberos a krb5.conf, which is set by `-Djava.security.krb5.conf=/dir/krb5.conf`
  *
- * <p>PIP-478: the binary-protocol SASL challenge/response now runs through the v5-native
- * {@link SaslAuthenticationV5} via {@link AsyncAuthenticationDriver}; the SASL-over-HTTP loop
- * ({@link #authenticationStage}/{@link #newRequestHeader}) and the synchronous
- * {@link #getAuthData(String)} surface remain on this v4 shim unchanged.
+ * <p>PIP-478: this v4 plugin keeps the verbatim v4 synchronous connect/refresh path when driven by
+ * {@code ClientCnx}; the SASL-over-HTTP loop ({@link #authenticationStage}/{@link #newRequestHeader})
+ * and the synchronous {@link #getAuthData(String)} surface remain on this v4 shim unchanged. The async
+ * v5 SPI is exercised via the v5-native {@link SaslAuthenticationV5} delegate and the
+ * {@code V5ToV4AuthenticationAdapter}, not by this v4 plugin directly.
  */
 @CustomLog
-public class AuthenticationSasl implements Authentication, EncodedAuthenticationParameterSupport,
-        AsyncAuthenticationDriver {
+public class AuthenticationSasl implements Authentication, EncodedAuthenticationParameterSupport {
     private static final long serialVersionUID = 1L;
     // this is a static object that shares amongst client.
     private static JAASCredentialsContainer jaasCredentialsContainer;
@@ -93,12 +88,9 @@ public class AuthenticationSasl implements Authentication, EncodedAuthentication
     private String loginContextName;
     private String serverType = null;
 
-    // PIP-478: v5-native body that serves the async (ClientCnx) binary SASL path. Non-transient so the
+    // PIP-478: v5-native body that serves the v5 client provider path. Non-transient so the
     // serializable v4 shim round-trips; its provider factory reuses this shim's getAuthData(host).
     private final SaslAuthenticationV5 delegate = new SaslAuthenticationV5(new ShimSaslProviderFactory(this));
-    // Per-broker call contexts keep the SASL conversation state (in the context state slot) across the
-    // initial connect and the subsequent challenge rounds for a single ClientCnx handshake.
-    private final transient Map<String, AuthenticationCallContext> binaryCallContexts = new ConcurrentHashMap<>();
 
     public AuthenticationSasl() {
     }
@@ -353,24 +345,6 @@ public class AuthenticationSasl implements Authentication, EncodedAuthentication
                 return;
             }
         });
-    }
-
-    // --- AsyncAuthenticationDriver: route ClientCnx's binary SASL handshake through the v5-native body ---
-
-    @Override
-    public CompletableFuture<AuthData> getAuthDataAsync(String brokerHostName) {
-        // Start a fresh SASL exchange for this broker: a new call context holds the conversation state.
-        AuthenticationCallContext ctx = V5AuthContexts.binaryCallContext(brokerHostName, 0);
-        binaryCallContexts.put(brokerHostName, ctx);
-        return delegate.getAuthDataAsync(ctx).thenApply(d -> AuthData.of(d.authData()));
-    }
-
-    @Override
-    public CompletableFuture<AuthData> authenticateAsync(AuthData challenge, String brokerHostName) {
-        AuthenticationCallContext ctx =
-                binaryCallContexts.computeIfAbsent(brokerHostName, h -> V5AuthContexts.binaryCallContext(h, 0));
-        return delegate.respondToChallengeAsync(ctx, AuthChallenge.of(challenge.getBytes()))
-                .thenApply(r -> AuthData.of(r.responseBytes()));
     }
 
     /**

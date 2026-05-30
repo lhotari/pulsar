@@ -91,6 +91,7 @@ public final class FileBasedServerTlsMaterialSource implements TlsMaterialSource
                 .keyCertChain(certificateChain)
                 .trustCerts(trustCerts)
                 .trustedClientCertRequired(config.isRequireTrustedClientCertOnConnect())
+                .trustAnyClientCert(config.isAllowInsecureConnection())
                 .tlsCiphers(config.getTlsCiphers().isEmpty() ? null : List.copyOf(config.getTlsCiphers()))
                 .tlsProtocols(config.getTlsProtocols().isEmpty() ? null : List.copyOf(config.getTlsProtocols()))
                 .build();

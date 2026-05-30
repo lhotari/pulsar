@@ -21,16 +21,12 @@ package org.apache.pulsar.client.impl.auth;
 import com.google.common.base.Joiner;
 import java.io.IOException;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import lombok.CustomLog;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
-import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.impl.auth.v5.KeyStoreTlsAuthenticationV5;
-import org.apache.pulsar.client.impl.auth.v5.V5AuthContexts;
-import org.apache.pulsar.common.api.AuthData;
 
 /**
  * This plugin requires these parameters: keyStoreType, keyStorePath, and keyStorePassword.
@@ -40,12 +36,12 @@ import org.apache.pulsar.common.api.AuthData;
  * mTLS authenticates via the TLS handshake, so the binary-protocol credential carries the {@code tls}
  * auth method with empty {@code auth_data}; the v4 surface (including {@link #getAuthData()} returning
  * {@link AuthenticationDataKeyStoreTls}, which feeds the client's TLS material override path) is
- * preserved for source compatibility. {@link AsyncAuthenticationDriver} lets {@code ClientCnx} drive
- * it on the non-blocking async path.
+ * preserved for source compatibility. The plugin keeps the verbatim v4 synchronous connect/refresh
+ * path when driven by {@code ClientCnx}. The async v5 SPI is exercised via the v5-native delegate and
+ * the {@code V5ToV4AuthenticationAdapter}, not by this v4 plugin directly.
  */
 @CustomLog
-public class AuthenticationKeyStoreTls implements Authentication, EncodedAuthenticationParameterSupport,
-        AsyncAuthenticationDriver {
+public class AuthenticationKeyStoreTls implements Authentication, EncodedAuthenticationParameterSupport {
     private static final long serialVersionUID = 1L;
 
     private static final String AUTH_NAME = "tls";
@@ -102,20 +98,6 @@ public class AuthenticationKeyStoreTls implements Authentication, EncodedAuthent
     @Override
     public void start() throws PulsarClientException {
         // noop — the v5-native delegate has no initialization I/O for keystore mTLS
-    }
-
-    // --- AsyncAuthenticationDriver: route ClientCnx through the v5-native async path ---
-
-    @Override
-    public CompletableFuture<AuthData> getAuthDataAsync(String brokerHostName) {
-        // mTLS authenticates via the TLS handshake; the connect command carries empty auth data.
-        return delegate.getAuthDataAsync(V5AuthContexts.binaryCallContext(brokerHostName, 0))
-                .thenApply(d -> AuthData.of(d.authData()));
-    }
-
-    @Override
-    public CompletableFuture<AuthData> authenticateAsync(AuthData challenge, String brokerHostName) {
-        return getAuthDataAsync(brokerHostName);
     }
 
     // return strings like : "key1":"value1", "key2":"value2", ...

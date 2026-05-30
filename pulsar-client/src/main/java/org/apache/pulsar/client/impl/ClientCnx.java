@@ -385,6 +385,11 @@ public class ClientCnx extends PulsarHandler {
             }
             final ByteBuf request;
             try {
+                // Populate the data provider field so that getAuthenticationDataProvider() and any
+                // subsequent challenge handling observe the same provider the synchronous path exposes.
+                // By this point getAuthDataAsync(...) has completed, so for the async-capable plugins the
+                // credential is already warm and this does not perform blocking credential acquisition.
+                authenticationDataProvider = authentication.getAuthData(remoteHostName);
                 request = Commands.newConnect(authentication.getAuthMethodName(), authData, this.protocolVersion,
                         clientVersion, proxyToTargetBrokerAddress, originalPrincipal, null, null);
             } catch (Throwable t) {
@@ -581,6 +586,15 @@ public class ClientCnx extends PulsarHandler {
                 return;
             }
             try {
+                // On the broker-pushed credential-refresh sentinel, re-resolve the data provider so that
+                // getAuthenticationDataProvider() observes the freshly-acquired credential (mirrors the
+                // synchronous path's handling of REFRESH_AUTH_DATA_BYTES). For short-lived credentials
+                // (OAuth2/Athenz) the async driver has already renewed the credential internally, so this
+                // simply exposes the current one without blocking.
+                if (Arrays.equals(AuthData.REFRESH_AUTH_DATA_BYTES, authChallenge.getChallenge().getAuthData())) {
+                    authenticationDataProvider = authentication.getAuthData(remoteHostName);
+                }
+
                 checkState(!authData.isComplete());
 
                 ByteBuf request = Commands.newAuthResponse(authentication.getAuthMethodName(),
