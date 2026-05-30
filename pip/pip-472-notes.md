@@ -122,6 +122,22 @@ Pushed to `forked` (lhotari/pulsar); PR opened to exercise full CI. Remaining kn
 some AdditionalServlet unit tests / `CounterBrokerInterceptor` may need runtime tweaks; Swagger 1→2 (Phase B);
 Checkstyle import-ban lint + LICENSE/NOTICE (Phase C).
 
+## CI iteration log
+
+- **Run 1** (`cb35f7ed5bd`): build failed — `jetty-upgrade/*-prometheus-metrics` compile error from the global
+  `simpleclient_servlet`→jakarta swap. Reverted that alias to the javax variant (`fa3b0c45f86`).
+- **Run 2** (`fa3b0c45f86`): build **compiled** + checkstyle + spotless **passed**; only `checkBinaryLicense`
+  failed (server + shell). Updated both `LICENSE.bin.txt` for the jersey-3.1/hk2-3.x/jakarta jar set; also fixed
+  `CounterBrokerInterceptor` runtime (jakarta servlet API) (`b3c153c5120`).
+- **Run 3** (`b3c153c5120`): in progress.
+
+### Extra local runtime validation (high-risk Jersey 3 / Jetty ee10 areas)
+- `FunctionApiV3ResourceTest` (Jersey 3 multipart `FormDataParam`): **71 pass, 0 fail**.
+- `AsyncHttpConnectorTest` (custom Jersey Connector SPI + internal `*PropertiesDelegate`): 7 pass; the one
+  failure `testShouldStopRetriesWhenTimeoutOccurs` is a **pre-existing timing-flaky test** (`Thread.sleep` +
+  WireMock scenario-state race, already carries a flaky-retry analyzer) — unrelated to the namespace migration,
+  which does not change the retry/timeout logic. Left for CI flaky-test handling.
+
 ## Decisions log
 
 - **D1 (swagger sequencing):** Swagger 1→2 deferred to Phase B (separate commits) so the javax→jakarta core
