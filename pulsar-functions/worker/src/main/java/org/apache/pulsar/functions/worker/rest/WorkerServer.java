@@ -265,6 +265,9 @@ public class WorkerServer {
         final ServletHolder apiServlet =
                 new ServletHolder(new ServletContainer(config));
         contextHandler.addServlet(apiServlet, MATCH_ALL);
+        // Allow %2F-encoded path separators; Jetty 12 ee10 rejects ambiguous URIs at the servlet layer by
+        // default (PIP-472 / Jetty 12).
+        contextHandler.getServletHandler().setDecodeAmbiguousURIs(true);
 
         filterInitializer.addFilters(contextHandler, requireAuthentication);
 

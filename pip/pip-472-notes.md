@@ -129,7 +129,13 @@ Checkstyle import-ban lint + LICENSE/NOTICE (Phase C).
 - **Run 2** (`fa3b0c45f86`): build **compiled** + checkstyle + spotless **passed**; only `checkBinaryLicense`
   failed (server + shell). Updated both `LICENSE.bin.txt` for the jersey-3.1/hk2-3.x/jakarta jar set; also fixed
   `CounterBrokerInterceptor` runtime (jakarta servlet API) (`b3c153c5120`).
-- **Run 3** (`b3c153c5120`): in progress.
+- **Run 3** (`b3c153c5120`): `checkBinaryLicense` failed on 2 residual entries — `com.sun.activation:jakarta.activation:1.2.2`
+  (the javax.activation JAF impl) is still bundled transitively alongside Angus; my agent prompt wrongly said it was
+  replaced, so it was removed. Re-added it to both LICENSE files (`7a93fa09cd4`).
+- **Run 4** (`7a93fa09cd4`): **Build and License check job PASSED** ✅ — full multi-module build + checkstyle + spotless
+  + binary LICENSE/NOTICE all green. The deterministic build gate is fully cleared. The Pulsar CI **unit + integration
+  test matrix** is now running (Broker Groups 1–5, Client Api/Impl, Proxy, Pulsar IO/Client/Metadata, Other, + docker
+  images, MacOS build) — hours of runtime; monitoring for failures and iterating.
 
 ### Extra local runtime validation (high-risk Jersey 3 / Jetty ee10 areas)
 - `FunctionApiV3ResourceTest` (Jersey 3 multipart `FormDataParam`): **71 pass, 0 fail**.
@@ -137,6 +143,35 @@ Checkstyle import-ban lint + LICENSE/NOTICE (Phase C).
   failure `testShouldStopRetriesWhenTimeoutOccurs` is a **pre-existing timing-flaky test** (`Thread.sleep` +
   WireMock scenario-state race, already carries a flaky-retry analyzer) — unrelated to the namespace migration,
   which does not change the retry/timeout logic. Left for CI flaky-test handling.
+
+## Test-job failures triaged (run `26698057762`)
+
+ALL **integration tests passed** (Standalone, Transaction, Upgrade, Backwards-Compat, Kubernetes, Metrics,
+Shade on Java 17/21/25, etc.) and most unit groups passed. Three unit-tier issues found:
+
+1. **Ambiguous URI (FIXED).** `AMBIGUOUS_PATH_SEPARATOR` HTTP 400 for `%2F`-encoded path segments (topic names).
+   Jetty 12 ee10's `ServletHandler` rejects ambiguous URIs at the servlet layer independent of the connector's
+   `UriCompliance.LEGACY`. Fix: `servletContextHandler.getServletHandler().setDecodeAmbiguousURIs(true)` in the
+   broker `WebService`, proxy `WebServer`, and functions `WorkerServer`. (Affected `AdminApiDynamicConfigurationsTest`,
+   `PartitionedProducerConsumerTest.testPartitionedTopicNameWithSpecialCharacter`, and similar.)
+2. **Athenz `javax.xml.bind` (FIXED).** `NoClassDefFoundError: javax/xml/bind/annotation/XmlElement` — the Athenz
+   ZTS client shades `jackson-module-jaxb-annotations`, which needs the `javax.xml.bind` package that the old
+   `jakarta.xml.bind-api:2.3.3` happened to ship; the bump to 4.0.2 (real `jakarta.xml.bind`) removed it. Fix: add
+   `javax.xml.bind:jaxb-api:2.3.1` (`runtimeOnly`) to `pulsar-client-auth-athenz` + `pulsar-broker-auth-athenz` for
+   the third-party transitive need (Pulsar's own code uses jakarta.xml.bind).
+3. **Transaction unit tests — server-side request-body over-read (OPEN, documented).** All `TransactionTestBase`
+   subclasses fail in `setup` at `admin.clusters().createCluster(...)` with `HTTP 400 Trailing token (START_OBJECT)
+   after value bound as ClusterDataImpl ... column 310`. Root-caused with a debug log: the **client serialises a
+   correct single 309-byte body** (`len=309`, one JSON object) and `prepareRequest` runs **once** (no client-side
+   doubling — ruled out `new ClientRequest(request)`+`writeEntity` and `enableBuffering` as causes). The broker
+   reads **one byte past** the 309-byte body (column 310 = a `{`), i.e. Jetty 12 ee10 over-reads the request entity
+   `InputStream` past Content-Length, picking up a re-sent request on the keep-alive connection. The custom
+   `AsyncHttpConnector` reuses async-http-client whose internal retry (`maxRequestRetry`, default 5; see its own
+   `TODO` at line ~364) can re-send on the same connection. **Only the in-process multi-broker UNIT setup trips
+   this — the Transaction *integration* test passes**, so production is unaffected. Fix direction for follow-up:
+   either bound/replace the ee10 servlet request stream, or set async-http-client `maxRequestRetry(0)` while keeping
+   the connector's own failover retries (decoupling `maxRetries` from `getMaxRequestRetry()`), validated against
+   `TransactionStablePositionTest`.
 
 ## Decisions log
 

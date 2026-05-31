@@ -256,6 +256,9 @@ public class WebServer {
         ServletContextHandler context = new ServletContextHandler(ServletContextHandler.SESSIONS);
         context.setContextPath(basePath);
         context.addServlet(servletHolder, MATCH_ALL);
+        // Allow %2F-encoded path separators (admin paths embed encoded topic names); Jetty 12 ee10 rejects
+        // ambiguous URIs at the servlet layer by default (PIP-472 / Jetty 12).
+        context.getServletHandler().setDecodeAmbiguousURIs(true);
         context.addFilter(new FilterHolder(new CustomHeaderFilter(config)), "/*", null);
         for (Pair<String, Object> attribute : attributes) {
             context.setAttribute(attribute.getLeft(), attribute.getRight());

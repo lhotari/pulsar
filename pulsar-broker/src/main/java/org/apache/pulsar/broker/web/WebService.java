@@ -411,6 +411,10 @@ public class WebService implements AutoCloseable {
         // Notice: each context path should be unique, but there's nothing here to verify that
         servletContextHandler.setContextPath(path);
         servletContextHandler.addServlet(servletHolder, MATCH_ALL);
+        // Jetty 12 ee10 rejects ambiguous URIs (e.g. %2F-encoded path separators) at the servlet layer by
+        // default, independent of the connector's UriCompliance. Pulsar admin paths embed encoded separators
+        // (e.g. topic names), so the servlet handler must be allowed to decode them (PIP-472 / Jetty 12).
+        servletContextHandler.getServletHandler().setDecodeAmbiguousURIs(true);
         if (attributeMap != null) {
             attributeMap.forEach(servletContextHandler::setAttribute);
         }

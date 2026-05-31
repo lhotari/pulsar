@@ -25,6 +25,8 @@ dependencies {
     implementation(project(":pulsar-client-api"))
     implementation(project(":pulsar-client-original"))
     implementation(libs.athenz.zts.java.client)
+    // Athenz shades jackson-module-jaxb-annotations which needs the javax.xml.bind API at runtime (PIP-472)
+    runtimeOnly(libs.jaxb.api)
     implementation(libs.athenz.cert.refresher)
     implementation(libs.athenz.auth.core)
     implementation(libs.guava)
