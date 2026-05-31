@@ -161,17 +161,40 @@ Shade on Java 17/21/25, etc.) and most unit groups passed. Three unit-tier issue
    the third-party transitive need (Pulsar's own code uses jakarta.xml.bind).
 3. **Transaction unit tests — server-side request-body over-read (OPEN, documented).** All `TransactionTestBase`
    subclasses fail in `setup` at `admin.clusters().createCluster(...)` with `HTTP 400 Trailing token (START_OBJECT)
-   after value bound as ClusterDataImpl ... column 310`. Root-caused with a debug log: the **client serialises a
-   correct single 309-byte body** (`len=309`, one JSON object) and `prepareRequest` runs **once** (no client-side
-   doubling — ruled out `new ClientRequest(request)`+`writeEntity` and `enableBuffering` as causes). The broker
-   reads **one byte past** the 309-byte body (column 310 = a `{`), i.e. Jetty 12 ee10 over-reads the request entity
-   `InputStream` past Content-Length, picking up a re-sent request on the keep-alive connection. The custom
-   `AsyncHttpConnector` reuses async-http-client whose internal retry (`maxRequestRetry`, default 5; see its own
-   `TODO` at line ~364) can re-send on the same connection. **Only the in-process multi-broker UNIT setup trips
-   this — the Transaction *integration* test passes**, so production is unaffected. Fix direction for follow-up:
-   either bound/replace the ee10 servlet request stream, or set async-http-client `maxRequestRetry(0)` while keeping
-   the connector's own failover retries (decoupling `maxRetries` from `getMaxRequestRetry()`), validated against
-   `TransactionStablePositionTest`.
+   after value bound as ClusterDataImpl ... column 310`. **Definitively root-caused as server-side** (5 ruled-out
+   fixes, see below). A `prepareRequest` diagnostic prints `body=309 jerseyCL=null`: the client serialises a single
+   **309-byte** body and sets **no** Content-Length header itself, so async-http-client computes `Content-Length: 309`
+   from the actual bytes — i.e. the wire request is correct (one 309-byte object, framed at 309). The broker still
+   reads **one byte past** (column 310 = a `{`, the START_OBJECT of the *next* pipelined request on the keep-alive
+   connection). This is a Jetty 12.1.9 / Jersey-ee10 server-side over-read of the request entity `InputStream` past
+   Content-Length, **below the handler layer**. Ruled out (each reverted): (a) no-copy in `prepareRequest`
+   (`new ClientRequest`+`writeEntity`); (b) `enableBuffering`; (c) async-http-client `maxRequestRetry(0)`;
+   (d) bypassing the Jetty 12.1 `CompressionHandler` (`GzipHandlerUtil`) entirely — still fails, so it is not the
+   compression layer; (e) stripping a stale/duplicate `Content-Length` in the header-copy loop — no-op because
+   `jerseyCL` is null. **Only the in-process multi-broker UNIT setup trips this — the Transaction *integration* test
+   passes**, so production is unaffected. Fix direction for follow-up: this is a Jetty-internals issue (HTTP/1.1
+   request-body framing / connection reuse in `org.eclipse.jetty.server.internal.HttpConnection` or the
+   ee10 `ServletApiRequest` input stream); candidate remedies are a Jetty patch/version bump (verify against
+   12.1.10+), forcing `Connection: close` for admin writes in the test path, or wrapping the ee10 servlet input
+   stream to hard-stop at Content-Length. Validate against `TransactionStablePositionTest`.
+
+4. **Tiered-storage offloader unit tests — legacy javax APIs dropped from the classpath (FIXED).**
+   `BlobStoreBackedInputStreamTest` (jcloud) and `FileSystemManagedLedgerOffloaderTest` (file-system) failed in
+   `start` with `NoClassDefFoundError` for `javax.xml.bind.JAXBException`, `javax.ws.rs.ext.ExceptionMapper`,
+   `javax.annotation.Priority`, and `javax.validation.Validator`. jclouds 2.6.0 and Hadoop are pre-jakarta libraries
+   that reference the legacy `javax.*` EE APIs which the migration removed from the transitive classpath. Fixes:
+   - **jcloud:** `runtimeOnly(libs.jaxb.api)` (`javax.xml.bind:jaxb-api:2.3.1`) — jclouds' `ContextBuilder.build()`
+     references `javax.xml.bind`. (Production + test path, hence `runtimeOnly`, not test-only.)
+   - **file-system:** Hadoop's `MiniDFSCluster` NameNode web UI is a **fully-javax** stack (already forced to Jetty 9
+     in this module). The migration force-upgraded its `jersey-*:2.46`→`3.1.10` (jakarta), so its
+     `org.glassfish.jersey.servlet.ServletContainer` stopped being a `javax.servlet.Servlet`
+     (`UnavailableException`). Pinned the legacy stack **for test configs only** (mirrors the existing Jetty-9 force):
+     Jersey `2.46` (client/common/server/container-servlet/container-servlet-core/jersey-hk2) + hk2 `2.6.1`
+     (api/locator/utils/aopalliance-repackaged/jakarta.inject), plus `testRuntimeOnly` legacy
+     `javax.ws.rs:javax.ws.rs-api:2.1.1`, `javax.annotation:javax.annotation-api:1.3.2`,
+     `javax.validation:validation-api:2.0.1.Final`, and `runtimeOnly(libs.jaxb.api)` (Hadoop common needs
+     `javax.xml.bind` at runtime). All `FileSystemManagedLedgerOffloaderTest` (3) + jcloud tests pass locally.
+     Production offloaders are NARs that bundle their own deps and use HDFS RPC (no web UI), so they are unaffected.
 
 ## Decisions log
 

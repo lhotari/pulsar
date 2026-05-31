@@ -399,8 +399,12 @@ jakarta-xml-bind-api = { module = "jakarta.xml.bind:jakarta.xml.bind-api", versi
 javax-servlet-api = { module = "javax.servlet:javax.servlet-api", version.ref = "javax-servlet" }
 jakarta-servlet-api = { module = "jakarta.servlet:jakarta.servlet-api", version.ref = "jakarta-servlet" }
 # javax.xml.bind:jaxb-api is required at runtime by third-party libraries (Athenz ZTS client shades
-# jackson-module-jaxb-annotations which references javax.xml.bind); Pulsar's own code uses jakarta.xml.bind (PIP-472)
+# jackson-module-jaxb-annotations which references javax.xml.bind, jclouds and Hadoop reference it
+# too); Pulsar's own code uses jakarta.xml.bind (PIP-472)
 jaxb-api = "javax.xml.bind:jaxb-api:2.3.1"
+# javax.ws.rs:javax.ws.rs-api is required at runtime only by Hadoop's MiniDFSCluster web UI in
+# tiered-storage tests; Pulsar's own code uses jakarta.ws.rs (PIP-472)
+javax-ws-rs-api = "javax.ws.rs:javax.ws.rs-api:2.1.1"
 jakarta-validation-api = { module = "jakarta.validation:jakarta.validation-api", version.ref = "jakarta-validation" }
 zt-zip = { module = "org.zeroturnaround:zt-zip", version.ref = "zt-zip" }
 ipaddress = { module = "com.github.seancfoley:ipaddress", version.ref = "ipaddress" }
