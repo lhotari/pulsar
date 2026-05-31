@@ -136,6 +136,15 @@ Checkstyle import-ban lint + LICENSE/NOTICE (Phase C).
   + binary LICENSE/NOTICE all green. The deterministic build gate is fully cleared. The Pulsar CI **unit + integration
   test matrix** is now running (Broker Groups 1–5, Client Api/Impl, Proxy, Pulsar IO/Client/Metadata, Other, + docker
   images, MacOS build) — hours of runtime; monitoring for failures and iterating.
+- **Run 5** (`3e1a39f3a31`): ambiguous-URI + Athenz fixes landed (Client Api group green). Surfaced the remaining
+  failures: the offloader tests (issue 4) and the broker-interceptor "Trailing token" (issue 3) across Broker Groups
+  1/2/3, Client Impl, and System-Plugin.
+- **Run 6** (`a01c58ad258`): offloader legacy-javax fix (issue 4) cleared `CI - Unit - Other` and
+  `CI - System - Tiered JCloud` ✅. Remaining red was only the interceptor "Trailing token" (issue 3).
+- **Run 7** (`8c70136da16`): RequestWrapper single-stream/lazy fix (issue 3) landed. **ENTIRE CI RUN GREEN** ✅✅ —
+  run `26700351491`, **39/39 jobs success**, zero failures. All previously-failing jobs (Broker Group 1–5, Client
+  Impl, Unit - Other, System - Plugin, System - Tiered JCloud) pass. The PIP-472 core migration (Phase A) is
+  **complete and fully validated end-to-end** on `lhotari/pulsar`.
 
 ### Extra local runtime validation (high-risk Jersey 3 / Jetty ee10 areas)
 - `FunctionApiV3ResourceTest` (Jersey 3 multipart `FormDataParam`): **71 pass, 0 fail**.
