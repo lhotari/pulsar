@@ -159,24 +159,27 @@ Shade on Java 17/21/25, etc.) and most unit groups passed. Three unit-tier issue
    `jakarta.xml.bind-api:2.3.3` happened to ship; the bump to 4.0.2 (real `jakarta.xml.bind`) removed it. Fix: add
    `javax.xml.bind:jaxb-api:2.3.1` (`runtimeOnly`) to `pulsar-client-auth-athenz` + `pulsar-broker-auth-athenz` for
    the third-party transitive need (Pulsar's own code uses jakarta.xml.bind).
-3. **Transaction unit tests — server-side request-body over-read (OPEN, documented).** All `TransactionTestBase`
-   subclasses fail in `setup` at `admin.clusters().createCluster(...)` with `HTTP 400 Trailing token (START_OBJECT)
-   after value bound as ClusterDataImpl ... column 310`. **Definitively root-caused as server-side** (5 ruled-out
-   fixes, see below). A `prepareRequest` diagnostic prints `body=309 jerseyCL=null`: the client serialises a single
-   **309-byte** body and sets **no** Content-Length header itself, so async-http-client computes `Content-Length: 309`
-   from the actual bytes — i.e. the wire request is correct (one 309-byte object, framed at 309). The broker still
-   reads **one byte past** (column 310 = a `{`, the START_OBJECT of the *next* pipelined request on the keep-alive
-   connection). This is a Jetty 12.1.9 / Jersey-ee10 server-side over-read of the request entity `InputStream` past
-   Content-Length, **below the handler layer**. Ruled out (each reverted): (a) no-copy in `prepareRequest`
-   (`new ClientRequest`+`writeEntity`); (b) `enableBuffering`; (c) async-http-client `maxRequestRetry(0)`;
-   (d) bypassing the Jetty 12.1 `CompressionHandler` (`GzipHandlerUtil`) entirely — still fails, so it is not the
-   compression layer; (e) stripping a stale/duplicate `Content-Length` in the header-copy loop — no-op because
-   `jerseyCL` is null. **Only the in-process multi-broker UNIT setup trips this — the Transaction *integration* test
-   passes**, so production is unaffected. Fix direction for follow-up: this is a Jetty-internals issue (HTTP/1.1
-   request-body framing / connection reuse in `org.eclipse.jetty.server.internal.HttpConnection` or the
-   ee10 `ServletApiRequest` input stream); candidate remedies are a Jetty patch/version bump (verify against
-   12.1.10+), forcing `Connection: close` for admin writes in the test path, or wrapping the ee10 servlet input
-   stream to hard-stop at Content-Length. Validate against `TransactionStablePositionTest`.
+3. **Broker-interceptor request bodies — phantom "Trailing token" (FIXED).** Every test whose broker enables a
+   `BrokerInterceptor` (all `TransactionTestBase` subclasses — `TransactionStablePositionTest`,
+   `TransactionBufferCloseTest`, `AdminApiTransactionMultiBrokerTest`, `TransactionEndToEndTest` — plus
+   `ExceptionsBrokerInterceptorTest`, and the `TestBrokerInterceptors` *integration* test) failed in `setup` at
+   `admin.clusters().createCluster(...)` with `HTTP 400 Trailing token (of type START_OBJECT) found after value bound
+   as ClusterDataImpl ... column 310`. The **`CI - Unit - Brokers - Client Api` group passed** because its tests do
+   not enable an interceptor — that was the key clue. Root cause: enabling an interceptor activates the broker's
+   `PreInterceptFilter`, which wraps the request in `RequestWrapper` (so the body can be read more than once). The
+   old `RequestWrapper.getInputStream()` returned a **fresh `ByteArrayInputStream` on every call**. Under Jetty 12
+   ee10 + Jersey 3, the entity reader calls `getInputStream()` more than once; after consuming the 309-byte body and
+   hitting EOF, a later call returned a brand-new stream positioned at byte 0, so the next read produced the body's
+   own first byte `{` again — a START_OBJECT at "column 310" that the (now stricter) Jackson jakarta-rs provider
+   rejects via FAIL_ON_TRAILING_TOKENS. The "310th byte" was never a real next-request byte (it is the body's own
+   leading `{`), so production framing was never corrupted; only the read-twice wrapper was non-compliant. Fix
+   (`RequestWrapper`): return a **single, stable** `ServletInputStream` from `getInputStream()` (cache it, per the
+   Servlet contract), buffer the body **lazily** (so an interceptor that never reads the body — the common case —
+   does not cause the filter to consume the core stream at all), bound the read to `Content-Length`, and report
+   `isFinished()` correctly. Verified: `TransactionStablePositionTest` now passes all 6 tests (was failing in
+   `setup`). This is a real, contract-compliant fix, not a leniency mask. Earlier dead-ends (all reverted) that
+   pointed at the client/Jetty before the interceptor was identified as the trigger: client no-copy/`enableBuffering`/
+   `maxRequestRetry(0)`, bypassing the `CompressionHandler`, and stripping a (null) duplicate `Content-Length`.
 
 4. **Tiered-storage offloader unit tests — legacy javax APIs dropped from the classpath (FIXED).**
    `BlobStoreBackedInputStreamTest` (jcloud) and `FileSystemManagedLedgerOffloaderTest` (file-system) failed in
