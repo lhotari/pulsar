@@ -136,15 +136,21 @@ Checkstyle import-ban lint + LICENSE/NOTICE (Phase C).
   + binary LICENSE/NOTICE all green. The deterministic build gate is fully cleared. The Pulsar CI **unit + integration
   test matrix** is now running (Broker Groups 1–5, Client Api/Impl, Proxy, Pulsar IO/Client/Metadata, Other, + docker
   images, MacOS build) — hours of runtime; monitoring for failures and iterating.
-- **Run 5** (`3e1a39f3a31`): ambiguous-URI + Athenz fixes landed (Client Api group green). Surfaced the remaining
-  failures: the offloader tests (issue 4) and the broker-interceptor "Trailing token" (issue 3) across Broker Groups
-  1/2/3, Client Impl, and System-Plugin.
+- **Run 5** (`3e1a39f3a31`): ambiguous-URI fix + the (now-removed) temporary Athenz `javax.xml.bind` workaround
+  landed (Client Api group green). Surfaced the remaining failures: the offloader tests (issue 4) and the
+  broker-interceptor "Trailing token" (issue 3) across Broker Groups 1/2/3, Client Impl, and System-Plugin.
 - **Run 6** (`a01c58ad258`): offloader legacy-javax fix (issue 4) cleared `CI - Unit - Other` and
   `CI - System - Tiered JCloud` ✅. Remaining red was only the interceptor "Trailing token" (issue 3).
 - **Run 7** (`8c70136da16`): RequestWrapper single-stream/lazy fix (issue 3) landed. **ENTIRE CI RUN GREEN** ✅✅ —
   run `26700351491`, **39/39 jobs success**, zero failures. All previously-failing jobs (Broker Group 1–5, Client
   Impl, Unit - Other, System - Plugin, System - Tiered JCloud) pass. The PIP-472 core migration (Phase A) is
   **complete and fully validated end-to-end** on `lhotari/pulsar`.
+- **Rebase onto `master` + Athenz cleanup (2026-06-01):** rebased the branch onto current `master`, which now
+  includes the **Athenz 1.12.42** upgrade (#25905, `14e228cf726`). Athenz 1.12.42 migrated to `jakarta.xml.bind`
+  (its `athenz-auth-core` pulls `org.glassfish.jaxb:jaxb-runtime:4.0.8`), so the temporary
+  `runtimeOnly(libs.jaxb.api)` workaround on the two `*-auth-athenz` modules (issue 2) was **removed**. The
+  `jaxb-api` catalog alias is retained for the tiered-storage offloaders only (issue 4). Athenz unit tests pass and
+  the Athenz `runtimeClasspath` no longer contains `javax.xml.bind:jaxb-api`.
 
 ### Extra local runtime validation (high-risk Jersey 3 / Jetty ee10 areas)
 - `FunctionApiV3ResourceTest` (Jersey 3 multipart `FormDataParam`): **71 pass, 0 fail**.
@@ -163,11 +169,18 @@ Shade on Java 17/21/25, etc.) and most unit groups passed. Three unit-tier issue
    `UriCompliance.LEGACY`. Fix: `servletContextHandler.getServletHandler().setDecodeAmbiguousURIs(true)` in the
    broker `WebService`, proxy `WebServer`, and functions `WorkerServer`. (Affected `AdminApiDynamicConfigurationsTest`,
    `PartitionedProducerConsumerTest.testPartitionedTopicNameWithSpecialCharacter`, and similar.)
-2. **Athenz `javax.xml.bind` (FIXED).** `NoClassDefFoundError: javax/xml/bind/annotation/XmlElement` — the Athenz
-   ZTS client shades `jackson-module-jaxb-annotations`, which needs the `javax.xml.bind` package that the old
-   `jakarta.xml.bind-api:2.3.3` happened to ship; the bump to 4.0.2 (real `jakarta.xml.bind`) removed it. Fix: add
-   `javax.xml.bind:jaxb-api:2.3.1` (`runtimeOnly`) to `pulsar-client-auth-athenz` + `pulsar-broker-auth-athenz` for
-   the third-party transitive need (Pulsar's own code uses jakarta.xml.bind).
+2. **Athenz `javax.xml.bind` (RESOLVED UPSTREAM — workaround removed).** `NoClassDefFoundError:
+   javax/xml/bind/annotation/XmlElement` — the Athenz ZTS client (v1.10.62) shaded `jackson-module-jaxb-annotations`,
+   which needed the `javax.xml.bind` package that the old `jakarta.xml.bind-api:2.3.3` happened to ship; the bump to
+   4.0.2 (real `jakarta.xml.bind`) removed it. This was first worked around by adding
+   `javax.xml.bind:jaxb-api:2.3.1` (`runtimeOnly`) to `pulsar-client-auth-athenz` + `pulsar-broker-auth-athenz`.
+   **That workaround has since been removed:** `master` upgraded Athenz to **1.12.42** (#25905, commit
+   `14e228cf726`), which itself migrated to `jakarta.xml.bind` — its `athenz-auth-core` now pulls
+   `org.glassfish.jaxb:jaxb-runtime:4.0.8`, so the legacy `javax.xml.bind` classes are no longer on (or needed on)
+   the Athenz runtime classpath. After rebasing on that commit, both `runtimeOnly(libs.jaxb.api)` lines were dropped
+   (verified: `AuthenticationAthenzTest` + `AuthenticationProviderAthenzTest` pass and `javax.xml.bind:jaxb-api` is
+   gone from the Athenz `runtimeClasspath`). The `jaxb-api` catalog alias itself stays — it is now used only by the
+   tiered-storage offloaders (jclouds/Hadoop), see issue 4.
 3. **Broker-interceptor request bodies — phantom "Trailing token" (FIXED).** Every test whose broker enables a
    `BrokerInterceptor` (all `TransactionTestBase` subclasses — `TransactionStablePositionTest`,
    `TransactionBufferCloseTest`, `AdminApiTransactionMultiBrokerTest`, `TransactionEndToEndTest` — plus
