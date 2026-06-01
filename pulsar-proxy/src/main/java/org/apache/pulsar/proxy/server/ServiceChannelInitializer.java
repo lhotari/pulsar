@@ -23,13 +23,17 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.flush.FlushConsolidationHandler;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
+import java.time.Clock;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import lombok.CustomLog;
 import org.apache.pulsar.common.protocol.FrameDecoderUtil;
 import org.apache.pulsar.common.protocol.OptionalProxyProtocolDecoder;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
+import org.apache.pulsar.common.tls.DefaultTlsMaterialProviderInitContext;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider;
+import org.apache.pulsar.common.tls.PulsarTlsEngineProvider;
+import org.apache.pulsar.common.tls.ServerTlsPurposeContext;
+import org.apache.pulsar.common.tls.ServerTlsPurposeContext.ServerPurpose;
 
 /**
  * Initialize service channel handlers.
@@ -45,7 +49,8 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
     private final int brokerProxyReadTimeoutMs;
     private final int maxMessageSize;
 
-    private PulsarSslFactory sslFactory;
+    private FileBasedTlsMaterialProvider tlsMaterialProvider;
+    private PulsarTlsEngineProvider tlsEngineProvider;
 
     public ServiceChannelInitializer(ProxyService proxyService, ProxyConfiguration serviceConfig,
                                      boolean enableTls, ScheduledExecutorService sslContextRefresher)
@@ -58,16 +63,13 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
         this.maxMessageSize = serviceConfig.getMaxMessageSize();
 
         if (enableTls) {
-            PulsarSslConfiguration sslConfiguration = buildSslConfiguration(serviceConfig);
-            this.sslFactory = (PulsarSslFactory) Class.forName(serviceConfig.getSslFactoryPlugin())
-                    .getConstructor().newInstance();
-            this.sslFactory.initialize(sslConfiguration);
-            this.sslFactory.createInternalSslContext();
-            if (serviceConfig.getTlsCertRefreshCheckDurationSec() > 0) {
-                sslContextRefresher.scheduleWithFixedDelay(this::refreshSslContext,
-                        serviceConfig.getTlsCertRefreshCheckDurationSec(),
-                        serviceConfig.getTlsCertRefreshCheckDurationSec(), TimeUnit.SECONDS);
-            }
+            // PIP-478: resolve the proxy server TLS material through the framework provider/engine.
+            // The provider owns periodic file-rotation polling (using the supplied scheduler), so no
+            // separate refresh task is scheduled here.
+            this.tlsMaterialProvider = ProxyTlsMaterialProviders.forServer(serviceConfig);
+            this.tlsMaterialProvider.initialize(new DefaultTlsMaterialProviderInitContext(
+                    sslContextRefresher, Clock.systemUTC(), "pulsar-proxy")).join();
+            this.tlsEngineProvider = new PulsarTlsEngineProvider(tlsMaterialProvider);
         }
     }
 
@@ -76,7 +78,8 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
         ch.pipeline().addLast("consolidation", new FlushConsolidationHandler(1024,
                 true));
         if (this.enableTls) {
-            ch.pipeline().addLast(TLS_HANDLER, new SslHandler(this.sslFactory.createServerSslEngine(ch.alloc())));
+            ch.pipeline().addLast(TLS_HANDLER, new SslHandler(this.tlsEngineProvider
+                    .createServerSslEngine(ServerTlsPurposeContext.of(ServerPurpose.PROXY), ch.alloc()).join()));
         }
         if (brokerProxyReadTimeoutMs > 0) {
             ch.pipeline().addLast("readTimeoutHandler",
@@ -89,34 +92,14 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
         ch.pipeline().addLast("handler", new ProxyConnection(proxyService, proxyService.getDnsAddressResolverGroup()));
     }
 
-    protected PulsarSslConfiguration buildSslConfiguration(ProxyConfiguration config) {
-        return PulsarSslConfiguration.builder()
-                .tlsProvider(config.getTlsProvider())
-                .tlsKeyStoreType(config.getTlsKeyStoreType())
-                .tlsKeyStorePath(config.getTlsKeyStore())
-                .tlsKeyStorePassword(config.getTlsKeyStorePassword())
-                .tlsTrustStoreType(config.getTlsTrustStoreType())
-                .tlsTrustStorePath(config.getTlsTrustStore())
-                .tlsTrustStorePassword(config.getTlsTrustStorePassword())
-                .tlsCiphers(config.getTlsCiphers())
-                .tlsProtocols(config.getTlsProtocols())
-                .tlsTrustCertsFilePath(config.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(config.getTlsCertificateFilePath())
-                .tlsKeyFilePath(config.getTlsKeyFilePath())
-                .allowInsecureConnection(config.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(config.isTlsRequireTrustedClientCertOnConnect())
-                .tlsEnabledWithKeystore(config.isTlsEnabledWithKeyStore())
-                .tlsCustomParams(config.getSslFactoryPluginParams())
-                .authData(null)
-                .serverMode(true)
-                .build();
-    }
-
-    protected void refreshSslContext() {
-        try {
-            this.sslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
+    /**
+     * Release the TLS material provider (and its rotation poll task), if any. Safe to call multiple
+     * times and when TLS is disabled.
+     */
+    public void close() {
+        if (tlsMaterialProvider != null) {
+            tlsMaterialProvider.close();
+            tlsMaterialProvider = null;
         }
     }
 }

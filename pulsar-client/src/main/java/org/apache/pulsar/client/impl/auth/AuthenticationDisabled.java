@@ -24,7 +24,20 @@ import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.impl.auth.v5.DisabledAuthenticationV5;
 
+/**
+ * Authentication provider for the {@code none} auth method (no credential).
+ *
+ * <p>PIP-478: this v4 plugin is a thin shim over the v5-native {@link DisabledAuthenticationV5}. The
+ * v4 surface (including the {@link #INSTANCE} singleton and {@link #getAuthData()} returning
+ * {@link AuthenticationDataNull}) is preserved for source compatibility.
+ *
+ * <p>Unlike credential plugins, the {@code none} method does no credential I/O, so it intentionally
+ * does NOT implement {@code AsyncAuthenticationDriver}: {@code ClientCnx} drives it through the
+ * verbatim synchronous connect path, which is the most common no-auth case and avoids needlessly
+ * scheduling onto the event-loop executor.
+ */
 public class AuthenticationDisabled implements Authentication, EncodedAuthenticationParameterSupport {
 
     protected final AuthenticationDataProvider nullData = new AuthenticationDataNull();
@@ -39,7 +52,7 @@ public class AuthenticationDisabled implements Authentication, EncodedAuthentica
 
     @Override
     public String getAuthMethodName() {
-        return "none";
+        return DisabledAuthenticationV5.AUTH_METHOD_NAME;
     }
 
     @SuppressWarnings("deprecation")

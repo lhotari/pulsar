@@ -30,6 +30,7 @@ dependencies {
     implementation(libs.opentelemetry.api)
     implementation(libs.protobuf.java)
     implementation(libs.netty.handler)
+    implementation(libs.asynchttpclient)
     implementation(libs.jackson.annotations)
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)

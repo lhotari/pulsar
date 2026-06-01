@@ -20,13 +20,13 @@ package org.apache.pulsar.functions.worker.rest;
 
 import io.opentelemetry.api.OpenTelemetry;
 import jakarta.servlet.DispatcherType;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import lombok.CustomLog;
 import org.apache.pulsar.broker.authentication.AuthenticationService;
 import org.apache.pulsar.broker.web.AuthenticationFilter;
@@ -34,9 +34,12 @@ import org.apache.pulsar.broker.web.JettyRequestLogFactory;
 import org.apache.pulsar.broker.web.RateLimitingFilter;
 import org.apache.pulsar.broker.web.WebExecutorThreadPool;
 import org.apache.pulsar.client.util.ExecutorProvider;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
+import org.apache.pulsar.common.tls.DefaultTlsMaterialProviderInitContext;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialSource;
+import org.apache.pulsar.common.tls.PulsarTlsEngineProvider;
+import org.apache.pulsar.common.tls.ServerTlsPurposeContext;
+import org.apache.pulsar.common.tls.ServerTlsPurposeContext.ServerPurpose;
 import org.apache.pulsar.functions.worker.PulsarWorkerOpenTelemetry;
 import org.apache.pulsar.functions.worker.WorkerConfig;
 import org.apache.pulsar.functions.worker.WorkerService;
@@ -81,7 +84,7 @@ public class WorkerServer {
     private ServerConnector httpsConnector;
 
     private final FilterInitializer filterInitializer;
-    private PulsarSslFactory sslFactory;
+    private FileBasedTlsMaterialProvider tlsMaterialProvider;
     private ScheduledExecutorService scheduledExecutorService;
 
     public WorkerServer(WorkerService workerService, AuthenticationService authenticationService) {
@@ -171,20 +174,21 @@ public class WorkerServer {
             log.info().attr("port", this.workerConfig.getWorkerPortTls())
                     .log("Configuring https server");
             try {
-                PulsarSslConfiguration sslConfiguration = buildSslConfiguration(workerConfig);
-                this.sslFactory = new DefaultPulsarSslFactory();
-                this.sslFactory.initialize(sslConfiguration);
-                this.sslFactory.createInternalSslContext();
+                // PIP-478: resolve the functions-worker web-service TLS material through the framework
+                // provider/engine. The provider owns periodic file-rotation polling; the Jetty factory
+                // reads the (engine-cached, hot-reloaded) JDK SSLContext lazily on every request.
                 this.scheduledExecutorService = Executors
                         .newSingleThreadScheduledExecutor(new ExecutorProvider
                                 .ExtendedThreadFactory("functions-worker-web-ssl-refresh"));
-                this.scheduledExecutorService.scheduleWithFixedDelay(this::refreshSslContext,
-                        workerConfig.getTlsCertRefreshCheckDurationSec(),
-                        workerConfig.getTlsCertRefreshCheckDurationSec(),
-                        TimeUnit.SECONDS);
+                this.tlsMaterialProvider = buildTlsMaterialProvider(workerConfig);
+                this.tlsMaterialProvider.initialize(new DefaultTlsMaterialProviderInitContext(
+                        scheduledExecutorService, Clock.systemUTC(), "functions-worker")).join();
+                PulsarTlsEngineProvider engineProvider = new PulsarTlsEngineProvider(tlsMaterialProvider);
+                ServerTlsPurposeContext webPurpose = ServerTlsPurposeContext.of(ServerPurpose.WEB_SERVICE);
                 SslContextFactory.Server sslCtxFactory =
                         JettySslContextFactory.createSslContextFactory(this.workerConfig.getTlsProvider(),
-                                this.sslFactory, this.workerConfig.isTlsRequireTrustedClientCertOnConnect(),
+                                () -> engineProvider.getJdkSslContext(webPurpose).join(),
+                                this.workerConfig.isTlsRequireTrustedClientCertOnConnect(),
                                 this.workerConfig.getWebServiceTlsCiphers(),
                                 this.workerConfig.getWebServiceTlsProtocols());
                 List<ConnectionFactory> connectionFactories = new ArrayList<>();
@@ -291,6 +295,10 @@ public class WorkerServer {
                         .log("Error stopping function web-server executor");
             }
         }
+        if (this.tlsMaterialProvider != null) {
+            this.tlsMaterialProvider.close();
+            this.tlsMaterialProvider = null;
+        }
         if (this.scheduledExecutorService != null) {
             this.scheduledExecutorService.shutdownNow();
         }
@@ -312,32 +320,37 @@ public class WorkerServer {
         }
     }
 
-    protected void refreshSslContext() {
-        try {
-            this.sslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
-        }
-    }
-
-    protected PulsarSslConfiguration buildSslConfiguration(WorkerConfig config) {
-        return PulsarSslConfiguration.builder()
-                .tlsKeyStoreType(config.getTlsKeyStoreType())
-                .tlsKeyStorePath(config.getTlsKeyStore())
-                .tlsKeyStorePassword(config.getTlsKeyStorePassword())
-                .tlsTrustStoreType(config.getTlsTrustStoreType())
-                .tlsTrustStorePath(config.getTlsTrustStore())
-                .tlsTrustStorePassword(config.getTlsTrustStorePassword())
+    /**
+     * Build an (uninitialized) {@link FileBasedTlsMaterialProvider} for the functions worker's
+     * web-service TLS material (PIP-478), registered for the {@link ServerPurpose#WEB_SERVICE} purpose.
+     * The provider's file-rotation poll interval mirrors {@code tlsCertRefreshCheckDurationSec}.
+     *
+     * @param config the worker configuration
+     * @return an uninitialized provider
+     */
+    protected FileBasedTlsMaterialProvider buildTlsMaterialProvider(WorkerConfig config) {
+        long refresh = config.getTlsCertRefreshCheckDurationSec();
+        int refreshSeconds = refresh <= 0 ? 300 : (int) Math.min(refresh, Integer.MAX_VALUE);
+        FileBasedTlsMaterialProvider provider = new FileBasedTlsMaterialProvider(refreshSeconds);
+        FileBasedTlsMaterialSource.Builder builder = FileBasedTlsMaterialSource.builder()
+                .tlsProvider(config.getTlsProvider())
                 .tlsCiphers(config.getWebServiceTlsCiphers())
                 .tlsProtocols(config.getWebServiceTlsProtocols())
-                .tlsTrustCertsFilePath(config.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(config.getTlsCertificateFilePath())
-                .tlsKeyFilePath(config.getTlsKeyFilePath())
                 .allowInsecureConnection(config.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(config.isTlsRequireTrustedClientCertOnConnect())
-                .tlsEnabledWithKeystore(config.isTlsEnabledWithKeyStore())
-                .serverMode(true)
-                .isHttps(true)
-                .build();
+                .requireTrustedClientCertOnConnect(config.isTlsRequireTrustedClientCertOnConnect());
+        if (config.isTlsEnabledWithKeyStore()) {
+            builder.keyStoreType(config.getTlsKeyStoreType())
+                    .keyStorePath(config.getTlsKeyStore())
+                    .keyStorePassword(config.getTlsKeyStorePassword())
+                    .trustStoreType(config.getTlsTrustStoreType())
+                    .trustStorePath(config.getTlsTrustStore())
+                    .trustStorePassword(config.getTlsTrustStorePassword());
+        } else {
+            builder.certificateFilePath(config.getTlsCertificateFilePath())
+                    .keyFilePath(config.getTlsKeyFilePath())
+                    .trustCertsFilePath(config.getTlsTrustCertsFilePath());
+        }
+        provider.registerSource(ServerTlsPurposeContext.of(ServerPurpose.WEB_SERVICE), builder.build());
+        return provider;
     }
 }

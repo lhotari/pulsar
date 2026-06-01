@@ -57,6 +57,7 @@ import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.PulsarClientException.ConnectException;
 import org.apache.pulsar.client.api.PulsarClientException.TimeoutException;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.impl.BinaryProtoLookupService.LookupDataResult;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.metrics.Counter;
@@ -341,17 +342,23 @@ public class ClientCnx extends PulsarHandler {
             log.info().attr("proxyToTargetBrokerAddress", proxyToTargetBrokerAddress)
                     .log("Connected through proxy to target broker");
         }
-        // Send CONNECT command
-        ctx.writeAndFlush(newConnectCommand())
-                .addListener(future -> {
-                    if (future.isSuccess()) {
-                            log.debug().attr("success", future.isSuccess()).log("Complete");
-                        state = State.SentConnectFrame;
-                    } else {
-                        log.warn().exception(future.cause()).log("Error during handshake");
-                        ctx.close();
-                    }
-                });
+        // Send CONNECT command. When the authentication plugin opts into the async path (PIP-478,
+        // AsyncAuthenticationDriver), credential acquisition runs off the event loop and the connect
+        // frame is written once it completes; otherwise the original synchronous path is used verbatim.
+        if (authentication instanceof AsyncAuthenticationDriver asyncAuth) {
+            sendConnectCommandAsync(ctx, asyncAuth);
+        } else {
+            ctx.writeAndFlush(newConnectCommand())
+                    .addListener(future -> {
+                        if (future.isSuccess()) {
+                                log.debug().attr("success", future.isSuccess()).log("Complete");
+                            state = State.SentConnectFrame;
+                        } else {
+                            log.warn().exception(future.cause()).log("Error during handshake");
+                            ctx.close();
+                        }
+                    });
+        }
     }
 
     protected ByteBuf newConnectCommand() throws Exception {
@@ -362,6 +369,44 @@ public class ClientCnx extends PulsarHandler {
         AuthData authData = authenticationDataProvider.authenticate(AuthData.INIT_AUTH_DATA);
         return Commands.newConnect(authentication.getAuthMethodName(), authData, this.protocolVersion,
                 clientVersion, proxyToTargetBrokerAddress, originalPrincipal, null, null);
+    }
+
+    /**
+     * Async counterpart of the connect path used when the authentication plugin implements
+     * {@link AsyncAuthenticationDriver} (PIP-478). The credential is acquired off the event loop and
+     * the result is piped back onto the channel's executor to build and write {@code CommandConnect}.
+     */
+    private void sendConnectCommandAsync(ChannelHandlerContext ctx, AsyncAuthenticationDriver asyncAuth) {
+        asyncAuth.getAuthDataAsync(remoteHostName).whenCompleteAsync((authData, throwable) -> {
+            if (throwable != null) {
+                log.warn().exception(throwable).log("Error during handshake");
+                ctx.close();
+                return;
+            }
+            final ByteBuf request;
+            try {
+                // Populate the data provider field so that getAuthenticationDataProvider() and any
+                // subsequent challenge handling observe the same provider the synchronous path exposes.
+                // By this point getAuthDataAsync(...) has completed, so for the async-capable plugins the
+                // credential is already warm and this does not perform blocking credential acquisition.
+                authenticationDataProvider = authentication.getAuthData(remoteHostName);
+                request = Commands.newConnect(authentication.getAuthMethodName(), authData, this.protocolVersion,
+                        clientVersion, proxyToTargetBrokerAddress, originalPrincipal, null, null);
+            } catch (Throwable t) {
+                log.warn().exception(t).log("Error during handshake");
+                ctx.close();
+                return;
+            }
+            ctx.writeAndFlush(request).addListener(future -> {
+                if (future.isSuccess()) {
+                        log.debug().attr("success", future.isSuccess()).log("Complete");
+                    state = State.SentConnectFrame;
+                } else {
+                    log.warn().exception(future.cause()).log("Error during handshake");
+                    ctx.close();
+                }
+            });
+        }, ctx.executor());
     }
 
     @Override
@@ -470,6 +515,14 @@ public class ClientCnx extends PulsarHandler {
         checkArgument(authChallenge.hasChallenge());
         checkArgument(authChallenge.getChallenge().hasAuthData());
 
+        // PIP-478: when the plugin opts into the async path, the whole challenge handling (connect,
+        // broker-pushed REFRESH, SASL multi-round, custom challenge-response) runs through the async
+        // driver off the event loop. Plain v4 plugins keep the synchronous path below verbatim.
+        if (authentication instanceof AsyncAuthenticationDriver asyncAuth) {
+            handleAuthChallengeAsync(asyncAuth, authChallenge);
+            return;
+        }
+
         if (Arrays.equals(AuthData.REFRESH_AUTH_DATA_BYTES, authChallenge.getChallenge().getAuthData())) {
             try {
                 authenticationDataProvider = authentication.getAuthData(remoteHostName);
@@ -514,6 +567,61 @@ public class ClientCnx extends PulsarHandler {
             connectionFuture.completeExceptionally(e);
             return;
         }
+    }
+
+    /**
+     * Async counterpart of {@link #handleAuthChallenge} for plugins implementing
+     * {@link AsyncAuthenticationDriver} (PIP-478). The response is computed off the event loop and the
+     * result is piped back onto the channel's executor to write {@code CommandAuthResponse}. This is
+     * generic across the broker-pushed {@code REFRESH} sentinel and any challenge/response scheme; the
+     * driver decides how to interpret the challenge.
+     */
+    private void handleAuthChallengeAsync(AsyncAuthenticationDriver asyncAuth,
+                                          CommandAuthChallenge authChallenge) {
+        AuthData challenge = AuthData.of(authChallenge.getChallenge().getAuthData());
+        asyncAuth.authenticateAsync(challenge, remoteHostName).whenCompleteAsync((authData, throwable) -> {
+            if (throwable != null) {
+                log.error().exception(throwable).log("Error mutual verify");
+                connectionFuture.completeExceptionally(throwable);
+                return;
+            }
+            try {
+                // On the broker-pushed credential-refresh sentinel, re-resolve the data provider so that
+                // getAuthenticationDataProvider() observes the freshly-acquired credential (mirrors the
+                // synchronous path's handling of REFRESH_AUTH_DATA_BYTES). For short-lived credentials
+                // (OAuth2/Athenz) the async driver has already renewed the credential internally, so this
+                // simply exposes the current one without blocking.
+                if (Arrays.equals(AuthData.REFRESH_AUTH_DATA_BYTES, authChallenge.getChallenge().getAuthData())) {
+                    authenticationDataProvider = authentication.getAuthData(remoteHostName);
+                }
+
+                checkState(!authData.isComplete());
+
+                ByteBuf request = Commands.newAuthResponse(authentication.getAuthMethodName(),
+                        authData,
+                        this.protocolVersion,
+                        clientVersion);
+                    log.debug()
+                            .attr("auth", authentication.getAuthMethodName())
+                            .log("Mutual auth");
+
+                ctx.writeAndFlush(request).addListener(writeFuture -> {
+                    if (!writeFuture.isSuccess()) {
+                        log.warn()
+                                .exceptionMessage(writeFuture.cause())
+                                .log("Failed to send request for mutual auth to broker");
+                        connectionFuture.completeExceptionally(writeFuture.cause());
+                    }
+                });
+
+                if (state == State.SentConnectFrame) {
+                    state = State.Connecting;
+                }
+            } catch (Exception e) {
+                log.error().exception(e).log("Error mutual verify");
+                connectionFuture.completeExceptionally(e);
+            }
+        }, ctx.executor());
     }
 
     @Override

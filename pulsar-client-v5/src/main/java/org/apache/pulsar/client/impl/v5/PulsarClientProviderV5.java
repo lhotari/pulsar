@@ -28,6 +28,9 @@ import org.apache.pulsar.client.api.v5.PulsarClientException;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.internal.PulsarClientProvider;
 import org.apache.pulsar.client.api.v5.schema.Schema;
+import org.apache.pulsar.client.impl.auth.AuthenticationTls;
+import org.apache.pulsar.client.impl.auth.AuthenticationToken;
+import org.apache.pulsar.client.impl.v5.auth.LegacyV4AuthenticationAdapter;
 
 /**
  * ServiceLoader-registered implementation of PulsarClientProvider.
@@ -145,28 +148,38 @@ public final class PulsarClientProviderV5 implements PulsarClientProvider {
 
     @Override
     public Authentication authenticationToken(String token) {
-        return AuthenticationAdapter.token(token);
+        return LegacyV4AuthenticationAdapter.wrap(new AuthenticationToken(token));
     }
 
     @Override
     public Authentication authenticationToken(Supplier<String> tokenSupplier) {
-        return AuthenticationAdapter.token(tokenSupplier);
+        return LegacyV4AuthenticationAdapter.wrap(new AuthenticationToken(tokenSupplier));
     }
 
     @Override
     public Authentication authenticationTls(String certFilePath, String keyFilePath) {
-        return AuthenticationAdapter.tls(certFilePath, keyFilePath);
+        return LegacyV4AuthenticationAdapter.wrap(new AuthenticationTls(certFilePath, keyFilePath));
     }
 
     @Override
     public Authentication createAuthentication(String className, String params)
             throws PulsarClientException {
-        return AuthenticationAdapter.create(className, params);
+        try {
+            return LegacyV4AuthenticationAdapter.wrap(
+                    org.apache.pulsar.client.api.AuthenticationFactory.create(className, params));
+        } catch (org.apache.pulsar.client.api.PulsarClientException e) {
+            throw new PulsarClientException.UnsupportedAuthenticationException(e);
+        }
     }
 
     @Override
     public Authentication createAuthentication(String className, Map<String, String> params)
             throws PulsarClientException {
-        return AuthenticationAdapter.create(className, params);
+        try {
+            return LegacyV4AuthenticationAdapter.wrap(
+                    org.apache.pulsar.client.api.AuthenticationFactory.create(className, params));
+        } catch (org.apache.pulsar.client.api.PulsarClientException e) {
+            throw new PulsarClientException.UnsupportedAuthenticationException(e);
+        }
     }
 }

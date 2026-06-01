@@ -25,17 +25,21 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.flow.FlowControlHandler;
 import io.netty.handler.flush.FlushConsolidationHandler;
 import io.netty.handler.ssl.SslHandler;
-import java.util.concurrent.TimeUnit;
+import java.time.Clock;
 import lombok.Builder;
 import lombok.CustomLog;
 import lombok.Data;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.broker.tls.DefaultBrokerTlsMaterialProvider;
 import org.apache.pulsar.common.protocol.ByteBufPair;
 import org.apache.pulsar.common.protocol.FrameDecoderUtil;
 import org.apache.pulsar.common.protocol.OptionalProxyProtocolDecoder;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
+import org.apache.pulsar.common.tls.DefaultTlsMaterialProviderInitContext;
+import org.apache.pulsar.common.tls.FileBasedTlsMaterialProvider;
+import org.apache.pulsar.common.tls.PulsarTlsEngineProvider;
+import org.apache.pulsar.common.tls.ServerTlsPurposeContext;
+import org.apache.pulsar.common.tls.ServerTlsPurposeContext.ServerPurpose;
 
 @CustomLog
 public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> {
@@ -46,7 +50,8 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     private final String listenerName;
     private final boolean enableTls;
     private final ServiceConfiguration brokerConf;
-    private PulsarSslFactory sslFactory;
+    private FileBasedTlsMaterialProvider tlsMaterialProvider;
+    private PulsarTlsEngineProvider tlsEngineProvider;
 
     /**
      * @param pulsar
@@ -61,17 +66,13 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         this.enableTls = opts.isEnableTLS();
         ServiceConfiguration serviceConfig = pulsar.getConfiguration();
         if (this.enableTls) {
-            PulsarSslConfiguration pulsarSslConfig = buildSslConfiguration(serviceConfig);
-            this.sslFactory = (PulsarSslFactory) Class.forName(serviceConfig.getSslFactoryPlugin())
-                    .getConstructor().newInstance();
-            this.sslFactory.initialize(pulsarSslConfig);
-            this.sslFactory.createInternalSslContext();
-            if (serviceConfig.getTlsCertRefreshCheckDurationSec() > 0) {
-                this.pulsar.getExecutor().scheduleWithFixedDelay(this::refreshSslContext,
-                        serviceConfig.getTlsCertRefreshCheckDurationSec(),
-                        serviceConfig.getTlsCertRefreshCheckDurationSec(),
-                        TimeUnit.SECONDS);
-            }
+            // PIP-478: resolve the broker server TLS material through the framework provider/engine.
+            // The provider owns periodic file-rotation polling (using the broker executor), so no
+            // separate refresh task is scheduled here.
+            this.tlsMaterialProvider = DefaultBrokerTlsMaterialProvider.forServer(serviceConfig);
+            this.tlsMaterialProvider.initialize(new DefaultTlsMaterialProviderInitContext(
+                    pulsar.getExecutor(), Clock.systemUTC(), "pulsar-broker")).join();
+            this.tlsEngineProvider = new PulsarTlsEngineProvider(tlsMaterialProvider);
         }
         this.brokerConf = pulsar.getConfiguration();
     }
@@ -85,7 +86,8 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         ch.config().setWriteBufferLowWaterMark(pulsar.getConfig().getPulsarChannelWriteBufferLowWaterMark());
         ch.pipeline().addLast("consolidation", new FlushConsolidationHandler(1024, true));
         if (this.enableTls) {
-            ch.pipeline().addLast(TLS_HANDLER, new SslHandler(this.sslFactory.createServerSslEngine(ch.alloc())));
+            ch.pipeline().addLast(TLS_HANDLER, new SslHandler(this.tlsEngineProvider
+                    .createServerSslEngine(ServerTlsPurposeContext.of(ServerPurpose.BROKER), ch.alloc()).join()));
         }
         ch.pipeline().addLast("ByteBufPairEncoder", ByteBufPair.getEncoder(this.enableTls));
 
@@ -131,32 +133,14 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         private String listenerName;
     }
 
-    protected PulsarSslConfiguration buildSslConfiguration(ServiceConfiguration serviceConfig) {
-        return PulsarSslConfiguration.builder()
-                .tlsKeyStoreType(serviceConfig.getTlsKeyStoreType())
-                .tlsKeyStorePath(serviceConfig.getTlsKeyStore())
-                .tlsKeyStorePassword(serviceConfig.getTlsKeyStorePassword())
-                .tlsTrustStoreType(serviceConfig.getTlsTrustStoreType())
-                .tlsTrustStorePath(serviceConfig.getTlsTrustStore())
-                .tlsTrustStorePassword(serviceConfig.getTlsTrustStorePassword())
-                .tlsCiphers(serviceConfig.getTlsCiphers())
-                .tlsProtocols(serviceConfig.getTlsProtocols())
-                .tlsTrustCertsFilePath(serviceConfig.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(serviceConfig.getTlsCertificateFilePath())
-                .tlsKeyFilePath(serviceConfig.getTlsKeyFilePath())
-                .allowInsecureConnection(serviceConfig.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(serviceConfig.isTlsRequireTrustedClientCertOnConnect())
-                .tlsEnabledWithKeystore(serviceConfig.isTlsEnabledWithKeyStore())
-                .tlsCustomParams(serviceConfig.getSslFactoryPluginParams())
-                .serverMode(true)
-                .build();
-    }
-
-    protected void refreshSslContext() {
-        try {
-            this.sslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
+    /**
+     * Release the TLS material provider (and its rotation poll task), if any. Safe to call multiple
+     * times and when TLS is disabled.
+     */
+    public void close() {
+        if (tlsMaterialProvider != null) {
+            tlsMaterialProvider.close();
+            tlsMaterialProvider = null;
         }
     }
 }

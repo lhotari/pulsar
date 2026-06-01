@@ -53,6 +53,7 @@ import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.PulsarClientException.GettingAuthenticationDataException;
 import org.apache.pulsar.client.api.url.URL;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
+import org.apache.pulsar.client.impl.auth.v5.AthenzAuthenticationV5;
 
 public class AuthenticationAthenz implements Authentication, EncodedAuthenticationParameterSupport {
 
@@ -86,6 +87,11 @@ public class AuthenticationAthenz implements Authentication, EncodedAuthenticati
     private static final int retryFrequencyInMillis = 60 * 60 * 1000; // key refresher scans files every hour
 
     private final ReadWriteLock cachedRoleTokenLock = new ReentrantReadWriteLock();
+
+    // PIP-478: v5-native body that serves the async (ClientCnx) credential path. Non-transient so the
+    // serializable v4 shim round-trips; its role-token provider reads this instance's current
+    // cached/refreshed role token via the existing synchronous credential path.
+    private final AthenzAuthenticationV5 delegate = new AthenzAuthenticationV5(new ShimRoleTokenProvider(this));
 
     public AuthenticationAthenz() {
     }
@@ -123,6 +129,48 @@ public class AuthenticationAthenz implements Authentication, EncodedAuthenticati
             throw new GettingAuthenticationDataException(t);
         } finally {
             writeLock.unlock();
+        }
+    }
+
+    /**
+     * @return the current role token, acquiring/refreshing it via the same path as {@link #getAuthData()}
+     * @throws PulsarClientException if the role token could not be obtained
+     */
+    String currentRoleToken() throws PulsarClientException {
+        return ((AuthenticationDataAthenz) getAuthData()).roleToken;
+    }
+
+    /**
+     * @return the HTTP header name carrying the role token
+     */
+    String roleHeaderName() {
+        return isNotBlank(roleHeader) ? roleHeader : ZTSClient.getHeader();
+    }
+
+    /**
+     * Serializable provider that reads the owning {@link AuthenticationAthenz}'s current role token and
+     * HTTP role header. Kept as a static nested class so the v5-native delegate serializes.
+     */
+    private static final class ShimRoleTokenProvider implements AthenzAuthenticationV5.RoleTokenProvider {
+        private static final long serialVersionUID = 1L;
+        private final AuthenticationAthenz owner;
+
+        ShimRoleTokenProvider(AuthenticationAthenz owner) {
+            this.owner = owner;
+        }
+
+        @Override
+        public String roleToken() {
+            try {
+                return owner.currentRoleToken();
+            } catch (PulsarClientException e) {
+                throw new RuntimeException("Failed to acquire Athenz role token", e);
+            }
+        }
+
+        @Override
+        public String roleHeaderName() {
+            return owner.roleHeaderName();
         }
     }
 

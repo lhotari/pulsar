@@ -18,32 +18,33 @@
  */
 package org.apache.pulsar.client.impl.auth;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonSyntaxException;
 import java.io.IOException;
-import java.io.Serializable;
-import java.net.URI;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.Map;
 import java.util.function.Supplier;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.impl.auth.v5.TokenAuthenticationV5;
 
 /**
  * Token based authentication provider.
+ *
+ * <p>PIP-478: this v4 plugin is a thin shim over the v5-native {@link TokenAuthenticationV5}. The v4
+ * surface (including {@link #getAuthData()} and the {@link AuthenticationDataToken} data provider) is
+ * preserved for source compatibility, and the plugin keeps the verbatim v4 synchronous connect/refresh
+ * path when driven by {@code ClientCnx}. The async v5 SPI is exercised via the v5-native delegate and
+ * the {@code V5ToV4AuthenticationAdapter}, not by this v4 plugin directly.
  */
 public class AuthenticationToken implements Authentication, EncodedAuthenticationParameterSupport {
     static final String AUTH_METHOD_NAME = "token";
 
     private static final long serialVersionUID = 1L;
-    private Supplier<String> tokenSupplier = null;
+
+    private final TokenAuthenticationV5 delegate;
 
     public AuthenticationToken() {
+        this.delegate = new TokenAuthenticationV5();
     }
 
     public AuthenticationToken(String token) {
@@ -51,12 +52,12 @@ public class AuthenticationToken implements Authentication, EncodedAuthenticatio
     }
 
     public AuthenticationToken(Supplier<String> tokenSupplier) {
-        this.tokenSupplier = tokenSupplier;
+        this.delegate = new TokenAuthenticationV5(tokenSupplier);
     }
 
     @Override
     public void close() throws IOException {
-        // noop
+        delegate.close();
     }
 
     @Override
@@ -67,28 +68,12 @@ public class AuthenticationToken implements Authentication, EncodedAuthenticatio
     @SuppressWarnings("deprecation")
     @Override
     public AuthenticationDataProvider getAuthData() throws PulsarClientException {
-        return new AuthenticationDataToken(tokenSupplier);
+        return new AuthenticationDataToken(delegate.tokenSupplier());
     }
 
     @Override
     public void configure(String encodedAuthParamString) {
-        // Interpret the whole param string as the token. If the string contains the notation `token:xxxxx` then strip
-        // the prefix
-        if (encodedAuthParamString.startsWith("token:")) {
-            this.tokenSupplier = new SerializableTokenSupplier(encodedAuthParamString.substring("token:".length()));
-        } else if (encodedAuthParamString.startsWith("file:")) {
-            // Read token from a file
-            URI filePath = URI.create(encodedAuthParamString);
-            this.tokenSupplier = new SerializableURITokenSupplier(filePath);
-        } else {
-            try {
-                // Read token from json string
-                JsonObject authParams = new Gson().fromJson(encodedAuthParamString, JsonObject.class);
-                this.tokenSupplier = new SerializableTokenSupplier(authParams.get("token").getAsString());
-            } catch (JsonSyntaxException e) {
-                this.tokenSupplier = new SerializableTokenSupplier(encodedAuthParamString);
-            }
-        }
+        delegate.configureEncoded(encodedAuthParamString);
     }
 
     @SuppressWarnings("deprecation")
@@ -99,36 +84,14 @@ public class AuthenticationToken implements Authentication, EncodedAuthenticatio
 
     @Override
     public void start() throws PulsarClientException {
-        // noop
+        // noop — the v5-native delegate has no initialization I/O for token auth
     }
 
-    private static class SerializableURITokenSupplier implements Supplier<String>, Serializable {
-
-        private static final long serialVersionUID = 3160666668166028760L;
-        private final URI uri;
-
-        public SerializableURITokenSupplier(final URI uri) {
-            super();
-            this.uri = uri;
-        }
-
-        @Override
-        public String get() {
-            try {
-                return new String(Files.readAllBytes(Paths.get(uri)), StandardCharsets.UTF_8).trim();
-            } catch (IOException e) {
-                throw new RuntimeException("Failed to read token from file", e);
-            }
-        }
-    }
-
-    private static class SerializableTokenSupplier implements Supplier<String>, Serializable {
-
+    private static class SerializableTokenSupplier implements Supplier<String>, java.io.Serializable {
         private static final long serialVersionUID = 5095234161799506913L;
         private final String token;
 
-        public SerializableTokenSupplier(final String token) {
-            super();
+        SerializableTokenSupplier(String token) {
             this.token = token;
         }
 
@@ -136,6 +99,5 @@ public class AuthenticationToken implements Authentication, EncodedAuthenticatio
         public String get() {
             return token;
         }
-
     }
 }

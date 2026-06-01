@@ -60,6 +60,7 @@ import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
 import org.apache.pulsar.client.impl.auth.PulsarSaslClient.ClientCallbackHandler;
+import org.apache.pulsar.client.impl.auth.v5.SaslAuthenticationV5;
 import org.apache.pulsar.common.api.AuthData;
 import org.apache.pulsar.common.sasl.JAASCredentialsContainer;
 
@@ -69,6 +70,12 @@ import org.apache.pulsar.common.sasl.JAASCredentialsContainer;
  * SASL need config files through JVM parameter:
  *   a jaas.conf, which is set by `-Djava.security.auth.login.config=/dir/jaas.conf`
  *   for Kerberos a krb5.conf, which is set by `-Djava.security.krb5.conf=/dir/krb5.conf`
+ *
+ * <p>PIP-478: this v4 plugin keeps the verbatim v4 synchronous connect/refresh path when driven by
+ * {@code ClientCnx}; the SASL-over-HTTP loop ({@link #authenticationStage}/{@link #newRequestHeader})
+ * and the synchronous {@link #getAuthData(String)} surface remain on this v4 shim unchanged. The async
+ * v5 SPI is exercised via the v5-native {@link SaslAuthenticationV5} delegate and the
+ * {@code V5ToV4AuthenticationAdapter}, not by this v4 plugin directly.
  */
 @CustomLog
 public class AuthenticationSasl implements Authentication, EncodedAuthenticationParameterSupport {
@@ -80,6 +87,10 @@ public class AuthenticationSasl implements Authentication, EncodedAuthentication
     private Map<String, String> configuration;
     private String loginContextName;
     private String serverType = null;
+
+    // PIP-478: v5-native body that serves the v5 client provider path. Non-transient so the
+    // serializable v4 shim round-trips; its provider factory reuses this shim's getAuthData(host).
+    private final SaslAuthenticationV5 delegate = new SaslAuthenticationV5(new ShimSaslProviderFactory(this));
 
     public AuthenticationSasl() {
     }
@@ -334,5 +345,24 @@ public class AuthenticationSasl implements Authentication, EncodedAuthentication
                 return;
             }
         });
+    }
+
+    /**
+     * Serializable factory that creates a fresh per-exchange SASL data provider via the owning
+     * {@link AuthenticationSasl}'s synchronous {@link #getAuthData(String)} surface. Kept as a static
+     * nested class so the v5-native delegate serializes.
+     */
+    private static final class ShimSaslProviderFactory implements SaslAuthenticationV5.SaslProviderFactory {
+        private static final long serialVersionUID = 1L;
+        private final AuthenticationSasl owner;
+
+        ShimSaslProviderFactory(AuthenticationSasl owner) {
+            this.owner = owner;
+        }
+
+        @Override
+        public AuthenticationDataProvider create(String brokerHost) throws Exception {
+            return owner.getAuthData(brokerHost);
+        }
     }
 }

@@ -325,6 +325,9 @@ public class BrokerService implements Closeable {
     private PulsarChannelInitializer.Factory pulsarChannelInitFactory = PulsarChannelInitializer.DEFAULT_FACTORY;
 
     private final List<Channel> listenChannels = new ArrayList<>(2);
+    // PIP-478: retain the per-bind-address channel initializers so their TLS material providers
+    // (and rotation poll tasks) can be released on shutdown.
+    private final List<PulsarChannelInitializer> channelInitializers = new ArrayList<>(2);
     private Channel listenChannel;
     private Channel listenChannelTls;
 
@@ -641,8 +644,10 @@ public class BrokerService implements Closeable {
                             .listenerName(a.getListenerName()).build();
 
             ServerBootstrap b = defaultServerBootstrap.clone();
-            b.childHandler(
-                    pulsarChannelInitFactory.newPulsarChannelInitializer(pulsar, opts));
+            PulsarChannelInitializer channelInitializer =
+                    pulsarChannelInitFactory.newPulsarChannelInitializer(pulsar, opts);
+            channelInitializers.add(channelInitializer);
+            b.childHandler(channelInitializer);
             try {
                 Channel ch = b.bind(addr).sync().channel();
                 listenChannels.add(ch);
@@ -926,6 +931,10 @@ public class BrokerService implements Closeable {
                                         asyncCloseFutures.add(closeChannel(ch));
                                     }
                                 });
+
+                                // PIP-478: release the channel initializers' TLS material providers.
+                                channelInitializers.forEach(PulsarChannelInitializer::close);
+                                channelInitializers.clear();
 
                                 maxTopicListInFlightLimiter.close();
 

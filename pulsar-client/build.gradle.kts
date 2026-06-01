@@ -24,6 +24,11 @@ plugins {
 
 dependencies {
     api(project(":pulsar-client-api"))
+    // PIP-478: the built-in v4 auth plugins are thin shims over v5-native implementations of the
+    // org.apache.pulsar.client.api.v5.auth SPI, so the v5 API (Tier 0, no internal deps) is on the
+    // compile/runtime path. NOTE: this folds the v5 auth API into pulsar-client-shaded / -all, which
+    // PIP-478 §Backward-Compatibility flagged as a follow-up; accepted here as an intentional deviation.
+    api(project(":pulsar-client-api-v5"))
     implementation(project(":pulsar-common")) {
         exclude(group = "io.prometheus", module = "simpleclient_caffeine")
     }
