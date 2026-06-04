@@ -118,7 +118,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "401",
                     description = "Don't have permission to administrate resources on this tenant"),
             @ApiResponse(responseCode = "403", description = "Don't have admin or operate permission on the namespace"),
-            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exit"),
+            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exist"),
             @ApiResponse(responseCode = "412", description = "Namespace name is not valid"),
             @ApiResponse(responseCode = "500", description = "Internal server error")})
     public void getList(
@@ -159,7 +159,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "401",
                     description = "Don't have permission to administrate resources on this tenant"),
             @ApiResponse(responseCode = "403", description = "Don't have admin or operate permission on the namespace"),
-            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exit"),
+            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exist"),
             @ApiResponse(responseCode = "412", description = "Namespace name is not valid"),
             @ApiResponse(responseCode = "500", description = "Internal server error")})
     public void getPartitionedTopicList(
@@ -190,7 +190,7 @@ public class PersistentTopics extends PersistentTopicsBase {
     @Path("/{tenant}/{namespace}/{topic}/permissions")
     @Operation(summary = "Get permissions on a topic.",
             description = "Retrieve the effective permissions for a topic."
-                    + " These permissions are defined by the permissions set at the"
+                    + " These permissions are defined by the permissions set at the "
                     + "namespace level combined (union) with any eventual specific permission set on the topic."
                     + " Returns a map structure: Map<String, Set<AuthAction>>.")
     @ApiResponses(value = {
@@ -203,7 +203,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "401",
                     description = "Don't have permission to administrate resources on this tenant"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
-            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exit"),
+            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exist"),
             @ApiResponse(responseCode = "412", description = "Topic name is not valid"),
             @ApiResponse(responseCode = "500", description = "Internal server error")})
     public void getPermissionsOnTopic(
@@ -244,7 +244,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "401",
                     description = "Don't have permission to administrate resources on this tenant"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
-            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exit"),
+            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exist"),
             @ApiResponse(responseCode = "409", description = "Concurrent modification"),
             @ApiResponse(responseCode = "412", description = "Topic name is not valid"),
             @ApiResponse(responseCode = "500", description = "Internal server error") })
@@ -274,7 +274,7 @@ public class PersistentTopics extends PersistentTopicsBase {
     @DELETE
     @Path("/{tenant}/{namespace}/{topic}/permissions/{role}")
     @Operation(summary = "Revoke permissions on a topic.",
-            description = "Revoke permissions to a role on a single topic. If the permission was not set at the topic"
+            description = "Revoke permissions to a role on a single topic. If the permission was not set at the topic "
                     + "level, but rather at the namespace level,"
                     + " this operation will return an error (HTTP status code 412).")
     @ApiResponses(value = {
@@ -284,7 +284,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "401",
                     description = "Don't have permission to administrate resources on this tenant"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
-            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exit"),
+            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exist"),
             @ApiResponse(responseCode = "412", description = "Permissions are not set at the topic level"),
             @ApiResponse(responseCode = "500", description = "Internal server error")})
     public void revokePermissionsOnTopic(
@@ -1108,7 +1108,7 @@ public class PersistentTopics extends PersistentTopicsBase {
         @ApiResponse(responseCode = "204", description = "Operation successful"),
         @ApiResponse(responseCode = "307", description = "Current broker doesn't serve the namespace of this topic"),
         @ApiResponse(responseCode = "401",
-                description = "Don't have permission to administrate resources on this tenant or"
+                description = "Don't have permission to administrate resources on this tenant or "
             + "subscriber is not authorized to access this operation"),
         @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
         @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
@@ -1701,7 +1701,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
@@ -1778,7 +1778,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
@@ -1820,7 +1820,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
@@ -1863,7 +1863,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
@@ -1906,7 +1906,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "400",
                     description = "Create subscription on non persistent topic is not supported"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
@@ -1974,7 +1974,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
@@ -2031,7 +2031,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
@@ -2075,7 +2075,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
@@ -2114,7 +2114,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
@@ -2163,7 +2163,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
@@ -2210,7 +2210,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404",
@@ -2278,7 +2278,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @PathParam("namespace") String namespace,
             @Parameter(description = "Specify topic name", required = true)
             @PathParam("topic") @Encoded String encodedTopic,
-            @Parameter(name = "initialPosition", description = "Relative start position to examine message."
+            @Parameter(name = "initialPosition", description = "Relative start position to examine message. "
                     + "It can be 'latest' or 'earliest'",
                             schema = @Schema(allowableValues = {"latest", "earliest"}, defaultValue = "latest"))
             @QueryParam("initialPosition") String initialPosition,
@@ -2315,7 +2315,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404",
@@ -2369,7 +2369,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic does not exist"),
@@ -3818,7 +3818,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic does not exist"),
@@ -3859,7 +3859,7 @@ public class PersistentTopics extends PersistentTopicsBase {
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic does not exist"),
@@ -3889,7 +3889,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic does not exist"),
@@ -3929,7 +3929,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404",
@@ -3972,7 +3972,7 @@ public class PersistentTopics extends PersistentTopicsBase {
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "400", description = "Message ID is null"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic does not exist"),
@@ -4016,7 +4016,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic does not exist"),
@@ -4055,7 +4055,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic does not exist"),
@@ -4089,7 +4089,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "401",
-                    description = "Don't have permission to administrate resources on this tenant or"
+                    description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic does not exist"),
@@ -4775,11 +4775,11 @@ public class PersistentTopics extends PersistentTopicsBase {
     @GET
     @Path("/{tenant}/{namespace}/{topic}/subscriptionTypesEnabled")
     @Operation(
-            summary = "Get is enable sub type fors specified topic.")
+            summary = "Get is enable sub type for specified topic.")
     @ApiResponses(value = {
             @ApiResponse(
                     responseCode = "200",
-                    description = "Get is enable sub type fors specified topic.",
+                    description = "Get is enable sub type for specified topic.",
                     content = @Content(array = @ArraySchema(schema =
                             @Schema(implementation = CommandSubscribe.SubType.class)))),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -5328,7 +5328,7 @@ public class PersistentTopics extends PersistentTopicsBase {
                                             @PathParam("namespace") String namespace,
                                             @PathParam("topic") @Encoded String encodedTopic,
                                             @QueryParam("isGlobal") @DefaultValue("false") boolean isGlobal,
-                                            @Parameter(description = "Whether leader broker redirected this"
+                                            @Parameter(description = "Whether leader broker redirected this "
                                                     + "call to this broker. For internal use.")
                                             @QueryParam("authoritative") @DefaultValue("false") boolean authoritative,
                                             @RequestBody(description = "Entry filters for the specified topic")
@@ -5359,7 +5359,7 @@ public class PersistentTopics extends PersistentTopicsBase {
                                     @PathParam("namespace") String namespace,
                                     @PathParam("topic") @Encoded String encodedTopic,
                                     @QueryParam("isGlobal") @DefaultValue("false") boolean isGlobal,
-                                    @Parameter(description = "Whether leader broker redirected this"
+                                    @Parameter(description = "Whether leader broker redirected this "
                                             + "call to this broker. For internal use.")
                                     @QueryParam("authoritative") @DefaultValue("false") boolean authoritative) {
         validateTopicName(tenant, namespace, encodedTopic);
@@ -5531,7 +5531,7 @@ public class PersistentTopics extends PersistentTopicsBase {
 
     @DELETE
     @Path("/{tenant}/{namespace}/{topic}/autoSubscriptionCreation")
-    @Operation(summary = "Remove autoSubscriptionCreation ina a topic.")
+    @Operation(summary = "Remove autoSubscriptionCreation in a topic.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),

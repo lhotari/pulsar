@@ -378,7 +378,7 @@ public class Namespaces extends NamespacesBase {
             @ApiResponse(responseCode = "401",
                     description = "Don't have permission to administrate resources on this tenant"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
-            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exit"),
+            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exist"),
             @ApiResponse(responseCode = "500", description = "Internal server error") })
     public void grantPermissionsOnTopics(@Suspended final AsyncResponse asyncResponse,
                                  List<GrantTopicPermissionOptions> options) {
@@ -402,7 +402,7 @@ public class Namespaces extends NamespacesBase {
             @ApiResponse(responseCode = "401",
                     description = "Don't have permission to administrate resources on this tenant"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
-            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exit"),
+            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exist"),
             @ApiResponse(responseCode = "500", description = "Internal server error") })
     public void revokePermissionsOnTopics(@Suspended final AsyncResponse asyncResponse,
                                          List<RevokeTopicPermissionOptions> options) {
@@ -1005,11 +1005,11 @@ public class Namespaces extends NamespacesBase {
     @Path("/{tenant}/{namespace}/unload")
     @Operation(summary = "Unload namespace",
             description = "Unload an active namespace from the current broker serving it. Performing this operation"
-                    + " will let the brokerremoves all producers, consumers, and connections using this namespace,"
-                    + " and close all topics (includingtheir persistent store). During that operation,"
-                    + " the namespace is marked as tentatively unavailable until thebroker completes "
+                    + " will let the broker removes all producers, consumers, and connections using this namespace,"
+                    + " and close all topics (including their persistent store). During that operation,"
+                    + " the namespace is marked as tentatively unavailable until the broker completes "
                     + "the unloading action. This operation requires strictly super user privileges,"
-                    + " since it wouldresult in non-persistent message loss and"
+                    + " since it would result in non-persistent message loss and"
                     + " unexpected connection closure to the clients.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
@@ -1499,7 +1499,7 @@ public class Namespaces extends NamespacesBase {
 
     @POST
     @Path("/{tenant}/{namespace}/backlogQuota")
-    @Operation(summary = " Set a backlog quota for all the topics on a namespace.")
+    @Operation(summary = "Set a backlog quota for all the topics on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -1561,7 +1561,7 @@ public class Namespaces extends NamespacesBase {
 
     @POST
     @Path("/{tenant}/{namespace}/retention")
-    @Operation(summary = " Set retention configuration on a namespace.")
+    @Operation(summary = "Set retention configuration on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -1576,7 +1576,7 @@ public class Namespaces extends NamespacesBase {
 
     @DELETE
     @Path("/{tenant}/{namespace}/retention")
-    @Operation(summary = " Remove retention configuration on a namespace.")
+    @Operation(summary = "Remove retention configuration on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -1848,7 +1848,7 @@ public class Namespaces extends NamespacesBase {
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403",
-                    description = "Don't have admin or operate permission on the namespacen"),
+                    description = "Don't have admin or operate permission on the namespace"),
             @ApiResponse(responseCode = "404", description = "Namespace does not exist") })
     public void unsubscribeNamespace(@Suspended final AsyncResponse asyncResponse, @PathParam("tenant") String tenant,
             @PathParam("namespace") String namespace,
@@ -1897,7 +1897,7 @@ public class Namespaces extends NamespacesBase {
 
     @POST
     @Path("/{tenant}/{namespace}/subscriptionAuthMode")
-    @Operation(summary = " Set a subscription auth mode for all the topics on a namespace.")
+    @Operation(summary = "Set a subscription auth mode for all the topics on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -2118,7 +2118,7 @@ public class Namespaces extends NamespacesBase {
 
     @POST
     @Path("/{tenant}/{namespace}/maxProducersPerTopic")
-    @Operation(summary = " Set maxProducersPerTopic configuration on a namespace.")
+    @Operation(summary = "Set maxProducersPerTopic configuration on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -2215,7 +2215,7 @@ public class Namespaces extends NamespacesBase {
 
     @POST
     @Path("/{tenant}/{namespace}/maxConsumersPerTopic")
-    @Operation(summary = " Set maxConsumersPerTopic configuration on a namespace.")
+    @Operation(summary = "Set maxConsumersPerTopic configuration on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -2272,7 +2272,7 @@ public class Namespaces extends NamespacesBase {
 
     @POST
     @Path("/{tenant}/{namespace}/maxConsumersPerSubscription")
-    @Operation(summary = " Set maxConsumersPerSubscription configuration on a namespace.")
+    @Operation(summary = "Set maxConsumersPerSubscription configuration on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -2290,7 +2290,7 @@ public class Namespaces extends NamespacesBase {
 
     @DELETE
     @Path("/{tenant}/{namespace}/maxConsumersPerSubscription")
-    @Operation(summary = " Set maxConsumersPerSubscription configuration on a namespace.")
+    @Operation(summary = "Set maxConsumersPerSubscription configuration on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -2330,7 +2330,7 @@ public class Namespaces extends NamespacesBase {
 
     @POST
     @Path("/{tenant}/{namespace}/maxUnackedMessagesPerConsumer")
-    @Operation(summary = " Set maxConsumersPerTopic configuration on a namespace.")
+    @Operation(summary = "Set maxConsumersPerTopic configuration on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -2388,7 +2388,7 @@ public class Namespaces extends NamespacesBase {
 
     @POST
     @Path("/{tenant}/{namespace}/maxUnackedMessagesPerSubscription")
-    @Operation(summary = " Set maxUnackedMessagesPerSubscription configuration on a namespace.")
+    @Operation(summary = "Set maxUnackedMessagesPerSubscription configuration on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -2443,7 +2443,7 @@ public class Namespaces extends NamespacesBase {
 
     @POST
     @Path("/{tenant}/{namespace}/maxSubscriptionsPerTopic")
-    @Operation(summary = " Set maxSubscriptionsPerTopic configuration on a namespace.")
+    @Operation(summary = "Set maxSubscriptionsPerTopic configuration on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -3040,7 +3040,7 @@ public class Namespaces extends NamespacesBase {
 
     @DELETE
     @Path("/{tenant}/{namespace}/subscriptionTypesEnabled")
-    @Operation(summary = " Remove subscription types enabled on a namespace.")
+    @Operation(summary = "Remove subscription types enabled on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Tenant or Namespace does not exist"),
@@ -3220,7 +3220,7 @@ public class Namespaces extends NamespacesBase {
 
     @DELETE
     @Path("/{tenant}/{namespace}/removeOffloadPolicies")
-    @Operation(summary = " Set offload configuration on a namespace.")
+    @Operation(summary = "Set offload configuration on a namespace.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),

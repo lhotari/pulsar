@@ -59,7 +59,7 @@ public class BrokerStats extends BrokerStatsBase {
     @Path("/broker-resource-availability/{tenant}/{namespace}")
     @Operation(summary = "Broker availability report",
             description = "This API gives the current broker availability in "
-            + "percent, each resource percentage usage is calculated and then"
+            + "percent, each resource percentage usage is calculated and then "
             + "sum of all of the resource usage percent is called broker-resource-availability"
             + "<br/><br/>THIS API IS ONLY FOR USE BY TESTING FOR CONFIRMING NAMESPACE ALLOCATION ALGORITHM")
     @ApiResponses(value = {

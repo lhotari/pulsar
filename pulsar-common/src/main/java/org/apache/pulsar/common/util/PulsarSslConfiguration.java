@@ -102,7 +102,7 @@ public class PulsarSslConfiguration implements Serializable, Cloneable {
 
     @Schema(
             name = "tlsTrustCertsFilePath",
-            description = " TLS Trust certificates file path"
+            description = "TLS Trust certificates file path"
     )
     private String tlsTrustCertsFilePath;
 

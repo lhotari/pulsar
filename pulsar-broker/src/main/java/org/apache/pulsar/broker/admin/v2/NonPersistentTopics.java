@@ -659,7 +659,7 @@ public class NonPersistentTopics extends PersistentTopics {
                                    @PathParam("namespace") String namespace,
                                    @PathParam("topic") @Encoded String encodedTopic,
                                    @QueryParam("isGlobal") @DefaultValue("false") boolean isGlobal,
-                                   @Parameter(description = "Whether leader broker redirected this"
+                                   @Parameter(description = "Whether leader broker redirected this "
                                            + "call to this broker. For internal use.")
                                    @QueryParam("authoritative") @DefaultValue("false") boolean authoritative) {
         validateTopicName(tenant, namespace, encodedTopic);

@@ -119,7 +119,7 @@ public class ReaderConfigurationData<T> implements Serializable, Cloneable {
                     + "\n"
                     + "Delivered encrypted message contains {@link EncryptionContext} which contains encryption and "
                     + "compression information in it using which application can decrypt consumed message payload."
-                    + "cannot set with {@link ReaderDecryptFailListener}, and if ReaderDecryptFailListener are set,\n"
+                    + " cannot set with {@link ReaderDecryptFailListener}, and if ReaderDecryptFailListener are set,\n"
                     + "application should responsible for handling decryption failure."
     )
     private ConsumerCryptoFailureAction cryptoFailureAction;

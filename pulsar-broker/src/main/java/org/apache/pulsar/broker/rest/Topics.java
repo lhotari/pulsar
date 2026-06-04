@@ -52,7 +52,7 @@ public class Topics extends TopicsBase {
             @ApiResponse(responseCode = "200", description = "Produce message to a persistent topic.",
                     content = @Content(array = @ArraySchema(schema = @Schema(implementation = String.class)))),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exit"),
+            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exist"),
             @ApiResponse(responseCode = "412", description = "Namespace name is not valid"),
             @ApiResponse(responseCode = "500", description = "Internal server error") })
     public void produceOnPersistentTopic(@Suspended final AsyncResponse asyncResponse,
@@ -84,7 +84,7 @@ public class Topics extends TopicsBase {
             @ApiResponse(responseCode = "200", description = "Produce message to a partition of a persistent topic.",
                     content = @Content(array = @ArraySchema(schema = @Schema(implementation = String.class)))),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exit"),
+            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exist"),
             @ApiResponse(responseCode = "412", description = "Namespace name is not valid"),
             @ApiResponse(responseCode = "500", description = "Internal server error") })
     public void produceOnPersistentTopicPartition(@Suspended final AsyncResponse asyncResponse,
@@ -118,7 +118,7 @@ public class Topics extends TopicsBase {
             @ApiResponse(responseCode = "200", description = "Produce message to a non-persistent topic.",
                     content = @Content(array = @ArraySchema(schema = @Schema(implementation = String.class)))),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exit"),
+            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exist"),
             @ApiResponse(responseCode = "412", description = "Namespace name is not valid"),
             @ApiResponse(responseCode = "500", description = "Internal server error") })
     public void produceOnNonPersistentTopic(@Suspended final AsyncResponse asyncResponse,
@@ -152,7 +152,7 @@ public class Topics extends TopicsBase {
                     description = "Produce message to a partition of a non-persistent topic.",
                     content = @Content(array = @ArraySchema(schema = @Schema(implementation = String.class)))),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exit"),
+            @ApiResponse(responseCode = "404", description = "tenant/namespace/topic doesn't exist"),
             @ApiResponse(responseCode = "412", description = "Namespace name is not valid"),
             @ApiResponse(responseCode = "500", description = "Internal server error") })
     public void produceOnNonPersistentTopicPartition(@Suspended final AsyncResponse asyncResponse,

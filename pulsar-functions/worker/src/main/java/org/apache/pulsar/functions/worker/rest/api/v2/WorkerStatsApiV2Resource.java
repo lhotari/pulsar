@@ -113,7 +113,7 @@ public class WorkerStatsApiV2Resource implements Supplier<WorkerService> {
     @Path("/functionsmetrics")
     @Operation(
             summary = "Get metrics for all functions owned by worker",
-            description = "Requested should be executed by Monitoring agent on each worker to fetch the metrics")
+            description = "Request should be executed by Monitoring agent on each worker to fetch the metrics")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Get metrics for all functions owned by worker",
                     content = @Content(array = @ArraySchema(schema =

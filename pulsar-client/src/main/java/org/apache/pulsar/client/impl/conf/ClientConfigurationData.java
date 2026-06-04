@@ -74,14 +74,14 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     @Schema(
             name = "serviceUrlQuarantineInitDurationMs",
             description = "The initial duration (in milliseconds) to quarantine endpoints that fail to connect."
-                    + "A value of 0 means don't quarantine any endpoints even if they fail."
+                    + " A value of 0 means don't quarantine any endpoints even if they fail."
     )
     private long serviceUrlQuarantineInitDurationMs = 60000;
 
     @Schema(
             name = "serviceUrlQuarantineMaxDurationMs",
             description = "The max duration (in milliseconds) to quarantine endpoints that fail to connect."
-                    + "A value of 0 means don't quarantine any endpoints even if they fail."
+                    + " A value of 0 means don't quarantine any endpoints even if they fail."
     )
     private long serviceUrlQuarantineMaxDurationMs = TimeUnit.DAYS.toMillis(1);
 
@@ -158,7 +158,7 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     @Schema(
             name = "connectionMaxIdleSeconds",
             description = "Release the connection if it is not used for more than [connectionMaxIdleSeconds] seconds. "
-                    + "If  [connectionMaxIdleSeconds] < 0, disabled the feature that auto release the idle connections"
+                    + "If [connectionMaxIdleSeconds] < 0, disabled the feature that auto release the idle connections"
     )
     private int connectionMaxIdleSeconds = 60;
 
@@ -207,7 +207,7 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     @Schema(
             name = "sslFactoryPlugin",
             description = "SSL Factory Plugin class to provide SSLEngine and SSLContext objects. The default "
-                    + " class used is DefaultPulsarSslFactory.")
+                    + "class used is DefaultPulsarSslFactory.")
     private String sslFactoryPlugin = DefaultPulsarSslFactory.class.getName();
 
     @Schema(
@@ -252,7 +252,7 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     @Schema(
             name = "connectionTimeoutMs",
             description = "Duration of waiting for a connection to a broker to be established."
-                    + "If the duration passes without a response from a broker, the connection attempt is dropped."
+                    + " If the duration passes without a response from a broker, the connection attempt is dropped."
     )
     private int connectionTimeoutMs = 10000;
     @Schema(
@@ -295,7 +295,7 @@ public class ClientConfigurationData implements Serializable, Cloneable {
             name = "listenerName",
             description = "Listener name for lookup. Clients can use listenerName to choose one of the listeners "
                     + "as the service URL to create a connection to the broker as long as the network is accessible."
-                    + "\"advertisedListeners\" must enabled in broker side."
+                    + " \"advertisedListeners\" must enabled in broker side."
     )
     private String listenerName;
 

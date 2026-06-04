@@ -25,7 +25,7 @@ import jakarta.ws.rs.core.MediaType;
 import org.apache.pulsar.broker.admin.impl.BrokersBase;
 
 @Path("/brokers")
-@Tag(name = "brokers", description = "BrokersBase admin apis")
+@Tag(name = "brokers", description = "Brokers admin apis")
 @Produces(MediaType.APPLICATION_JSON)
 public class Brokers extends BrokersBase {
 }

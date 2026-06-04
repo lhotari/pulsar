@@ -144,13 +144,13 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
     private String brokerClientTlsKeyStoreType;
     @Schema(
             name = "brokerClientTlsKeyStore",
-            description = "TLS KeyStore path for internal client, "
+            description = "TLS KeyStore path for internal client,"
                     + " used by the internal client to authenticate with Pulsar brokers"
     )
     private String brokerClientTlsKeyStore;
     @Schema(
             name = "brokerClientTlsKeyStorePassword",
-            description = "TLS KeyStore password for internal client, "
+            description = "TLS KeyStore password for internal client,"
                     + " used by the internal client to authenticate with Pulsar brokers"
     )
     private String brokerClientTlsKeyStorePassword;

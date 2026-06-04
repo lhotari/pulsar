@@ -72,12 +72,12 @@ public class BrokersBase extends AdminResource {
     @GET
     @Path("/{cluster}")
     @Operation(
-        summary = "Get the list of active brokers (broker ids) in the cluster."
+        summary = "Get the list of active brokers (broker ids) in the cluster. "
                 + "If authorization is not enabled, any cluster name is valid.")
     @ApiResponses(
         value = {
             @ApiResponse(responseCode = "200",
-                description = "Get the list of active brokers (broker ids) in the cluster."
+                description = "Get the list of active brokers (broker ids) in the cluster. "
                         + "If authorization is not enabled, any cluster name is valid.",
                 content = @Content(array = @ArraySchema(uniqueItems = true,
                         schema = @Schema(implementation = String.class)))),
@@ -111,12 +111,12 @@ public class BrokersBase extends AdminResource {
 
     @GET
     @Operation(
-            summary = "Get the list of active brokers (broker ids) in the local cluster."
+            summary = "Get the list of active brokers (broker ids) in the local cluster. "
                     + "If authorization is not enabled")
     @ApiResponses(
             value = {
                     @ApiResponse(responseCode = "200",
-                            description = "Get the list of active brokers (broker ids) in the local cluster."
+                            description = "Get the list of active brokers (broker ids) in the local cluster. "
                                     + "If authorization is not enabled",
                             content = @Content(array = @ArraySchema(uniqueItems = true,
                                     schema = @Schema(implementation = String.class)))),
@@ -194,7 +194,7 @@ public class BrokersBase extends AdminResource {
     @POST
     @Path("/configuration/{configName}/{configValue}")
     @Operation(summary =
-            "Update dynamic serviceconfiguration into zk only. This operation requires Pulsar super-user privileges.")
+            "Update dynamic ServiceConfiguration into zk only. This operation requires Pulsar super-user privileges.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Service configuration updated successfully"),
             @ApiResponse(responseCode = "403",

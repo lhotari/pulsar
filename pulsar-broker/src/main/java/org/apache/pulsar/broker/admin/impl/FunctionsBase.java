@@ -144,7 +144,7 @@ public class FunctionsBase extends AdminResource {
                             + "- **retainOrdering**\n"
                             + "  Function consumes and processes messages in order.\n"
                             + "- **outputSchemaType**\n"
-                            + "   Represents either a builtin schema type (for example: 'avro', 'json', ect)"
+                            + "   Represents either a builtin schema type (for example: 'avro', 'json', etc)"
                             + " or the class name for a Schema implementation."
                             + "- **subName**\n"
                             + "  Pulsar source subscription name. User can specify a subscription-name"
@@ -255,7 +255,7 @@ public class FunctionsBase extends AdminResource {
                             + "- **retainOrdering**\n"
                             + "  Function consumes and processes messages in order.\n"
                             + "- **outputSchemaType**\n"
-                            + "   Represents either a builtin schema type (for example: 'avro', 'json', ect)"
+                            + "   Represents either a builtin schema type (for example: 'avro', 'json', etc)"
                             + " or the class name for a Schema implementation."
                             + "- **subName**\n"
                             + "  Pulsar source subscription name. User can specify"
@@ -356,7 +356,7 @@ public class FunctionsBase extends AdminResource {
             @Parameter(description = "The name of a Pulsar Function")
             final @PathParam("functionName") String functionName,
             @Parameter(description = "The instanceId of a Pulsar Function (if instance-id is not provided,"
-                    + " the stats of all instances is returned") final @PathParam("instanceId")
+                    + " the stats of all instances is returned)") final @PathParam("instanceId")
                     String instanceId) throws IOException {
         return functions().getFunctionInstanceStatus(tenant, namespace, functionName,
                 instanceId, uri.getRequestUri(), authParams());
@@ -436,7 +436,7 @@ public class FunctionsBase extends AdminResource {
             @Parameter(description = "The name of a Pulsar Function")
             final @PathParam("functionName") String functionName,
             @Parameter(description = "The instanceId of a Pulsar Function"
-                    + " (if instance-id is not provided, the stats of all instances is returned") final @PathParam(
+                    + " (if instance-id is not provided, the stats of all instances is returned)") final @PathParam(
                     "instanceId") String instanceId) throws IOException {
         return functions().getFunctionsInstanceStats(tenant, namespace, functionName, instanceId,
                 uri.getRequestUri(), authParams());
@@ -560,7 +560,7 @@ public class FunctionsBase extends AdminResource {
             @Parameter(description = "The name of a Pulsar Function")
             final @PathParam("functionName") String functionName,
             @Parameter(description =
-                    "The instanceId of a Pulsar Function (if instance-id is not provided, all instances are restarted")
+                    "The instanceId of a Pulsar Function (if instance-id is not provided, all instances are restarted)")
             final @PathParam("instanceId") String instanceId) {
         functions().restartFunctionInstance(tenant, namespace, functionName, instanceId,
                 uri.getRequestUri(), authParams());
@@ -603,7 +603,7 @@ public class FunctionsBase extends AdminResource {
             @Parameter(description = "The name of a Pulsar Function")
             final @PathParam("functionName") String functionName,
             @Parameter(description =
-                    "The instanceId of a Pulsar Function (if instance-id is not provided, all instances are stopped. ")
+                    "The instanceId of a Pulsar Function (if instance-id is not provided, all instances are stopped.)")
             final @PathParam("instanceId") String instanceId) {
         functions().stopFunctionInstance(tenant, namespace, functionName, instanceId,
                 uri.getRequestUri(), authParams());
@@ -646,7 +646,7 @@ public class FunctionsBase extends AdminResource {
             @Parameter(description = "The name of a Pulsar Function")
             final @PathParam("functionName") String functionName,
             @Parameter(description = "The instanceId of a Pulsar Function"
-                    + " (if instance-id is not provided, all instances sre started. ") final @PathParam("instanceId")
+                    + " (if instance-id is not provided, all instances are started.)") final @PathParam("instanceId")
                     String instanceId) {
         functions().startFunctionInstance(tenant, namespace, functionName, instanceId,
                 uri.getRequestUri(), authParams());

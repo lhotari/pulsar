@@ -130,7 +130,7 @@ public class ProducerConfigurationData implements Serializable, Cloneable {
                     + "* `pulsar.Murmur3_32Hash`: applies the [Murmur3](https://en.wikipedia.org/wiki/MurmurHash)"
                     + " hashing function\n"
                     + "* `pulsar.BoostHash`: applies the hashing function from C++'s"
-                    + "[Boost](https://www.boost.org/doc/libs/1_62_0/doc/html/hash.html) library"
+                    + " [Boost](https://www.boost.org/doc/libs/1_62_0/doc/html/hash.html) library"
     )
     private HashingScheme hashingScheme = HashingScheme.JavaStringHash;
 
