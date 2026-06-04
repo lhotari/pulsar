@@ -40,6 +40,8 @@ dependencies {
     implementation(libs.jline)
     implementation(libs.commons.io)
     implementation(libs.commons.lang3)
+    // guava was previously leaked onto the compile classpath via compileOnly(swagger-core 1.x)
+    implementation(libs.guava)
     implementation(libs.commons.text)
     implementation(libs.asynchttpclient)
     implementation(libs.netty.reactive.streams)
@@ -51,10 +53,9 @@ dependencies {
     implementation(libs.jetty.websocket.jetty.client)
     runtimeOnly(libs.jna)
 
-    compileOnly(libs.swagger.core)
+    compileOnly(libs.swagger.annotations)
 
     testImplementation(libs.jackson.dataformat.yaml)
-    testImplementation(libs.guava)
 }
 
 // Maven uses ant-plugin to copy pom.xml -> dummy.nar for TestCmdSinks/TestCmdSources.

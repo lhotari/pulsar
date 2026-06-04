@@ -19,11 +19,12 @@
 
 package org.apache.pulsar.broker.admin.v2;
 
-import io.swagger.annotations.Api;
-import io.swagger.annotations.ApiOperation;
-import io.swagger.annotations.ApiParam;
-import io.swagger.annotations.ApiResponse;
-import io.swagger.annotations.ApiResponses;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.parameters.RequestBody;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.Encoded;
@@ -46,38 +47,40 @@ import org.apache.pulsar.common.policies.data.PolicyOperation;
  */
 @Path("/persistent")
 @Produces(MediaType.APPLICATION_JSON)
-@Api(value = "/persistent", description = "Persistent topic admin apis", tags = "persistent topic")
+@Tag(name = "persistent topic", description = "Persistent topic admin apis")
 @SuppressWarnings("deprecation")
 public class ExtPersistentTopics extends PersistentTopicsBase {
 
     @PUT
     @Consumes(PartitionedTopicMetadata.MEDIA_TYPE)
     @Path("/{tenant}/{namespace}/{topic}/partitions")
-    @ApiOperation(value = "Create a partitioned topic.",
-            notes = "It needs to be called before creating a producer on a partitioned topic.")
+    @Operation(summary = "Create a partitioned topic.",
+            description = "It needs to be called before creating a producer on a partitioned topic.")
     @ApiResponses(value = {
-            @ApiResponse(code = 307, message = "Current broker doesn't serve the namespace of this topic"),
-            @ApiResponse(code = 401, message = "Don't have permission to administrate resources on this tenant"),
-            @ApiResponse(code = 403, message = "Don't have admin permission"),
-            @ApiResponse(code = 404, message = "Tenant or namespace doesn't exist"),
-            @ApiResponse(code = 406, message = "The number of partitions should be more than 0 and"
+            @ApiResponse(responseCode = "307",
+                    description = "Current broker doesn't serve the namespace of this topic"),
+            @ApiResponse(responseCode = "401",
+                    description = "Don't have permission to administrate resources on this tenant"),
+            @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
+            @ApiResponse(responseCode = "404", description = "Tenant or namespace doesn't exist"),
+            @ApiResponse(responseCode = "406", description = "The number of partitions should be more than 0 and"
                     + " less than or equal to maxNumPartitionsPerPartitionedTopic"),
-            @ApiResponse(code = 409, message = "Partitioned topic already exist"),
-            @ApiResponse(code = 412,
-                    message = "Failed Reason : Name is invalid or Namespace does not have any clusters configured"),
-            @ApiResponse(code = 500, message = "Internal server error"),
-            @ApiResponse(code = 503, message = "Failed to validate global cluster configuration")
+            @ApiResponse(responseCode = "409", description = "Partitioned topic already exist"),
+            @ApiResponse(responseCode = "412",
+                    description = "Failed Reason : Name is invalid or Namespace does not have any clusters configured"),
+            @ApiResponse(responseCode = "500", description = "Internal server error"),
+            @ApiResponse(responseCode = "503", description = "Failed to validate global cluster configuration")
     })
     public void createPartitionedTopic(
             @Suspended final AsyncResponse asyncResponse,
-            @ApiParam(value = "Specify the tenant", required = true)
+            @Parameter(description = "Specify the tenant", required = true)
             @PathParam("tenant") String tenant,
-            @ApiParam(value = "Specify the namespace", required = true)
+            @Parameter(description = "Specify the namespace", required = true)
             @PathParam("namespace") String namespace,
-            @ApiParam(value = "Specify topic name", required = true)
+            @Parameter(description = "Specify topic name", required = true)
             @PathParam("topic") @Encoded String encodedTopic,
-            @ApiParam(value = "The metadata for the topic",
-                    required = true, type = "PartitionedTopicMetadata") PartitionedTopicMetadata metadata,
+            @RequestBody(description = "The metadata for the topic",
+                    required = true) PartitionedTopicMetadata metadata,
             @QueryParam("createLocalTopicOnly") @DefaultValue("false") boolean createLocalTopicOnly) {
         try {
             validateNamespaceName(tenant, namespace);
