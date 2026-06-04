@@ -63,7 +63,7 @@ public class ExtNonPersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "404", description = "Tenant or namespace doesn't exist"),
             @ApiResponse(responseCode = "406", description = "The number of partitions should be more than 0 and"
                     + " less than or equal to maxNumPartitionsPerPartitionedTopic"),
-            @ApiResponse(responseCode = "409", description = "Partitioned topic already exist"),
+            @ApiResponse(responseCode = "409", description = "Partitioned topic already exists"),
             @ApiResponse(responseCode = "412",
                     description = "Failed Reason : Name is invalid or Namespace does not have any clusters configured"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),

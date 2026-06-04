@@ -321,7 +321,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "404", description = "Tenant or namespace doesn't exist"),
             @ApiResponse(responseCode = "406", description = "The number of partitions should be more than 0 and"
                     + " less than or equal to maxNumPartitionsPerPartitionedTopic"),
-            @ApiResponse(responseCode = "409", description = "Partitioned topic already exist"),
+            @ApiResponse(responseCode = "409", description = "Partitioned topic already exists"),
             @ApiResponse(responseCode = "412",
                     description = "Failed Reason : Name is invalid or Namespace does not have any clusters configured"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),
@@ -367,7 +367,7 @@ public class PersistentTopics extends PersistentTopicsBase {
                     description = "Don't have permission to administrate resources on this tenant"),
             @ApiResponse(responseCode = "404", description = "Tenant or namespace doesn't exist"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
-            @ApiResponse(responseCode = "409", description = "Partitioned topic already exist"),
+            @ApiResponse(responseCode = "409", description = "Partitioned topic already exists"),
             @ApiResponse(responseCode = "412",
                     description = "Failed Reason : Name is invalid or Namespace does not have any clusters configured"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),
@@ -916,7 +916,7 @@ public class PersistentTopics extends PersistentTopicsBase {
     @POST
     @Path("/{tenant}/{namespace}/{topic}/partitions")
     @Operation(summary = "Increment partitions of an existing partitioned topic.",
-            description = "It increments partitions of existing partitioned-topic")
+            description = "It increments the partitions of an existing partitioned topic.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Update topic partition successful."),
             @ApiResponse(responseCode = "307",
@@ -1772,7 +1772,7 @@ public class PersistentTopics extends PersistentTopicsBase {
 
     @POST
     @Path("/{tenant}/{namespace}/{topic}/subscription/{subName}/expireMessages/{expireTimeInSeconds}")
-    @Operation(summary = "Expiry messages on a topic subscription.")
+    @Operation(summary = "Expire messages on a topic subscription.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "307",
@@ -1783,7 +1783,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
             @ApiResponse(responseCode = "405",
-                    description = "Expiry messages on a non-persistent topic is not allowed"),
+                    description = "Expiring messages on a non-persistent topic is not allowed"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),
             @ApiResponse(responseCode = "503", description = "Failed to validate global cluster configuration")})
     public void expireTopicMessages(
@@ -1794,7 +1794,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @PathParam("namespace") String namespace,
             @Parameter(description = "Specify topic name", required = true)
             @PathParam("topic") @Encoded String encodedTopic,
-            @Parameter(description = "Subscription to be Expiry messages on")
+            @Parameter(description = "Subscription to expire messages on")
             @PathParam("subName") String encodedSubName,
             @Parameter(description = "Expires beyond the specified number of seconds",
                     schema = @Schema(defaultValue = "0"))
@@ -1814,7 +1814,7 @@ public class PersistentTopics extends PersistentTopicsBase {
 
     @POST
     @Path("/{tenant}/{namespace}/{topic}/subscription/{subName}/expireMessages")
-    @Operation(summary = "Expiry messages on a topic subscription.")
+    @Operation(summary = "Expire messages on a topic subscription.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "307",
@@ -1825,7 +1825,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
             @ApiResponse(responseCode = "405",
-                    description = "Expiry messages on a non-persistent topic is not allowed"),
+                    description = "Expiring messages on a non-persistent topic is not allowed"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),
             @ApiResponse(responseCode = "503", description = "Failed to validate global cluster configuration")})
     public void expireTopicMessages(
@@ -1836,7 +1836,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @PathParam("namespace") String namespace,
             @Parameter(description = "Specify topic name", required = true)
             @PathParam("topic") @Encoded String encodedTopic,
-            @Parameter(description = "Subscription to be Expiry messages on")
+            @Parameter(description = "Subscription to expire messages on")
             @PathParam("subName") String encodedSubName,
             @Parameter(description = "Whether leader broker redirected this call to this broker. For internal use.")
             @QueryParam("authoritative") @DefaultValue("false") boolean authoritative,
@@ -1857,7 +1857,7 @@ public class PersistentTopics extends PersistentTopicsBase {
 
     @POST
     @Path("/{tenant}/{namespace}/{topic}/all_subscription/expireMessages/{expireTimeInSeconds}")
-    @Operation(summary = "Expiry messages on all subscriptions of topic.")
+    @Operation(summary = "Expire messages on all subscriptions of a topic.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "307",
@@ -1868,7 +1868,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace or topic or subscription does not exist"),
             @ApiResponse(responseCode = "405",
-                    description = "Expiry messages on a non-persistent topic is not allowed"),
+                    description = "Expiring messages on a non-persistent topic is not allowed"),
             @ApiResponse(responseCode = "412", description = "Can't find owner for topic"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),
             @ApiResponse(responseCode = "503", description = "Failed to validate global cluster configuration")})
@@ -1904,7 +1904,7 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "307",
                     description = "Current broker doesn't serve the namespace of this topic"),
             @ApiResponse(responseCode = "400",
-                    description = "Create subscription on non persistent topic is not supported"),
+                    description = "Creating a subscription on a non-persistent topic is not supported"),
             @ApiResponse(responseCode = "401",
                     description = "Don't have permission to administrate resources on this tenant or "
                     + "subscriber is not authorized to access this operation"),
@@ -1968,7 +1968,7 @@ public class PersistentTopics extends PersistentTopicsBase {
     @POST
     @Path("/{tenant}/{namespace}/{topic}/subscription/{subName}/resetcursor/{timestamp}")
     @Operation(summary = "Reset subscription to message position closest to absolute timestamp (in ms).",
-            description = "It fence cursor and disconnects all active consumers before resetting cursor.")
+            description = "It fences the cursor and disconnects all active consumers before resetting the cursor.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "307",
@@ -2157,7 +2157,7 @@ public class PersistentTopics extends PersistentTopicsBase {
     @POST
     @Path("/{tenant}/{namespace}/{topic}/subscription/{subName}/resetcursor")
     @Operation(summary = "Reset subscription to message position closest to given position.",
-            description = "It fence cursor and disconnects all active consumers before resetting cursor.")
+            description = "It fences the cursor and disconnects all active consumers before resetting the cursor.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "307",
@@ -4775,11 +4775,11 @@ public class PersistentTopics extends PersistentTopicsBase {
     @GET
     @Path("/{tenant}/{namespace}/{topic}/subscriptionTypesEnabled")
     @Operation(
-            summary = "Get is enable sub type for specified topic.")
+            summary = "Get the enabled subscription types for the specified topic.")
     @ApiResponses(value = {
             @ApiResponse(
                     responseCode = "200",
-                    description = "Get is enable sub type for specified topic.",
+                    description = "Get the enabled subscription types for the specified topic.",
                     content = @Content(array = @ArraySchema(schema =
                             @Schema(implementation = CommandSubscribe.SubType.class)))),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -4810,7 +4810,7 @@ public class PersistentTopics extends PersistentTopicsBase {
 
     @POST
     @Path("/{tenant}/{namespace}/{topic}/subscriptionTypesEnabled")
-    @Operation(summary = "Set is enable sub types for specified topic")
+    @Operation(summary = "Set the enabled subscription types for the specified topic")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -5578,7 +5578,8 @@ public class PersistentTopics extends PersistentTopicsBase {
             @ApiResponse(responseCode = "404", description = "Namespace or partitioned topic does not exist, "
                     + "or the index is invalid"),
             @ApiResponse(responseCode = "406", description = "The topic is not a persistent topic"),
-            @ApiResponse(responseCode = "412", description = "The broker is not enable broker entry metadata"),
+            @ApiResponse(responseCode = "412",
+                    description = "The broker does not have broker entry metadata enabled"),
     })
     public void getMessageIDByIndex(@Suspended final AsyncResponse asyncResponse,
                                     @PathParam("tenant") String tenant,

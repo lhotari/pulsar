@@ -307,7 +307,7 @@ public class Transactions extends TransactionsBase {
                     + "or coordinator or transaction doesn't exist"),
             @ApiResponse(responseCode = "503", description = "This Broker is not configured "
                     + "with transactionCoordinatorEnabled=true."),
-            @ApiResponse(responseCode = "307", description = "Topic don't owner by this broker!"),
+            @ApiResponse(responseCode = "307", description = "Topic is not owned by this broker!"),
             @ApiResponse(responseCode = "400", description = "Topic is not a persistent topic!"),
             @ApiResponse(responseCode = "409", description = "Concurrent modification")})
     public void getSlowTransactions(@Suspended final AsyncResponse asyncResponse,
@@ -330,7 +330,7 @@ public class Transactions extends TransactionsBase {
             @ApiResponse(responseCode = "503", description = "This Broker is not "
                     + "configured with transactionCoordinatorEnabled=true."),
             @ApiResponse(responseCode = "404", description = "Transaction coordinator not found"),
-            @ApiResponse(responseCode = "405", description = "Broker don't use MLTransactionMetadataStore!"),
+            @ApiResponse(responseCode = "405", description = "Broker doesn't use MLTransactionMetadataStore!"),
             @ApiResponse(responseCode = "409", description = "Concurrent modification")})
     public void getCoordinatorInternalStats(@Suspended final AsyncResponse asyncResponse,
                                             @QueryParam("authoritative")
@@ -354,7 +354,7 @@ public class Transactions extends TransactionsBase {
             @ApiResponse(responseCode = "503", description = "This Broker is not configured "
                     + "with transactionCoordinatorEnabled=true."),
             @ApiResponse(responseCode = "307", description = "Topic is not owned by this broker!"),
-            @ApiResponse(responseCode = "405", description = "Pending ack handle don't use managedLedger!"),
+            @ApiResponse(responseCode = "405", description = "Pending ack handle doesn't use managedLedger!"),
             @ApiResponse(responseCode = "400", description = "Topic is not a persistent topic!"),
             @ApiResponse(responseCode = "409", description = "Concurrent modification")})
     public void getPendingAckInternalStats(@Suspended final AsyncResponse asyncResponse,
@@ -409,9 +409,9 @@ public class Transactions extends TransactionsBase {
                             @Schema(implementation = TransactionBufferInternalStats.class))),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Tenant or cluster or namespace or topic doesn't exist"),
-            @ApiResponse(responseCode = "503", description = "This Broker is not enable transaction"),
+            @ApiResponse(responseCode = "503", description = "This Broker does not have transactions enabled"),
             @ApiResponse(responseCode = "307", description = "Topic is not owned by this broker!"),
-            @ApiResponse(responseCode = "405", description = "Transaction buffer don't use managedLedger!"),
+            @ApiResponse(responseCode = "405", description = "Transaction buffer doesn't use managedLedger!"),
             @ApiResponse(responseCode = "400", description = "Topic is not a persistent topic!"),
             @ApiResponse(responseCode = "409", description = "Concurrent modification")
     })
@@ -476,7 +476,7 @@ public class Transactions extends TransactionsBase {
             @ApiResponse(responseCode = "503", description = "This Broker is not configured "
                     + "with transactionCoordinatorEnabled=true."),
             @ApiResponse(responseCode = "307", description = "Topic is not owned by this broker!"),
-            @ApiResponse(responseCode = "405", description = "Pending ack handle don't use managedLedger!"),
+            @ApiResponse(responseCode = "405", description = "Pending ack handle doesn't use managedLedger!"),
             @ApiResponse(responseCode = "400", description = "Topic is not a persistent topic!"),
             @ApiResponse(responseCode = "409", description = "Concurrent modification")})
     public void getPositionStatsInPendingAck(@Suspended final AsyncResponse asyncResponse,

@@ -50,7 +50,7 @@ public class AutoFailoverPolicyDataImpl implements AutoFailoverPolicyData {
             name = "parameters",
             description =
                     "The parameters applied to the auto failover policy specified by `policy_type`.\n"
-                            + "The parameters for 'min_available' are :\n"
+                            + "The parameters for 'min_available' are:\n"
                             + "  - 'min_limit': the limit of minimal number of available brokers in primary"
                             + " group before auto failover\n"
                             + "  - 'usage_threshold': the resource usage threshold. If the usage of a broker"

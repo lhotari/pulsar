@@ -106,7 +106,8 @@ public class ConsumerConfigurationData<T> implements Serializable, Cloneable {
 
     @Schema(
             name = "negativeAckRedeliveryBackoff",
-            description = "Interface for custom message is negativeAcked policy. You can specify `RedeliveryBackoff`"
+            description = "Interface for the custom message negative-acknowledgment policy. You can specify"
+                    + " `RedeliveryBackoff`"
                     + " for a consumer."
     )
     @JsonIgnore
@@ -114,7 +115,7 @@ public class ConsumerConfigurationData<T> implements Serializable, Cloneable {
 
     @Schema(
             name = "ackTimeoutRedeliveryBackoff",
-            description = "Interface for custom message is ackTimeout policy. You can specify `RedeliveryBackoff`"
+            description = "Interface for the custom message ack-timeout policy. You can specify `RedeliveryBackoff`"
                     + " for a consumer."
     )
     @JsonIgnore
@@ -164,7 +165,7 @@ public class ConsumerConfigurationData<T> implements Serializable, Cloneable {
             name = "negativeAckPrecisionBitCnt",
             description = "The redelivery time precision bit count. The lower bits of the redelivery time will be"
                     + " trimmed to reduce the memory occupation.\nThe default value is 8, which means the"
-                    + " redelivery time will be bucketed by 256ms, the redelivery time could be earlier(no later)"
+                    + " redelivery time will be bucketed by 256ms, the redelivery time could be earlier (no later)"
                     + " than the expected time, but no more than 256ms. \nIf set to k, the redelivery time will be"
                     + " bucketed by 2^k ms.\nIf the value is 0, the redelivery time will be accurate to ms."
     )
@@ -276,13 +277,13 @@ public class ConsumerConfigurationData<T> implements Serializable, Cloneable {
             name = "cryptoFailureAction",
             description = "Consumer should take action when it receives a message that can not be decrypted.\n"
                     + "* **FAIL**: this is the default option to fail messages until crypto succeeds.\n"
-                    + "* **DISCARD**:silently acknowledge and not deliver message to an application.\n"
+                    + "* **DISCARD**: silently acknowledge and not deliver message to an application.\n"
                     + "* **CONSUME**: deliver encrypted messages to applications. It is the application's"
                     + " responsibility to decrypt the message.\n"
                     + "\n"
                     + "The decompression of message fails.\n"
                     + "\n"
-                    + "If messages contain batch messages, a client is not be able to retrieve individual messages in"
+                    + "If messages contain batch messages, a client is not able to retrieve individual messages in"
                     + " batch.\n"
                     + "\n"
                     + "Delivered encrypted message contains {@link EncryptionContext} which contains encryption and "

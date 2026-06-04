@@ -632,7 +632,7 @@ public class NonPersistentTopics extends PersistentTopics {
                                 @Parameter(description = "Whether leader broker redirected this "
                                         + "call to this broker. For internal use.")
                                 @QueryParam("authoritative") @DefaultValue("false") boolean authoritative,
-                                @RequestBody(description = "Enable sub types for the specified topic")
+                                @RequestBody(description = "Entry filters for the specified topic")
                                         EntryFilters entryFilters) {
         validateTopicName(tenant, namespace, encodedTopic);
         preValidation(authoritative)

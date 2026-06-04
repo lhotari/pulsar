@@ -228,10 +228,10 @@ public class BrokersBase extends AdminResource {
     @DELETE
     @Path("/configuration/{configName}")
     @Operation(summary =
-            "Delete dynamic ServiceConfiguration into metadata only."
+            "Delete dynamic ServiceConfiguration from metadata only."
                     + " This operation requires Pulsar super-user privileges.")
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "204", description = "Service configuration delete successfully"),
+            @ApiResponse(responseCode = "204", description = "Service configuration deleted successfully"),
             @ApiResponse(responseCode = "403",
                     description = "You don't have admin permission to update service-configuration"),
             @ApiResponse(responseCode = "412", description = "Invalid dynamic-config value"),
@@ -259,10 +259,10 @@ public class BrokersBase extends AdminResource {
 
     @GET
     @Path("/configuration/values")
-    @Operation(summary = "Get value of all dynamic configurations' value overridden on local config")
+    @Operation(summary = "Get the values of all dynamic configurations overridden on local config")
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200",
-            description = "Get value of all dynamic configurations' value overridden on local config",
+            description = "Get the values of all dynamic configurations overridden on local config",
             content = @Content(schema = @Schema(type = "object", additionalPropertiesSchema = String.class))),
         @ApiResponse(responseCode = "403", description = "You don't have admin permission to view configuration"),
         @ApiResponse(responseCode = "404", description = "Configuration not found"),
@@ -283,9 +283,9 @@ public class BrokersBase extends AdminResource {
 
     @GET
     @Path("/configuration")
-    @Operation(summary = "Get all updatable dynamic configurations's name")
+    @Operation(summary = "Get all updatable dynamic configurations' names")
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Get all updatable dynamic configurations's name",
+            @ApiResponse(responseCode = "200", description = "Get all updatable dynamic configurations' names",
                     content = @Content(array = @ArraySchema(schema = @Schema(implementation = String.class)))),
             @ApiResponse(responseCode = "403", description = "You don't have admin permission to get configuration")})
     public void getDynamicConfigurationName(@Suspended AsyncResponse asyncResponse) {
@@ -373,7 +373,7 @@ public class BrokersBase extends AdminResource {
 
     @GET
     @Path("/backlog-quota-check")
-    @Operation(summary = "An REST endpoint to trigger backlogQuotaCheck")
+    @Operation(summary = "A REST endpoint to trigger backlogQuotaCheck")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Everything is OK"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -512,7 +512,7 @@ public class BrokersBase extends AdminResource {
             @ApiResponse(responseCode = "500", description = "Internal server error")})
     public void shutDownBrokerGracefully(
             @Parameter(name = "maxConcurrentUnloadPerSec",
-                    description = "if the value absent(value=0) means no concurrent limitation.")
+                    description = "If the value is absent (value=0), it means there is no concurrency limit.")
             @QueryParam("maxConcurrentUnloadPerSec") int maxConcurrentUnloadPerSec,
             @QueryParam("forcedTerminateTopic") @DefaultValue("true") boolean forcedTerminateTopic,
             @Suspended final AsyncResponse asyncResponse

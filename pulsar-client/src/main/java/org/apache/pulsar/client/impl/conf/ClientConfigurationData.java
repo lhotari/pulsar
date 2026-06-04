@@ -158,7 +158,7 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     @Schema(
             name = "connectionMaxIdleSeconds",
             description = "Release the connection if it is not used for more than [connectionMaxIdleSeconds] seconds. "
-                    + "If [connectionMaxIdleSeconds] < 0, disabled the feature that auto release the idle connections"
+                    + "If [connectionMaxIdleSeconds] < 0, disables the feature that auto-releases the idle connections"
     )
     private int connectionMaxIdleSeconds = 60;
 
@@ -295,7 +295,7 @@ public class ClientConfigurationData implements Serializable, Cloneable {
             name = "listenerName",
             description = "Listener name for lookup. Clients can use listenerName to choose one of the listeners "
                     + "as the service URL to create a connection to the broker as long as the network is accessible."
-                    + " \"advertisedListeners\" must enabled in broker side."
+                    + " \"advertisedListeners\" must be enabled on the broker side."
     )
     private String listenerName;
 

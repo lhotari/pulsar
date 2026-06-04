@@ -36,13 +36,13 @@ import lombok.NoArgsConstructor;
 public final class ClusterPoliciesImpl implements  ClusterPolicies, Cloneable {
     @Schema(
             name = "migrated",
-            description = "flag to check if cluster is migrated to different cluster",
+            description = "Flag to check if the cluster is migrated to a different cluster",
             example = "true/false"
     )
     private boolean migrated;
     @Schema(
             name = "migratedClusterUrl",
-            description = "url of cluster where current cluster is migrated"
+            description = "URL of the cluster to which the current cluster is migrated"
     )
     private ClusterUrl migratedClusterUrl;
 

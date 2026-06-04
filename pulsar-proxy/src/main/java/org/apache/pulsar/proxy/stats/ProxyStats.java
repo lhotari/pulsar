@@ -110,7 +110,7 @@ public class ProxyStats {
     @POST
     @Path("/logging/{logLevel}")
     @Operation(hidden = true, summary = "Change proxy logging level dynamically",
-            description = "It only changes log-level in memory, change it config file to persist the change")
+            description = "It only changes the log level in memory; change it in the config file to persist the change")
     @ApiResponses(value = { @ApiResponse(responseCode = "412", description = "Proxy log level can be [0-2]"), })
     public void updateProxyLogLevel(@PathParam("logLevel") int logLevel) {
         throwIfNotSuperUser("updateProxyLogLevel");

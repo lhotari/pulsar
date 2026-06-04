@@ -37,7 +37,7 @@ public class TenantInfoImpl implements TenantInfo {
      * List of role enabled as admin for this tenant.
      */
     @Schema(
-            description = "Comma separated list of auth principal allowed to administrate the tenant.",
+            description = "Comma separated list of auth principals allowed to administrate the tenant.",
             name = "adminRoles"
     )
     private Set<String> adminRoles;

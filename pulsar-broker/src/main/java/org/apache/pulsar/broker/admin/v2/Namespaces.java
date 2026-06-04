@@ -1005,7 +1005,7 @@ public class Namespaces extends NamespacesBase {
     @Path("/{tenant}/{namespace}/unload")
     @Operation(summary = "Unload namespace",
             description = "Unload an active namespace from the current broker serving it. Performing this operation"
-                    + " will let the broker removes all producers, consumers, and connections using this namespace,"
+                    + " will make the broker remove all producers, consumers, and connections using this namespace,"
                     + " and close all topics (including their persistent store). During that operation,"
                     + " the namespace is marked as tentatively unavailable until the broker completes "
                     + "the unloading action. This operation requires strictly super user privileges,"
@@ -2553,12 +2553,12 @@ public class Namespaces extends NamespacesBase {
 
     @GET
     @Path("{cluster}/antiAffinity/{group}")
-    @Operation(summary = "Get all namespaces that are grouped by given anti-affinity group in a given cluster."
-            + " api can be only accessed by admin of any of the existing tenant")
+    @Operation(summary = "Get all namespaces that are grouped by the given anti-affinity group in a given cluster."
+            + " This API can only be accessed by an admin of any of the existing tenants.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200",
-                    description = "Get all namespaces that are grouped by given anti-affinity group in a given cluster."
-                            + " api can be only accessed by admin of any of the existing tenant",
+                    description = "Get all namespaces that are grouped by the given anti-affinity group in a given"
+                            + " cluster. This API can only be accessed by an admin of any of the existing tenants.",
                     content = @Content(array = @ArraySchema(schema = @Schema(implementation = String.class)))),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "412", description = "Cluster not exist/Anti-affinity group can't be empty.")})
@@ -2584,7 +2584,7 @@ public class Namespaces extends NamespacesBase {
     @Path("/{tenant}/{namespace}/compactionThreshold")
     @Operation(summary = "Maximum number of uncompacted bytes in topics before compaction is triggered.",
                   description = "The backlog size is compared to the threshold periodically. "
-                          + "A threshold of 0 disabled automatic compaction")
+                          + "A threshold of 0 disables automatic compaction")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200",
                     description = "Maximum number of uncompacted bytes in topics before compaction is triggered.",
@@ -2613,7 +2613,7 @@ public class Namespaces extends NamespacesBase {
     @Path("/{tenant}/{namespace}/compactionThreshold")
     @Operation(summary = "Set maximum number of uncompacted bytes in a topic before compaction is triggered.",
             description = "The backlog size is compared to the threshold periodically. "
-                    + "A threshold of 0 disabled automatic compaction")
+                    + "A threshold of 0 disables automatic compaction")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -2633,7 +2633,7 @@ public class Namespaces extends NamespacesBase {
     @Path("/{tenant}/{namespace}/compactionThreshold")
     @Operation(summary = "Delete maximum number of uncompacted bytes in a topic before compaction is triggered.",
             description = "The backlog size is compared to the threshold periodically. "
-                    + "A threshold of 0 disabled automatic compaction")
+                    + "A threshold of 0 disables automatic compaction")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -2931,9 +2931,9 @@ public class Namespaces extends NamespacesBase {
 
     @GET
     @Path("/{tenant}/{namespace}/isAllowAutoUpdateSchema")
-    @Operation(summary = "The flag of whether allow auto update schema")
+    @Operation(summary = "The flag of whether to allow auto update schema")
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "The flag of whether allow auto update schema",
+            @ApiResponse(responseCode = "200", description = "The flag of whether to allow auto update schema",
                     content = @Content(schema = @Schema(implementation = Boolean.class))),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
             @ApiResponse(responseCode = "404", description = "Namespace doesn't exist"),
@@ -2965,7 +2965,7 @@ public class Namespaces extends NamespacesBase {
 
     @POST
     @Path("/{tenant}/{namespace}/isAllowAutoUpdateSchema")
-    @Operation(summary = "Update flag of whether allow auto update schema")
+    @Operation(summary = "Update flag of whether to allow auto update schema")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -2990,9 +2990,9 @@ public class Namespaces extends NamespacesBase {
 
     @GET
     @Path("/{tenant}/{namespace}/subscriptionTypesEnabled")
-    @Operation(summary = "The set of whether allow subscription types")
+    @Operation(summary = "The set of enabled subscription types")
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "The set of whether allow subscription types",
+            @ApiResponse(responseCode = "200", description = "The set of enabled subscription types",
                     content = @Content(array = @ArraySchema(schema = @Schema(implementation = SubscriptionType.class),
                             uniqueItems = true))),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -3023,7 +3023,7 @@ public class Namespaces extends NamespacesBase {
 
     @POST
     @Path("/{tenant}/{namespace}/subscriptionTypesEnabled")
-    @Operation(summary = "Update set of whether allow share sub type")
+    @Operation(summary = "Update the set of enabled subscription types")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),
@@ -3032,7 +3032,7 @@ public class Namespaces extends NamespacesBase {
     public void setSubscriptionTypesEnabled(
             @PathParam("tenant") String tenant,
             @PathParam("namespace") String namespace,
-            @RequestBody(description = "Set of whether allow subscription types", required = true)
+            @RequestBody(description = "Set of enabled subscription types", required = true)
                     Set<SubscriptionType> subscriptionTypesEnabled) {
         validateNamespaceName(tenant, namespace);
         internalSetSubscriptionTypesEnabled(subscriptionTypesEnabled);
@@ -3136,9 +3136,9 @@ public class Namespaces extends NamespacesBase {
     @Path("/{tenant}/{namespace}/schemaValidationEnforced")
     @Operation(summary = "Get schema validation enforced flag for namespace.",
                   description = "If the flag is set to true, when a producer without a schema attempts to produce "
-                          + "to a topic with schema in this namespace, the producer will be failed to connect. "
-                          + "PLEASE be carefully on using this, since non-java clients don't support schema.if you "
-                          + "enable this setting, it will cause non-java clients failed to produce.")
+                          + "to a topic with schema in this namespace, the producer will fail to connect. "
+                          + "PLEASE be careful when using this, since non-Java clients don't support schema. If you "
+                          + "enable this setting, it will cause non-Java clients to fail to produce.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Get schema validation enforced flag for namespace.",
                     content = @Content(schema = @Schema(implementation = Boolean.class))),
@@ -3175,9 +3175,9 @@ public class Namespaces extends NamespacesBase {
     @Path("/{tenant}/{namespace}/schemaValidationEnforced")
     @Operation(summary = "Set schema validation enforced flag on namespace.",
             description = "If the flag is set to true, when a producer without a schema attempts to produce to a topic"
-                    + " with schema in this namespace, the producer will be failed to connect. PLEASE be"
-                    + " carefully on using this, since non-java clients don't support schema.if you enable"
-                    + " this setting, it will cause non-java clients failed to produce.")
+                    + " with schema in this namespace, the producer will fail to connect. PLEASE be"
+                    + " careful when using this, since non-Java clients don't support schema. If you enable"
+                    + " this setting, it will cause non-Java clients to fail to produce.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "403", description = "Don't have admin permission"),

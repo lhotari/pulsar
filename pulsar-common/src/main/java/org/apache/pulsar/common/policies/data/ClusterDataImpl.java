@@ -86,7 +86,7 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
     private String authenticationParameters;
     @Schema(
             name = "proxyProtocol",
-            description = "protocol to decide type of proxy routing eg: SNI-routing",
+            description = "Protocol to decide the type of proxy routing, e.g. SNI-routing",
             example = "SNI"
     )
     private ProxyProtocol proxyProtocol;
@@ -114,7 +114,7 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
     private boolean tlsAllowInsecureConnection;
     @Schema(
         name = "brokerClientTlsEnabledWithKeyStore",
-        description = "Whether internal client use KeyStore type to authenticate with other Pulsar brokers"
+        description = "Whether the internal client uses KeyStore type to authenticate with other Pulsar brokers"
     )
     private boolean brokerClientTlsEnabledWithKeyStore;
     @Schema(

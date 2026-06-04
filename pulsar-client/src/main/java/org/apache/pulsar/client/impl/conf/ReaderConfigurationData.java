@@ -114,13 +114,14 @@ public class ReaderConfigurationData<T> implements Serializable, Cloneable {
                     + "\n"
                     + "The message decompression fails.\n"
                     + "\n"
-                    + "If messages contain batch messages, a client is not be able to retrieve individual messages in"
+                    + "If messages contain batch messages, a client is not able to retrieve individual messages in"
                     + " batch.\n"
                     + "\n"
                     + "Delivered encrypted message contains {@link EncryptionContext} which contains encryption and "
                     + "compression information in it using which application can decrypt consumed message payload."
-                    + " cannot set with {@link ReaderDecryptFailListener}, and if ReaderDecryptFailListener are set,\n"
-                    + "application should responsible for handling decryption failure."
+                    + " It cannot be set together with a {@link ReaderDecryptFailListener}, and if a"
+                    + " ReaderDecryptFailListener is set,\n"
+                    + "the application is responsible for handling decryption failures."
     )
     private ConsumerCryptoFailureAction cryptoFailureAction;
 

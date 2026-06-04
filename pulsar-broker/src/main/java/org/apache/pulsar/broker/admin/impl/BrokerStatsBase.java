@@ -51,7 +51,7 @@ public class BrokerStatsBase extends AdminResource {
     @GET
     @Path("/metrics")
     @Operation(summary = "Gets the metrics for Monitoring",
-            description = "Requested should be executed by Monitoring agent on each broker to fetch the metrics")
+            description = "The request should be executed by the Monitoring agent on each broker to fetch the metrics")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Gets the metrics for Monitoring",
                     content = @Content(array = @ArraySchema(schema = @Schema(implementation = Metrics.class)))),

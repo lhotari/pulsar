@@ -48,7 +48,8 @@ public class WorkerStats extends AdminResource {
     @Path("/metrics")
     @Operation(
             summary = "Gets the metrics for Monitoring",
-            description = "Request should be executed by Monitoring agent on each worker to fetch the worker-metrics")
+            description = "The request should be executed by a Monitoring agent on each worker "
+                    + "to fetch the worker-metrics")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Gets the metrics for Monitoring",
                     content = @Content(array = @ArraySchema(
@@ -65,7 +66,7 @@ public class WorkerStats extends AdminResource {
     @Path("/functionsmetrics")
     @Operation(
             summary = "Get metrics for all functions owned by worker",
-            description = "Requested should be executed by Monitoring agent on each worker to fetch the metrics")
+            description = "The request should be executed by a Monitoring agent on each worker to fetch the metrics")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Get metrics for all functions owned by worker",
                     content = @Content(array = @ArraySchema(

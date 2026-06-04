@@ -57,9 +57,10 @@ public class SourcesBase extends AdminResource {
     @POST
     @Operation(summary = "Creates a new Pulsar Source in cluster mode")
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "200", description = "Pulsar Function successfully created"),
+            @ApiResponse(responseCode = "200", description = "Pulsar Source successfully created"),
             @ApiResponse(responseCode = "400", description =
-                    "Invalid request (Function already exists or Tenant, Namespace or Name is not provided, etc.)"),
+                    "Invalid request (The Pulsar Source already exists or Tenant,"
+                            + " Namespace or Name is not provided, etc.)"),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
             @ApiResponse(responseCode = "500", description = "Internal Server Error"),
             @ApiResponse(responseCode = "503",
@@ -83,7 +84,7 @@ public class SourcesBase extends AdminResource {
                             + "Follow the steps below.\n"
                             + "1. Create a JSON object using some of the following parameters.\n"
                             + "A JSON value presenting configuration payload of a Pulsar Source."
-                            + " An example of the expected functions can be found here.\n"
+                            + " An example of the expected Pulsar Source can be found here.\n"
                             + "- **classname**\n"
                             + "  The class name of a Pulsar Source if archive is file-url-path (file://).\n"
                             + "- **topicName**\n"
@@ -91,16 +92,16 @@ public class SourcesBase extends AdminResource {
                             + "- **serdeClassName**\n"
                             + "  The SerDe classname for the Pulsar Source.\n"
                             + "- **schemaType**\n"
-                            + "  The schema type (either a builtin schema like 'avro', 'json', etc.. or  "
+                            + "  The schema type (either a builtin schema like 'avro', 'json', etc. or  "
                             + "  custom Schema class name to be used to"
                             + " encode messages emitted from the Pulsar Source)\n"
                             + "- **configs**\n"
                             + "  Source config key/values\n"
                             + "- **secrets**\n"
-                            + "  This is a map of secretName(that is how the secret is going"
+                            + "  This is a map of secretName (that is how the secret is going"
                             + " to be accessed in the function via context) to an object that"
                             + "  encapsulates how the secret is fetched by the underlying secrets provider."
-                            + " The type of an value here can be found by the"
+                            + " The type of a value here can be found by the"
                             + "  SecretProviderConfigurator.getSecretObjectType() method. \n"
                             + "- **parallelism**\n"
                             + "  The parallelism factor of a Pulsar Source"
@@ -128,10 +129,11 @@ public class SourcesBase extends AdminResource {
     @ApiResponses(value = {
             @ApiResponse(responseCode = "403", description = "The requester doesn't have admin permissions"),
             @ApiResponse(responseCode = "400", description =
-                    "Invalid request (Function already exists or Tenant, Namespace or Name is not provided, etc.)"),
+                    "Invalid request (The Pulsar Source already exists or Tenant,"
+                            + " Namespace or Name is not provided, etc.)"),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "200", description = "Pulsar Function successfully updated"),
-            @ApiResponse(responseCode = "404", description = "Not Found(The Pulsar Source doesn't exist)"),
+            @ApiResponse(responseCode = "200", description = "Pulsar Source successfully updated"),
+            @ApiResponse(responseCode = "404", description = "Not Found (The Pulsar Source doesn't exist)"),
             @ApiResponse(responseCode = "500", description = "Internal Server Error"),
             @ApiResponse(responseCode = "503",
                     description = "Function worker service is now initializing. Please try again later.")
@@ -158,16 +160,16 @@ public class SourcesBase extends AdminResource {
                             + "- **serdeClassName**\n"
                             + "  The SerDe classname for the Pulsar Source.\n"
                             + "- **schemaType**\n"
-                            + "  The schema type (either a builtin schema like 'avro', 'json', etc.. or  "
+                            + "  The schema type (either a builtin schema like 'avro', 'json', etc. or  "
                             + "  custom Schema class name to be used to encode"
                             + " messages emitted from the Pulsar Source)\n"
                             + "- **configs**\n"
                             + "  Pulsar Source config key/values\n"
                             + "- **secrets**\n"
-                            + "  This is a map of secretName(that is how the secret is going to"
+                            + "  This is a map of secretName (that is how the secret is going to"
                             + " be accessed in the function via context) to an object that"
                             + "  encapsulates how the secret is fetched by the underlying secrets provider."
-                            + " The type of an value here can be found by the"
+                            + " The type of a value here can be found by the"
                             + "  SecretProviderConfigurator.getSecretObjectType() method.\n"
                             + "- **parallelism**\n"
                             + "  The parallelism factor of a Pulsar Source"
@@ -197,9 +199,9 @@ public class SourcesBase extends AdminResource {
     @ApiResponses(value = {
             @ApiResponse(responseCode = "400", description = "Invalid request"),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "404", description = "Not Found(The Pulsar Source doesn't exist)"),
+            @ApiResponse(responseCode = "404", description = "Not Found (The Pulsar Source doesn't exist)"),
             @ApiResponse(responseCode = "408", description = "Request timeout"),
-            @ApiResponse(responseCode = "200", description = "The function was successfully deleted"),
+            @ApiResponse(responseCode = "200", description = "The Pulsar Source was successfully deleted"),
             @ApiResponse(responseCode = "500", description = "Internal Server Error"),
             @ApiResponse(responseCode = "503",
                     description = "Function worker service is now initializing. Please try again later.")
@@ -224,7 +226,7 @@ public class SourcesBase extends AdminResource {
                     description = "Fetches information about a Pulsar Source currently running in cluster mode",
                     content = @Content(schema = @Schema(implementation = SourceConfig.class))),
             @ApiResponse(responseCode = "400", description = "Invalid request"),
-            @ApiResponse(responseCode = "404", description = "Not Found(The Pulsar Source doesn't exist)"),
+            @ApiResponse(responseCode = "404", description = "Not Found (The Pulsar Source doesn't exist)"),
             @ApiResponse(responseCode = "503",
                     description = "Function worker service is now initializing. Please try again later.")
     })
@@ -325,7 +327,7 @@ public class SourcesBase extends AdminResource {
                     description = "Current broker doesn't serve the namespace of this source"),
             @ApiResponse(responseCode = "400", description = "Invalid request"),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "404", description = "Not Found(The Pulsar Source doesn't exist)"),
+            @ApiResponse(responseCode = "404", description = "Not Found (The Pulsar Source doesn't exist)"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),
             @ApiResponse(responseCode = "503",
                     description = "Function worker service is now initializing. Please try again later.")
@@ -349,7 +351,7 @@ public class SourcesBase extends AdminResource {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "400", description = "Invalid request"),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "404", description = "Not Found(The Pulsar Source doesn't exist)"),
+            @ApiResponse(responseCode = "404", description = "Not Found (The Pulsar Source doesn't exist)"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),
             @ApiResponse(responseCode = "503",
                     description = "Function worker service is now initializing. Please try again later.")
@@ -372,7 +374,7 @@ public class SourcesBase extends AdminResource {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "400", description = "Invalid request"),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "404", description = "Not Found(The Pulsar Source doesn't exist)"),
+            @ApiResponse(responseCode = "404", description = "Not Found (The Pulsar Source doesn't exist)"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),
             @ApiResponse(responseCode = "503",
                     description = "Function worker service is now initializing. Please try again later.")
@@ -395,7 +397,7 @@ public class SourcesBase extends AdminResource {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "400", description = "Invalid request"),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "404", description = "Not Found(The Pulsar Source doesn't exist)"),
+            @ApiResponse(responseCode = "404", description = "Not Found (The Pulsar Source doesn't exist)"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),
             @ApiResponse(responseCode = "503",
                     description = "Function worker service is now initializing. Please try again later.")
@@ -418,7 +420,7 @@ public class SourcesBase extends AdminResource {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "400", description = "Invalid request"),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "404", description = "Not Found(The Pulsar Source doesn't exist)"),
+            @ApiResponse(responseCode = "404", description = "Not Found (The Pulsar Source doesn't exist)"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),
             @ApiResponse(responseCode = "503",
                     description = "Function worker service is now initializing. Please try again later.")
@@ -441,7 +443,7 @@ public class SourcesBase extends AdminResource {
             @ApiResponse(responseCode = "200", description = "Operation successful"),
             @ApiResponse(responseCode = "400", description = "Invalid request"),
             @ApiResponse(responseCode = "401", description = "Client is not authorized to perform operation"),
-            @ApiResponse(responseCode = "404", description = "Not Found(The Pulsar Source doesn't exist)"),
+            @ApiResponse(responseCode = "404", description = "Not Found (The Pulsar Source doesn't exist)"),
             @ApiResponse(responseCode = "500", description = "Internal server error"),
             @ApiResponse(responseCode = "503",
                     description = "Function worker service is now initializing. Please try again later.")
