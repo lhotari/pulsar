@@ -216,7 +216,7 @@ lightproto {
 // ── OpenAPI (Swagger) REST API documentation ────────────────────────────────
 // Mirrors the Maven build's `swagger` profile (kongchen swagger-maven-plugin, Swagger 1.x),
 // ported to the official Swagger Core v3 gradle plugin. Run on demand:
-//   ./gradlew :pulsar-broker:swaggerDocs        (outputs to pulsar-broker/build/docs/)
+//   ./gradlew :pulsar-broker:generateOpenApiSpecs   (outputs to pulsar-broker/build/openapi/)
 // The plugin's default `swaggerDeps` resolver dependencies target javax.ws.rs; declaring
 // our own dependencies on the configuration replaces them with the jakarta variants.
 dependencies {
@@ -295,10 +295,10 @@ registerSwaggerTask("swaggerPackages", "swaggerpackages", "packages-v3.json") {
 // Assemble the documentation set in the layout published on pulsar.apache.org (see e.g.
 // pulsar-site static/swagger/<version>/): all files flat, plus v2/ and v3/ subdirectory copies
 // grouped by REST API version.
-tasks.register<Sync>("swaggerDocs") {
+tasks.register<Sync>("generateOpenApiSpecs") {
     group = "documentation"
-    description = "Generates all OpenAPI REST API documentation files to build/docs"
-    into(layout.buildDirectory.dir("docs"))
+    description = "Generates all OpenAPI REST API documentation files to build/openapi"
+    into(layout.buildDirectory.dir("openapi"))
     val v2Tasks = listOf("swaggerAdminV2", "swaggerLookup")
     val v3Tasks = listOf("swaggerFunctions", "swaggerTransactions", "swaggerSource", "swaggerSink", "swaggerPackages")
     v2Tasks.forEach { t ->
