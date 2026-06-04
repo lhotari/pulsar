@@ -256,9 +256,6 @@ registerSwaggerTask("swaggerAdminV2", "swagger", "admin-v2.json") {
         "org.apache.pulsar.broker.admin.v2.Namespaces",
         "org.apache.pulsar.broker.admin.v2.NonPersistentTopics",
         "org.apache.pulsar.broker.admin.v2.PersistentTopics",
-        // See https://github.com/apache/pulsar/issues/18947
-        // "org.apache.pulsar.broker.admin.v2.ExtPersistentTopics",
-        // "org.apache.pulsar.broker.admin.v2.ExtNonPersistentTopics",
         "org.apache.pulsar.broker.admin.v2.ResourceGroups",
         "org.apache.pulsar.broker.admin.v2.ResourceQuotas",
         "org.apache.pulsar.broker.admin.v2.SchemasResource",

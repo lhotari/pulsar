@@ -29,6 +29,7 @@ import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.Encoded;
@@ -335,17 +336,54 @@ public class PersistentTopics extends PersistentTopicsBase {
             @PathParam("namespace") String namespace,
             @Parameter(description = "Specify topic name", required = true)
             @PathParam("topic") @Encoded String encodedTopic,
-            @RequestBody(description = "The number of partitions for the topic",
-                    required = true, content = @Content(schema = @Schema(type = "integer", defaultValue = "0")))
+            @RequestBody(description = "The number of partitions for the topic, or the partitioned topic metadata"
+                    + " (partitions and properties) when the request is sent with the '"
+                    + PartitionedTopicMetadata.MEDIA_TYPE + "' content type",
+                    required = true, content = {
+                            @Content(mediaType = MediaType.APPLICATION_JSON,
+                                    schema = @Schema(type = "integer", defaultValue = "0")),
+                            @Content(mediaType = PartitionedTopicMetadata.MEDIA_TYPE,
+                                    schema = @Schema(implementation = PartitionedTopicMetadata.class))})
                     int numPartitions,
             @QueryParam("createLocalTopicOnly") @DefaultValue("false") boolean createLocalTopicOnly) {
+        validateAndCreatePartitionedTopic(asyncResponse, tenant, namespace, encodedTopic, numPartitions,
+                createLocalTopicOnly, null);
+    }
+
+    @PUT
+    @Consumes(PartitionedTopicMetadata.MEDIA_TYPE)
+    @Path("/{tenant}/{namespace}/{topic}/partitions")
+    // hidden = true: this method shares PUT .../partitions with the overload above and OpenAPI forbids two
+    // operations on the same path and method (https://github.com/apache/pulsar/issues/18947). The request body
+    // this method accepts is documented on the overload above as the alternate
+    // 'application/vnd.partitioned-topic-metadata+json' content type.
+    @Operation(summary = "Create a partitioned topic.",
+            description = "It needs to be called before creating a producer on a partitioned topic.",
+            hidden = true)
+    public void createPartitionedTopic(
+            @Suspended final AsyncResponse asyncResponse,
+            @Parameter(description = "Specify the tenant", required = true)
+            @PathParam("tenant") String tenant,
+            @Parameter(description = "Specify the namespace", required = true)
+            @PathParam("namespace") String namespace,
+            @Parameter(description = "Specify topic name", required = true)
+            @PathParam("topic") @Encoded String encodedTopic,
+            @RequestBody(description = "The metadata for the topic",
+                    required = true) PartitionedTopicMetadata metadata,
+            @QueryParam("createLocalTopicOnly") @DefaultValue("false") boolean createLocalTopicOnly) {
+        validateAndCreatePartitionedTopic(asyncResponse, tenant, namespace, encodedTopic, metadata.partitions,
+                createLocalTopicOnly, metadata.properties);
+    }
+
+    protected void validateAndCreatePartitionedTopic(AsyncResponse asyncResponse, String tenant, String namespace,
+            String encodedTopic, int numPartitions, boolean createLocalTopicOnly, Map<String, String> properties) {
         try {
             validateNamespaceName(tenant, namespace);
             validateGlobalNamespaceOwnership();
             validatePartitionedTopicName(tenant, namespace, encodedTopic);
             validateTopicPolicyOperation(topicName, PolicyName.PARTITION, PolicyOperation.WRITE);
             validateCreateTopic(topicName);
-            internalCreatePartitionedTopic(asyncResponse, numPartitions, createLocalTopicOnly);
+            internalCreatePartitionedTopic(asyncResponse, numPartitions, createLocalTopicOnly, properties);
         } catch (Exception e) {
             log.error()
                     .attr("topic", topicName)

@@ -46,6 +46,7 @@ import jakarta.ws.rs.core.Response.Status;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -196,16 +197,30 @@ public class NonPersistentTopics extends PersistentTopics {
             @PathParam("namespace") String namespace,
             @Parameter(description = "Specify topic name", required = true)
             @PathParam("topic") @Encoded String encodedTopic,
-            @RequestBody(description = "The number of partitions for the topic",
-                    required = true,
-                    content = @Content(schema = @Schema(type = "integer", defaultValue = "0")))
+            @RequestBody(description = "The number of partitions for the topic, or the partitioned topic metadata"
+                    + " (partitions and properties) when the request is sent with the '"
+                    + PartitionedTopicMetadata.MEDIA_TYPE + "' content type",
+                    required = true, content = {
+                            @Content(mediaType = MediaType.APPLICATION_JSON,
+                                    schema = @Schema(type = "integer", defaultValue = "0")),
+                            @Content(mediaType = PartitionedTopicMetadata.MEDIA_TYPE,
+                                    schema = @Schema(implementation = PartitionedTopicMetadata.class))})
                     int numPartitions,
             @QueryParam("createLocalTopicOnly") @DefaultValue("false") boolean createLocalTopicOnly) {
+        validateAndCreatePartitionedTopic(asyncResponse, tenant, namespace, encodedTopic, numPartitions,
+                createLocalTopicOnly, null);
+    }
+
+    // Also handles the inherited 'application/vnd.partitioned-topic-metadata+json' createPartitionedTopic
+    // overload: non-persistent topics validate the topic name only.
+    @Override
+    protected void validateAndCreatePartitionedTopic(AsyncResponse asyncResponse, String tenant, String namespace,
+            String encodedTopic, int numPartitions, boolean createLocalTopicOnly, Map<String, String> properties) {
         try {
             validateNamespaceName(tenant, namespace);
             validateGlobalNamespaceOwnership();
             validateTopicName(tenant, namespace, encodedTopic);
-            internalCreatePartitionedTopic(asyncResponse, numPartitions, createLocalTopicOnly);
+            internalCreatePartitionedTopic(asyncResponse, numPartitions, createLocalTopicOnly, properties);
         } catch (Exception e) {
             log.error()
                     .attr("topic", topicName)
