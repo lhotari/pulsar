@@ -34,6 +34,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BiConsumer;
 import lombok.Cleanup;
 import lombok.CustomLog;
 import org.apache.pulsar.broker.PulsarService;
@@ -51,6 +52,8 @@ public class ServiceUnitStateTableViewSyncer implements Closeable {
     private static final int MAX_CONCURRENT_SYNC_COUNT = 100;
     private static final int SYNC_WAIT_TIME_IN_SECS = 300;
     private static final long RECONCILE_INTERVAL_IN_MILLIS = 5_000;
+    private static final BiConsumer<String, ServiceUnitStateData> NOOP_CONSUMER = (__, ___) -> {
+    };
     private volatile int syncWaitTimeInSecs = SYNC_WAIT_TIME_IN_SECS;
     private PulsarService pulsar;
     private volatile ServiceUnitStateTableView systemTopicTableView;
@@ -114,28 +117,26 @@ public class ServiceUnitStateTableViewSyncer implements Closeable {
         });
     }
 
-    private void dummy(String key, ServiceUnitStateData data) {
-    }
-
     private void syncExistingItems()
             throws IOException, ExecutionException, InterruptedException, TimeoutException {
         long started = System.currentTimeMillis();
+
         @Cleanup
         ServiceUnitStateTableView metadataStoreTableView = new ServiceUnitStateMetadataStoreTableViewImpl();
         metadataStoreTableView.start(
                 pulsar,
-                this::dummy,
-                this::dummy,
-                this::dummy
+                NOOP_CONSUMER,
+                NOOP_CONSUMER,
+                NOOP_CONSUMER
         );
 
         @Cleanup
         ServiceUnitStateTableView systemTopicTableView = new ServiceUnitStateTableViewImpl();
         systemTopicTableView.start(
                 pulsar,
-                this::dummy,
-                this::dummy,
-                this::dummy
+                NOOP_CONSUMER,
+                NOOP_CONSUMER,
+                NOOP_CONSUMER
         );
 
 
@@ -185,8 +186,8 @@ public class ServiceUnitStateTableViewSyncer implements Closeable {
         this.metadataStoreTableView.start(
                 pulsar,
                 this::syncToSystemTopic,
-                this::dummy,
-                this::dummy
+                NOOP_CONSUMER,
+                NOOP_CONSUMER
         );
         log.info("Started MetadataStoreTableView");
 
@@ -194,8 +195,8 @@ public class ServiceUnitStateTableViewSyncer implements Closeable {
         this.systemTopicTableView.start(
                 pulsar,
                 this::syncToMetadataStore,
-                this::dummy,
-                this::dummy
+                NOOP_CONSUMER,
+                NOOP_CONSUMER
         );
         log.info("Started SystemTopicTableView");
 
