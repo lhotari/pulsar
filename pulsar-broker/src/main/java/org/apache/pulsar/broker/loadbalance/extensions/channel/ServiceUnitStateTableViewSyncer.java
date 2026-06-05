@@ -23,6 +23,7 @@ import static org.apache.pulsar.broker.ServiceConfiguration.ServiceUnitTableView
 import static org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl.COMPACTION_THRESHOLD;
 import static org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl.configureSystemTopics;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectWriter;
 import com.google.common.annotations.VisibleForTesting;
 import java.io.Closeable;
 import java.io.IOException;
@@ -41,6 +42,7 @@ import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
+import org.jspecify.annotations.NonNull;
 
 /**
  * Defines ServiceUnitTableViewSyncer.
@@ -59,6 +61,7 @@ public class ServiceUnitStateTableViewSyncer implements Closeable {
     private volatile ServiceUnitStateTableView systemTopicTableView;
     private volatile ServiceUnitStateTableView metadataStoreTableView;
     private volatile boolean isActive = false;
+    private final ObjectWriter jsonWriter = ObjectMapperFactory.getMapper().writer();
 
 
     public void start(PulsarService pulsar)
@@ -221,47 +224,50 @@ public class ServiceUnitStateTableViewSyncer implements Closeable {
     private void syncExistingItemsToMetadataStore(ServiceUnitStateTableView src)
             throws JsonProcessingException, ExecutionException, InterruptedException, TimeoutException {
         // Directly use store to sync existing items to metadataStoreTableView(otherwise, they are conflicted out)
-        var store = pulsar.getLocalMetadataStore();
-        var writer = ObjectMapperFactory.getMapper().writer();
-        var opTimeout = pulsar.getConfiguration().getMetadataStoreOperationTimeoutSeconds();
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         var srcIter = src.entrySet().iterator();
         while (srcIter.hasNext()) {
             var e = srcIter.next();
-            futures.add(store.put(ServiceUnitStateMetadataStoreTableViewImpl.PATH_PREFIX + "/" + e.getKey(),
-                    writer.writeValueAsBytes(e.getValue()), Optional.empty()).thenApply(__ -> null));
-            if (futures.size() == MAX_CONCURRENT_SYNC_COUNT || !srcIter.hasNext()) {
-                FutureUtil.waitForAll(futures).get(opTimeout, TimeUnit.SECONDS);
-            }
+            futures.add(writeToMetadataStore(e.getKey(), e.getValue()));
+            maybeWaitCompletion(futures, !srcIter.hasNext());
         }
+    }
+
+    private void maybeWaitCompletion(List<CompletableFuture<Void>> futures, boolean forceWait)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        if (!futures.isEmpty() && (futures.size() == MAX_CONCURRENT_SYNC_COUNT || forceWait)) {
+            FutureUtil.waitForAll(futures)
+                    .get(pulsar.getConfiguration().getMetadataStoreOperationTimeoutSeconds(), TimeUnit.SECONDS);
+            futures.clear();
+        }
+    }
+
+    private @NonNull CompletableFuture<Void> writeToMetadataStore(String key, ServiceUnitStateData value)
+            throws JsonProcessingException {
+        return pulsar.getLocalMetadataStore().put(ServiceUnitStateMetadataStoreTableViewImpl.PATH_PREFIX + "/" + key,
+                jsonWriter.writeValueAsBytes(value), Optional.empty()).thenApply(__ -> null);
     }
 
     private void syncExistingItemsToSystemTopic(ServiceUnitStateTableView src,
                                                 ServiceUnitStateTableView dst)
             throws ExecutionException, InterruptedException, TimeoutException {
-        var opTimeout = pulsar.getConfiguration().getMetadataStoreOperationTimeoutSeconds();
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         var srcIter = src.entrySet().iterator();
         while (srcIter.hasNext()) {
             var e = srcIter.next();
             futures.add(dst.put(e.getKey(), e.getValue()));
-            if (futures.size() == MAX_CONCURRENT_SYNC_COUNT || !srcIter.hasNext()) {
-                FutureUtil.waitForAll(futures).get(opTimeout, TimeUnit.SECONDS);
-            }
+            maybeWaitCompletion(futures, !srcIter.hasNext());
         }
     }
 
     private void clean(ServiceUnitStateTableView dst)
             throws ExecutionException, InterruptedException, TimeoutException {
-        var opTimeout = pulsar.getConfiguration().getMetadataStoreOperationTimeoutSeconds();
         var dstIter = dst.entrySet().iterator();
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         while (dstIter.hasNext()) {
             var e = dstIter.next();
             futures.add(dst.delete(e.getKey()));
-            if (futures.size() == MAX_CONCURRENT_SYNC_COUNT || !dstIter.hasNext()) {
-                FutureUtil.waitForAll(futures).get(opTimeout, TimeUnit.SECONDS);
-            }
+            maybeWaitCompletion(futures, !dstIter.hasNext());
         }
     }
 
@@ -302,9 +308,6 @@ public class ServiceUnitStateTableViewSyncer implements Closeable {
      */
     private void reconcile(ServiceUnitStateTableView src, ServiceUnitStateTableView dst, long started)
             throws InterruptedException {
-        var store = pulsar.getLocalMetadataStore();
-        var writer = ObjectMapperFactory.getMapper().writer();
-        var opTimeout = pulsar.getConfiguration().getMetadataStoreOperationTimeoutSeconds();
         // Snapshot the destination entries before iterating the source so that a key arriving
         // in the destination through a concurrent tail sync cannot be misclassified as stale.
         var staleDstItems = new HashMap<String, ServiceUnitStateData>();
@@ -320,16 +323,11 @@ public class ServiceUnitStateTableViewSyncer implements Closeable {
                     if (dst.isMetadataStoreBased()) {
                         // Write directly to the store like syncExistingItemsToMetadataStore
                         // does; the view's put() would conflict the item out.
-                        futures.add(store.put(
-                                ServiceUnitStateMetadataStoreTableViewImpl.PATH_PREFIX + "/" + e.getKey(),
-                                writer.writeValueAsBytes(e.getValue()), Optional.empty()).thenApply(__ -> null));
+                        futures.add(writeToMetadataStore(e.getKey(), e.getValue()));
                     } else {
                         futures.add(dst.put(e.getKey(), e.getValue()));
                     }
-                    if (futures.size() == MAX_CONCURRENT_SYNC_COUNT) {
-                        FutureUtil.waitForAll(futures).get(opTimeout, TimeUnit.SECONDS);
-                        futures.clear();
-                    }
+                    maybeWaitCompletion(futures, false);
                 }
             }
             for (var e : staleDstItems.entrySet()) {
@@ -341,15 +339,10 @@ public class ServiceUnitStateTableViewSyncer implements Closeable {
                     log.info().attr("serviceUnit", e.getKey())
                             .log("Reconciling stale item in the destination tableview");
                     futures.add(dst.delete(e.getKey()));
-                    if (futures.size() == MAX_CONCURRENT_SYNC_COUNT) {
-                        FutureUtil.waitForAll(futures).get(opTimeout, TimeUnit.SECONDS);
-                        futures.clear();
-                    }
+                    maybeWaitCompletion(futures, false);
                 }
             }
-            if (!futures.isEmpty()) {
-                FutureUtil.waitForAll(futures).get(opTimeout, TimeUnit.SECONDS);
-            }
+            maybeWaitCompletion(futures, true);
         } catch (IOException | ExecutionException | TimeoutException e) {
             // Transient write failures leave a size divergence behind; the next reconcile pass
             // (or the sync-wait timeout) handles it.
