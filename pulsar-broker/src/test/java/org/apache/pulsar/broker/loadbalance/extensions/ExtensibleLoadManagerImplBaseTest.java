@@ -199,18 +199,18 @@ public abstract class ExtensibleLoadManagerImplBaseTest extends MockedPulsarServ
 
     @BeforeMethod(alwaysRun = true)
     protected void initializeState() throws Exception {
-        // Reset to a clean state before each test: reconcile each broker's role with the
-        // channel ownership and unload the test namespace so no bundle ownership carries over.
-        // The unload publishes a state change on the channel system topic.
+        // Reset to a clean state before each test: reconcile each broker's role with the channel
+        // ownership and unload the test namespace so no bundle ownership carries over. The unload
+        // publishes a state change on the channel system topic.
         //
         // A prior role-churning test (e.g. the direct playLeader()/playFollower() calls in
-        // testRoleChangeIdempotency) can leave the channel system topic owned by a broker that
-        // no longer serves it ("not served by this instance, redo the lookup"), with the
-        // channel producer stuck in escalating reconnect backoff, so the unload's channel
-        // publish keeps failing. monitor() reconciles roles but cannot re-serve the topic on
-        // its own. If the fast path does not recover, force a clean channel owner via leader
-        // re-election (which reassigns and re-serves the channel topic and makes clients redo
-        // their lookups) and retry.
+        // testRoleChangeIdempotency) can leave the channel system topic owned by a broker that no
+        // longer serves it ("not served by this instance, redo the lookup"), with the channel
+        // producer stuck in escalating reconnect backoff, so the unload's channel publish keeps
+        // failing. Each unload attempt force-serves the channel topic (an admin lookup re-assigns
+        // the pulsar/system bundle and getStats makes the owner load it); if that still does not
+        // recover, force a clean channel owner via leader re-election (which reassigns and
+        // re-serves the channel topic and makes clients redo their lookups) and retry.
         try {
             awaitTestNamespaceUnloaded(30);
         } catch (ConditionTimeoutException channelWedged) {
@@ -223,16 +223,23 @@ public abstract class ExtensibleLoadManagerImplBaseTest extends MockedPulsarServ
         pulsar2.getConfig().setLoadBalancerMultiPhaseBundleUnload(true);
     }
 
-    // Drive monitor() eagerly to reconcile roles, then unload. ignoreExceptions() retries
-    // transient channel-publish failures; each unload attempt is bounded so a synchronous
-    // unload cannot block longer than the retry window.
+    // Drive monitor() to reconcile roles and force-serve the channel topic (monitor() only
+    // self-heals when there is *no* channel owner, not when an owner is recorded but the bundle is
+    // not served), then unload. ignoreExceptions() retries transient channel-publish failures; each
+    // unload attempt is bounded so a synchronous unload cannot block longer than the retry window.
     private void awaitTestNamespaceUnloaded(long atMostSeconds) {
+        boolean systemTopicChannel =
+                serviceUnitStateTableViewClassName.equals(ServiceUnitStateTableViewImpl.class.getName());
         Awaitility.await().atMost(atMostSeconds, TimeUnit.SECONDS)
                 .pollInterval(1, TimeUnit.SECONDS)
                 .ignoreExceptions()
                 .untilAsserted(() -> {
                     primaryLoadManager.monitor();
                     secondaryLoadManager.monitor();
+                    if (systemTopicChannel) {
+                        admin.lookups().lookupTopic(ServiceUnitStateTableViewImpl.TOPIC);
+                        admin.topics().getStats(ServiceUnitStateTableViewImpl.TOPIC);
+                    }
                     admin.namespaces().unloadAsync(defaultTestNamespace).get(15, TimeUnit.SECONDS);
                 });
     }
