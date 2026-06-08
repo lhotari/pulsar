@@ -31,7 +31,7 @@ jetty = "12.1.10"
 jersey = "3.1.10"
 jackson = "2.21.3"
 jackson-annotations = "2.21"
-protobuf = "3.25.5"
+protobuf = "4.35.0"
 grpc = "1.75.0"
 slf4j = "2.0.17"
 slog = "0.9.7"
@@ -473,7 +473,7 @@ datasketches-java = { module = "org.apache.datasketches:datasketches-java", vers
 [plugins]
 lightproto = { id = "io.streamnative.lightproto", version.ref = "lightproto" }
 nar = "io.github.merlimat.nar:0.1.3"
-protobuf = "com.google.protobuf:0.9.6"
+protobuf = "com.google.protobuf:0.10.0"
 shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
 rat = "org.nosphere.apache.rat:0.8.1"
 spotless = "com.diffplug.spotless:8.4.0"
