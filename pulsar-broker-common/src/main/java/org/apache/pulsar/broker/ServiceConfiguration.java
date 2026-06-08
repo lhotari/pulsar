@@ -2340,7 +2340,9 @@ public class ServiceConfiguration implements PulsarConfiguration {
             + " been delivered to the Consumer Netty channel. This provides backpressure for BookKeeper and tiered"
             + " storage reads, preventing the broker from having too many concurrent reads and running into Out of"
             + " Memory errors when there are multiple concurrent reads to multiple concurrent consumers.\n"
-            + "When left unset (empty), it defaults to 15% of available JVM direct memory.\n"
+            + "When left unset (empty), it defaults to 15% of available JVM direct memory, but never below"
+            + " dispatcherMaxReadBatchSize * maxMessageSize so the limiter can never block the completion of a"
+            + " single read.\n"
             + "Set to 0 to disable the feature.\n"
             + "Set to a value greater than 0 to use that many MB.")
     private Long managedLedgerMaxReadsInFlightSizeInMB = null;

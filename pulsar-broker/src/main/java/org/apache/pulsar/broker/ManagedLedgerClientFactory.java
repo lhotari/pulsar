@@ -94,8 +94,12 @@ public class ManagedLedgerClientFactory implements ManagedLedgerStorage {
         Long managedLedgerMaxReadsInFlightSizeInMB = conf.getManagedLedgerMaxReadsInFlightSizeInMB();
         final long managedLedgerMaxReadsInFlightSizeBytes;
         if (managedLedgerMaxReadsInFlightSizeInMB == null) {
-            // When unset, default to 15% of the available JVM direct memory.
-            managedLedgerMaxReadsInFlightSizeBytes = (long) (0.15d * DirectMemoryUtils.jvmMaxDirectMemory());
+            // When unset, default to 15% of the available JVM direct memory, but never below the size of a
+            // single full read (dispatcherMaxReadBatchSize entries of maxMessageSize bytes) so that the
+            // limiter can never block the completion of one read.
+            long fractionOfDirectMemory = (long) (0.15d * DirectMemoryUtils.jvmMaxDirectMemory());
+            long singleReadMaxSize = (long) conf.getDispatcherMaxReadBatchSize() * conf.getMaxMessageSize();
+            managedLedgerMaxReadsInFlightSizeBytes = Math.max(fractionOfDirectMemory, singleReadMaxSize);
         } else {
             // An explicit 0 disables the feature; an explicit value > 0 is used as-is.
             managedLedgerMaxReadsInFlightSizeBytes = managedLedgerMaxReadsInFlightSizeInMB * 1024L * 1024L;
