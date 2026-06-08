@@ -48,6 +48,7 @@ import org.apache.pulsar.broker.storage.ManagedLedgerStorage;
 import org.apache.pulsar.broker.storage.ManagedLedgerStorageClass;
 import org.apache.pulsar.common.policies.data.EnsemblePlacementPolicyConfig;
 import org.apache.pulsar.common.stats.CacheMetricsCollector;
+import org.apache.pulsar.common.util.DirectMemoryUtils;
 import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 
 @CustomLog
@@ -90,11 +91,20 @@ public class ManagedLedgerClientFactory implements ManagedLedgerStorage {
             );
         }
         managedLedgerFactoryConfig.setCopyEntriesInCache(conf.isManagedLedgerCacheCopyEntries());
-        long managedLedgerMaxReadsInFlightSizeBytes = conf.getManagedLedgerMaxReadsInFlightSizeInMB() * 1024L * 1024L;
+        Long managedLedgerMaxReadsInFlightSizeInMB = conf.getManagedLedgerMaxReadsInFlightSizeInMB();
+        final long managedLedgerMaxReadsInFlightSizeBytes;
+        if (managedLedgerMaxReadsInFlightSizeInMB == null) {
+            // When unset, default to 15% of the available JVM direct memory.
+            managedLedgerMaxReadsInFlightSizeBytes = (long) (0.15d * DirectMemoryUtils.jvmMaxDirectMemory());
+        } else {
+            // An explicit 0 disables the feature; an explicit value > 0 is used as-is.
+            managedLedgerMaxReadsInFlightSizeBytes = managedLedgerMaxReadsInFlightSizeInMB * 1024L * 1024L;
+        }
         if (managedLedgerMaxReadsInFlightSizeBytes > 0 && conf.getDispatcherMaxReadSizeBytes() > 0
                 && managedLedgerMaxReadsInFlightSizeBytes < conf.getDispatcherMaxReadSizeBytes()) {
             log.warn()
-                    .attr("managedLedgerMaxReadsInFlightSizeInMB", conf.getManagedLedgerMaxReadsInFlightSizeInMB())
+                    .attr("managedLedgerMaxReadsInFlightSizeInMB",
+                            managedLedgerMaxReadsInFlightSizeBytes / (1024L * 1024L))
                     .attr("dispatcherMaxReadSizeBytes", conf.getDispatcherMaxReadSizeBytes())
                     .attr("minManagedLedgerMaxReadsInFlightSizeInMB",
                             (conf.getDispatcherMaxReadSizeBytes() / (1024L * 1024L)) + 1)
