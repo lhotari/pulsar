@@ -31,7 +31,7 @@ dependencies {
     implementation(libs.jetty.ee8.servlet)
     implementation(libs.guava)
     implementation(libs.netty.common)
-    implementation(libs.sketches.core)
+    implementation(libs.datasketches.java)
 
     testImplementation(libs.netty.buffer)
 }
