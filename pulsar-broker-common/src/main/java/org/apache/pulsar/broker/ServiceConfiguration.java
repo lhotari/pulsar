@@ -1126,7 +1126,16 @@ public class ServiceConfiguration implements PulsarConfiguration {
                     + ".\n"
                     + "Keep this value relatively low to increase the cache hit ratio for Key_Shared replay"
                     + " queue reads; it should also be less than 2 * managedLedgerMaxUnackedRangesToPersist.\n"
-                    + "Setting this value to 0 will disable the limit calculated per subscription.\n",
+                    + "However, with workloads that have low key cardinality (few distinct keys), a low value"
+                    + " can leave some consumers idle, since the dispatcher pauses once this threshold is"
+                    + " reached and stops reading new messages for the other consumers; increasing the value"
+                    + " allows more messages to be in flight in such cases. Since the effective threshold is the"
+                    + " minimum of the per-consumer and per-subscription limits,"
+                    + " keySharedLookAheadMsgInReplayThresholdPerConsumer should also be increased, or set to 0"
+                    + " (disabled), in that case.\n"
+                    + "Setting this value to 0 will disable the limit calculated per subscription. Disabling"
+                    + " it might result in the number of unacked ranges to persist exceeding"
+                    + " managedLedgerMaxUnackedRangesToPersist, therefore disabling is not recommended.\n",
             dynamic = true
     )
     private int keySharedLookAheadMsgInReplayThresholdPerSubscription = 40000;
