@@ -1113,7 +1113,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
                     + "Setting this value to 0 will disable the limit calculated per consumer.",
             dynamic = true
     )
-    private int keySharedLookAheadMsgInReplayThresholdPerConsumer = 2000;
+    private int keySharedLookAheadMsgInReplayThresholdPerConsumer = 4000;
 
     @FieldContext(
             category = CATEGORY_POLICIES,
@@ -1124,11 +1124,12 @@ public class ServiceConfiguration implements PulsarConfiguration {
                     + "Formula: threshold = min(keySharedLookAheadMsgInReplayThresholdPerConsumer *"
                     + " connected consumer count, keySharedLookAheadMsgInReplayThresholdPerSubscription)"
                     + ".\n"
-                    + "This value should be set to a value less than 2 * managedLedgerMaxUnackedRangesToPersist.\n"
+                    + "Keep this value relatively low to increase the cache hit ratio for Key_Shared replay"
+                    + " queue reads; it should also be less than 2 * managedLedgerMaxUnackedRangesToPersist.\n"
                     + "Setting this value to 0 will disable the limit calculated per subscription.\n",
             dynamic = true
     )
-    private int keySharedLookAheadMsgInReplayThresholdPerSubscription = 20000;
+    private int keySharedLookAheadMsgInReplayThresholdPerSubscription = 40000;
 
     @FieldContext(
             category = CATEGORY_POLICIES,
@@ -2552,8 +2553,14 @@ public class ServiceConfiguration implements PulsarConfiguration {
             + " messages are acknowledged is persisted by compressing in `ranges` of messages"
             + " that were acknowledged. After the max number of ranges is reached, the information"
             + " will only be tracked in memory and messages will be redelivered in case of"
-            + " crashes.")
-    private int managedLedgerMaxUnackedRangesToPersist = 10000;
+            + " crashes.\n"
+            + "Note: when managedLedgerPersistIndividualAckAsLongArray is enabled (the default), the persisted"
+            + " size is bounded by the backlog size (the range of entries the cursor spans), not by this max"
+            + " number of unacked ranges. For BookKeeper ledger storage, with the default broker maxMessageSize"
+            + " and BookKeeper nettyMaxFrameSizeBytes, the state fits a backlog of about 30M entries (excluding"
+            + " the managedLedgerMaxBatchDeletedIndexToPersist storage, whose size is instead relative to the"
+            + " number of acknowledgment holes).")
+    private int managedLedgerMaxUnackedRangesToPersist = 200000;
 
     @FieldContext(category = CATEGORY_STORAGE_ML,
             doc = "Maximum number of partially acknowledged batch messages per subscription that will have their batch "
@@ -2562,7 +2569,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
                 + "When this limit is exceeded, remaining batch message containing the batch deleted indexes will "
                 + "only be tracked in memory. In case of broker restarts or load balancing events, the batch "
                 + "deleted indexes will be cleared while redelivering the messages to consumers.")
-    private int managedLedgerMaxBatchDeletedIndexToPersist = 10000;
+    private int managedLedgerMaxBatchDeletedIndexToPersist = 200000;
 
     @FieldContext(category = CATEGORY_STORAGE_ML,
             doc = "When storing acknowledgement state, choose a more compact serialization format that stores"
@@ -2589,7 +2596,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
             doc = "Max number of `acknowledgment holes` that can be stored in MetadataStore.\n\n"
                     + "If number of unack message range is higher than this limit then broker will persist"
                     + " unacked ranges into bookkeeper to avoid additional data overhead into MetadataStore.")
-    private int managedLedgerMaxUnackedRangesToPersistInMetadataStore = 1000;
+    private int managedLedgerMaxUnackedRangesToPersistInMetadataStore = 200000;
     @FieldContext(
             category = CATEGORY_STORAGE_OFFLOADING,
             doc = "When set to true, a BitSet will be used to track acknowledged messages that come after the \"mark "
@@ -2668,7 +2675,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
     @FieldContext(category = CATEGORY_STORAGE_ML,
             doc = "ManagedLedgerInfo compression type, option values (NONE, LZ4, ZLIB, ZSTD, SNAPPY). \n"
                     + "If value is invalid or NONE, then save the ManagedLedgerInfo bytes data directly.")
-    private String managedLedgerInfoCompressionType = "NONE";
+    private String managedLedgerInfoCompressionType = "LZ4";
 
     @FieldContext(category = CATEGORY_STORAGE_ML,
             doc = "ManagedLedgerInfo compression size threshold (bytes), "
@@ -2680,7 +2687,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
     @FieldContext(category = CATEGORY_STORAGE_ML,
             doc = "ManagedCursorInfo compression type, option values (NONE, LZ4, ZLIB, ZSTD, SNAPPY). \n"
                     + "If value is NONE, then save the ManagedCursorInfo bytes data directly.")
-    private String managedCursorInfoCompressionType = "NONE";
+    private String managedCursorInfoCompressionType = "LZ4";
 
 
     @FieldContext(category = CATEGORY_STORAGE_ML,
