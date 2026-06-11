@@ -59,7 +59,7 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
     // The leader value as known by the election cycle (the leader can only change through an
     // election cycle). Pending while no leader is known — election in progress or the leader node
     // deleted — and completed with the leader value once the election settles. Readers of
-    // getLeaderValue() wait on it (bounded by LEADER_ELECTION_COMPLETION_TIMEOUT_SECONDS);
+    // getLeaderValue() wait on it (bounded by leaderElectionCompletionTimeoutSeconds);
     // getLeaderValueIfPresent() takes a non-blocking snapshot of it.
     private CompletableFuture<Optional<T>> currentLeaderFuture = new CompletableFuture<>();
 
@@ -76,7 +76,12 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
 
     // Upper bound for getLeaderValue() waiting on an election that never settles, aligned with the
     // default metadata-store operation timeout (the broker's metadataStoreOperationTimeoutSeconds).
-    private static final int LEADER_ELECTION_COMPLETION_TIMEOUT_SECONDS = 30;
+    private volatile int leaderElectionCompletionTimeoutSeconds = 30;
+
+    @VisibleForTesting
+    void setLeaderElectionCompletionTimeoutSeconds(int leaderElectionCompletionTimeoutSeconds) {
+        this.leaderElectionCompletionTimeoutSeconds = leaderElectionCompletionTimeoutSeconds;
+    }
 
     LeaderElectionImpl(MetadataStoreExtended store, Class<T> clazz, String path,
             Consumer<LeaderElectionState> stateChangesListener,
@@ -324,11 +329,12 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
             // Hand out a derived future so callers cannot complete the internal one.
             return future.thenApply(value -> value);
         }
+        int timeoutSeconds = leaderElectionCompletionTimeoutSeconds;
         return FutureUtil.addTimeoutHandling(whenLeaderKnown(future),
-                Duration.ofSeconds(LEADER_ELECTION_COMPLETION_TIMEOUT_SECONDS), executor,
+                Duration.ofSeconds(timeoutSeconds), executor,
                 () -> FutureUtil.createTimeoutException(
                         "Leader election on path " + path + " did not complete within "
-                                + LEADER_ELECTION_COMPLETION_TIMEOUT_SECONDS + " seconds",
+                                + timeoutSeconds + " seconds",
                         LeaderElectionImpl.class, "getLeaderValue()"));
     }
 

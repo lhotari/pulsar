@@ -51,8 +51,12 @@ public interface LeaderElection<T> extends AutoCloseable {
      * previous leader's node was just deleted and the participants are re-electing), the returned
      * future completes once the election has settled, with the newly determined leader value. The
      * future completes exceptionally with a {@link java.util.concurrent.TimeoutException} if the
-     * election does not complete within the default metadata operation timeout. A closed leader
-     * election reports an empty leader.
+     * election does not complete within the default metadata operation timeout.
+     * <p>
+     * An instance that never participated in the election (no {@link #elect(Object)} call) reads
+     * the leader value directly from the metadata store. A closed instance does not wait: it
+     * reports an empty leader if it held the leadership when closed, or its last known view
+     * otherwise.
      *
      * @return a future that will track the completion of the operation
      */
