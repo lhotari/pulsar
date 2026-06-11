@@ -221,6 +221,10 @@ lightproto {
 // The plugin's default `swaggerDeps` resolver dependencies target javax.ws.rs; declaring
 // our own dependencies on the configuration replaces them with the jakarta variants.
 dependencies {
+    // The component metadata rule in pulsar.java-conventions replaces
+    // com.sun.activation:jakarta.activation with versionless jakarta.activation-api/
+    // angus-activation deps, so swaggerDeps needs the platform to pin their versions.
+    "swaggerDeps"(enforcedPlatform(project(":pulsar-dependencies")))
     "swaggerDeps"(libs.commons.lang3)
     "swaggerDeps"(libs.swagger.jaxrs2)
     "swaggerDeps"(libs.jakarta.ws.rs.api)
