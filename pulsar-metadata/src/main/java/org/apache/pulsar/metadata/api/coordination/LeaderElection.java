@@ -45,19 +45,26 @@ public interface LeaderElection<T> extends AutoCloseable {
     LeaderElectionState getState();
 
     /**
-     * Get the value set by the elected leader, or empty if there's currently no leader.
+     * Get the value set by the elected leader.
+     * <p>
+     * This is the authoritative read: if a leader election is currently in progress (e.g. the
+     * previous leader's node was just deleted and the participants are re-electing), the returned
+     * future completes once the election has settled, with the newly determined leader value. The
+     * future completes exceptionally with a {@link java.util.concurrent.TimeoutException} if the
+     * election does not complete within the default metadata operation timeout. A closed leader
+     * election reports an empty leader.
      *
      * @return a future that will track the completion of the operation
      */
     CompletableFuture<Optional<T>> getLeaderValue();
 
     /**
-     * Get the value set by the elected leader, or empty if there's currently no leader.
+     * Get a non-blocking snapshot of the value set by the elected leader, or empty if no leader is
+     * known right now.
      * <p>
-     * The call is non blocking and in certain cases can return <code>Optional.empty()</code> even though a leader is
-     * technically elected.
-     *
-     * @return a future that will track the completion of the operation
+     * The snapshot can return <code>Optional.empty()</code> even though a leader is technically
+     * elected (for example while a re-election is still settling). Callers that need the
+     * authoritative leader must use {@link #getLeaderValue()} instead.
      */
     Optional<T> getLeaderValueIfPresent();
 
