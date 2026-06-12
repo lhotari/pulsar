@@ -18,8 +18,12 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
+    id("pulsar.publish-test-jar-conventions")
 }
+
+// Match the Maven coordinates org.apache.pulsar.tests:integration
+group = "org.apache.pulsar.tests"
 
 dependencies {
     implementation(libs.slog)
