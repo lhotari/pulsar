@@ -87,12 +87,26 @@ run {
     // Capture values in a local scope so withXml closures don't capture the script object
     // (which would break configuration cache serialization)
     val projectName = project.name
-    val projectDescription = project.description
     val archivesNameValue = the<BasePluginExtension>().archivesName.get()
     val isPlatformProject = plugins.hasPlugin("java-platform")
     val isRootProject = project == rootProject
     val pulsarVersion = version.toString()
     val localDeployRepoDir = rootProject.layout.buildDirectory.dir("local-deploy-repo")
+
+    // Per-module POM name and description. Read in afterEvaluate so that a description
+    // assigned in a module's build script body is picked up, and captured as plain strings
+    // so the pom configuration stays configuration-cache compatible.
+    if (!isRootProject) {
+        afterEvaluate {
+            val projectDescription = project.description ?: "Apache Pulsar :: $projectName"
+            publishing.publications.withType<MavenPublication>().configureEach {
+                pom {
+                    name.set(projectDescription)
+                    description.set(projectDescription)
+                }
+            }
+        }
+    }
 
     publishing {
         publications {
@@ -100,12 +114,6 @@ run {
                 artifactId = archivesNameValue
 
                 pom {
-                    // Per-module name and description
-                    if (!isRootProject) {
-                        name.set("Apache Pulsar :: $projectName")
-                        description.set(projectDescription ?: "Apache Pulsar :: $projectName")
-                    }
-
                     // Clean up POM XML and inject <parent> reference
                     withXml {
                         val sb = asString()
