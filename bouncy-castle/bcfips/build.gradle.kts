@@ -22,10 +22,8 @@ plugins {
 }
 
 dependencies {
-    implementation(libs.slog)
-    compileOnly(project(":pulsar-common")) {
-        exclude(group = "io.prometheus", module = "simpleclient_caffeine")
-    }
+    // Artifact bundle: puts the FIPS BouncyCastle provider jars on the runtime classpath. This
+    // module carries no classes of its own.
     implementation(libs.bcutil.fips)
     implementation(libs.bc.fips)
     implementation(libs.bcpkix.fips)

@@ -22,10 +22,9 @@ plugins {
 }
 
 dependencies {
-    implementation(libs.slog)
-    compileOnly(project(":pulsar-common")) {
-        exclude(group = "io.prometheus", module = "simpleclient_caffeine")
-    }
+    // Artifact bundle: puts the non-FIPS BouncyCastle provider jars on the runtime classpath for
+    // consumers that need the JCA provider at runtime (e.g. pulsar-client) without a compile-time
+    // dependency on BouncyCastle. This module carries no classes of its own.
     implementation(libs.bcpkix.jdk18on)
     implementation(libs.bcprov.jdk18on)
 }
