@@ -288,11 +288,10 @@ tasks.withType<Sign>().configureEach {
         (providers.gradleProperty("useGpgCmd").orNull?.toBoolean() ?: false)
 }
 
-// Suppress enforced-platform validation: all java-library modules use
-// enforcedPlatform(":pulsar-dependencies") for internal version alignment,
-// but this should not leak to consumers. The dependencyManagement section
-// is stripped from published POMs via withXml above.
-tasks.withType<GenerateModuleMetadata>().configureEach {
-    suppressedValidationErrors.add("enforced-platform")
-}
+// NOTE: the enforced-platform validation error is intentionally NOT suppressed. The internal
+// version-alignment platform (:pulsar-dependencies) is declared on the non-published
+// `internalPlatform` bucket in pulsar.java-conventions (only the resolvable build classpaths
+// extend it), so it never reaches the published apiElements/runtimeElements variants. Letting the
+// validation run unsuppressed guards against the enforced platform regressing back into published
+// Gradle Module Metadata.
 

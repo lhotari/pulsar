@@ -24,6 +24,42 @@ plugins {
 
 val catalog = the<VersionCatalogsExtension>().named("libs")
 
+// Versions for dependencies injected by the component-metadata rules below, captured as plain
+// strings so the rule closures stay configuration-cache compatible (and so the injected deps carry
+// explicit versions rather than relying on the alignment platform being on every classpath).
+val jakartaActivationApiVersion = catalog.findVersion("jakarta-activation").get().requiredVersion
+val angusActivationVersion = catalog.findVersion("angus-activation").get().requiredVersion
+
+// Internal version-alignment platform bucket.
+// The enforced platform (:pulsar-dependencies) must align the build's OWN resolution but must NOT
+// leak into the published apiElements/runtimeElements variants: an enforcedPlatform recorded in
+// published Gradle Module Metadata forces Pulsar's internal versions onto downstream Gradle
+// consumers and strips their ability to override (Gradle's platforms docs warn against using
+// enforcedPlatform on a component intended for consumption). Declaring it on a non-consumable,
+// non-resolvable bucket that only the resolvable build classpaths extend keeps full build-time
+// alignment (and feeds versionMapping for POM versions) while leaving it out of publication.
+// Consumers get the separate, non-enforced pulsar-bom for version recommendations instead.
+val internalPlatform = configurations.create("internalPlatform") {
+    isCanBeConsumed = false
+    isCanBeResolved = false
+    description = "Enforced version-alignment platform for build resolution only; never published."
+}
+// The resolvable build classpaths that must see the alignment platform. This replaces the reach the
+// platform previously had via the `implementation` bucket: the compile/runtime/test classpaths and
+// the annotation-processor paths. Consumable variants (apiElements/runtimeElements and the custom
+// testJar) deliberately do NOT extend it, so the enforced platform stays out of published Gradle
+// Module Metadata. (Dependencies injected by the component-metadata rules below carry explicit
+// versions, so configurations not listed here — e.g. the protobuf plugin's *ProtoPath — still
+// resolve; they just do not get enforced version alignment, which they do not need.)
+val platformAlignedClasspaths = setOf(
+    "compileClasspath", "runtimeClasspath",
+    "testCompileClasspath", "testRuntimeClasspath",
+    "annotationProcessor", "testAnnotationProcessor",
+)
+configurations.matching { it.name in platformAlignedClasspaths }.configureEach {
+    extendsFrom(internalPlatform)
+}
+
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.release.set(17)
@@ -71,14 +107,15 @@ dependencies {
         // jakarta.activation:jakarta.activation-api 2.1.x. Replace it everywhere with the API artifact
         // plus the Eclipse Angus implementation (the EE10 successor). async-http-client still depends
         // on it (https://github.com/AsyncHttpClient/async-http-client/issues/2190) and this rule also
-        // guards against any future dependency pulling it in. Versions are pinned by the
-        // pulsar-dependencies platform.
+        // guards against any future dependency pulling it in. The replacements carry explicit catalog
+        // versions so they resolve on any classpath without relying on the alignment platform being
+        // present (e.g. the protobuf plugin's *ProtoPath configurations do not extend it).
         all {
             allVariants {
                 withDependencies {
                     if (removeAll { it.group == "com.sun.activation" && it.name == "jakarta.activation" }) {
-                        add("jakarta.activation:jakarta.activation-api")
-                        add("org.eclipse.angus:angus-activation")
+                        add("jakarta.activation:jakarta.activation-api:$jakartaActivationApiVersion")
+                        add("org.eclipse.angus:angus-activation:$angusActivationVersion")
                     }
                 }
             }
@@ -113,9 +150,11 @@ dependencies {
         }
     }
 
-    // Enforced platform pins all dependency versions from the version catalog.
-    // This is the Gradle equivalent of Maven's dependencyManagement section.
-    "implementation"(enforcedPlatform(project(":pulsar-dependencies")))
+    // Enforced platform pins all dependency versions from the version catalog (the Gradle
+    // equivalent of Maven's dependencyManagement). Declared on the internal, non-published
+    // `internalPlatform` bucket (see above) so it aligns the build's resolvable classpaths
+    // without leaking the enforced platform into published apiElements/runtimeElements metadata.
+    "internalPlatform"(enforcedPlatform(project(":pulsar-dependencies")))
 
     // Resolve lz4-java capability conflict: at.yawk.lz4:lz4-java (used by Pulsar) and
     // org.lz4:lz4-java (used by kafka-clients) both provide the org.lz4:lz4-java capability.
