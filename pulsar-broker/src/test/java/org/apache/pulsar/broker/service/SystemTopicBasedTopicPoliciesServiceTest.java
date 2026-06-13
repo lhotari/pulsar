@@ -39,12 +39,15 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import lombok.Cleanup;
 import lombok.CustomLog;
 import org.apache.commons.lang3.reflect.FieldUtils;
 import org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest;
 import org.apache.pulsar.broker.systopic.SystemTopicClient;
 import org.apache.pulsar.client.admin.PulsarAdminException;
+import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.common.events.PulsarEvent;
 import org.apache.pulsar.common.naming.NamespaceName;
@@ -625,5 +628,70 @@ public class SystemTopicBasedTopicPoliciesServiceTest extends MockedPulsarServic
                         || logEvent.getMessage().toString().contains("Failed to read event from the system topic"));
         assertFalse(logFound2);
         verify(spyService, times(1)).cleanPoliciesCacheInitMap(any(), anyBoolean());
+    }
+
+    @Test(timeOut = 60_000)
+    public void testPrepareInitPoliciesCacheAsyncTimesOutWhenReaderStuck() throws Exception {
+        // Bound the policy-cache initialization to a short timeout for the test.
+        pulsar.getConfiguration().setTopicPoliciesCacheInitTimeoutSeconds(3);
+
+        pulsar.getTopicPoliciesService().close();
+        SystemTopicBasedTopicPoliciesService spyService =
+                Mockito.spy(new SystemTopicBasedTopicPoliciesService(pulsar));
+        FieldUtils.writeField(pulsar, "topicPoliciesService", spyService, true);
+
+        admin.namespaces().createNamespace(NAMESPACE5);
+        final NamespaceName namespace = NamespaceName.get(NAMESPACE5);
+
+        // Create a real __change_events reader, then spy it so that it reports more events but never delivers one —
+        // i.e. a reader that reconnected but is stuck (issue #25294). initPolicesCache would otherwise never complete.
+        SystemTopicClient.Reader<PulsarEvent> stuckReader = Mockito.spy(spyService.createSystemTopicClient(namespace)
+                .get(30, TimeUnit.SECONDS));
+        Mockito.doReturn(CompletableFuture.completedFuture(true)).when(stuckReader).hasMoreEventsAsync();
+        Mockito.doReturn(new CompletableFuture<Message<PulsarEvent>>()).when(stuckReader).readNextAsync();
+        Mockito.doReturn(CompletableFuture.completedFuture(stuckReader))
+                .when(spyService).createSystemTopicClient(namespace);
+
+        // Without the timeout the returned future never completes and topic loading for the namespace hangs forever.
+        CompletableFuture<Boolean> prepareFuture = spyService.prepareInitPoliciesCacheAsync(namespace);
+        try {
+            prepareFuture.get(15, TimeUnit.SECONDS);
+            Assert.fail("Expected the topic policies cache initialization to time out");
+        } catch (ExecutionException e) {
+            assertTrue("Expected a TimeoutException cause but got " + e.getCause(),
+                    e.getCause() instanceof TimeoutException);
+        }
+
+        // The poisoned cache entry must be cleared and the stuck reader closed so a subsequent load can retry with a
+        // fresh reader instead of being pinned until the broker restarts.
+        Awaitility.await().untilAsserted(() -> assertNull(spyService.getPoliciesCacheInit(namespace)));
+        Mockito.verify(stuckReader, Mockito.atLeastOnce()).closeAsync();
+    }
+
+    @Test
+    public void testCleanPoliciesCacheInitMapCompletesPendingInitFuture() {
+        SystemTopicBasedTopicPoliciesService service =
+                (SystemTopicBasedTopicPoliciesService) pulsar.getTopicPoliciesService();
+        final NamespaceName namespace = NamespaceName.get(NAMESPACE1);
+
+        // Dropping the cached init future (e.g. on a namespace-bundle unload) must complete it so the topic loads
+        // awaiting it fail fast and retry, instead of hanging until the broker restarts (issue #25294).
+        CompletableFuture<Void> pendingWithReaderClose = new CompletableFuture<>();
+        service.policyCacheInitMap.put(namespace, pendingWithReaderClose);
+        service.cleanPoliciesCacheInitMap(namespace, true);
+        assertTrue(pendingWithReaderClose.isCompletedExceptionally());
+        assertNull(service.getPoliciesCacheInit(namespace));
+
+        CompletableFuture<Void> pendingWithoutReaderClose = new CompletableFuture<>();
+        service.policyCacheInitMap.put(namespace, pendingWithoutReaderClose);
+        service.cleanPoliciesCacheInitMap(namespace, false);
+        assertTrue(pendingWithoutReaderClose.isCompletedExceptionally());
+        assertNull(service.getPoliciesCacheInit(namespace));
+
+        // An already-completed init future must not be overwritten/disturbed.
+        CompletableFuture<Void> alreadyDone = CompletableFuture.completedFuture(null);
+        service.policyCacheInitMap.put(namespace, alreadyDone);
+        service.cleanPoliciesCacheInitMap(namespace, true);
+        assertFalse(alreadyDone.isCompletedExceptionally());
     }
 }
