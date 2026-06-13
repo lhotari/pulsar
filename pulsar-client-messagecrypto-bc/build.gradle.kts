@@ -23,10 +23,11 @@ plugins {
 
 dependencies {
     implementation(libs.slog)
-    compileOnly(project(":pulsar-common"))
+    implementation(project(":pulsar-common"))
     api(project(":pulsar-client-api"))
-    // MessageCryptoBc compiles against BouncyCastle types: bcpkix (PEMParser, X509CertificateHolder)
-    // as an implementation detail, and bcprov (BouncyCastleProvider) on the public API surface.
+    // MessageCryptoBc uses BouncyCastle types directly: bcpkix for PEM parsing (PEMParser,
+    // JcaPEMKeyConverter) and bcprov for the EC/IES key specs and ASN.1 types used in key handling.
+    // The JCA provider itself is resolved at runtime via SecurityUtility (pulsar-common), not here.
     implementation(libs.bcpkix.jdk18on)
     api(libs.bcprov.jdk18on)
     implementation(libs.guava)

@@ -64,6 +64,7 @@ import org.apache.pulsar.client.api.PulsarClientException.CryptoException;
 import org.apache.pulsar.common.api.proto.EncryptionKeys;
 import org.apache.pulsar.common.api.proto.KeyValue;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
+import org.apache.pulsar.common.util.SecurityUtility;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
@@ -71,7 +72,6 @@ import org.bouncycastle.asn1.x9.ECNamedCurveTable;
 import org.bouncycastle.asn1.x9.X9ECParameters;
 import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.jce.interfaces.ECPublicKey;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.jce.spec.ECParameterSpec;
 import org.bouncycastle.jce.spec.ECPrivateKeySpec;
 import org.bouncycastle.jce.spec.ECPublicKeySpec;
@@ -92,14 +92,16 @@ public class MessageCryptoBc implements MessageCrypto<MessageMetadata, MessageMe
     public static final String RSA_TRANS = "RSA/NONE/OAEPWithSHA1AndMGF1Padding";
     public static final String AESGCM = "AES/GCM/NoPadding";
 
-    // BouncyCastle provider, created lazily on first use via the initialization-on-demand holder
-    // idiom: instantiating it is deferred until an operation actually needs it (asymmetric key
-    // wrapping with RSA-OAEP/ECIES, or EC key loading), and it is passed directly to the JCA
-    // getInstance(...) calls — never added to the global JCA provider list, so message crypto does
-    // not mutate JVM-wide state (applications manage their own providers). Any failure to create the
-    // provider surfaces at use time rather than during class loading.
+    // BouncyCastle JCA provider, resolved lazily on first use via the initialization-on-demand holder
+    // idiom. Resolution is delegated to SecurityUtility.getProvider() — the same FIPS-agnostic lookup
+    // used elsewhere in Pulsar (e.g. TLS) — so message crypto uses whichever BouncyCastle provider is
+    // present on the classpath: the non-FIPS "BC" (org.bouncycastle.jce.provider.BouncyCastleProvider)
+    // or the FIPS "BCFIPS" (org.bouncycastle.jcajce.provider.BouncyCastleFipsProvider), rather than
+    // hardcoding one. The resolved provider is passed directly to the JCA getInstance(...) calls.
+    // Deferring the lookup to first use (asymmetric key wrapping with RSA-OAEP/ECIES, or EC key
+    // loading) keeps any resolution failure out of class loading.
     private static final class BcProviderHolder {
-        static final Provider PROVIDER = new BouncyCastleProvider();
+        static final Provider PROVIDER = SecurityUtility.getProvider();
     }
 
     private static Provider bcProvider() {
