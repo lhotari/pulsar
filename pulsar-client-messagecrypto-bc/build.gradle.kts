@@ -25,10 +25,8 @@ dependencies {
     implementation(libs.slog)
     compileOnly(project(":pulsar-common"))
     api(project(":pulsar-client-api"))
-    // BouncyCastle is declared directly (not via the :bouncy-castle:bouncy-castle-bc module):
-    // MessageCryptoBc compiles against bcpkix/bcprov types (PEMParser, X509CertificateHolder,
-    // BouncyCastleProvider), and the bc module only re-exposes those same jars as `implementation`
-    // plus an unused loader, so depending on it here was redundant.
+    // MessageCryptoBc compiles against BouncyCastle types: bcpkix (PEMParser, X509CertificateHolder)
+    // as an implementation detail, and bcprov (BouncyCastleProvider) on the public API surface.
     implementation(libs.bcpkix.jdk18on)
     api(libs.bcprov.jdk18on)
     implementation(libs.guava)
