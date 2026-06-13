@@ -31,11 +31,6 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 configurations.all {
-    // Exclude the old SLF4J 1.x bridge pulled in by bookkeeper-server.
-    // Pulsar uses SLF4J 2.x with log4j-slf4j2-impl; having both causes
-    // NoSuchMethodError in Log4jLoggerFactory at test startup.
-    exclude(group = "org.apache.logging.log4j", module = "log4j-slf4j-impl")
-
     // Force Jackson version to match the version catalog. Transitive dependencies
     // (e.g. from jackson-bom) can pull in newer versions that break API compatibility
     // (EnumResolver.constructUsingToString signature changed in 2.19+).
@@ -50,28 +45,24 @@ configurations.all {
     }
 }
 
-// Exclude bc-fips from modules that don't need it. bc-fips's CryptoServicesRegistrar
-// conflicts with bcprov-jdk18on's version — having both causes NoSuchMethodError.
-// Only the FIPS-specific modules and modules with explicit FIPS tests should have it.
-val modulesUsingBcFips = setOf(
-    "bcfips", "bcfips-include-test",
-    "pulsar-common", "pulsar-broker-common",
-)
-if (project.name !in modulesUsingBcFips) {
-    configurations.all {
-        exclude(group = "org.bouncycastle", module = "bc-fips")
-    }
-}
-
 dependencies {
-    // Exclude all BouncyCastle from bookkeeper-server (matches Maven parent POM exclusion).
-    // BookKeeper's bc-fips transitive dependency contains a CryptoServicesRegistrar that
-    // conflicts with the non-FIPS version in bcprov-jdk18on. Pulsar manages its own BC deps.
+    // Strip conflicting transitive dependencies from bookkeeper-server at the source. Handling them
+    // here (rather than with a build-wide `configurations.all { exclude(...) }`) keeps them off the
+    // classpath without leaking a per-dependency <exclusion> onto every dependency in every
+    // published POM.
+    //   - All BouncyCastle: BookKeeper's transitive bc-fips bundles a CryptoServicesRegistrar that
+    //     conflicts with the non-FIPS bcprov-jdk18on. Pulsar manages its own BC deps; the FIPS
+    //     modules (bcfips, pulsar-common/pulsar-broker-common tests) declare bc-fips directly.
+    //   - log4j-slf4j-impl: the SLF4J 1.x bridge conflicts with Pulsar's SLF4J 2.x setup
+    //     (log4j-slf4j2-impl), causing NoSuchMethodError in Log4jLoggerFactory at startup.
     components {
         withModule("org.apache.bookkeeper:bookkeeper-server") {
             allVariants {
                 withDependencies {
-                    removeAll { it.group == "org.bouncycastle" }
+                    removeAll {
+                        it.group == "org.bouncycastle" ||
+                            (it.group == "org.apache.logging.log4j" && it.name == "log4j-slf4j-impl")
+                    }
                 }
             }
         }
