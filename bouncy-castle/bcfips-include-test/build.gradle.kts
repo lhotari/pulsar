@@ -23,10 +23,13 @@ plugins {
 }
 
 
-// Exclude the non-FIPS BouncyCastle module — this module tests with FIPS provider only.
-// Having both bc (bcprov) and bcfips (bc-fips) causes CryptoServicesRegistrar conflicts.
+// Exclude the non-FIPS BouncyCastle module and libraries — this module tests with the FIPS provider
+// only. Having both the non-FIPS bc (bcprov) and bcfips (bc-fips) on the classpath causes
+// CryptoServicesRegistrar signer conflicts. The non-FIPS module's Maven artifactId is
+// "bouncy-castle-bc" (it was previously excluded as "bc", which silently stopped matching after the
+// module was renamed).
 configurations.all {
-    exclude(group = "org.apache.pulsar", module = "bc")
+    exclude(group = "org.apache.pulsar", module = "bouncy-castle-bc")
     exclude(group = "org.bouncycastle", module = "bcprov-jdk18on")
     exclude(group = "org.bouncycastle", module = "bcprov-ext-jdk18on")
     exclude(group = "org.bouncycastle", module = "bcpkix-jdk18on")
