@@ -22,6 +22,9 @@
 // the ASF Nexus release/snapshot repositories, and a local deploy repository
 // for testing.
 
+import org.gradle.api.services.BuildService
+import org.gradle.api.services.BuildServiceParameters
+
 plugins {
     `maven-publish`
     signing
@@ -167,10 +170,11 @@ run {
 // Publish with one of:
 //   ./gradlew publishAllPublicationsToApacheSnapshotsRepository   (for -SNAPSHOT versions)
 //   ./gradlew publishAllPublicationsToApacheReleasesRepository    (for release versions)
-// Releases must be published with --no-parallel: when uploading to the Apache staging
-// repository, Nexus creates an implicit staging repository, and concurrent per-module uploads
-// can end up split across multiple implicitly-created staging repositories instead of being
-// collected into a single one.
+// Uploads to the Apache staging repository are serialized by the mavenPublishLock shared build
+// service (defined below) so they all land in a single Nexus staging repository: Nexus creates an
+// implicit staging repository on first upload, and concurrent per-module uploads could otherwise be
+// split across multiple implicitly-created staging repositories. Because the lock handles this,
+// --no-parallel is not required.
 // Credentials are resolved by Gradle at execution time from the apacheReleasesUsername /
 // apacheReleasesPassword and apacheSnapshotsUsername / apacheSnapshotsPassword Gradle properties
 // (the credentials(PasswordCredentials::class) form, which keeps the publish tasks
@@ -180,7 +184,7 @@ run {
 // builds; start the command line with a space to keep the password out of shell history:
 //    ORG_GRADLE_PROJECT_apacheReleasesUsername=$APACHE_USER \
 //    ORG_GRADLE_PROJECT_apacheReleasesPassword="<your ASF password>" \
-//    ./gradlew publishAllPublicationsToApacheReleasesRepository --no-parallel ...
+//    ./gradlew publishAllPublicationsToApacheReleasesRepository ...
 // The URLs can be overridden with the apacheReleasesRepoUrl / apacheSnapshotsRepoUrl Gradle
 // properties (e.g. a file:// URL for testing the publication layout).
 run {
@@ -242,6 +246,25 @@ run {
             }
         }
     }
+}
+
+// --- Serialize uploads to Maven repositories ---
+// Nexus creates an implicit staging repository on the first upload of a release, and concurrent
+// per-module uploads can end up split across multiple implicitly-created staging repositories
+// instead of being collected into a single one. A shared build service with maxParallelUsages = 1
+// ensures at most one PublishToMavenRepository upload runs at a time across the whole build, so the
+// rest of the build (compilation, jars, signing) can still run in parallel and --no-parallel is not
+// required.
+abstract class MavenPublishLock : BuildService<BuildServiceParameters.None>
+
+val mavenPublishLock = gradle.sharedServices.registerIfAbsent(
+    "mavenPublishLock", MavenPublishLock::class
+) {
+    maxParallelUsages = 1
+}
+
+tasks.withType<PublishToMavenRepository>().configureEach {
+    usesService(mavenPublishLock)
 }
 
 // --- GPG signing ---
