@@ -52,26 +52,44 @@ pluginManager.withPlugin("java-library") {
         from(tasks.named(JavaPlugin.JAVADOC_TASK_NAME))
     }
 
-    // Standard java-library modules: publish from components["java"]
-    publishing {
-        publications {
-            create<MavenPublication>("maven") {
-                from(components["java"])
-                artifact(sourcesJar)
-                artifact(javadocJar)
+    // The Maven publication. Its software component is wired in a deferred block because it depends
+    // on whether this is a shaded module:
+    //   - Shaded modules (com.gradleup.shadow applied) publish the shadow plugin's dependency-reduced
+    //     `shadow` component: the artifact is the shadow jar and the published dependencies are
+    //     EXACTLY the `shadow` configuration (the non-bundled runtime deps), not the bundled
+    //     component modules + their unshaded transitive tree. This is the Gradle equivalent of
+    //     Maven's createDependencyReducedPom.
+    //   - All other java-library modules publish the standard `java` component with resolved
+    //     version mapping (unchanged behavior).
+    val mavenPublication = publishing.publications.create<MavenPublication>("maven") {
+        artifact(sourcesJar)
+        artifact(javadocJar)
+    }
 
-                versionMapping {
-                    usage(Usage.JAVA_RUNTIME) {
-                        fromResolutionResult()
-                    }
-                    usage(Usage.JAVA_API) {
-                        fromResolutionOf("runtimeClasspath")
-                    }
+    // Shaded modules: the shadow plugin registers components["shadow"] in its own afterEvaluate, so
+    // wire it from an afterEvaluate registered AFTER that. Registering inside withPlugin (which fires
+    // once the shadow plugin is applied, after this convention) guarantees the ordering.
+    pluginManager.withPlugin("com.gradleup.shadow") {
+        afterEvaluate {
+            mavenPublication.from(components["shadow"])
+        }
+    }
+
+    // Non-shaded modules: standard java component + resolved version mapping. By afterEvaluate all
+    // plugins are applied, so the shadow-plugin check is reliable.
+    afterEvaluate {
+        if (!pluginManager.hasPlugin("com.gradleup.shadow")) {
+            mavenPublication.from(components["java"])
+            mavenPublication.versionMapping {
+                usage(Usage.JAVA_RUNTIME) {
+                    fromResolutionResult()
+                }
+                usage(Usage.JAVA_API) {
+                    fromResolutionOf("runtimeClasspath")
                 }
             }
         }
     }
-
 }
 
 // --- java-platform projects (BOM, dependencies): POM-only, no JAR ---
