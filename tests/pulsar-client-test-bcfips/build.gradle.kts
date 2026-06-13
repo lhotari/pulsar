@@ -22,14 +22,11 @@ plugins {
     id("pulsar.test-certs-conventions")
 }
 
-
-// Exclude the non-FIPS BouncyCastle module and libraries — this module tests with the FIPS provider
-// only. Having both the non-FIPS bc (bcprov) and bcfips (bc-fips) on the classpath causes
-// CryptoServicesRegistrar signer conflicts. The non-FIPS module's Maven artifactId is
-// "bouncy-castle-bc" (it was previously excluded as "bc", which silently stopped matching after the
-// module was renamed).
+// FIPS is selected by EXCLUDING the non-FIPS BouncyCastle libraries (bcprov/bcpkix/bcutil) that the
+// broker and client pull in transitively, leaving only the FIPS provider (bc-fips) on the classpath.
+// The non-FIPS and FIPS jars both define org.bouncycastle.* classes with different signers, so having
+// both on one classpath triggers CryptoServicesRegistrar signer conflicts.
 configurations.all {
-    exclude(group = "org.apache.pulsar", module = "bouncy-castle-bc")
     exclude(group = "org.bouncycastle", module = "bcprov-jdk18on")
     exclude(group = "org.bouncycastle", module = "bcprov-ext-jdk18on")
     exclude(group = "org.bouncycastle", module = "bcpkix-jdk18on")
@@ -38,7 +35,9 @@ configurations.all {
 
 dependencies {
     implementation(libs.slog)
-    testImplementation(project(":bouncy-castle:bcfips"))
+    testImplementation(libs.bc.fips)
+    testImplementation(libs.bcpkix.fips)
+    testImplementation(libs.bcutil.fips)
     testImplementation(project(":pulsar-common"))
     testImplementation(project(":pulsar-broker"))
     testImplementation(project(path = ":pulsar-broker", configuration = "testJar"))

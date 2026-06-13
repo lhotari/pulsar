@@ -27,7 +27,9 @@ dependencies {
     api(project(":pulsar-common")) {
         exclude(group = "io.prometheus", module = "simpleclient_caffeine")
     }
-    implementation(project(":bouncy-castle:bouncy-castle-bc"))
+    // Non-FIPS BouncyCastle JCA provider, needed at runtime by pulsar-client-messagecrypto-bc.
+    implementation(libs.bcprov.jdk18on)
+    implementation(libs.bcpkix.jdk18on)
     compileOnly(project(":pulsar-client-messagecrypto-bc"))
 
     api(libs.opentelemetry.api)
