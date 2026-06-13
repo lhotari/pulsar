@@ -31,8 +31,10 @@ val distLib by configurations.creating {
     isCanBeResolved = true
     isCanBeConsumed = false
     isTransitive = true
-    // Inherit version constraints from the enforced platform (via implementation)
-    extendsFrom(configurations["implementation"])
+    // Inherit the enforced version-alignment platform so bundled dependency versions match the
+    // version catalog (the platform lives on the non-published `internalPlatform` bucket from
+    // pulsar.java-conventions; `implementation` no longer carries it).
+    extendsFrom(configurations["implementation"], configurations["internalPlatform"])
     exclude(group = "org.projectlombok", module = "lombok")
     // Exclude jars not in the shell distribution
     exclude(group = "javax.xml.bind", module = "jaxb-api")

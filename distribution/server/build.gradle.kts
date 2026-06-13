@@ -37,8 +37,11 @@ val distLib by configurations.creating {
     isCanBeResolved = true
     isCanBeConsumed = false
     isTransitive = true
-    // Inherit version constraints from the root project's version catalog
-    extendsFrom(configurations["implementation"])
+    // Inherit the enforced version-alignment platform so bundled dependency versions match the
+    // version catalog (the platform lives on the non-published `internalPlatform` bucket from
+    // pulsar.java-conventions; `implementation` no longer carries it). Keeps the distribution's
+    // resolved versions aligned with what checkBinaryLicense expects.
+    extendsFrom(configurations["implementation"], configurations["internalPlatform"])
     // Global exclusions
     exclude(group = "org.projectlombok", module = "lombok")
     // Exclude test frameworks that leak through transitive deps

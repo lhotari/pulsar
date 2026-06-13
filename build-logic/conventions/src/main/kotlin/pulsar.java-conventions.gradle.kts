@@ -44,13 +44,16 @@ val internalPlatform = configurations.create("internalPlatform") {
     isCanBeResolved = false
     description = "Enforced version-alignment platform for build resolution only; never published."
 }
-// The resolvable build classpaths that must see the alignment platform. This replaces the reach the
-// platform previously had via the `implementation` bucket: the compile/runtime/test classpaths and
-// the annotation-processor paths. Consumable variants (apiElements/runtimeElements and the custom
-// testJar) deliberately do NOT extend it, so the enforced platform stays out of published Gradle
-// Module Metadata. (Dependencies injected by the component-metadata rules below carry explicit
-// versions, so configurations not listed here — e.g. the protobuf plugin's *ProtoPath — still
-// resolve; they just do not get enforced version alignment, which they do not need.)
+// Wire the alignment platform onto the build's resolvable classpaths by name. These configurations
+// are created by the Java plugin before this convention's body runs, so the name match reliably
+// fires for them. (Matching on the mutable isCanBeResolved/isCanBeConsumed flags is NOT reliable for
+// configurations created later via `configurations.creating {}` — their flags are set inside the
+// creation block, after a flag-based configureEach predicate has already evaluated the legacy
+// defaults.) The consumable variants apiElements/runtimeElements are intentionally not listed, so
+// the enforced platform stays out of published Gradle Module Metadata. Custom resolvable
+// configurations that collect artifacts and need the same alignment (notably the distributions'
+// `distLib`, which feeds the binary distribution checked by checkBinaryLicense) extend
+// `internalPlatform` explicitly where they are declared.
 val platformAlignedClasspaths = setOf(
     "compileClasspath", "runtimeClasspath",
     "testCompileClasspath", "testRuntimeClasspath",
