@@ -676,6 +676,36 @@ public class RawReaderTest extends MockedPulsarServiceBaseTest {
         assertTrue(readFuture.isCompletedExceptionally());
     }
 
+    @Test(timeOut = 30000)
+    public void testConnectionFailureBeforeSubscribeFailsReaderCreation() throws Exception {
+        String topic = "persistent://my-property/my-ns/" + BrokerTestUtil.newUniqueName("reader");
+        admin.topics().createNonPartitionedTopic(topic);
+
+        // Same compaction-reader scenario as the test above, but the unrecoverable error (e.g. a lookup
+        // failure with ServiceNotReadyException) arrives BEFORE the initial subscribe completes. The
+        // subscribe (consumer) future must then be completed exceptionally; otherwise RawReader.create(...)
+        // would stay pending forever, which keeps the compaction future pending and blocks forced
+        // topic/namespace deletion (issue #24148).
+        ConsumerConfigurationData<byte[]> conf = new ConsumerConfigurationData<>();
+        conf.getTopicNames().add(topic);
+        conf.setSubscriptionName(subscription);
+        conf.setSubscriptionType(SubscriptionType.Exclusive);
+        conf.setReceiverQueueSize(DEFAULT_RECEIVER_QUEUE_SIZE);
+        conf.setSubscriptionInitialPosition(SubscriptionInitialPosition.Earliest);
+        conf.setReadCompacted(true);
+        CompletableFuture<Consumer<byte[]>> consumerFuture = new CompletableFuture<>();
+        RawReaderImpl.RawConsumerImpl consumer = new RawReaderImpl.RawConsumerImpl(
+                (PulsarClientImpl) pulsarClient, conf, consumerFuture, false, false);
+        // Inject the failure without waiting for the subscribe to complete, i.e. while the consumer
+        // future is still pending (construction returns before the async subscribe round-trip finishes).
+        boolean keepReconnecting =
+                consumer.connectionFailed(new PulsarClientException.ServiceNotReadyException("injected"));
+
+        Assert.assertFalse(keepReconnecting);
+        Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> assertTrue(consumerFuture.isDone()));
+        assertTrue(consumerFuture.isCompletedExceptionally());
+    }
+
     @Test(timeOut = 100000)
     public void testPauseAndResume() throws Exception {
         log.info("-- Starting testPauseAndResume test --");
