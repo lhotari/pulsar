@@ -552,16 +552,18 @@ public class SystemTopicBasedTopicPoliciesServiceTest extends MockedPulsarServic
             Assert.assertNull(readerCompletableFuture1);
         });
 
-        // make sure not do cleanPoliciesCacheInitMap() twice
-        // totally trigger prepareInitPoliciesCacheAsync() twice, so the time of cleanPoliciesCacheInitMap() is 2.
-        // in previous code, the time would be 3
+        // Cleanup must run exactly once per trigger and not repeat recursively (in older code it ran 3 times).
+        // Two failures are triggered here: the reader.close() above drives readMorePoliciesAsync into
+        // cleanPoliciesCacheInitMap (1x), and the second prepareInitPoliciesCacheAsync fails in initPolicesCache and
+        // is torn down by the identity-guarded cleanupFailedPolicyCacheInit (1x).
         boolean logFound = testLogAppender.getEvents().stream().anyMatch(logEvent ->
                 logEvent.getMessage().toString().contains("Failed to create reader on __change_events topic"));
         assertFalse(logFound);
         boolean logFound2 = testLogAppender.getEvents().stream().anyMatch(logEvent ->
                 logEvent.getMessage().toString().contains("Failed to check the move events for the system topic"));
         assertTrue(logFound2);
-        verify(spyService, times(2)).cleanPoliciesCacheInitMap(any(), anyBoolean());
+        verify(spyService, times(1)).cleanPoliciesCacheInitMap(any(), anyBoolean());
+        verify(spyService, times(1)).cleanupFailedPolicyCacheInit(any(), any(), anyBoolean());
 
         // make sure not occur Recursive update
         boolean logFound3 = testLogAppender.getEvents().stream().anyMatch(logEvent ->
@@ -619,8 +621,9 @@ public class SystemTopicBasedTopicPoliciesServiceTest extends MockedPulsarServic
             Assert.assertNull(readerCompletableFuture1);
         });
 
-        // make sure not do cleanPoliciesCacheInitMap() twice
-        // totally trigger prepareInitPoliciesCacheAsync() once, so the time of cleanPoliciesCacheInitMap() is 1.
+        // Reader creation fails, so the single cleanup runs once via the identity-guarded
+        // cleanupFailedPolicyCacheInit (the reader-creation-failure branch no longer goes through
+        // cleanPoliciesCacheInitMap), and must not run more than once.
         boolean logFound = testLogAppender.getEvents().stream().anyMatch(logEvent ->
                 logEvent.getMessage().toString().contains("Failed to create reader on __change_events topic"));
         assertTrue(logFound);
@@ -628,7 +631,8 @@ public class SystemTopicBasedTopicPoliciesServiceTest extends MockedPulsarServic
                 logEvent.getMessage().toString().contains("Failed to check the move events for the system topic")
                         || logEvent.getMessage().toString().contains("Failed to read event from the system topic"));
         assertFalse(logFound2);
-        verify(spyService, times(1)).cleanPoliciesCacheInitMap(any(), anyBoolean());
+        verify(spyService, times(1)).cleanupFailedPolicyCacheInit(any(), any(), anyBoolean());
+        verify(spyService, times(0)).cleanPoliciesCacheInitMap(any(), anyBoolean());
     }
 
     @Test(timeOut = 60_000)
