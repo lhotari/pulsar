@@ -27,6 +27,7 @@ import static org.testng.AssertJUnit.assertEquals;
 import static org.testng.AssertJUnit.assertFalse;
 import static org.testng.AssertJUnit.assertNotNull;
 import static org.testng.AssertJUnit.assertNull;
+import static org.testng.AssertJUnit.assertSame;
 import static org.testng.AssertJUnit.assertTrue;
 import java.util.HashSet;
 import java.util.List;
@@ -693,5 +694,37 @@ public class SystemTopicBasedTopicPoliciesServiceTest extends MockedPulsarServic
         service.policyCacheInitMap.put(namespace, alreadyDone);
         service.cleanPoliciesCacheInitMap(namespace, true);
         assertFalse(alreadyDone.isCompletedExceptionally());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testCleanupFailedPolicyCacheInitIsIdentityGuarded() {
+        SystemTopicBasedTopicPoliciesService service =
+                (SystemTopicBasedTopicPoliciesService) pulsar.getTopicPoliciesService();
+        final NamespaceName namespace = NamespaceName.get(NAMESPACE1);
+
+        // A newer init attempt (B) already owns the namespace with a fresh future and reader.
+        CompletableFuture<Void> newerInitFuture = new CompletableFuture<>();
+        SystemTopicClient.Reader<PulsarEvent> newerReader = Mockito.mock(SystemTopicClient.Reader.class);
+        Mockito.doReturn(CompletableFuture.completedFuture(null)).when(newerReader).closeAsync();
+        service.policyCacheInitMap.put(namespace, newerInitFuture);
+        service.getReaderCaches().put(namespace, CompletableFuture.completedFuture(newerReader));
+
+        // A stale init attempt (A) whose reader was already torn down (e.g. by the timeout cleanup) fires its failure
+        // callback late. Cleaning it up by identity must be a no-op: it must not clobber B's future or close B's reader
+        // (issue #25294 follow-up).
+        CompletableFuture<Void> staleInitFuture = new CompletableFuture<>();
+        service.cleanupFailedPolicyCacheInit(namespace, staleInitFuture, true);
+        assertSame(newerInitFuture, service.getPoliciesCacheInit(namespace));
+        assertFalse(newerInitFuture.isDone());
+        assertNotNull(service.getReaderCaches().get(namespace));
+        Mockito.verify(newerReader, Mockito.never()).closeAsync();
+
+        // Cleaning up the owning attempt does drop its future and close its reader.
+        service.cleanupFailedPolicyCacheInit(namespace, newerInitFuture, true);
+        assertNull(service.getPoliciesCacheInit(namespace));
+        assertTrue(newerInitFuture.isCompletedExceptionally());
+        assertNull(service.getReaderCaches().get(namespace));
+        Mockito.verify(newerReader, Mockito.times(1)).closeAsync();
     }
 }

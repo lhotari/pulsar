@@ -633,16 +633,21 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
                                     return null;
                                 }).exceptionally(ex -> {
                                     try {
+                                        // Identity-guarded cleanup: a concurrent timeout cleanup or a namespace unload
+                                        // may already have dropped this future and let a retry install a fresh
+                                        // future/reader, so clean up by namespace key here would clobber that newer
+                                        // attempt. Tear down state only while this future still owns the namespace.
                                         if (readerCompletableFuture.isCompletedExceptionally()) {
                                             log.error()
                                                     .attr("namespace", namespace)
                                                     .exception(ex)
                                                     .log("Failed to create reader on __change_events topic");
                                             initNamespacePolicyFuture.completeExceptionally(ex);
-                                            cleanPoliciesCacheInitMap(namespace, true);
+                                            cleanupFailedPolicyCacheInit(namespace, initNamespacePolicyFuture, true);
                                         } else {
                                             initNamespacePolicyFuture.completeExceptionally(ex);
-                                            cleanPoliciesCacheInitMap(namespace, isAlreadyClosedException(ex));
+                                            cleanupFailedPolicyCacheInit(namespace, initNamespacePolicyFuture,
+                                                    isAlreadyClosedException(ex));
                                         }
                                     } catch (Throwable cleanupEx) {
                                         // Adding this catch to avoid break callback chain
@@ -749,7 +754,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
                         .log("Timed out initializing the topic policies cache; closing the stuck __change_events "
                                 + "reader so the namespace can be loaded again");
                 try {
-                    cleanupAfterPolicyCacheInitTimeout(namespace, initNamespacePolicyFuture);
+                    cleanupFailedPolicyCacheInit(namespace, initNamespacePolicyFuture, true);
                 } catch (Throwable cleanupEx) {
                     log.error()
                             .attr("namespace", namespace)
@@ -763,20 +768,34 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
     }
 
     /**
-     * Identity-guarded cleanup for a timed-out initialization. Unlike {@link #cleanPoliciesCacheInitMap}, which
+     * Identity-guarded cleanup for an initialization that failed (it timed out, the {@code __change_events} reader
+     * could not be created, or reading the topic threw). Unlike {@link #cleanPoliciesCacheInitMap}, which
      * removes/closes by namespace key unconditionally, this only tears down state that still belongs to
-     * {@code timedOutFuture}. By the time the timeout fires, a concurrent retry — or a namespace-bundle unload that
+     * {@code initFuture}. By the time the failure is observed, a concurrent retry — or a namespace-bundle unload that
      * left the init future orphaned — may already own the namespace with a fresh future and reader; removing by key
-     * would close that newer reader and pin the namespace again. Guarding on identity ensures the timeout never
-     * clobbers a newer initialization.
+     * would drop that newer future and close its reader, pinning the namespace again. Guarding on identity ensures a
+     * late failure never clobbers a newer initialization.
+     *
+     * @param closeReader when {@code true}, also clears the cached policies and closes the reader that belongs to this
+     *                    initialization; when {@code false}, only the init future is dropped, leaving the reader cached
+     *                    for the retry to reuse (mirrors the transient read-error path of
+     *                    {@link #cleanPoliciesCacheInitMap}).
      */
-    private void cleanupAfterPolicyCacheInitTimeout(@NonNull NamespaceName namespace,
-                                                    @NonNull CompletableFuture<Void> timedOutFuture) {
+    @VisibleForTesting
+    void cleanupFailedPolicyCacheInit(@NonNull NamespaceName namespace,
+                                      @NonNull CompletableFuture<Void> initFuture, boolean closeReader) {
         // Capture the reader before dropping the init future so we only close the reader that belongs to this
         // initialization, never one a concurrent retry creates immediately afterwards.
-        CompletableFuture<SystemTopicClient.Reader<PulsarEvent>> readerFuture = readerCaches.get(namespace);
-        if (!policyCacheInitMap.remove(namespace, timedOutFuture)) {
+        CompletableFuture<SystemTopicClient.Reader<PulsarEvent>> readerFuture =
+                closeReader ? readerCaches.get(namespace) : null;
+        if (!policyCacheInitMap.remove(namespace, initFuture)) {
             // Superseded by a retry or an unload; that owner is responsible for its own reader/state.
+            return;
+        }
+        // Complete the dropped future (a no-op if the caller already completed it) outside any map remapping function,
+        // so awaiting topic loads fail fast and retry instead of hanging until the broker restarts (issue #25294).
+        failPendingPolicyCacheInit(namespace, initFuture);
+        if (!closeReader) {
             return;
         }
         policiesCache.entrySet().removeIf(entry -> Objects.equals(entry.getKey().getNamespaceObject(), namespace));
