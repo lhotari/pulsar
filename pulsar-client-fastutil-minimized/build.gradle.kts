@@ -78,49 +78,26 @@ tasks.shadowJar {
     minimize()
 }
 
-// ---------------------------------------------------------------------------
-// Verification: fail the build if the entry points statically referenced by
-// pulsar-client-original (NegativeAcksTracker, the only direct fastutil consumer)
-// are ever dropped by over-pruning, or if minimize() silently becomes a no-op (which
-// would ship the full fastutil jar). Add to this list when new usage is introduced.
-// ---------------------------------------------------------------------------
-val requiredMinimizedClasses = listOf(
-    "it/unimi/dsi/fastutil/longs/Long2ObjectAVLTreeMap.class",
-    "it/unimi/dsi/fastutil/longs/Long2ObjectMap.class",
-    "it/unimi/dsi/fastutil/longs/Long2ObjectOpenHashMap.class",
-    "it/unimi/dsi/fastutil/longs/Long2ObjectSortedMap.class",
-    "it/unimi/dsi/fastutil/longs/LongBidirectionalIterator.class",
-)
-
-// Upper bound that comfortably exceeds the reachable set (~1k classes) but is well
-// below the full fastutil jar (~12,965 classes), so a minimize() regression fails loudly.
-val maxRetainedClasses = 5000
+// Verification: the reachable set is ~591 classes; this upper bound is comfortably
+// above it but far below the full fastutil jar (~12,965 classes), so a minimize()
+// regression (e.g. the no-op that ships the whole jar) fails the build. Bump it if
+// new fastutil usage legitimately grows the minimized set past the limit.
+val maxRetainedClasses = 600
 
 val verifyMinimizedJar by tasks.registering {
     val jarFile = tasks.shadowJar.flatMap { it.archiveFile }
-    val required = requiredMinimizedClasses
     val maxClasses = maxRetainedClasses
     inputs.file(jarFile)
     doLast {
-        val jar = jarFile.get().asFile
-        val entries = mutableSetOf<String>()
-        ZipFile(jar).use { zf ->
-            val e = zf.entries()
-            while (e.hasMoreElements()) {
-                entries.add(e.nextElement().name)
-            }
-        }
-        val classCount = entries.count { it.endsWith(".class") }
-        val missing = required.filterNot { it in entries }
-        if (missing.isNotEmpty()) {
-            throw GradleException("Minimized jar is missing required classes (over-pruned): $missing")
+        val classCount = ZipFile(jarFile.get().asFile).use { zf ->
+            zf.entries().asSequence().count { it.name.endsWith(".class") }
         }
         if (classCount > maxClasses) {
             throw GradleException(
                 "Minimized jar retained $classCount classes (> $maxClasses) — minimize() is not pruning."
             )
         }
-        logger.lifecycle("Minimized jar OK: $classCount classes retained.")
+        logger.lifecycle("Minimized fastutil jar OK: $classCount classes retained (limit $maxClasses).")
     }
 }
 

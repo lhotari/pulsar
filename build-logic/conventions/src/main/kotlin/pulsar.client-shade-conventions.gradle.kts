@@ -37,7 +37,7 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
         include(project(":pulsar-client-admin-original"))
         include(project(":pulsar-common"))
         include(project(":pulsar-client-messagecrypto-bc"))
-        include(project(":pulsar-client-dependencies-minimized"))
+        include(project(":pulsar-client-fastutil-minimized"))
         include(dependency("com.fasterxml.jackson.*:.*"))
         include(dependency("com.google.*:.*"))
         include(dependency("com.google.auth:.*"))
