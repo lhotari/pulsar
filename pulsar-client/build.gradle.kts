@@ -58,7 +58,6 @@ dependencies {
         exclude(group = "com.google.protobuf", module = "protobuf-java")
     }
     implementation(libs.jackson.module.jsonSchema)
-    implementation(libs.jsr305)
     api(libs.jspecify)
     implementation(libs.roaringbitmap)
 
@@ -66,6 +65,11 @@ dependencies {
     compileOnly(libs.protobuf.java)
     compileOnly(libs.joda.time)
     compileOnly(libs.spotbugs.annotations)
+    // JSR-305 (javax.annotation.*) is a compile-time/static-analysis-only annotation library with no
+    // runtime use. Keep it off the runtime classpath so it is not bundled into the shaded client jar
+    // (Pulsar 5.0 drops javax.* from the runtime; JSpecify covers nullness). Consumers that want to run
+    // SpotBugs/FindBugs analysis can add jsr305 themselves.
+    compileOnly(libs.jsr305)
 
     testImplementation(libs.jsonassert)
     testImplementation(libs.awaitility)
