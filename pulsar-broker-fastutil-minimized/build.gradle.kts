@@ -21,10 +21,10 @@
 // full fastutil jar in the server distribution so the docker image / tarball ships only the
 // classes actually used. The roots cover both the broker and (since it is bundled in the
 // server distribution) the unrelocated pulsar-client-original, so this is a superset of
-// :pulsar-client-fastutil-minimized. See pulsar.fastutil-minimized-conventions.
+// :pulsar-client-fastutil-minimized. See pulsar.minimized-dependencies-conventions.
 
 plugins {
-    id("pulsar.fastutil-minimized-conventions")
+    id("pulsar.minimized-dependencies-conventions")
 }
 
 dependencies {
@@ -34,7 +34,8 @@ dependencies {
     api(project(":pulsar-client-original"))
 }
 
-fastutilMinimized {
+minimizedJar {
+    minimizedDependencies.set(listOf("it.unimi.dsi:fastutil"))
     // The reachable set (broker + client usage) is ~818 classes; fail the build if it grows
     // past this (bump it when new fastutil usage legitimately enlarges the set).
     maxRetainedClasses.set(850)

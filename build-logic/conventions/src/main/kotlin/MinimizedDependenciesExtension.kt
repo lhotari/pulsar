@@ -21,14 +21,14 @@ import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 
 /**
- * Configuration for the `pulsar.dependency-minimized-conventions` plugin.
+ * Configuration for the `pulsar.minimized-dependencies-conventions` plugin.
  *
  * A "minimized" packaging module declares its reachability roots as `api(project(...))`
  * dependencies and then only needs to express which libraries to minimize and the
  * expected upper bound on the retained class count.
  */
-interface FastutilMinimizedExtension {
-    /** Libraries to minimize, as `"group:name"` entries. Defaults to `it.unimi.dsi:fastutil`. */
+interface MinimizedDependenciesExtension {
+    /** Libraries to minimize, as `"group:name"` entries (e.g. `"it.unimi.dsi:fastutil"`). */
     val minimizedDependencies: ListProperty<String>
 
     /**

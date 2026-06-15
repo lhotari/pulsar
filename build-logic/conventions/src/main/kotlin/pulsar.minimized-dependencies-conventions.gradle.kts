@@ -29,8 +29,8 @@ import java.util.zip.ZipFile
 // A consuming module:
 //   * applies this plugin,
 //   * declares its reachability roots as `api(project(...))` dependencies (e.g. the
-//     pulsar projects that use the library being minimized), and
-//   * sets `fastutilMinimized { maxRetainedClasses.set(N) }`.
+//     pulsar projects that use the libraries being minimized), and
+//   * configures `minimizedJar { minimizedDependencies.set(listOf("group:name")); maxRetainedClasses.set(N) }`.
 //
 // Why `api`: Shadow's minimize() seeds its reachability analysis (UnusedTracker) from
 // the project's own source classes plus its `api`-scoped jars. A packaging module has no
@@ -42,8 +42,7 @@ plugins {
     id("pulsar.shadow-conventions")
 }
 
-val minimized = extensions.create<FastutilMinimizedExtension>("fastutilMinimized")
-minimized.minimizedDependencies.convention(listOf("it.unimi.dsi:fastutil"))
+val minimized = extensions.create<MinimizedDependenciesExtension>("minimizedJar")
 
 // The `api` roots are a build-only reachability seed; strip them (and everything else)
 // from the consumable variants so this module ships a self-contained jar with no

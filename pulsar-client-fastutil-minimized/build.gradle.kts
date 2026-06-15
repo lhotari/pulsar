@@ -19,10 +19,10 @@
 
 // Jar of just the fastutil classes reachable from the Pulsar client. It is bundled (and
 // relocated) by :pulsar-client-shaded, :pulsar-client-all and :pulsar-client-admin-shaded
-// so the full ~25MB fastutil jar is not shipped. See pulsar.fastutil-minimized-conventions.
+// so the full ~25MB fastutil jar is not shipped. See pulsar.minimized-dependencies-conventions.
 
 plugins {
-    id("pulsar.fastutil-minimized-conventions")
+    id("pulsar.minimized-dependencies-conventions")
     // Published to Maven so it can be referenced from pulsar-client-original's published metadata
     // (where the full fastutil dependency is replaced by this minimized jar). The broker variant is
     // not published — it is only consumed by the server distribution.
@@ -35,7 +35,8 @@ dependencies {
     api(project(":pulsar-client-original"))
 }
 
-fastutilMinimized {
+minimizedJar {
+    minimizedDependencies.set(listOf("it.unimi.dsi:fastutil"))
     // The reachable set is ~591 classes; fail the build if it grows past this (e.g. if
     // minimize() regresses and ships the full ~12,965-class jar).
     maxRetainedClasses.set(600)
