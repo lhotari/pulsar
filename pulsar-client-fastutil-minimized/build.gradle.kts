@@ -30,9 +30,15 @@ plugins {
 }
 
 dependencies {
-    // Reachability root: pulsar-client-original (its NegativeAcksTracker is the only direct
-    // fastutil consumer on the client side). minimize() seeds from its transitive closure.
+    // Reachability roots: the client-side modules that ship together (in the client shaded jars,
+    // the published pulsar-client-original, and the shell distribution). minimize() seeds from
+    // their transitive closures, so this jar contains every fastutil class any of them reach.
+    // Today only pulsar-client-original (NegativeAcksTracker) uses fastutil directly, but listing
+    // pulsar-client-tools and pulsar-client-admin-original as roots future-proofs the set: if they
+    // start using fastutil, the needed classes are pulled in automatically with no further wiring.
     api(project(":pulsar-client-original"))
+    api(project(":pulsar-client-tools"))
+    api(project(":pulsar-client-admin-original"))
 }
 
 minimizedJar {
