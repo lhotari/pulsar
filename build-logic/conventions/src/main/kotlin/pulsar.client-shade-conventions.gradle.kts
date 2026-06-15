@@ -17,6 +17,12 @@
  * under the License.
  */
 
+import org.gradle.api.attributes.Bundling
+import org.gradle.api.attributes.Category
+import org.gradle.api.attributes.LibraryElements
+import org.gradle.api.attributes.Usage
+import org.gradle.api.component.AdhocComponentWithVariants
+
 // Convention plugin for Pulsar client shaded modules (pulsar-client-shaded,
 // pulsar-client-admin-shaded, pulsar-client-all). Configures the shadow jar
 // with the shared dependency includes, file excludes, relocations, and
@@ -28,6 +34,40 @@ plugins {
 
 val shadePrefix = "org.apache.pulsar.shade"
 extra["shadePrefix"] = shadePrefix
+
+// ---- Published dependency scopes for non-bundled dependencies ----
+// The Shadow plugin publishes the `shadow` configuration's dependencies as the dependency-reduced
+// POM/Gradle Module Metadata of the shaded artifact, mapping ALL of them to Maven `runtime` scope
+// (a single java-runtime variant). That loses the api/implementation distinction the original
+// modules express, so consumers can't compile against the parts of the API that live in non-bundled
+// modules (e.g. pulsar-client-api).
+//
+// To restore control, modules can declare a dependency in the `shadowApi` configuration instead of
+// `shadow`. `shadowApi` deps are published with `compile` scope (a java-api variant added to the
+// shadow component), while `shadow` deps stay `runtime`. Both end up in the POM and GMM:
+//   "shadowApi"(...)  -> compile scope  (consumer compile + runtime classpath)
+//   "shadow"(...)     -> runtime scope  (consumer runtime classpath only)
+val shadowApi = configurations.dependencyScope("shadowApi") {
+    description = "Non-bundled dependencies published with compile (api) scope in the shaded " +
+        "artifact's dependency-reduced POM and Gradle Module Metadata."
+}
+val shadowApiElements = configurations.consumable("shadowApiElements") {
+    description = "API elements (compile scope) of the shaded artifact, mirroring shadowRuntimeElements."
+    extendsFrom(shadowApi.get())
+    attributes {
+        attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_API))
+        attribute(Category.CATEGORY_ATTRIBUTE, objects.named(Category.LIBRARY))
+        attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, objects.named(LibraryElements.JAR))
+        attribute(Bundling.BUNDLING_ATTRIBUTE, objects.named(Bundling.SHADOWED))
+    }
+    // Carry the shaded jar so this variant is a complete API variant (like apiElements does for the
+    // standard java-library component).
+    outgoing.artifact(tasks.named("shadowJar"))
+}
+// Add the java-api variant to the shadow component so maven-publish emits the shadowApi deps with
+// compile scope. The shadow plugin already wires shadowRuntimeElements -> runtime scope.
+(components["shadow"] as AdhocComponentWithVariants)
+    .addVariantsFromConfiguration(shadowApiElements.get()) { mapToMavenScope("compile") }
 
 tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {
 

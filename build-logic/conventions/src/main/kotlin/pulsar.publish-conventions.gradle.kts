@@ -108,7 +108,6 @@ run {
     // Capture values in a local scope so withXml closures don't capture the script object
     // (which would break configuration cache serialization)
     val projectName = project.name
-    val archivesNameValue = the<BasePluginExtension>().archivesName.get()
     val isPlatformProject = plugins.hasPlugin("java-platform")
     val isRootProject = project == rootProject
     val pulsarVersion = version.toString()
@@ -129,11 +128,21 @@ run {
         }
     }
 
+    // Set the published artifactId from archivesName. Deferred to afterEvaluate (per the Gradle
+    // maven-publish "deferred configuration" guidance) so a module can override archivesName in its
+    // build script body — e.g. the shaded client modules publish under their historical Maven
+    // artifactId ("pulsar-client", "pulsar-client-admin"). Read eagerly at plugin-application time
+    // the override would be missed. Captured as a plain string for configuration-cache safety.
+    afterEvaluate {
+        val archivesNameValue = the<BasePluginExtension>().archivesName.get()
+        publishing.publications.withType<MavenPublication>().configureEach {
+            artifactId = archivesNameValue
+        }
+    }
+
     publishing {
         publications {
             withType<MavenPublication>().configureEach {
-                artifactId = archivesNameValue
-
                 pom {
                     // Clean up POM XML and inject <parent> reference
                     withXml {
