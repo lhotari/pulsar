@@ -211,10 +211,18 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
 
     // ---- File content transformations ----
     relocateAsyncHttpClientProperties(shadePrefix)
-    // Relocate Netty native library filenames to avoid conflicts with unshaded Netty
+    // Relocate Netty native library filenames so the shaded Netty NativeLibraryLoader
+    // can find them (and to avoid conflicts with unshaded Netty). The loader prepends
+    // the shaded package prefix, with dots replaced by underscores, to the library
+    // name, so the prefix has to be inserted right before "netty" (after the "lib"
+    // prefix that .so/.jnilib files carry). For example
+    //   META-INF/native/libnetty_transport_native_epoll_x86_64.so
+    // must be renamed to
+    //   META-INF/native/liborg_apache_pulsar_shade_netty_transport_native_epoll_x86_64.so
+    val nettyNativePrefix = shadePrefix.replace('.', '_') + "_"
     filesMatching("META-INF/native/**") {
-        if (name.matches(Regex("netty.+\\.(so|jnilib|dll)"))) {
-            path = path.replace(name, "org_apache_pulsar_shade_$name")
+        if (name.matches(Regex("(lib)?netty.+\\.(so|jnilib|dll)"))) {
+            path = path.replace(name, name.replaceFirst("netty", "${nettyNativePrefix}netty"))
         }
     }
 }
