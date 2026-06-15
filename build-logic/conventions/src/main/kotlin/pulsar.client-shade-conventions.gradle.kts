@@ -17,11 +17,14 @@
  * under the License.
  */
 
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 import org.gradle.api.attributes.Bundling
 import org.gradle.api.attributes.Category
 import org.gradle.api.attributes.LibraryElements
 import org.gradle.api.attributes.Usage
 import org.gradle.api.component.AdhocComponentWithVariants
+import org.gradle.api.tasks.PathSensitivity
+import java.util.zip.ZipFile
 
 // Convention plugin for Pulsar client shaded modules (pulsar-client-shaded,
 // pulsar-client-admin-shaded, pulsar-client-all). Configures the shadow jar
@@ -225,4 +228,61 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
             path = path.replace(name, name.replaceFirst("netty", "${nettyNativePrefix}netty"))
         }
     }
+}
+
+// ---- Shaded jar content validation ----
+// Safety net: after the shaded jar is built, fail the build if it contains any file outside the
+// allowed package roots. This catches dependencies that ended up in the jar without being relocated
+// (e.g. leaked javax.* classes) or native libraries whose filenames were not rewritten. Directory
+// entries (the parent directories of the allowed roots) are ignored.
+val allowedShadedRoots = listOf(
+    "META-INF/",
+    "org/apache/pulsar/",
+    "com/scurrilous/circe/",
+    // Avro reflection annotations are intentionally excluded from the org.apache.avro relocation so
+    // that Avro recognizes them by their original name on user-supplied classes.
+    "org/apache/avro/reflect/",
+    // Bundled native libraries (libcirce-checksum.so, libcpu-affinity.so).
+    "lib/",
+)
+val verifyShadedJarContents = tasks.register("verifyShadedJarContents") {
+    description = "Fails the build if the shaded jar contains files outside the allowed package roots."
+    group = "verification"
+    val shadedJar = tasks.named<ShadowJar>("shadowJar").flatMap { it.archiveFile }
+    inputs.file(shadedJar).withPropertyName("shadedJar").withPathSensitivity(PathSensitivity.NONE)
+    inputs.property("allowedRoots", allowedShadedRoots)
+    val report = layout.buildDirectory.file("verification/verifyShadedJarContents.txt")
+    outputs.file(report).withPropertyName("report")
+    val allowedRoots = allowedShadedRoots
+    doLast {
+        val jar = shadedJar.get().asFile
+        val violations = mutableListOf<String>()
+        ZipFile(jar).use { zip ->
+            val entries = zip.entries()
+            while (entries.hasMoreElements()) {
+                val entry = entries.nextElement()
+                if (entry.isDirectory) continue
+                if (allowedRoots.none { entry.name.startsWith(it) }) {
+                    violations.add(entry.name)
+                }
+            }
+        }
+        violations.sort()
+        if (violations.isNotEmpty()) {
+            throw GradleException(
+                "Shaded jar ${jar.name} contains ${violations.size} file(s) outside the allowed roots " +
+                    "$allowedRoots:\n" + violations.joinToString("\n") { "  $it" }
+            )
+        }
+        report.get().asFile.run {
+            parentFile.mkdirs()
+            writeText(
+                "OK: ${jar.name} contents are within the allowed roots:\n" +
+                    allowedRoots.joinToString("\n") { "  $it" } + "\n"
+            )
+        }
+    }
+}
+tasks.named<ShadowJar>("shadowJar") {
+    finalizedBy(verifyShadedJarContents)
 }
