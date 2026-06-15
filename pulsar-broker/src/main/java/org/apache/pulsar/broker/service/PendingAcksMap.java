@@ -18,15 +18,15 @@
  */
 package org.apache.pulsar.broker.service;
 
-import it.unimi.dsi.fastutil.ints.IntIntPair;
-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectRBTreeMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectSortedMap;
-import it.unimi.dsi.fastutil.objects.ObjectBidirectionalIterator;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
+import speiger.src.collections.ints.misc.pairs.IntIntPair;
+import speiger.src.collections.longs.maps.impl.tree.Long2ObjectRBTreeMap;
+import speiger.src.collections.longs.maps.interfaces.Long2ObjectMap;
+import speiger.src.collections.longs.maps.interfaces.Long2ObjectSortedMap;
+import speiger.src.collections.objects.collections.ObjectBidirectionalIterator;
 
 /**
  * A thread-safe map to store pending acks in the consumer.
@@ -191,8 +191,8 @@ public class PendingAcksMap {
             for (Long2ObjectMap.Entry<IntIntPair> e : ledgerPendingAcks.long2ObjectEntrySet()) {
                 long entryId = e.getLongKey();
                 IntIntPair batchSizeAndStickyKeyHash = e.getValue();
-                processor.accept(ledgerId, entryId, batchSizeAndStickyKeyHash.leftInt(),
-                        batchSizeAndStickyKeyHash.rightInt());
+                processor.accept(ledgerId, entryId, batchSizeAndStickyKeyHash.getIntKey(),
+                        batchSizeAndStickyKeyHash.getIntValue());
             }
         }
     }
@@ -335,8 +335,8 @@ public class PendingAcksMap {
             if (current == null) {
                 return false;
             }
-            int newRemaining = current.leftInt() - ackedDelta;
-            ledgerMap.put(entryId, IntIntPair.of(newRemaining, current.rightInt()));
+            int newRemaining = current.getIntKey() - ackedDelta;
+            ledgerMap.put(entryId, IntIntPair.of(newRemaining, current.getIntValue()));
             return true;
         } finally {
             writeLock.unlock();
@@ -361,7 +361,7 @@ public class PendingAcksMap {
             boolean removed = removedEntry != null;
             if (removed) {
                 size--;
-                int stickyKeyHash = removedEntry.rightInt();
+                int stickyKeyHash = removedEntry.getIntValue();
                 handleRemovePendingAck(ledgerId, entryId, stickyKeyHash);
             }
             if (removed && ledgerMap.isEmpty()) {
@@ -392,7 +392,7 @@ public class PendingAcksMap {
             IntIntPair removedEntry = ledgerMap.remove(entryId);
             if (removedEntry != null) {
                 size--;
-                handleRemovePendingAck(ledgerId, entryId, removedEntry.rightInt());
+                handleRemovePendingAck(ledgerId, entryId, removedEntry.getIntValue());
             }
             if (removedEntry != null && ledgerMap.isEmpty()) {
                 pendingAcks.remove(ledgerId);
@@ -466,8 +466,8 @@ public class PendingAcksMap {
                         return;
                     }
                     IntIntPair value = intIntPairEntry.getValue();
-                    int batchSize = value.leftInt();
-                    int stickyKeyHash = value.rightInt();
+                    int batchSize = value.getIntKey();
+                    int stickyKeyHash = value.getIntValue();
                     if (pendingAcksRemoveHandler != null) {
                         if (!batchStarted) {
                             pendingAcksRemoveHandler.startBatch();

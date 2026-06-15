@@ -19,7 +19,6 @@
 package org.apache.pulsar.broker.service;
 
 import static org.apache.pulsar.broker.service.StickyKeyConsumerSelector.STICKY_KEY_HASH_NOT_SET;
-import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -34,6 +33,7 @@ import org.apache.pulsar.common.policies.data.DrainingHash;
 import org.apache.pulsar.common.policies.data.stats.ConsumerStatsImpl;
 import org.apache.pulsar.common.policies.data.stats.DrainingHashImpl;
 import org.roaringbitmap.RoaringBitmap;
+import speiger.src.collections.ints.maps.impl.hash.Int2ObjectOpenHashMap;
 
 /**
  * A thread-safe map to store draining hashes in the consumer.

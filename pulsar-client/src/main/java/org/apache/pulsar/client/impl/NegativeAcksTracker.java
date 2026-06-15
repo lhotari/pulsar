@@ -23,11 +23,6 @@ import com.google.common.annotations.VisibleForTesting;
 import io.netty.util.Timeout;
 import io.netty.util.Timer;
 import io.opentelemetry.api.trace.Span;
-import it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectSortedMap;
-import it.unimi.dsi.fastutil.longs.LongBidirectionalIterator;
 import java.io.Closeable;
 import java.util.HashSet;
 import java.util.Set;
@@ -40,6 +35,11 @@ import org.apache.pulsar.client.api.RedeliveryBackoff;
 import org.apache.pulsar.client.api.TraceableMessageId;
 import org.apache.pulsar.client.impl.conf.ConsumerConfigurationData;
 import org.roaringbitmap.longlong.Roaring64Bitmap;
+import speiger.src.collections.longs.collections.LongBidirectionalIterator;
+import speiger.src.collections.longs.maps.impl.hash.Long2ObjectOpenHashMap;
+import speiger.src.collections.longs.maps.impl.tree.Long2ObjectAVLTreeMap;
+import speiger.src.collections.longs.maps.interfaces.Long2ObjectMap;
+import speiger.src.collections.longs.maps.interfaces.Long2ObjectSortedMap;
 
 @CustomLog
 class NegativeAcksTracker implements Closeable {

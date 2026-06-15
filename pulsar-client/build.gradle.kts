@@ -63,7 +63,7 @@ dependencies {
     implementation(libs.jsr305)
     api(libs.jspecify)
     implementation(libs.roaringbitmap)
-    implementation(libs.fastutil)
+    implementation(libs.primitive.collections)
 
     compileOnly(libs.swagger.annotations)
     compileOnly(libs.protobuf.java)

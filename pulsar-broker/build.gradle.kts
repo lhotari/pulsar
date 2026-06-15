@@ -49,7 +49,7 @@ dependencies {
     api(libs.commons.lang3)
     api(libs.netty.transport)
     implementation(libs.protobuf.java)
-    implementation(libs.fastutil)
+    implementation(libs.primitive.collections)
     implementation(libs.curator.recipes)
     implementation(libs.bookkeeper.stream.storage.server) {
         exclude(group = "org.apache.bookkeeper")

@@ -29,10 +29,10 @@ import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
-import it.unimi.dsi.fastutil.ints.IntIntPair;
 import java.util.ArrayList;
 import java.util.List;
 import org.testng.annotations.Test;
+import speiger.src.collections.ints.misc.pairs.IntIntPair;
 
 public class PendingAcksMapTest {
     @Test
@@ -303,8 +303,8 @@ public class PendingAcksMapTest {
         IntIntPair result = pendingAcksMap.removeAndGet(1L, 1L);
 
         assertTrue(result != null);
-        assertEquals(result.leftInt(), 5);
-        assertEquals(result.rightInt(), 123);
+        assertEquals(result.getIntKey(), 5);
+        assertEquals(result.getIntValue(), 123);
         assertFalse(pendingAcksMap.contains(1L, 1L));
         assertEquals(pendingAcksMap.size(), 0);
     }

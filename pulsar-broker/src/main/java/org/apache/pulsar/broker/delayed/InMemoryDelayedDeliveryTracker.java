@@ -21,12 +21,6 @@ package org.apache.pulsar.broker.delayed;
 import com.google.common.annotations.VisibleForTesting;
 import io.github.merlimat.slog.Logger;
 import io.netty.util.Timer;
-import it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectRBTreeMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectSortedMap;
-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import it.unimi.dsi.fastutil.longs.LongSet;
 import java.time.Clock;
 import java.util.NavigableSet;
 import java.util.TreeSet;
@@ -37,6 +31,12 @@ import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.pulsar.broker.service.persistent.AbstractPersistentDispatcherMultipleConsumers;
 import org.roaringbitmap.longlong.Roaring64Bitmap;
+import speiger.src.collections.longs.maps.impl.tree.Long2ObjectAVLTreeMap;
+import speiger.src.collections.longs.maps.impl.tree.Long2ObjectRBTreeMap;
+import speiger.src.collections.longs.maps.interfaces.Long2ObjectMap;
+import speiger.src.collections.longs.maps.interfaces.Long2ObjectSortedMap;
+import speiger.src.collections.longs.sets.LongOpenHashSet;
+import speiger.src.collections.longs.sets.LongSet;
 
 public class InMemoryDelayedDeliveryTracker extends AbstractDelayedDeliveryTracker {
 

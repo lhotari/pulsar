@@ -28,8 +28,6 @@ import io.github.merlimat.slog.Logger;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.Promise;
 import io.opentelemetry.api.common.Attributes;
-import it.unimi.dsi.fastutil.ints.IntIntPair;
-import it.unimi.dsi.fastutil.objects.ObjectIntPair;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -76,6 +74,8 @@ import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.collections.BitSetRecyclable;
 import org.apache.pulsar.opentelemetry.OpenTelemetryAttributes;
 import org.apache.pulsar.transaction.common.exception.TransactionConflictException;
+import speiger.src.collections.ints.misc.pairs.IntIntPair;
+import speiger.src.collections.objects.misc.pairs.ObjectIntPair;
 
 /**
  * A Consumer is a consumer currently connected and associated with a Subscription.
@@ -616,7 +616,7 @@ public class Consumer {
                 continue;
             }
 
-            Consumer ackOwnerConsumer = ackOwnerConsumerAndBatchSize.left();
+            Consumer ackOwnerConsumer = ackOwnerConsumerAndBatchSize.getKey();
 
             if (hasTxn) {
                 // Transactional: use batch size from message ID (not from pendingAcks, which may not
@@ -652,7 +652,7 @@ public class Consumer {
                     IntIntPair removed = ackOwnerConsumer.removePendingAckAndGet(
                             position.getLedgerId(), position.getEntryId());
                     if (removed != null) {
-                        addAndGetUnAckedMsgs(ackOwnerConsumer, -removed.leftInt());
+                        addAndGetUnAckedMsgs(ackOwnerConsumer, -removed.getIntKey());
                         updateBlockedConsumerOnUnackedMsgs(ackOwnerConsumer);
                     }
                 }
@@ -661,7 +661,7 @@ public class Consumer {
             } else {
                 // Non-transactional: build position and compute acked count, defer state updates.
                 Position position = buildPosition(msgId);
-                int batchSize = ackOwnerConsumerAndBatchSize.rightInt();
+                int batchSize = ackOwnerConsumerAndBatchSize.getIntValue();
                 long ackedCount = computeAckedCount(msgId, position, ackOwnerConsumer, batchSize);
 
                 nonTxnPositions.add(position);
@@ -747,7 +747,7 @@ public class Consumer {
                 IntIntPair removed = ackOwnerConsumer.removePendingAckAndGet(
                         position.getLedgerId(), position.getEntryId());
                 if (removed != null) {
-                    addAndGetUnAckedMsgs(ackOwnerConsumer, -removed.leftInt());
+                    addAndGetUnAckedMsgs(ackOwnerConsumer, -removed.getIntKey());
                 }
             }
             updateBlockedConsumerOnUnackedMsgs(ackOwnerConsumer);
@@ -843,14 +843,14 @@ public class Consumer {
         if (Subscription.isIndividualAckMode(subType)) {
             IntIntPair pendingAck = getPendingAcks().get(ledgerId, entryId);
             if (pendingAck != null) {
-                return ObjectIntPair.of(this, pendingAck.leftInt());
+                return ObjectIntPair.of(this, pendingAck.getIntKey());
             } else {
                 // If there are more consumers, this step will consume more CPU, and it should be optimized later.
                 for (Consumer consumer : subscription.getConsumers()) {
                     if (consumer != this) {
                         pendingAck = consumer.getPendingAcks().get(ledgerId, entryId);
                         if (pendingAck != null) {
-                            return ObjectIntPair.of(consumer, pendingAck.leftInt());
+                            return ObjectIntPair.of(consumer, pendingAck.getIntKey());
                         }
                     }
                 }
@@ -1275,7 +1275,7 @@ public class Consumer {
             Position position = PositionFactory.create(msg.getLedgerId(), msg.getEntryId());
             IntIntPair pendingAck = pendingAcks.removeAndGet(position.getLedgerId(), position.getEntryId());
             if (pendingAck != null) {
-                totalRedeliveryMessages += pendingAck.leftInt();
+                totalRedeliveryMessages += pendingAck.getIntKey();
                 pendingPositions.add(position);
             }
         }
