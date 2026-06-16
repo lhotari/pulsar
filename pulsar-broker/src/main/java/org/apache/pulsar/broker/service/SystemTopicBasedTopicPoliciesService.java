@@ -496,16 +496,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         if (msg.getValue() == null) {
             TopicName topicName = TopicName.get(TopicPoliciesService.unwrapEventKey(msg.getKey())
                     .getPartitionedTopicName());
-            List<TopicPolicyListener> listeners = this.listeners.get(topicName);
-            if (listeners != null) {
-                for (TopicPolicyListener listener : listeners) {
-                    try {
-                        listener.onUpdate(null);
-                    } catch (Throwable error) {
-                        log.error().attr("topic", topicName).exception(error).log("call listener error.");
-                    }
-                }
-            }
+            notifyListeners(topicName, null);
             return;
         }
 
@@ -515,17 +506,37 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         TopicPoliciesEvent event = msg.getValue().getTopicPoliciesEvent();
         TopicName topicName = TopicName.get(event.getDomain(), event.getTenant(),
                 event.getNamespace(), event.getTopic());
-        List<TopicPolicyListener> listeners = this.listeners.get(topicName);
-        if (listeners != null) {
-            TopicPolicies policies = event.getPolicies();
-            for (TopicPolicyListener listener : listeners) {
+        notifyListeners(topicName, event.getPolicies());
+    }
+
+    /**
+     * Notifies the topic-policy listeners registered for {@code topicName} of a policy update.
+     *
+     * <p>The {@link TopicPolicyListener#onUpdate} calls are dispatched to the per-topic ordered executor
+     * rather than run inline. The reader callbacks that drive notifications (the {@link #initPolicesCache}
+     * replay loop and {@link #readMorePoliciesAsync}) run on the single, process-wide shared
+     * {@code broker-client-shared-internal-executor} thread. A listener (e.g.
+     * {@code PersistentTopic.onUpdate} -> {@code applyUpdatedTopicPolicies}) can perform non-trivial and
+     * even blocking work, so running it inline serializes and can stall topic-policy loading for every
+     * namespace (issue #26037). Keying {@code executeOrdered} by {@code topicName} preserves per-topic
+     * notification ordering.
+     */
+    private void notifyListeners(TopicName topicName, @Nullable TopicPolicies policies) {
+        // The per-topic value is a CopyOnWriteArrayList, so iterating it later on the executor thread stays
+        // safe even if a listener is registered/unregistered between dispatch and execution.
+        List<TopicPolicyListener> topicListeners = listeners.get(topicName);
+        if (topicListeners == null) {
+            return;
+        }
+        pulsarService.getBrokerService().getTopicOrderedExecutor().executeOrdered(topicName, () -> {
+            for (TopicPolicyListener listener : topicListeners) {
                 try {
                     listener.onUpdate(policies);
                 } catch (Throwable error) {
                     log.error().attr("topic", topicName).exception(error).log("call listener error.");
                 }
             }
-        }
+        });
     }
 
     @Override
@@ -855,17 +866,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
                         .log("Reach the end of the system topic.");
 
                 // replay policy message
-                policiesCache.forEach(((topicName, topicPolicies) -> {
-                    if (listeners.get(topicName) != null) {
-                        for (TopicPolicyListener listener : listeners.get(topicName)) {
-                            try {
-                                listener.onUpdate(topicPolicies);
-                            } catch (Throwable error) {
-                                log.error().attr("topic", topicName).exception(error).log("call listener error.");
-                            }
-                        }
-                    }
-                }));
+                policiesCache.forEach((topicName, topicPolicies) -> notifyListeners(topicName, topicPolicies));
 
                 future.complete(null);
             }
