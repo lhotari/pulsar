@@ -548,7 +548,8 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         }
     }
 
-    private CompletableFuture<Void> notifyListenersForTopicAsync(TopicName topicName, @Nullable TopicPolicies policies) {
+    private CompletableFuture<Void> notifyListenersForTopicAsync(TopicName topicName,
+                                                                 @Nullable TopicPolicies policies) {
         // The per-topic value is a CopyOnWriteArrayList, so iterating it later on the executor thread stays
         // safe even if a listener is registered/unregistered between dispatch and execution.
         List<TopicPolicyListener> topicListeners = listeners.get(topicName);
@@ -890,7 +891,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
 
                 // replay policy message
                 List<CompletableFuture<Void>> notifyFutures = new ArrayList<>();
-                for(Map.Entry<TopicName, TopicPolicies> entry : policiesCache.entrySet()) {
+                for (Map.Entry<TopicName, TopicPolicies> entry : policiesCache.entrySet()) {
                     TopicName topicName = entry.getKey();
                     TopicPolicies policies = entry.getValue();
                     notifyFutures.add(notifyListenersForTopicAsync(topicName, policies));
