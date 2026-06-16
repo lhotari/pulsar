@@ -510,7 +510,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
                     isAllowAutoUpdateSchema = policies.is_allow_auto_update_schema;
                     isAllowAutoUpdateSchemaWithReplicator = policies.is_allow_auto_update_schema_with_replicator;
-                }, getOrderedExecutor())
+                }, getPoliciesNotifyThread())
                 .thenCompose(ignore -> initTopicPolicy())
                 .thenCompose(ignore -> removeOrphanReplicationCursors())
                 .exceptionally(ex -> {
@@ -4952,13 +4952,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                         return CompletableFuture.runAsync(() -> {
                             // finally update the topic policies with the latest value or loaded value
                             topicPolicyListener.completeInitialization(global.orElse(null), local.orElse(null));
-                        }, getTopicPoliciesNotifyThread());
+                        }, getPoliciesNotifyThread());
                     }).thenCompose(Function.identity());
                 });
-    }
-
-    private ExecutorService getTopicPoliciesNotifyThread() {
-        return brokerService.getTopicOrderedExecutor().chooseThread(TopicName.getPartitionedTopicName(topic));
     }
 
     @VisibleForTesting
