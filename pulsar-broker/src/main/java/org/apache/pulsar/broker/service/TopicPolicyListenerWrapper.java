@@ -42,13 +42,18 @@ public class TopicPolicyListenerWrapper implements TopicPolicyListener {
     public synchronized void onUpdate(TopicPolicies data) {
         if (initialized) {
             realTopicListener.onUpdate(data);
-        } else {
+        } else if (data != null) {
+            // Buffer the latest policies received during initialization so they can be applied
+            // (preferring them over the loaded values) in completeInitialization.
             if (data.isGlobalPolicies()) {
                 latestGlobalPolicies = data;
             } else {
                 latestLocalPolicies = data;
             }
         }
+        // A null update is a delete signal; onUpdate(null) is a no-op for the real listeners, so there is
+        // nothing to buffer during initialization. Guarding against null also avoids an NPE on the
+        // data.isGlobalPolicies() call when a delete event arrives before initialization completes (#26037).
     }
 
     /**
