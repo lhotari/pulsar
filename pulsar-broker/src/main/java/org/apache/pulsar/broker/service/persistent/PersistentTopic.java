@@ -60,6 +60,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import lombok.Getter;
 import lombok.Value;
 import org.apache.bookkeeper.client.BKException.BKNoSuchLedgerExistsException;
@@ -136,6 +137,8 @@ import org.apache.pulsar.broker.service.Subscription;
 import org.apache.pulsar.broker.service.SubscriptionOption;
 import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.broker.service.TopicPoliciesService;
+import org.apache.pulsar.broker.service.TopicPolicyListener;
+import org.apache.pulsar.broker.service.TopicPolicyListenerWrapper;
 import org.apache.pulsar.broker.service.TransportCnx;
 import org.apache.pulsar.broker.service.schema.BookkeeperSchemaStorage;
 import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaException;
@@ -296,6 +299,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     // Record the last time max read position is moved forward, unless it's a marker message.
     @Getter
     private volatile long lastMaxReadPositionMovedForwardTimestamp = 0;
+
+    // prevents race conditions in topic policy initialization
+    private final TopicPolicyListenerWrapper topicPolicyListener = new TopicPolicyListenerWrapper(this);
+
     @Getter
     private final ExecutorService orderedExecutor;
 
@@ -4925,22 +4932,29 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         final var topicPoliciesService = brokerService.pulsar().getTopicPoliciesService();
         final var partitionedTopicName = TopicName.getPartitionedTopicName(topic);
 
-        return topicPoliciesService.registerListenerAsync(partitionedTopicName, this).thenCompose(registered -> {
-            if (!registered) {
-                return CompletableFuture.completedFuture(null);
-            }
-            if (ExtensibleLoadManagerImpl.isInternalTopic(topic)) {
-                return CompletableFuture.completedFuture(null);
-            }
-            return topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
-                    TopicPoliciesService.GetType.GLOBAL_ONLY)
-            .thenAcceptAsync(optionalPolicies -> optionalPolicies.ifPresent(this::onUpdate),
-                    getTopicPoliciesNotifyThread())
-            .thenCompose(__ -> topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
-                    TopicPoliciesService.GetType.LOCAL_ONLY))
-            .thenAcceptAsync(optionalPolicies -> optionalPolicies.ifPresent(this::onUpdate),
-                    getTopicPoliciesNotifyThread());
-        });
+        return topicPoliciesService.registerListenerAsync(partitionedTopicName, topicPolicyListener)
+                .thenCompose(registered -> {
+                    if (!registered) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    if (ExtensibleLoadManagerImpl.isInternalTopic(topic)) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    // future for fetching global topic policies
+                    CompletableFuture<Optional<TopicPolicies>> globalPoliciesFuture =
+                            topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
+                                    TopicPoliciesService.GetType.GLOBAL_ONLY);
+                    // future for fetching local topic policies
+                    CompletableFuture<Optional<TopicPolicies>> localPoliciesFuture =
+                            topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
+                                    TopicPoliciesService.GetType.LOCAL_ONLY);
+                    return globalPoliciesFuture.thenCombine(localPoliciesFuture, (global, local) -> {
+                        return CompletableFuture.runAsync(() -> {
+                            // finally update the topic policies with the latest value or loaded value
+                            topicPolicyListener.completeInitialization(global.orElse(null), local.orElse(null));
+                        }, getTopicPoliciesNotifyThread());
+                    }).thenCompose(Function.identity());
+                });
     }
 
     private ExecutorService getTopicPoliciesNotifyThread() {
@@ -5120,5 +5134,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         }
 
         return future;
+    }
+
+    @Override
+    public TopicPolicyListener getTopicPolicyListener() {
+        return topicPolicyListener;
     }
 }
