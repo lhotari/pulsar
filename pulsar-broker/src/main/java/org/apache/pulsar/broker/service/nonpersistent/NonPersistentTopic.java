@@ -190,7 +190,14 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
                     updatePublishRateLimiter();
                     updateResourceGroupLimiter(policies);
                     return updateClusterMigrated();
-                }, getPoliciesNotifyThread());
+                }, getPoliciesNotifyThread())
+                // Complete the topic-policy listener wrapper so buffered and future topic-level policy
+                // updates are forwarded to this topic. Without this the wrapper stays uninitialized forever
+                // and all topic-level policy updates are silently dropped. Unlike PersistentTopic,
+                // non-persistent topics don't load initial topic policies (matching the previous behavior),
+                // so the loaded values are passed as null.
+                .thenRunAsync(() -> topicPolicyListener.completeInitialization(null, null),
+                        getPoliciesNotifyThread());
     }
 
     @Override

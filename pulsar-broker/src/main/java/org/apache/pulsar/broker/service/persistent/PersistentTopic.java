@@ -3915,7 +3915,14 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
         return applyPoliciesFutureList;
     }
-    
+
+    /**
+     * Triggers a message-expiry check on a policy update, but only when the message TTL actually changed, and
+     * runs it on the messageExpiryMonitor thread (the same thread the periodic expiry check uses) so it never
+     * blocks updating or loading topic policies. Unlike before, the expiry check is no longer part of the
+     * returned {@link #applyUpdatedTopicPolicies()} futures, so callers no longer wait for it; the periodic
+     * monitor provides eventual coverage and the check is idempotent.
+     */
     private void maybeCheckMessageExpiryOnPolicyUpdateInBackground() {
         int messageTtlInSeconds = topicPolicies.getMessageTTLInSeconds().get();
         // don't check if the message expiry hasn't changed
@@ -4953,7 +4960,12 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                         return CompletableFuture.completedFuture(null);
                     }
                     if (ExtensibleLoadManagerImpl.isInternalTopic(topic)) {
-                        return CompletableFuture.completedFuture(null);
+                        // Internal topics don't load topic-level policies, but the listener wrapper must
+                        // still be initialized so any buffered/future updates are forwarded to the topic
+                        // instead of being silently dropped.
+                        return CompletableFuture.runAsync(
+                                () -> topicPolicyListener.completeInitialization(null, null),
+                                getPoliciesNotifyThread());
                     }
                     // future for fetching global topic policies
                     CompletableFuture<Optional<TopicPolicies>> globalPoliciesFuture =
