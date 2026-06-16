@@ -285,6 +285,7 @@ public class BrokerService implements Closeable {
             .register();
 
     private final SingleThreadNonConcurrentFixedRateScheduler inactivityMonitor;
+    @Getter
     private final SingleThreadNonConcurrentFixedRateScheduler messageExpiryMonitor;
     private final SingleThreadNonConcurrentFixedRateScheduler compactionMonitor;
     private final SingleThreadNonConcurrentFixedRateScheduler consumedLedgersMonitor;
@@ -2880,13 +2881,22 @@ public class BrokerService implements Closeable {
                             .log("Updating namespace with policies");
 
                     topics.forEach((name, topicFuture) -> {
-                        if (namespace.includes(TopicName.get(name))) {
+                        TopicName topicName = TopicName.get(name);
+                        if (namespace.includes(topicName)) {
                             // If the topic is already created, immediately apply the updated policies, otherwise
                             // once the topic is created it'll apply the policies update
                             topicFuture.thenAccept(topic -> {
                                 log.debug().attr("topic", name).log("Notifying topic that policies have changed");
 
-                                topic.ifPresent(t -> t.onPoliciesUpdate(policies));
+                                topic.ifPresent(t -> {
+                                    if (t instanceof AbstractTopic abstractTopic) {
+                                        abstractTopic.getPoliciesNotifyThread().execute(() -> {
+                                            t.onPoliciesUpdate(policies);
+                                        });
+                                    } else {
+                                        t.onPoliciesUpdate(policies);
+                                    }
+                                });
                             });
                         }
                     });
