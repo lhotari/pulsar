@@ -526,7 +526,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         // The per-topic value is a CopyOnWriteArrayList, so iterating it later on the executor thread stays
         // safe even if a listener is registered/unregistered between dispatch and execution.
         List<TopicPolicyListener> topicListeners = listeners.get(topicName);
-        if (topicListeners == null) {
+        if (topicListeners == null || topicListeners.isEmpty()) {
             return;
         }
         pulsarService.getBrokerService().getTopicPoliciesNotifyThread(topicName).execute(() -> {
@@ -553,7 +553,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         // The per-topic value is a CopyOnWriteArrayList, so iterating it later on the executor thread stays
         // safe even if a listener is registered/unregistered between dispatch and execution.
         List<TopicPolicyListener> topicListeners = listeners.get(topicName);
-        if (topicListeners == null) {
+        if (topicListeners == null || topicListeners.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
         ExecutorService pinnedTopicOrderedExecutor =
