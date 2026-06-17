@@ -93,15 +93,32 @@ public class TopicPolicyListenerWrapperTest {
     }
 
     @Test
-    public void shouldNotThrowOnNullDeleteBeforeInitialization() {
+    public void shouldSuppressLoadedValuesWhenDeletedBeforeInitialization() {
         RecordingListener real = new RecordingListener();
         TopicPolicyListenerWrapper wrapper = new TopicPolicyListenerWrapper(real);
 
-        // A delete (null) arriving before initialization must not NPE and must not be forwarded (#26037).
+        // A delete (null) arriving before initialization must not NPE and must not be forwarded yet (#26037).
         assertThatCode(() -> wrapper.onUpdate(null)).doesNotThrowAnyException();
         assertThat(real.updates).isEmpty();
 
-        wrapper.completeInitialization(null, null);
-        assertThat(real.updates).isEmpty();
+        // The delete supersedes the (now-stale) loaded values: they are not applied, and the delete (null) is
+        // propagated downstream instead.
+        wrapper.completeInitialization(globalPolicies(), localPolicies());
+        assertThat(real.updates).containsExactly(null, null);
+    }
+
+    @Test
+    public void shouldApplyLatestScopedUpdateOverEarlierDeleteDuringInitialization() {
+        RecordingListener real = new RecordingListener();
+        TopicPolicyListenerWrapper wrapper = new TopicPolicyListenerWrapper(real);
+
+        // A delete records empty for both scopes, then a newer global update overrides only the global scope.
+        wrapper.onUpdate(null);
+        TopicPolicies newerGlobal = globalPolicies();
+        wrapper.onUpdate(newerGlobal);
+
+        wrapper.completeInitialization(globalPolicies(), localPolicies());
+        // Global: the newer update wins; Local: the delete (null) wins over the loaded local value.
+        assertThat(real.updates).containsExactly(newerGlobal, null);
     }
 }

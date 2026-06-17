@@ -19,6 +19,7 @@
 
 package org.apache.pulsar.broker.service;
 
+import java.util.Optional;
 import org.apache.pulsar.common.policies.data.TopicPolicies;
 
 /**
@@ -30,8 +31,13 @@ import org.apache.pulsar.common.policies.data.TopicPolicies;
  */
 public class TopicPolicyListenerWrapper implements TopicPolicyListener {
     private final TopicPolicyListener realTopicListener;
-    private TopicPolicies latestGlobalPolicies;
-    private TopicPolicies latestLocalPolicies;
+    // The latest value received during initialization, per scope. A null reference means no update was
+    // received during initialization (the loaded value should be used); an Optional that is present holds the
+    // received policies, and an empty Optional records that a delete (onUpdate(null)) was received, so the
+    // loaded value must not be applied. Optional is used because the map-like field cannot itself hold null
+    // while still distinguishing "not received" (null) from "received a delete" (Optional.empty()).
+    private Optional<TopicPolicies> latestGlobalPolicies;
+    private Optional<TopicPolicies> latestLocalPolicies;
     private boolean initialized;
 
     public TopicPolicyListenerWrapper(TopicPolicyListener realTopicListener) {
@@ -42,18 +48,22 @@ public class TopicPolicyListenerWrapper implements TopicPolicyListener {
     public synchronized void onUpdate(TopicPolicies data) {
         if (initialized) {
             realTopicListener.onUpdate(data);
-        } else if (data != null) {
-            // Buffer the latest policies received during initialization so they can be applied
-            // (preferring them over the loaded values) in completeInitialization.
-            if (data.isGlobalPolicies()) {
-                latestGlobalPolicies = data;
-            } else {
-                latestLocalPolicies = data;
-            }
+            return;
         }
-        // A null update is a delete signal; onUpdate(null) is a no-op for the real listeners, so there is
-        // nothing to buffer during initialization. Guarding against null also avoids an NPE on the
-        // data.isGlobalPolicies() call when a delete event arrives before initialization completes (#26037).
+        // Record the latest value received during initialization so it can be applied (preferring it over the
+        // loaded value) in completeInitialization. Wrapping with Optional.ofNullable lets a delete be recorded
+        // as Optional.empty() and propagated downstream instead of being lost.
+        if (data == null) {
+            // A delete (onUpdate(null)) does not carry the global/local scope through the listener interface,
+            // so record it for both scopes; a later scoped update received during initialization still
+            // overrides its own scope.
+            latestGlobalPolicies = Optional.empty();
+            latestLocalPolicies = Optional.empty();
+        } else if (data.isGlobalPolicies()) {
+            latestGlobalPolicies = Optional.of(data);
+        } else {
+            latestLocalPolicies = Optional.of(data);
+        }
     }
 
     /**
@@ -63,23 +73,22 @@ public class TopicPolicyListenerWrapper implements TopicPolicyListener {
      */
     public synchronized void completeInitialization(TopicPolicies loadedGlobalPolicies,
                                                     TopicPolicies loadedLocalPolicies) {
-        // the listener might have received a newer value than the loaded one while the loading was happening
-        // use the latest values received by the listener, fallback to use the loaded values
-
-        if (latestGlobalPolicies != null) {
-            realTopicListener.onUpdate(latestGlobalPolicies);
-            latestGlobalPolicies = null;
-        } else if (loadedGlobalPolicies != null) {
-            realTopicListener.onUpdate(loadedGlobalPolicies);
-        }
-
-        if (latestLocalPolicies != null) {
-            realTopicListener.onUpdate(latestLocalPolicies);
-            latestLocalPolicies = null;
-        } else if (loadedLocalPolicies != null) {
-            realTopicListener.onUpdate(loadedLocalPolicies);
-        }
-
+        // The listener might have received a newer value (or a delete) than the loaded one while the loading
+        // was happening; prefer the latest value received during initialization, falling back to the loaded
+        // value only when nothing was received for that scope.
+        emitInitialPolicies(latestGlobalPolicies, loadedGlobalPolicies);
+        emitInitialPolicies(latestLocalPolicies, loadedLocalPolicies);
+        latestGlobalPolicies = null;
+        latestLocalPolicies = null;
         initialized = true;
+    }
+
+    private void emitInitialPolicies(Optional<TopicPolicies> latestReceived, TopicPolicies loaded) {
+        if (latestReceived != null) {
+            // A value (or a delete) was received during initialization; it supersedes the loaded value.
+            realTopicListener.onUpdate(latestReceived.orElse(null));
+        } else if (loaded != null) {
+            realTopicListener.onUpdate(loaded);
+        }
     }
 }
