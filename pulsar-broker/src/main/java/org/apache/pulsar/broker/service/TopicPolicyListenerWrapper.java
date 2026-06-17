@@ -42,7 +42,7 @@ public class TopicPolicyListenerWrapper implements TopicPolicyListener {
     private Optional<TopicPolicies> latestGlobalPolicies;
     private Optional<TopicPolicies> latestLocalPolicies;
     private boolean initialized;
-    private long createdTimestampNanos = System.nanoTime();
+    private final long createdTimestampNanos = System.nanoTime();
     private static final long INITIALIZATION_WARNING_LOG_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
     private int lastIntervalLogged;
 
@@ -60,8 +60,8 @@ public class TopicPolicyListenerWrapper implements TopicPolicyListener {
         maybeLogWarning();
 
         // Record the latest value received during initialization so it can be applied (preferring it over the
-        // loaded value) in completeInitialization. Wrapping with Optional.ofNullable lets a delete be recorded
-        // as Optional.empty() and propagated downstream instead of being lost.
+        // loaded value) in completeInitialization. A received value is stored as Optional.of(data) and a delete
+        // as Optional.empty(), so the delete is propagated downstream instead of being lost.
         if (data == null) {
             // A delete (onUpdate(null)) does not carry the global/local scope through the listener interface,
             // so record it for both scopes; a later scoped update received during initialization still
