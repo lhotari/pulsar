@@ -3808,8 +3808,18 @@ public class BrokerService implements Closeable {
      * thread so that they are serialized and never run concurrently. Centralizing the topic-to-thread mapping
      * here keeps it consistent between {@link AbstractTopic} and
      * {@link SystemTopicBasedTopicPoliciesService} so the two cannot accidentally diverge.
+     *
+     * @throws IllegalArgumentException if {@code topicName} refers to a specific partition. The thread must be
+     *     looked up by the non-partitioned topic name (e.g. {@code TopicName.get(name.getPartitionedTopicName())})
+     *     so all partitions of a topic share one notify thread; converting it here would mask callers that pass
+     *     the wrong topic name, so the caller is required to pass the correct one.
      */
     public ExecutorService getTopicPoliciesNotifyThread(TopicName topicName) {
+        if (topicName.isPartitioned()) {
+            throw new IllegalArgumentException("getTopicPoliciesNotifyThread must be called with a "
+                    + "non-partitioned topic name, but got partition " + topicName
+                    + "; look it up with TopicName.get(topicName.getPartitionedTopicName())");
+        }
         return topicOrderedExecutor.chooseThread(topicName);
     }
 
