@@ -2909,8 +2909,7 @@ public class BrokerService implements Closeable {
         if (t instanceof AbstractTopic abstractTopic) {
             policiesNotifyThread = abstractTopic.getPoliciesNotifyThread();
         } else {
-            TopicName partitionedBaseTopicName = TopicName.get(TopicName.get(t.getName()).getPartitionedTopicName());
-            policiesNotifyThread = getTopicPoliciesNotifyThread(partitionedBaseTopicName);
+            policiesNotifyThread = getTopicPoliciesNotifyThread(TopicName.getPartitionedTopicName(t.getName()));
         }
         policiesNotifyThread.execute(runnable);
     }
@@ -3816,20 +3815,16 @@ public class BrokerService implements Closeable {
      * thread so that they are serialized and never run concurrently. Centralizing the topic-to-thread mapping
      * here keeps it consistent between {@link AbstractTopic} and
      * {@link SystemTopicBasedTopicPoliciesService} so the two cannot accidentally diverge.
-     *
-     * @throws IllegalArgumentException if {@code partitionedBaseTopicName} refers to a specific partition. The
-     *     thread must be looked up by the base partitioned topic name
-     *     (e.g. {@code TopicName.get(name.getPartitionedTopicName())}) so all partitions of a topic share one
-     *     notify thread; converting it here would mask callers that pass the wrong topic name, so the caller is
-     *     required to pass the correct one.
      */
-    public ExecutorService getTopicPoliciesNotifyThread(TopicName partitionedBaseTopicName) {
-        if (partitionedBaseTopicName.isPartitioned()) {
-            throw new IllegalArgumentException("getTopicPoliciesNotifyThread must be called with a "
-                    + "base partitioned topic name, but got partition " + partitionedBaseTopicName
-                    + "; look it up with TopicName.get(topicName.getPartitionedTopicName())");
+    public ExecutorService getTopicPoliciesNotifyThread(TopicName topicName) {
+        TopicName baseTopicName;
+        if (topicName.isPartitioned()) {
+            // for partitioned topics, we need to use the base topic name
+            baseTopicName = TopicName.get(topicName.getPartitionedTopicName());
+        } else {
+            baseTopicName = topicName;
         }
-        return topicOrderedExecutor.chooseThread(partitionedBaseTopicName);
+        return topicOrderedExecutor.chooseThread(baseTopicName);
     }
 
     /**
