@@ -20,6 +20,8 @@
 package org.apache.pulsar.broker.service;
 
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import lombok.CustomLog;
 import org.apache.pulsar.common.policies.data.TopicPolicies;
 
 /**
@@ -29,6 +31,7 @@ import org.apache.pulsar.common.policies.data.TopicPolicies;
  * NonPersistentTopic#initialize method. The impact of the race conditions is that the topic policy state would
  * be left in an inconsistent state until another update arrives. This is a rare corner case, but possible.
  */
+@CustomLog
 public class TopicPolicyListenerWrapper implements TopicPolicyListener {
     private final TopicPolicyListener realTopicListener;
     // The latest value received during initialization, per scope. A null reference means no update was
@@ -39,6 +42,9 @@ public class TopicPolicyListenerWrapper implements TopicPolicyListener {
     private Optional<TopicPolicies> latestGlobalPolicies;
     private Optional<TopicPolicies> latestLocalPolicies;
     private boolean initialized;
+    private long createdTimestampNanos = System.nanoTime();
+    private static final long INITIALIZATION_WARNING_LOG_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
+    private int lastIntervalLogged;
 
     public TopicPolicyListenerWrapper(TopicPolicyListener realTopicListener) {
         this.realTopicListener = realTopicListener;
@@ -50,6 +56,9 @@ public class TopicPolicyListenerWrapper implements TopicPolicyListener {
             realTopicListener.onUpdate(data);
             return;
         }
+
+        maybeLogWarning();
+
         // Record the latest value received during initialization so it can be applied (preferring it over the
         // loaded value) in completeInitialization. Wrapping with Optional.ofNullable lets a delete be recorded
         // as Optional.empty() and propagated downstream instead of being lost.
@@ -89,6 +98,20 @@ public class TopicPolicyListenerWrapper implements TopicPolicyListener {
             realTopicListener.onUpdate(latestReceived.orElse(null));
         } else if (loaded != null) {
             realTopicListener.onUpdate(loaded);
+        }
+    }
+
+    // warn if the initialization takes too long and updates have been received
+    // this helps detect issues where completeInitialization didn't get called after loading policies
+    private void maybeLogWarning() {
+        long durationNanos = System.nanoTime() - createdTimestampNanos;
+        int warningLogIntervalCount = (int) (durationNanos / INITIALIZATION_WARNING_LOG_INTERVAL_NANOS);
+        if (warningLogIntervalCount > lastIntervalLogged) {
+            log.warn().attr("topicPolicyListener", realTopicListener)
+                    .attr("sinceCreationMs", TimeUnit.NANOSECONDS.toMillis(durationNanos))
+                    .log("TopicPolicyUpdate buffered. TopicPolicyListenerWrapper initialization phase took too long. "
+                            + "completeInitialization should have been called to complete the phase.");
+            lastIntervalLogged = warningLogIntervalCount;
         }
     }
 }
