@@ -166,7 +166,7 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
     public CompletableFuture<Void> initialize() {
         return brokerService.pulsar().getPulsarResources().getNamespaceResources()
                 .getPoliciesAsync(TopicName.get(topic).getNamespaceObject())
-                .thenCompose(optPolicies -> {
+                .thenComposeAsync(optPolicies -> {
                     final Policies policies;
                     if (optPolicies.isEmpty()) {
                         log.warn("[{}] Policies not present and isEncryptionRequired will be set to false", topic);
@@ -181,7 +181,7 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
                     updatePublishRateLimiter();
                     updateResourceGroupLimiter(policies);
                     return updateClusterMigrated();
-                });
+                }, getPoliciesNotifyThread());
     }
 
     @Override

@@ -43,6 +43,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
@@ -185,10 +186,16 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
     protected final Clock clock;
 
     protected Set<String> additionalSystemCursorNames = new TreeSet<>();
+    private final ExecutorService topicPoliciesNotifyThread;
 
     public AbstractTopic(String topic, BrokerService brokerService) {
         this.topic = topic;
         this.namespace = TopicName.get(topic).getNamespaceObject();
+        // Pin the per-topic policies-notify thread once. BrokerService#getTopicPoliciesNotifyThread centralizes
+        // the topic-to-thread mapping so it stays consistent with SystemTopicBasedTopicPoliciesService. In unit
+        // tests that construct topics with a mock BrokerService this returns null (the thread is unused there).
+        this.topicPoliciesNotifyThread =
+                brokerService.getTopicPoliciesNotifyThread(TopicName.getPartitionedTopicName(topic));
         this.clock = brokerService.getClock();
         this.brokerService = brokerService;
         this.producers = new ConcurrentHashMap<>();
@@ -1450,5 +1457,9 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
         } else {
             return Collections.emptyMap();
         }
+    }
+
+    protected ExecutorService getPoliciesNotifyThread() {
+        return topicPoliciesNotifyThread;
     }
 }
