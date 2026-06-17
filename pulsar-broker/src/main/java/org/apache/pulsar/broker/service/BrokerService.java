@@ -2858,9 +2858,10 @@ public class BrokerService implements Closeable {
                             topicFuture.thenAccept(topic -> {
                                 log.debug().attr("name", name).log("Notifying topic that local policies have changed");
                                 topic.ifPresent(t -> {
-                                    if (t instanceof PersistentTopic) {
-                                        PersistentTopic topic1 = (PersistentTopic) t;
-                                        topic1.onLocalPoliciesUpdate();
+                                    if (t instanceof PersistentTopic persistentTopic) {
+                                        runOnTopicPoliciesNotifyThread(t, () -> {
+                                            persistentTopic.onLocalPoliciesUpdate();
+                                        });
                                     }
                                 });
                             });
@@ -2889,13 +2890,9 @@ public class BrokerService implements Closeable {
                                 log.debug().attr("topic", name).log("Notifying topic that policies have changed");
 
                                 topic.ifPresent(t -> {
-                                    if (t instanceof AbstractTopic abstractTopic) {
-                                        abstractTopic.getPoliciesNotifyThread().execute(() -> {
-                                            t.onPoliciesUpdate(policies);
-                                        });
-                                    } else {
+                                    runOnTopicPoliciesNotifyThread(t, () -> {
                                         t.onPoliciesUpdate(policies);
-                                    }
+                                    });
                                 });
                             });
                         }
@@ -2905,6 +2902,17 @@ public class BrokerService implements Closeable {
                     // replication-cluster and still own the bundle. That can cause data-loss for TODO: git-issue
                     unloadDeletedReplNamespace(policies, namespace);
                 }, pulsar.getExecutor());
+    }
+
+    private void runOnTopicPoliciesNotifyThread(Topic t, Runnable runnable) {
+        ExecutorService policiesNotifyThread;
+        if (t instanceof AbstractTopic abstractTopic) {
+            policiesNotifyThread = abstractTopic.getPoliciesNotifyThread();
+        } else {
+            TopicName partitionedBaseTopicName = TopicName.get(TopicName.get(t.getName()).getPartitionedTopicName());
+            policiesNotifyThread = getTopicPoliciesNotifyThread(partitionedBaseTopicName);
+        }
+        policiesNotifyThread.execute(runnable);
     }
 
     private void handleDynamicConfigurationUpdates() {
@@ -3809,18 +3817,19 @@ public class BrokerService implements Closeable {
      * here keeps it consistent between {@link AbstractTopic} and
      * {@link SystemTopicBasedTopicPoliciesService} so the two cannot accidentally diverge.
      *
-     * @throws IllegalArgumentException if {@code topicName} refers to a specific partition. The thread must be
-     *     looked up by the non-partitioned topic name (e.g. {@code TopicName.get(name.getPartitionedTopicName())})
-     *     so all partitions of a topic share one notify thread; converting it here would mask callers that pass
-     *     the wrong topic name, so the caller is required to pass the correct one.
+     * @throws IllegalArgumentException if {@code partitionedBaseTopicName} refers to a specific partition. The
+     *     thread must be looked up by the base partitioned topic name
+     *     (e.g. {@code TopicName.get(name.getPartitionedTopicName())}) so all partitions of a topic share one
+     *     notify thread; converting it here would mask callers that pass the wrong topic name, so the caller is
+     *     required to pass the correct one.
      */
-    public ExecutorService getTopicPoliciesNotifyThread(TopicName topicName) {
-        if (topicName.isPartitioned()) {
+    public ExecutorService getTopicPoliciesNotifyThread(TopicName partitionedBaseTopicName) {
+        if (partitionedBaseTopicName.isPartitioned()) {
             throw new IllegalArgumentException("getTopicPoliciesNotifyThread must be called with a "
-                    + "non-partitioned topic name, but got partition " + topicName
+                    + "base partitioned topic name, but got partition " + partitionedBaseTopicName
                     + "; look it up with TopicName.get(topicName.getPartitionedTopicName())");
         }
-        return topicOrderedExecutor.chooseThread(topicName);
+        return topicOrderedExecutor.chooseThread(partitionedBaseTopicName);
     }
 
     /**
