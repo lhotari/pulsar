@@ -68,6 +68,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
@@ -3799,6 +3800,17 @@ public class BrokerService implements Closeable {
 
     public OrderedExecutor getTopicOrderedExecutor() {
         return topicOrderedExecutor;
+    }
+
+    /**
+     * Returns the single executor thread used to apply topic-policy updates for the given topic. All
+     * topic-policy notifications and policy application for a topic must run on this deterministically-chosen
+     * thread so that they are serialized and never run concurrently. Centralizing the topic-to-thread mapping
+     * here keeps it consistent between {@link AbstractTopic} and
+     * {@link SystemTopicBasedTopicPoliciesService} so the two cannot accidentally diverge.
+     */
+    public ExecutorService getTopicPoliciesNotifyThread(TopicName topicName) {
+        return topicOrderedExecutor.chooseThread(topicName);
     }
 
     /**

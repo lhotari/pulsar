@@ -529,7 +529,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         if (topicListeners == null) {
             return;
         }
-        pulsarService.getBrokerService().getTopicOrderedExecutor().executeOrdered(topicName, () -> {
+        pulsarService.getBrokerService().getTopicPoliciesNotifyThread(topicName).execute(() -> {
             internalNotifyTopicListeners(topicName, policies, topicListeners);
         });
     }
@@ -557,7 +557,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
             return CompletableFuture.completedFuture(null);
         }
         ExecutorService pinnedTopicOrderedExecutor =
-                pulsarService.getBrokerService().getTopicOrderedExecutor().chooseThread(topicName);
+                pulsarService.getBrokerService().getTopicPoliciesNotifyThread(topicName);
         return CompletableFuture.runAsync(() -> {
             internalNotifyTopicListeners(topicName, policies, topicListeners);
         }, pinnedTopicOrderedExecutor);

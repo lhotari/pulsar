@@ -196,13 +196,11 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
         this.topic = topic;
         this.log = LOG.with().attr("topic", topic).build();
         this.namespace = TopicName.get(topic).getNamespaceObject();
-        // Pin a per-topic policies-notify thread from the topic-ordered executor. A running broker always has
-        // this executor; guard against null so unit tests that construct topics with a mock BrokerService
-        // (without stubbing getTopicOrderedExecutor()) don't fail in the constructor.
-        var topicOrderedExecutor = brokerService.getTopicOrderedExecutor();
-        this.topicPoliciesNotifyThread = topicOrderedExecutor != null
-                ? topicOrderedExecutor.chooseThread(TopicName.getPartitionedTopicName(topic))
-                : null;
+        // Pin the per-topic policies-notify thread once. BrokerService#getTopicPoliciesNotifyThread centralizes
+        // the topic-to-thread mapping so it stays consistent with SystemTopicBasedTopicPoliciesService. In unit
+        // tests that construct topics with a mock BrokerService this returns null (the thread is unused there).
+        this.topicPoliciesNotifyThread =
+                brokerService.getTopicPoliciesNotifyThread(TopicName.getPartitionedTopicName(topic));
         this.clock = brokerService.getClock();
         this.brokerService = brokerService;
         this.producers = new ConcurrentHashMap<>();

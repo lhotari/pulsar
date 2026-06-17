@@ -38,7 +38,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import lombok.Cleanup;
-import org.apache.bookkeeper.common.util.OrderedExecutor;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.DeleteCursorCallback;
 import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.PositionFactory;
@@ -56,21 +55,10 @@ import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.Markers;
 import org.mockito.Mockito;
 import org.testng.Assert;
-import org.testng.annotations.AfterMethod;
 import org.testng.annotations.Test;
 
 @Test(groups = "broker-replication")
 public class ReplicatedSubscriptionsControllerTest {
-
-    private OrderedExecutor topicOrderedExecutor;
-
-    @AfterMethod(alwaysRun = true)
-    public void cleanup() {
-        if (topicOrderedExecutor != null) {
-            topicOrderedExecutor.shutdownNow();
-            topicOrderedExecutor = null;
-        }
-    }
 
     @Test
     @SuppressWarnings("unchecked")
@@ -100,9 +88,6 @@ public class ReplicatedSubscriptionsControllerTest {
         when(brokerService.pulsar()).thenReturn(pulsar);
         when(brokerService.getPulsar()).thenReturn(pulsar);
         when(brokerService.getBacklogQuotaManager()).thenReturn(backlogQuotaManager);
-        // AbstractTopic's constructor pins a per-topic policies-notify thread from the topic-ordered executor.
-        topicOrderedExecutor = OrderedExecutor.newBuilder().numThreads(1).name("test-topic-workers").build();
-        when(brokerService.getTopicOrderedExecutor()).thenReturn(topicOrderedExecutor);
 
         when(pulsar.getExecutor()).thenReturn(executor);
         when(pulsar.getConfiguration()).thenReturn(config);
