@@ -335,14 +335,19 @@ public abstract class PersistentReplicator extends AbstractReplicator
                 return null;
             }
             int permits = getPermitsIfNoPendingRead();
-            if (permits == 0) {
+            if (permits <= 0) {
                 return null;
             }
 
             int messagesToRead = permits;
             long bytesToRead = -1;
             if (dispatchRateLimiter.isPresent() && dispatchRateLimiter.get().isDispatchRateLimitingEnabled()) {
-                AvailablePermits availablePermits = getRateLimiterAvailablePermits(permits);
+                if (!isWritable()) {
+                    log.debug("Throttling replication traffic because producer is not writable");
+                    // Minimize the read size if the producer is disconnected or the window is already full
+                    messagesToRead = 1;
+                }
+                AvailablePermits availablePermits = getRateLimiterAvailablePermits(messagesToRead);
                 if (!availablePermits.isReadable()) {
                     // no rate limiter permits from rate limit
                     log.debug()
@@ -353,11 +358,6 @@ public abstract class PersistentReplicator extends AbstractReplicator
                 }
                 messagesToRead = availablePermits.getMessages();
                 bytesToRead = availablePermits.getBytes();
-                if (!isWritable()) {
-                    log.debug("Throttling replication traffic because producer is not writable");
-                    // Minimize the read size if the producer is disconnected or the window is already full
-                    messagesToRead = 1;
-                }
             }
             return new ReadEntriesRequest(
                     createOrRecycleInFlightTaskIntoQueue(cursor.getReadPosition(), messagesToRead), bytesToRead);
