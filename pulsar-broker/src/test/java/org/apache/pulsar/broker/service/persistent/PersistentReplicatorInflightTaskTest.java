@@ -195,7 +195,7 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
         replicator.dispatchRateLimiter = Optional.of(rateLimiter);
 
         try {
-            Assert.assertNull(replicator.acquireInFlightTaskIfNeeded());
+            Assert.assertNull(replicator.acquirePermitsIfNotFetchingSchema());
             Assert.assertTrue(inFlightTasks.isEmpty());
             Assert.assertFalse(replicator.hasPendingRead());
             assertEquals(replicator.getPermitsIfNoPendingRead(), 1000);
