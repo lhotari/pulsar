@@ -191,7 +191,7 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
         replicator.dispatchRateLimiter = Optional.of(rateLimiter);
 
         try {
-            Assert.assertNull(replicator.acquireReadEntriesRequestIfNeeded());
+            Assert.assertNull(replicator.acquireInFlightTaskIfNeeded());
             Assert.assertTrue(inFlightTasks.isEmpty());
             Assert.assertFalse(replicator.hasPendingRead());
             assertEquals(replicator.getPermitsIfNoPendingRead(), 1000);
@@ -221,35 +221,38 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
         // Test Case 1: Create a new task when the queue is empty
         Position position1 = PositionFactory.create(1, 1);
         Assert.assertNotNull(position1, "Position should not be null");
-        InFlightTask task1 = replicator.createOrRecycleInFlightTaskIntoQueue(position1, 10);
+        InFlightTask task1 = replicator.createOrRecycleInFlightTaskIntoQueue(position1, 10, -1);
         // Verify a new task was created and added to the queue
         Assert.assertNotNull(task1, "Task should not be null");
         Assert.assertEquals(inFlightTasks.size(), 1, "Queue should have one task");
         Assert.assertEquals(task1.getReadPos(), position1, "Task should have the correct position");
         Assert.assertEquals(task1.getReadingEntries(), 10, "Task should have the correct reading entries count");
+        Assert.assertEquals(task1.getBytesToRead(), -1, "Task should have the correct byte read limit");
         // Mark the task as done to test recycling
         task1.setEntries(Collections.emptyList());
 
         // Test Case 2: Recycle an existing task
         Position position2 = PositionFactory.create(2, 2);
         Assert.assertNotNull(position2, "Position should not be null");
-        InFlightTask task2 = replicator.createOrRecycleInFlightTaskIntoQueue(position2, 20);
+        InFlightTask task2 = replicator.createOrRecycleInFlightTaskIntoQueue(position2, 20, 1024);
         // Verify the task was recycled
         Assert.assertNotNull(task2, "Task should not be null");
         Assert.assertEquals(inFlightTasks.size(), 1, "Queue should still have one task");
         Assert.assertEquals(task2.getReadPos(), position2, "Task should have the updated position");
         Assert.assertEquals(task2.getReadingEntries(), 20, "Task should have the updated reading entries count");
+        Assert.assertEquals(task2.getBytesToRead(), 1024, "Task should have the updated byte read limit");
 
         // Test Case 3: Create a new task when no tasks can be recycled
         task2.setEntries(null); // Make the task not done
         Position position3 = PositionFactory.create(3, 3);
         Assert.assertNotNull(position3, "Position should not be null");
-        InFlightTask task3 = replicator.createOrRecycleInFlightTaskIntoQueue(position3, 30);
+        InFlightTask task3 = replicator.createOrRecycleInFlightTaskIntoQueue(position3, 30, 2048);
         // Verify a new task was created
         Assert.assertNotNull(task3, "Task should not be null");
         Assert.assertEquals(inFlightTasks.size(), 2, "Queue should have two tasks");
         Assert.assertEquals(task3.getReadPos(), position3, "Task should have the correct position");
         Assert.assertEquals(task3.getReadingEntries(), 30, "Task should have the correct reading entries count");
+        Assert.assertEquals(task3.getBytesToRead(), 2048, "Task should have the correct byte read limit");
 
         // cleanup.
         log.info("Completed testCreateOrRecycleInFlightTaskIntoQueue");

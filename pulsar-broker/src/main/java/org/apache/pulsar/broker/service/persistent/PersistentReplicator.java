@@ -240,17 +240,6 @@ public abstract class PersistentReplicator extends AbstractReplicator
         }
     }
 
-    @VisibleForTesting
-    static class ReadEntriesRequest {
-        private final InFlightTask inFlightTask;
-        private final long bytesToRead;
-
-        ReadEntriesRequest(InFlightTask inFlightTask, long bytesToRead) {
-            this.inFlightTask = inFlightTask;
-            this.bytesToRead = bytesToRead;
-        }
-    }
-
     /**
      * Calculate available permits for read entries.
      */
@@ -298,8 +287,8 @@ public abstract class PersistentReplicator extends AbstractReplicator
         if (state.equals(Terminated) || state.equals(Terminating)) {
             return;
         }
-        ReadEntriesRequest request = acquireReadEntriesRequestIfNeeded();
-        if (request == null) {
+        InFlightTask newInFlightTask = acquireInFlightTaskIfNeeded();
+        if (newInFlightTask == null) {
             // no permits from rate limit
             log.debug("Not scheduling read due to pending read or no permits");
             if (!hasPendingRead()) {
@@ -310,17 +299,16 @@ public abstract class PersistentReplicator extends AbstractReplicator
                 return;
             }
         }
-        InFlightTask newInFlightTask = request.inFlightTask;
         log.debug()
                 .attr("readingEntries", newInFlightTask.readingEntries)
-                .attr("bytesToRead", request.bytesToRead)
+                .attr("bytesToRead", newInFlightTask.bytesToRead)
                 .log("Scheduling read");
-        cursor.asyncReadEntriesOrWait(newInFlightTask.readingEntries, request.bytesToRead, this,
+        cursor.asyncReadEntriesOrWait(newInFlightTask.readingEntries, newInFlightTask.bytesToRead, this,
                 newInFlightTask/* Context object */, topic.getMaxReadPosition());
     }
 
     @VisibleForTesting
-    ReadEntriesRequest acquireReadEntriesRequestIfNeeded() {
+    InFlightTask acquireInFlightTaskIfNeeded() {
         synchronized (inFlightTasks) {
             if (hasPendingRead()) {
                 log.info("Skip the reading because there is a pending read task");
@@ -359,8 +347,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
                 messagesToRead = availablePermits.getMessages();
                 bytesToRead = availablePermits.getBytes();
             }
-            return new ReadEntriesRequest(
-                    createOrRecycleInFlightTaskIntoQueue(cursor.getReadPosition(), messagesToRead), bytesToRead);
+            return createOrRecycleInFlightTaskIntoQueue(cursor.getReadPosition(), messagesToRead, bytesToRead);
         }
     }
 
@@ -822,6 +809,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
     protected static class InFlightTask {
         Position readPos;
         int readingEntries;
+        long bytesToRead;
         volatile List<Entry> entries;
         volatile int completedEntries;
         volatile boolean skipReadResultDueToCursorRewind;
@@ -838,17 +826,23 @@ public abstract class PersistentReplicator extends AbstractReplicator
             }
         }
 
-        synchronized void recycle(Position readStart, int readingEntries) {
+        synchronized void recycle(Position readStart, int readingEntries, long bytesToRead) {
             this.readPos = readStart;
             this.readingEntries = readingEntries;
+            this.bytesToRead = bytesToRead;
             this.entries = null;
             this.completedEntries = 0;
             this.skipReadResultDueToCursorRewind = false;
         }
 
         public InFlightTask(Position readPos, int readingEntries, String replicatorId) {
+            this(readPos, readingEntries, -1, replicatorId);
+        }
+
+        public InFlightTask(Position readPos, int readingEntries, long bytesToRead, String replicatorId) {
             this.readPos = readPos;
             this.readingEntries = readingEntries;
+            this.bytesToRead = bytesToRead;
             this.replicatorId = replicatorId;
         }
 
@@ -868,6 +862,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
                 + "{replicatorId=" + replicatorId
                 + ", readPos=" + readPos
                 + ", readingEntries=" + readingEntries
+                + ", bytesToRead=" + bytesToRead
                 + ", readoutEntries=" + (entries == null ? "-1" : entries.size())
                 + ", completedEntries=" + completedEntries
                 + ", skipReadResultDueToCursorRewound=" + skipReadResultDueToCursorRewind
@@ -876,7 +871,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
     }
 
     @VisibleForTesting
-    InFlightTask createOrRecycleInFlightTaskIntoQueue(Position readPos, int readingEntries) {
+    InFlightTask createOrRecycleInFlightTaskIntoQueue(Position readPos, int readingEntries, long bytesToRead) {
         synchronized (inFlightTasks) {
             // Reuse projects that has done.
             if (!inFlightTasks.isEmpty()) {
@@ -884,21 +879,20 @@ public abstract class PersistentReplicator extends AbstractReplicator
                 if (first.isDone()) {
                     // Remove from the first index, and add to the latest index.
                     inFlightTasks.poll();
-                    first.recycle(readPos, readingEntries);
+                    first.recycle(readPos, readingEntries, bytesToRead);
                     inFlightTasks.add(first);
                     return first;
                 }
             }
             // New project if nothing can be reused.
-            InFlightTask task = new InFlightTask(readPos, readingEntries, replicatorId);
+            InFlightTask task = new InFlightTask(readPos, readingEntries, bytesToRead, replicatorId);
             inFlightTasks.add(task);
             return task;
         }
     }
 
     protected InFlightTask acquirePermitsIfNotFetchingSchema() {
-        ReadEntriesRequest request = acquireReadEntriesRequestIfNeeded();
-        return request == null ? null : request.inFlightTask;
+        return acquireInFlightTaskIfNeeded();
     }
 
     protected int getPermitsIfNoPendingRead() {
