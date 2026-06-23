@@ -60,6 +60,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import lombok.Getter;
 import lombok.Value;
 import org.apache.bookkeeper.client.BKException.BKNoSuchLedgerExistsException;
@@ -136,6 +137,8 @@ import org.apache.pulsar.broker.service.Subscription;
 import org.apache.pulsar.broker.service.SubscriptionOption;
 import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.broker.service.TopicPoliciesService;
+import org.apache.pulsar.broker.service.TopicPolicyListener;
+import org.apache.pulsar.broker.service.TopicPolicyListenerWrapper;
 import org.apache.pulsar.broker.service.TransportCnx;
 import org.apache.pulsar.broker.service.schema.BookkeeperSchemaStorage;
 import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaException;
@@ -228,6 +231,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     private final TopicName shadowSourceTopic;
 
     public static final String DEDUPLICATION_CURSOR_NAME = "pulsar.dedup";
+    private volatile int lastMessageTtlInSeconds;
 
     public static boolean isDedupCursorName(String name) {
         return DEDUPLICATION_CURSOR_NAME.equals(name);
@@ -296,6 +300,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     // Record the last time max read position is moved forward, unless it's a marker message.
     @Getter
     private volatile long lastMaxReadPositionMovedForwardTimestamp = 0;
+
+    // prevents race conditions in topic policy initialization
+    private final TopicPolicyListenerWrapper topicPolicyListener = new TopicPolicyListenerWrapper(this);
+
     @Getter
     private final ExecutorService orderedExecutor;
 
@@ -503,7 +511,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
                     isAllowAutoUpdateSchema = policies.is_allow_auto_update_schema;
                     isAllowAutoUpdateSchemaWithReplicator = policies.is_allow_auto_update_schema_with_replicator;
-                }, getOrderedExecutor())
+                }, getPoliciesNotifyThread())
                 .thenCompose(ignore -> initTopicPolicy())
                 .thenCompose(ignore -> removeOrphanReplicationCursors())
                 .exceptionally(ex -> {
@@ -787,18 +795,23 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             // close all producers
             CompletableFuture<Void> disconnectProducersFuture;
             if (producers.size() > 0) {
-                List<CompletableFuture<Void>> futures = new ArrayList<>();
                 // send migration url metadata to producers before disconnecting them
-                if (isMigrated()) {
-                    if (!shouldProducerMigrate()) {
+                CompletableFuture<Void> sendMigrationUrlFuture;
+                if (isMigrated() && shouldProducerMigrate()) {
+                    sendMigrationUrlFuture = getMigratedClusterUrlAsync().thenAccept(clusterUrl ->
+                            producers.forEach((__, producer) -> producer.topicMigrated(clusterUrl)));
+                } else {
+                    if (isMigrated()) {
                         log.info("Topic is migrated but replication-backlog exists or "
                                 + "subs not created, closing producers");
-                    } else {
-                        producers.forEach((__, producer) -> producer.topicMigrated(getMigratedClusterUrl()));
                     }
+                    sendMigrationUrlFuture = CompletableFuture.completedFuture(null);
                 }
-                producers.forEach((__, producer) -> futures.add(producer.disconnect()));
-                disconnectProducersFuture = FutureUtil.waitForAll(futures);
+                disconnectProducersFuture = sendMigrationUrlFuture.thenCompose(v -> {
+                    List<CompletableFuture<Void>> futures = new ArrayList<>();
+                    producers.forEach((__, producer) -> futures.add(producer.disconnect()));
+                    return FutureUtil.waitForAll(futures);
+                });
             } else {
                 disconnectProducersFuture = CompletableFuture.completedFuture(null);
             }
@@ -1010,8 +1023,15 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                         new NamingException("Subscription with reserved subscription name attempted"));
             }
 
-            if (cnx.clientAddress() != null && cnx.clientAddress().toString().contains(":")
-                    && subscribeRateLimiter.isPresent()) {
+            // The subscribe rate limit must not apply to the broker-internal compaction subscription: the
+            // compactor's reader re-subscribes after the phase-two seek, and throttling that re-subscribe stalls
+            // the compaction, which in turn blocks forced topic/namespace deletion waiting on the in-flight
+            // compaction. System topics are exempt as well, consistent with the publish/dispatch rate limiters,
+            // since throttling broker-internal readers (e.g. on __change_events) can stall topic policy updates.
+            if (subscribeRateLimiter.isPresent()
+                    && !isSystemTopic()
+                    && !isCompactionSubscription(subscriptionName)
+                    && cnx.clientAddress() != null && cnx.clientAddress().toString().contains(":")) {
                 SubscribeRateLimiter.ConsumerIdentifier consumer = new SubscribeRateLimiter.ConsumerIdentifier(
                         cnx.clientAddress().toString().split(":")[0], consumerName, consumerId);
                 if (!subscribeRateLimiter.get().subscribeAvailable(consumer)
@@ -1429,8 +1449,26 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 return;
             }
         }
-        // Unsubscribe compaction cursor and delete compacted ledger.
-        currentCompaction.thenCompose(__ -> {
+        // Unsubscribe compaction cursor and delete compacted ledger. Normally we wait for any in-flight compaction
+        // to finish first, but a compaction that completed exceptionally must not block the cursor deletion: it
+        // would otherwise fail on every retry until the topic instance is reloaded (issue #24148).
+        //
+        // Moreover, when the topic is being closed or deleted it is already fenced and any in-flight compaction is
+        // being aborted. Waiting for that compaction to complete is both unnecessary and unsafe here: the
+        // compactor's reader is expected to fail once the topic is fenced, but that depends on how the client
+        // reconnect surfaces the failure (a retriable lookup-stage error keeps the reader reconnecting instead of
+        // failing the in-flight read), so the compaction future may stay pending for far longer than the deletion
+        // can wait. Proceed with the cursor deletion right away in that case so a forced topic/namespace deletion
+        // cannot hang (issue #24148).
+        CompletableFuture<Long> compactionToWait =
+                isClosingOrDeleting ? CompletableFuture.<Long>completedFuture(null) : currentCompaction;
+        compactionToWait.exceptionally(compactionEx -> {
+            log.info()
+                    .attr("subscription", subscriptionName)
+                    .exceptionMessage(compactionEx)
+                    .log("Last compaction task failed, proceeding to delete the compaction cursor");
+            return null;
+        }).thenCompose(__ -> {
             asyncDeleteCursor(subscriptionName, unsubscribeFuture);
             return unsubscribeFuture;
         }).thenAccept(__ -> {
@@ -1452,15 +1490,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 disablingCompaction.compareAndSet(true, false);
             }
         }).exceptionally(ex -> {
-            if (currentCompaction.isCompletedExceptionally()) {
-                log.warn()
-                        .attr("subscription", subscriptionName)
-                        .log("Last compaction task failed");
-            } else {
-                log.warn()
-                        .attr("subscription", subscriptionName)
-                        .log("Failed to delete cursor task failed");
-            }
+            log.warn()
+                    .attr("subscription", subscriptionName)
+                    .exceptionMessage(ex)
+                    .log("Failed to delete the compaction cursor");
             // Reset the variable: disablingCompaction,
             disablingCompaction.compareAndSet(true, false);
             unsubscribeFuture.completeExceptionally(ex);
@@ -3371,37 +3404,37 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             return CompletableFuture.completedFuture(null);
         }
 
-        Optional<ClusterUrl> clusterUrl = getMigratedClusterUrl();
-
-        if (!clusterUrl.isPresent()) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        if (isReplicated()) {
-            if (isReplicationBacklogExist()) {
-                if (!ledger.isMigrated()) {
-                    log.info("applying migration with replication backlog");
-                    ledger.asyncMigrate();
-                }
-                log.debug("has replication backlog and applied migration");
-                return CompletableFuture.completedFuture(null);
+        return getMigratedClusterUrlAsync().thenCompose(clusterUrl -> {
+            if (!clusterUrl.isPresent()) {
+                return CompletableFuture.<Void>completedFuture(null);
             }
-        }
 
-        return initMigration().thenCompose(subCreated -> {
-            migrationSubsCreated = true;
-            CompletableFuture<?> migrated = !isMigrated() ? ledger.asyncMigrate()
-                    : CompletableFuture.completedFuture(null);
-            return migrated.thenApply(__ -> {
-                subscriptions.forEach((name, sub) -> {
-                    if (sub.isSubscriptionMigrated()) {
-                        sub.getConsumers().forEach(Consumer::checkAndApplyTopicMigration);
+            if (isReplicated()) {
+                if (isReplicationBacklogExist()) {
+                    if (!ledger.isMigrated()) {
+                        log.info("applying migration with replication backlog");
+                        ledger.asyncMigrate();
                     }
-                });
-                return null;
-            }).thenCompose(__ -> checkAndDisconnectReplicators())
-                    .thenCompose(__ -> checkAndUnsubscribeSubscriptions())
-                    .thenCompose(__ -> checkAndDisconnectProducers());
+                    log.debug("has replication backlog and applied migration");
+                    return CompletableFuture.<Void>completedFuture(null);
+                }
+            }
+
+            return initMigration().thenCompose(subCreated -> {
+                migrationSubsCreated = true;
+                CompletableFuture<?> migrated = !isMigrated() ? ledger.asyncMigrate()
+                        : CompletableFuture.completedFuture(null);
+                return migrated.thenApply(__ -> {
+                    subscriptions.forEach((name, sub) -> {
+                        if (sub.isSubscriptionMigrated()) {
+                            sub.getConsumers().forEach(consumer -> consumer.topicMigrated(clusterUrl));
+                        }
+                    });
+                    return null;
+                }).thenCompose(__ -> checkAndDisconnectReplicators())
+                        .thenCompose(__ -> checkAndUnsubscribeSubscriptions())
+                        .thenCompose(__ -> checkAndDisconnectProducers());
+            });
         });
     }
 
@@ -3861,8 +3894,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         });
         producers.values().forEach(producer -> applyPoliciesFutureList.add(
                 producer.checkPermissionsAsync().thenRun(producer::checkEncryption)));
-        // Check message expiry.
-        applyPoliciesFutureList.add(FutureUtil.runWithCurrentThread(() -> checkMessageExpiry()));
+
+        // Check message expiry in the background so that it doesn't block updating or loading topic policies.
+        maybeCheckMessageExpiryOnPolicyUpdateInBackground();
 
         // Update rate limiters.
         applyPoliciesFutureList.add(FutureUtil.runWithCurrentThread(() -> updateDispatchRateLimiter()));
@@ -3885,6 +3919,26 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 () -> updateBrokerDispatchPauseOnAckStatePersistentEnabled()));
 
         return applyPoliciesFutureList;
+    }
+
+    /**
+     * Triggers a message-expiry check on a policy update, but only when the message TTL actually changed, and
+     * runs it on the messageExpiryMonitor thread (the same thread the periodic expiry check uses) so it never
+     * blocks updating or loading topic policies. Unlike before, the expiry check is no longer part of the
+     * returned {@link #applyUpdatedTopicPolicies()} futures, so callers no longer wait for it; the periodic
+     * monitor provides eventual coverage and the check is idempotent.
+     */
+    private void maybeCheckMessageExpiryOnPolicyUpdateInBackground() {
+        int messageTtlInSeconds = topicPolicies.getMessageTTLInSeconds().get();
+        // don't check if the message expiry hasn't changed
+        if (messageTtlInSeconds > 0) {
+            if (lastMessageTtlInSeconds != messageTtlInSeconds) {
+                lastMessageTtlInSeconds = messageTtlInSeconds;
+                brokerService.getMessageExpiryMonitor().execute(this::checkMessageExpiry);
+            }
+        } else {
+            lastMessageTtlInSeconds = messageTtlInSeconds;
+        }
     }
 
     /**
@@ -4904,22 +4958,35 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     protected CompletableFuture<Void> initTopicPolicy() {
         final var topicPoliciesService = brokerService.pulsar().getTopicPoliciesService();
         final var partitionedTopicName = TopicName.getPartitionedTopicName(topic);
-        return topicPoliciesService.registerListenerAsync(partitionedTopicName, this).thenCompose(registered -> {
-            if (!registered) {
-                return CompletableFuture.completedFuture(null);
-            }
-            if (ExtensibleLoadManagerImpl.isInternalTopic(topic)) {
-                return CompletableFuture.completedFuture(null);
-            }
-            return topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
-                    TopicPoliciesService.GetType.GLOBAL_ONLY)
-            .thenAcceptAsync(optionalPolicies -> optionalPolicies.ifPresent(this::onUpdate),
-                    brokerService.getTopicOrderedExecutor())
-            .thenCompose(__ -> topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
-                    TopicPoliciesService.GetType.LOCAL_ONLY))
-            .thenAcceptAsync(optionalPolicies -> optionalPolicies.ifPresent(this::onUpdate),
-                            brokerService.getTopicOrderedExecutor());
-        });
+
+        return topicPoliciesService.registerListenerAsync(partitionedTopicName, topicPolicyListener)
+                .thenCompose(registered -> {
+                    if (!registered) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    if (ExtensibleLoadManagerImpl.isInternalTopic(topic)) {
+                        // Internal topics don't load topic-level policies, but the listener wrapper must
+                        // still be initialized so any buffered/future updates are forwarded to the topic
+                        // instead of being silently dropped.
+                        return CompletableFuture.runAsync(
+                                () -> topicPolicyListener.completeInitialization(null, null),
+                                getPoliciesNotifyThread());
+                    }
+                    // future for fetching global topic policies
+                    CompletableFuture<Optional<TopicPolicies>> globalPoliciesFuture =
+                            topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
+                                    TopicPoliciesService.GetType.GLOBAL_ONLY);
+                    // future for fetching local topic policies
+                    CompletableFuture<Optional<TopicPolicies>> localPoliciesFuture =
+                            topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
+                                    TopicPoliciesService.GetType.LOCAL_ONLY);
+                    return globalPoliciesFuture.thenCombine(localPoliciesFuture, (global, local) -> {
+                        // finally update the topic policies with the latest value or loaded value
+                        return CompletableFuture.runAsync(() ->
+                                topicPolicyListener.completeInitialization(global.orElse(null), local.orElse(null)),
+                                getPoliciesNotifyThread());
+                    }).thenCompose(Function.identity());
+                });
     }
 
     @VisibleForTesting
@@ -5095,5 +5162,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         }
 
         return future;
+    }
+
+    @Override
+    public TopicPolicyListener getTopicPolicyListener() {
+        return topicPolicyListener;
     }
 }
