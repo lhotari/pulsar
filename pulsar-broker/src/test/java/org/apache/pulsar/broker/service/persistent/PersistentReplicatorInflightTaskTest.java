@@ -455,8 +455,8 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
             InFlightTask task1 = replicator.maybeCreateInFlightReadTask();
             Assert.assertNotNull(task1, "Should return a new InFlightTask in normal case");
             Assert.assertNotNull(task1.getReadPos(), "Task should have a read position");
-            Assert.assertEquals(task1.getReadingEntries(), expectedPermits,
-                    "Task readingEntries should equal the number of permits available");
+            Assert.assertEquals(task1.getReadingEntries(), 100,
+                    "Task readingEntries should equal to readBatchSize");
             Assert.assertTrue(inFlightTasks.contains(task1),
                     "Task should be added to the inFlightTasks list");
 
