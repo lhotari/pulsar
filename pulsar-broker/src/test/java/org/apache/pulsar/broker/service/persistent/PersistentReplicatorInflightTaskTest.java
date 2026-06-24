@@ -541,7 +541,8 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
         });
         replicator.beforeTerminateOrCursorRewinding(PersistentReplicator.ReasonOfWaitForCursorRewinding.Disconnecting);
         replicator.doRewindCursor(false);
-        InFlightTask inFlightTask = replicator.createOrRecycleInFlightTaskIntoQueue(PositionFactory.create(1, 1), 1);
+        InFlightTask inFlightTask =
+                replicator.createOrRecycleInFlightTaskIntoQueue(PositionFactory.create(1, 1), 1, -1);
         return () -> {
             inFlightTask.setEntries(Collections.emptyList());
             replicator.readMoreEntries();
