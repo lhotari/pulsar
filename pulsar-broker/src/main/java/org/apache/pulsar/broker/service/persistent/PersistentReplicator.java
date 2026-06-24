@@ -92,7 +92,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
     protected Optional<DispatchRateLimiter> dispatchRateLimiter = Optional.empty();
     private final Object dispatchRateLimiterLock = new Object();
 
-    private int readBatchSize;
+    private volatile int readBatchSize;
     private final int readMaxSizeBytes;
 
     private final int producerQueueThreshold;
@@ -140,15 +140,17 @@ public abstract class PersistentReplicator extends AbstractReplicator
         this.expiryMonitor = new PersistentMessageExpiryMonitor(localTopic,
                 Codec.decode(cursor.getName()), cursor, null);
 
-        readBatchSize = Math.min(
-                producerQueueSize,
-                localTopic.getBrokerService().pulsar().getConfiguration().getDispatcherMaxReadBatchSize());
+        readBatchSize = getMaxReadBatchSize();
         readMaxSizeBytes = localTopic.getBrokerService().pulsar().getConfiguration().getDispatcherMaxReadSizeBytes();
         producerQueueThreshold = (int) (producerQueueSize * 0.9);
 
         this.initializeDispatchRateLimiterIfNeeded();
 
         startProducer();
+    }
+
+    private int getMaxReadBatchSize() {
+        return Math.min(producerQueueSize, brokerService.pulsar().getConfiguration().getDispatcherMaxReadBatchSize());
     }
 
     @Override
@@ -225,7 +227,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
 
     /**
      * Calculate read limits for a read operation. Takes the rate limiter into account if it's enabled.
-     * Also limits to configured max read batch size and max read size.
+     * Also limits to current readBatchSize and readMaxSizeBytes.
      */
     private ReadLimits getReadLimits(int availablePermits) {
 
@@ -237,8 +239,8 @@ public abstract class PersistentReplicator extends AbstractReplicator
             return new ReadLimits(0, 0);
         }
 
-        long readLimitOnMsg = -1;
-        long readLimitOnByte = -1;
+        long readLimitOnMsg;
+        long readLimitOnByte;
 
         // handle rate limit
         if (dispatchRateLimiter.isPresent() && dispatchRateLimiter.get().isDispatchRateLimitingEnabled()) {
@@ -257,12 +259,17 @@ public abstract class PersistentReplicator extends AbstractReplicator
                         .log("Message-read exceeded topic replicator rate limit");
                 return new ReadLimits(-1, -1);
             }
+            // use available permits if no rate limit configured, otherwise limit to returned rate limiter permits
+            readLimitOnMsg = readLimitOnMsg == -1 ? availablePermits : Math.min(availablePermits, readLimitOnMsg);
+            // use readMaxSizeBytes if no rate limit configured, otherwise limit to returned rate limiter permits
+            readLimitOnByte = readLimitOnByte == -1 ? readMaxSizeBytes : Math.min(readMaxSizeBytes, readLimitOnByte);
+        } else {
+            readLimitOnMsg = availablePermits;
+            readLimitOnByte = readMaxSizeBytes;
         }
 
-        readLimitOnMsg = readLimitOnMsg == -1 ? availablePermits : Math.min(availablePermits, readLimitOnMsg);
+        // limit messages to current read batch size
         readLimitOnMsg = Math.min(readLimitOnMsg, readBatchSize);
-
-        readLimitOnByte = readLimitOnByte == -1 ? readMaxSizeBytes : Math.min(readMaxSizeBytes, readLimitOnByte);
 
         return new ReadLimits((int) readLimitOnMsg, readLimitOnByte);
     }
@@ -366,7 +373,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
         inFlightTask.setEntries(entries);
 
         // After the replicator starts, the speed will be gradually increased.
-        int maxReadBatchSize = topic.getBrokerService().pulsar().getConfiguration().getDispatcherMaxReadBatchSize();
+        int maxReadBatchSize = getMaxReadBatchSize();
         if (readBatchSize < maxReadBatchSize) {
             int newReadBatchSize = Math.min(readBatchSize * 2, maxReadBatchSize);
             log.debug()
@@ -523,7 +530,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
         }
 
         // Reduce read batch size to avoid flooding bookies with retries
-        readBatchSize = topic.getBrokerService().pulsar().getConfiguration().getDispatcherMinReadBatchSize();
+        readBatchSize = brokerService.pulsar().getConfiguration().getDispatcherMinReadBatchSize();
 
         long waitTimeMillis = readFailureBackoff.next().toMillis();
 
