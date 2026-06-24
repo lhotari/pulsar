@@ -39,7 +39,6 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.Getter;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
@@ -218,70 +217,54 @@ public abstract class PersistentReplicator extends AbstractReplicator
         this.cursor.setInactive();
     }
 
-    @Data
-    @AllArgsConstructor
-    private static class AvailablePermits {
-        private int messages;
-        private long bytes;
-
-        /**
-         * messages, bytes
-         * 0, O:  Producer queue is full, no permits.
-         * -1, -1:  Rate Limiter reaches limit.
-         * >0, >0:  available permits for read entries.
-         */
-        public boolean isExceeded() {
-            return messages == -1 && bytes == -1;
-        }
-
+    private record ReadLimits(int messages, long bytes) {
         public boolean isReadable() {
             return messages > 0 && bytes > 0;
         }
     }
 
     /**
-     * Calculate available permits for read entries.
+     * Calculate read limits for a read operation. Takes the rate limiter into account if it's enabled.
+     * Also limits to configured max read batch size and max read size.
      */
-    private AvailablePermits getRateLimiterAvailablePermits(int availablePermits) {
+    private ReadLimits getReadLimits(int availablePermits) {
 
         // return 0, if Producer queue is full, it will pause read entries.
         if (availablePermits <= 0) {
             log.debug()
                     .attr("availablePermits", availablePermits)
                     .log("Producer queue is full, pausing reads");
-            return new AvailablePermits(0, 0);
+            return new ReadLimits(0, 0);
         }
 
-        long availablePermitsOnMsg = -1;
-        long availablePermitsOnByte = -1;
+        long readLimitOnMsg = -1;
+        long readLimitOnByte = -1;
 
         // handle rate limit
         if (dispatchRateLimiter.isPresent() && dispatchRateLimiter.get().isDispatchRateLimitingEnabled()) {
             DispatchRateLimiter rateLimiter = dispatchRateLimiter.get();
             // if dispatch-rate is in msg then read only msg according to available permit
             // rateLimiter returns -1 if there is no rate limit configured
-            availablePermitsOnMsg = rateLimiter.getAvailableDispatchRateLimitOnMsg();
-            availablePermitsOnByte = rateLimiter.getAvailableDispatchRateLimitOnByte();
+            readLimitOnMsg = rateLimiter.getAvailableDispatchRateLimitOnMsg();
+            readLimitOnByte = rateLimiter.getAvailableDispatchRateLimitOnByte();
             // no permits from rate limit when either limit is 0
-            if (availablePermitsOnByte == 0 || availablePermitsOnMsg == 0) {
+            if (readLimitOnByte == 0 || readLimitOnMsg == 0) {
                 log.debug()
                         .attr("dispatchRateOnMsg", rateLimiter.getDispatchRateOnMsg())
                         .attr("dispatchRateOnByte", rateLimiter.getDispatchRateOnByte())
-                        .attr("availablePermitsOnMsg", availablePermitsOnMsg)
-                        .attr("availablePermitsOnByte", availablePermitsOnByte)
+                        .attr("readLimitOnMsg", readLimitOnMsg)
+                        .attr("readLimitOnByte", readLimitOnByte)
                         .log("Message-read exceeded topic replicator rate limit");
-                return new AvailablePermits(-1, -1);
+                return new ReadLimits(-1, -1);
             }
         }
 
-        availablePermitsOnMsg =
-                availablePermitsOnMsg == -1 ? availablePermits : Math.min(availablePermits, availablePermitsOnMsg);
-        availablePermitsOnMsg = Math.min(availablePermitsOnMsg, readBatchSize);
+        readLimitOnMsg = readLimitOnMsg == -1 ? availablePermits : Math.min(availablePermits, readLimitOnMsg);
+        readLimitOnMsg = Math.min(readLimitOnMsg, readBatchSize);
 
-        availablePermitsOnByte =
-                availablePermitsOnByte == -1 ? readMaxSizeBytes : Math.min(readMaxSizeBytes, availablePermitsOnByte);
+        readLimitOnByte = readLimitOnByte == -1 ? readMaxSizeBytes : Math.min(readMaxSizeBytes, readLimitOnByte);
 
-        return new AvailablePermits((int) availablePermitsOnMsg, availablePermitsOnByte);
+        return new ReadLimits((int) readLimitOnMsg, readLimitOnByte);
     }
 
     public void disconnectIfNoTrafficAndBacklog() {
@@ -943,19 +926,19 @@ public abstract class PersistentReplicator extends AbstractReplicator
                 permits = 1;
             }
 
-            AvailablePermits availablePermits = getRateLimiterAvailablePermits(permits);
+            ReadLimits readLimits = getReadLimits(permits);
 
-            if (!availablePermits.isReadable()) {
+            if (!readLimits.isReadable()) {
                 // no rate limiter permits from rate limit
                 log.debug()
-                        .attr("messages", availablePermits.getMessages())
-                        .attr("bytes", availablePermits.getBytes())
+                        .attr("messages", readLimits.messages)
+                        .attr("bytes", readLimits.bytes)
                         .log("Throttling replication traffic");
                 return null;
             }
 
-            return createOrRecycleInFlightTaskIntoQueue(cursor.getReadPosition(), availablePermits.getMessages(),
-                    availablePermits.getBytes());
+            return createOrRecycleInFlightTaskIntoQueue(cursor.getReadPosition(), readLimits.messages,
+                    readLimits.bytes);
         }
     }
 
