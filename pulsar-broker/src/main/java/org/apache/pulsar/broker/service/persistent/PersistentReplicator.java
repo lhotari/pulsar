@@ -935,27 +935,25 @@ public abstract class PersistentReplicator extends AbstractReplicator
                 return null;
             }
 
-            int messagesToRead = permits;
-            long bytesToRead = -1;
-            if (dispatchRateLimiter.isPresent() && dispatchRateLimiter.get().isDispatchRateLimitingEnabled()) {
-                if (!isWritable()) {
-                    log.debug("Throttling replication traffic because producer is not writable");
-                    // Minimize the read size if the producer is disconnected or the window is already full
-                    messagesToRead = 1;
-                }
-                AvailablePermits availablePermits = getRateLimiterAvailablePermits(messagesToRead);
-                if (!availablePermits.isReadable()) {
-                    // no rate limiter permits from rate limit
-                    log.debug()
-                            .attr("messages", availablePermits.getMessages())
-                            .attr("bytes", availablePermits.getBytes())
-                            .log("Throttling replication traffic");
-                    return null;
-                }
-                messagesToRead = availablePermits.getMessages();
-                bytesToRead = availablePermits.getBytes();
+            if (!isWritable()) {
+                log.debug("Throttling replication traffic because producer is not writable");
+                // Minimize the read size if the producer is disconnected or the window is already full
+                permits = 1;
             }
-            return createOrRecycleInFlightTaskIntoQueue(cursor.getReadPosition(), messagesToRead, bytesToRead);
+
+            AvailablePermits availablePermits = getRateLimiterAvailablePermits(permits);
+
+            if (!availablePermits.isReadable()) {
+                // no rate limiter permits from rate limit
+                log.debug()
+                        .attr("messages", availablePermits.getMessages())
+                        .attr("bytes", availablePermits.getBytes())
+                        .log("Throttling replication traffic");
+                return null;
+            }
+
+            return createOrRecycleInFlightTaskIntoQueue(cursor.getReadPosition(), availablePermits.getMessages(),
+                    availablePermits.getBytes());
         }
     }
 
