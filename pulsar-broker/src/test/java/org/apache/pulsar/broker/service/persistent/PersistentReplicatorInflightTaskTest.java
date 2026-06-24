@@ -195,7 +195,7 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
         replicator.dispatchRateLimiter = Optional.of(rateLimiter);
 
         try {
-            Assert.assertNull(replicator.acquirePermitsIfNotFetchingSchema());
+            Assert.assertNull(replicator.tryReserveInFlightReadTask());
             Assert.assertTrue(inFlightTasks.isEmpty());
             Assert.assertFalse(replicator.hasPendingRead());
             assertEquals(replicator.getPermitsIfNoPendingRead(), 1000);
@@ -428,8 +428,8 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
     }
 
     @Test
-    public void testAcquirePermitsIfNotFetchingSchema() throws Exception {
-        log.info("Starting testAcquirePermitsIfNotFetchingSchema");
+    public void testTryReserveInFlightReadTask() throws Exception {
+        log.info("Starting testTryReserveInFlightReadTask");
         // Get the replicator for the test topic
         PersistentReplicator replicator = getReplicator(topicName);
         Assert.assertNotNull(replicator, "Replicator should not be null");
@@ -452,7 +452,7 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
             // First, check the current permits available
             int expectedPermits = replicator.getPermitsIfNoPendingRead();
             Assert.assertTrue(expectedPermits > 0, "Should have available permits for the test");
-            InFlightTask task1 = replicator.acquirePermitsIfNotFetchingSchema();
+            InFlightTask task1 = replicator.tryReserveInFlightReadTask();
             Assert.assertNotNull(task1, "Should return a new InFlightTask in normal case");
             Assert.assertNotNull(task1.getReadPos(), "Task should have a read position");
             Assert.assertEquals(task1.getReadingEntries(), expectedPermits,
@@ -466,13 +466,13 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
             InFlightTask pendingReadTask = new InFlightTask(position1, 5, "");
             // Don't set readoutEntries to simulate pending read
             inFlightTasks.add(pendingReadTask);
-            InFlightTask task2 = replicator.acquirePermitsIfNotFetchingSchema();
+            InFlightTask task2 = replicator.tryReserveInFlightReadTask();
             Assert.assertNull(task2, "Should return null when there is a pending read");
 
             // Test Case 3: With waitForCursorRewinding=true - should return null
             inFlightTasks.clear();
             replicator.waitForCursorRewindingRefCnf = 1;
-            InFlightTask task3 = replicator.acquirePermitsIfNotFetchingSchema();
+            InFlightTask task3 = replicator.tryReserveInFlightReadTask();
             Assert.assertNull(task3, "Should return null when waiting for cursor rewinding");
             // Reset for next test
             replicator.waitForCursorRewindingRefCnf = 0;
@@ -480,7 +480,7 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
             // Test Case 4: With state != Started - should return null
             // We need to use reflection to modify the state since it's protected by AtomicReferenceFieldUpdater
             BrokerServiceInternalMethodInvoker.replicatorSetState(replicator, AbstractReplicator.State.Starting);
-            InFlightTask task4 = replicator.acquirePermitsIfNotFetchingSchema();
+            InFlightTask task4 = replicator.tryReserveInFlightReadTask();
             Assert.assertNull(task4, "Should return null when state is not Started");
             // Reset state for next test
             BrokerServiceInternalMethodInvoker.replicatorSetState(replicator, AbstractReplicator.State.Started);
@@ -503,7 +503,7 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
             Assert.assertTrue(limitedPermits > 0 && limitedPermits < 20,
                     "Should have a small number of permits available for testing");
             // Now acquire permits and verify readingEntries matches the limited permits
-            InFlightTask task5 = replicator.acquirePermitsIfNotFetchingSchema();
+            InFlightTask task5 = replicator.tryReserveInFlightReadTask();
             Assert.assertNotNull(task5, "Should return a task with limited permits");
             Assert.assertEquals(task5.getReadingEntries(), limitedPermits,
                     "Task readingEntries should equal the limited number of permits available");
@@ -522,9 +522,9 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
                 task.setEntries(entries);
                 inFlightTasks.add(task);
             }
-            InFlightTask task6 = replicator.acquirePermitsIfNotFetchingSchema();
+            InFlightTask task6 = replicator.tryReserveInFlightReadTask();
             Assert.assertNull(task6, "Should return null when permits is 0");
-            log.info("Completed testAcquirePermitsIfNotFetchingSchema");
+            log.info("Completed testTryReserveInFlightReadTask");
         } finally {
             // Restore original state
             replicator.waitForCursorRewindingRefCnf = originalWaitForCursorRewinding;

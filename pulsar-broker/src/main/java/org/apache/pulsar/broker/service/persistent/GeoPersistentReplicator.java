@@ -264,7 +264,7 @@ public class GeoPersistentReplicator extends PersistentReplicator {
                      * Explain the result of the race-condition between:
                      *   - {@link #readMoreEntries}
                      *   - {@link #beforeTerminateOrCursorRewinding(ReasonOfWaitForCursorRewinding)}
-                     * Since {@link #acquirePermitsIfNotFetchingSchema} and
+                     * Since {@link #tryReserveInFlightReadTask} and
                      *   {@link #beforeTerminateOrCursorRewinding(ReasonOfWaitForCursorRewinding)} acquire the
                      * same lock, it is safe.
                      */

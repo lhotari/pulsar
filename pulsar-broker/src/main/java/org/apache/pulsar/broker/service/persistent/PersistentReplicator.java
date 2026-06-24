@@ -287,7 +287,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
         if (state.equals(Terminated) || state.equals(Terminating)) {
             return;
         }
-        InFlightTask newInFlightTask = acquirePermitsIfNotFetchingSchema();
+        InFlightTask newInFlightTask = tryReserveInFlightReadTask();
         if (newInFlightTask == null) {
             // no permits from rate limit
             log.debug("Not scheduling read due to pending read or no permits");
@@ -850,7 +850,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
         }
     }
 
-    protected InFlightTask acquirePermitsIfNotFetchingSchema() {
+    protected InFlightTask tryReserveInFlightReadTask() {
         synchronized (inFlightTasks) {
             if (hasPendingRead()) {
                 log.info("Skip the reading because there is a pending read task");
