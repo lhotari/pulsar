@@ -141,7 +141,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
                 Codec.decode(cursor.getName()), cursor, null);
 
         readBatchSize = getMaxReadBatchSize();
-        readMaxSizeBytes = localTopic.getBrokerService().pulsar().getConfiguration().getDispatcherMaxReadSizeBytes();
+        readMaxSizeBytes = brokerService.pulsar().getConfiguration().getDispatcherMaxReadSizeBytes();
         producerQueueThreshold = (int) (producerQueueSize * 0.9);
 
         this.initializeDispatchRateLimiterIfNeeded();
