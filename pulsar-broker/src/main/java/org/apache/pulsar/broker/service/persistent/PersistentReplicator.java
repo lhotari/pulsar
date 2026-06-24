@@ -259,15 +259,17 @@ public abstract class PersistentReplicator extends AbstractReplicator
         if (dispatchRateLimiter.isPresent() && dispatchRateLimiter.get().isDispatchRateLimitingEnabled()) {
             DispatchRateLimiter rateLimiter = dispatchRateLimiter.get();
             // if dispatch-rate is in msg then read only msg according to available permit
+            // rateLimiter returns -1 if there is no rate limit configured
             availablePermitsOnMsg = rateLimiter.getAvailableDispatchRateLimitOnMsg();
             availablePermitsOnByte = rateLimiter.getAvailableDispatchRateLimitOnByte();
-            // no permits from rate limit
+            // no permits from rate limit when either limit is 0
             if (availablePermitsOnByte == 0 || availablePermitsOnMsg == 0) {
                 log.debug()
                         .attr("dispatchRateOnMsg", rateLimiter.getDispatchRateOnMsg())
                         .attr("dispatchRateOnByte", rateLimiter.getDispatchRateOnByte())
-                        .attr("backoffMs", MESSAGE_RATE_BACKOFF_MS)
-                        .log("Message-read exceeded topic replicator message-rate, scheduling after a delay");
+                        .attr("availablePermitsOnMsg", availablePermitsOnMsg)
+                        .attr("availablePermitsOnByte", availablePermitsOnByte)
+                        .log("Message-read exceeded topic replicator rate limit");
                 return new AvailablePermits(-1, -1);
             }
         }
@@ -936,7 +938,7 @@ public abstract class PersistentReplicator extends AbstractReplicator
             }
 
             if (!isWritable()) {
-                log.debug("Throttling replication traffic because producer is not writable");
+                log.debug("Throttling replication traffic to a single message permit because producer is not writable");
                 // Minimize the read size if the producer is disconnected or the window is already full
                 permits = 1;
             }
