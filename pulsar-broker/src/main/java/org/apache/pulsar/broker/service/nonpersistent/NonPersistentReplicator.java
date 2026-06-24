@@ -71,6 +71,11 @@ public class NonPersistentReplicator extends AbstractReplicator implements Repli
     }
 
     @Override
+    public void startProducer() {
+        super.startProducer();
+    }
+
+    @Override
     protected void setProducerAndTriggerReadEntries(Producer<byte[]> producer) {
         this.producer = (ProducerImpl) producer;
 
@@ -88,6 +93,7 @@ public class NonPersistentReplicator extends AbstractReplicator implements Repli
     }
 
     public void sendMessage(Entry entry) {
+        latestPublishTime = System.currentTimeMillis();
         if ((STATE_UPDATER.get(this) == State.Started) && isWritable()) {
 
             int length = entry.getLength();
