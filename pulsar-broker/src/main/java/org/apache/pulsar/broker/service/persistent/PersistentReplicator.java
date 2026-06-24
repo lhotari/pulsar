@@ -229,12 +229,12 @@ public abstract class PersistentReplicator extends AbstractReplicator
      * Calculate read limits for a read operation. Takes the rate limiter into account if it's enabled.
      * Also limits to current readBatchSize and readMaxSizeBytes.
      */
-    private ReadLimits getReadLimits(int availablePermits) {
+    private ReadLimits getReadLimits(int permits) {
 
         // return 0, if Producer queue is full, it will pause read entries.
-        if (availablePermits <= 0) {
+        if (permits <= 0) {
             log.debug()
-                    .attr("availablePermits", availablePermits)
+                    .attr("permits", permits)
                     .log("Producer queue is full, pausing reads");
             return new ReadLimits(0, 0);
         }
@@ -260,11 +260,11 @@ public abstract class PersistentReplicator extends AbstractReplicator
                 return new ReadLimits(-1, -1);
             }
             // use available permits if no rate limit configured, otherwise limit to returned rate limiter permits
-            readLimitOnMsg = readLimitOnMsg == -1 ? availablePermits : Math.min(availablePermits, readLimitOnMsg);
+            readLimitOnMsg = readLimitOnMsg == -1 ? permits : Math.min(permits, readLimitOnMsg);
             // use readMaxSizeBytes if no rate limit configured, otherwise limit to returned rate limiter permits
             readLimitOnByte = readLimitOnByte == -1 ? readMaxSizeBytes : Math.min(readMaxSizeBytes, readLimitOnByte);
         } else {
-            readLimitOnMsg = availablePermits;
+            readLimitOnMsg = permits;
             readLimitOnByte = readMaxSizeBytes;
         }
 
@@ -309,10 +309,8 @@ public abstract class PersistentReplicator extends AbstractReplicator
             if (!hasPendingRead()) {
                 topic.getBrokerService().executor().schedule(
                         () -> readMoreEntries(), MESSAGE_RATE_BACKOFF_MS, TimeUnit.MILLISECONDS);
-                return;
-            } else {
-                return;
             }
+            return;
         }
         log.debug()
                 .attr("readingEntries", newInFlightTask.readingEntries)
