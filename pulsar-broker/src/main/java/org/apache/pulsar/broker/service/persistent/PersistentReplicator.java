@@ -357,9 +357,15 @@ public abstract class PersistentReplicator extends AbstractReplicator
         InFlightTask inFlightTask = (InFlightTask) ctx;
 
         latestPublishTime = System.currentTimeMillis();
-        // Release memory if terminated.
+        // Release memory if terminated or the result is skipped due to a cursor rewind.
         if (state == State.Terminated || state == State.Terminating
                 || inFlightTask.isSkipReadResultDueToCursorRewind()) {
+            // Record the read result on the task before completing it. A pending read that was cancelled by a
+            // cursor rewind (cursor.cancelPendingReadRequest() returned false) still delivers this callback
+            // with entries == null on the task; without setEntries(...) here, incCompletedEntries() cannot
+            // mark the task done, so it stays pending forever, occupies the single read slot, and blocks
+            // readMoreEntries() from ever scheduling another read (replication stalls).
+            inFlightTask.setEntries(entries);
             for (Entry entry : entries) {
                 inFlightTask.incCompletedEntries();
                 entry.release();

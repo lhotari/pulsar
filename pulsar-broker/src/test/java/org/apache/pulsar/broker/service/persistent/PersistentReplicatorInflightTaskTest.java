@@ -33,6 +33,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 import io.netty.channel.EventLoopGroup;
 import java.util.ArrayList;
@@ -213,6 +214,64 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
 
             assertTrue(task.isDone());
             assertEquals(replicator.getPermitsIfNoPendingRead(), 1000);
+        } finally {
+            inFlightTasks.clear();
+            inFlightTasks.addAll(originalTasks);
+        }
+    }
+
+    /**
+     * Regression test for a replication stall observed at a schema boundary (e.g.
+     * {@code ReplicatorTest.testReplicationWithSchema}).
+     *
+     * <p>When a cursor rewind (for example a schema fetch) cancels in-flight reads while a cursor read has
+     * already been dispatched and cannot be cancelled, {@code cursor.cancelPendingReadRequest()} returns
+     * {@code false}, so {@code cancelPendingReadTasks(false)} flags the pending {@link InFlightTask} with
+     * {@code skipReadResultDueToCursorRewind=true} but leaves it {@code entries == null}. When that read later
+     * completes, {@code readEntriesComplete}'s skip branch must reconcile the task so it becomes
+     * {@code isDone()} and releases its read permit; otherwise the task occupies the single read slot forever
+     * ({@code getPermitsIfNoPendingRead()==0}, {@code hasPendingRead()==true}) and the replicator can never
+     * schedule another read, freezing replication.
+     */
+    @Test
+    public void testSkippedPendingReadDoesNotStallReplication() throws Exception {
+        PersistentReplicator replicator = spy(getReplicator(topicName));
+        // Isolate the InFlightTask state machine from the live read loop.
+        doNothing().when(replicator).readMoreEntries();
+
+        LinkedList<InFlightTask> inFlightTasks = replicator.inFlightTasks;
+        List<InFlightTask> originalTasks = new ArrayList<>(inFlightTasks);
+        inFlightTasks.clear();
+
+        try {
+            // A cursor read for 5 entries is in flight: entries == null means a pending cursor read.
+            InFlightTask pendingRead =
+                    new InFlightTask(PositionFactory.create(1, 1), 5, replicator.getReplicatorId());
+            inFlightTasks.add(pendingRead);
+            assertFalse(pendingRead.isDone());
+            // A pending read occupies the single read slot.
+            assertEquals(replicator.getPermitsIfNoPendingRead(), 0);
+            assertTrue(replicator.hasPendingRead());
+
+            // A cursor rewind fires while the read is already dispatched and cannot be cancelled
+            // (cursor.cancelPendingReadRequest() returned false -> cancelPendingReadTasks(false)): the pending
+            // task is flagged skip but left entries == null.
+            pendingRead.setSkipReadResultDueToCursorRewind(true);
+
+            // The dispatched read now completes with its 5 entries.
+            List<Entry> entries = new ArrayList<>();
+            for (int i = 0; i < 5; i++) {
+                entries.add(mock(Entry.class));
+            }
+            replicator.readEntriesComplete(entries, pendingRead);
+
+            // After the skipped read completes, the task must be reconciled so the read loop can resume.
+            assertTrue(pendingRead.isDone(),
+                    "skipped pending-read task must be done after its read completes; otherwise replication stalls");
+            assertEquals(replicator.getPermitsIfNoPendingRead(), 1000,
+                    "read permits must be restored after the skipped read completes");
+            assertFalse(replicator.hasPendingRead(),
+                    "no read must be considered pending after the skipped read completes");
         } finally {
             inFlightTasks.clear();
             inFlightTasks.addAll(originalTasks);
