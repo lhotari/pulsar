@@ -386,6 +386,10 @@ public abstract class PersistentReplicator extends AbstractReplicator
                     // messages (ManagedCursor advances the read position when a read completes), which
                     // overwrites the earlier doRewindCursor(). Rewind again so the messages are re-read;
                     // otherwise they stay stranded behind the read position and the backlog never drains.
+                    // rewind() resets the read position to the mark-delete position, so only unacked
+                    // messages are re-read; entries already acknowledged (replicated) are skipped on the
+                    // re-read. This makes the recovery at-least-once, with duplicates bounded to the
+                    // messages that were in flight when the rewind happened.
                     cursor.rewind();
                 }
                 // Complete the task with an empty result so it releases its permit and no longer counts

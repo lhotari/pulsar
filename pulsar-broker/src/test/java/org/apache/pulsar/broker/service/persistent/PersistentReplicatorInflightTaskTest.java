@@ -30,8 +30,10 @@ import static org.testng.Assert.assertTrue;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -345,15 +347,28 @@ public class PersistentReplicatorInflightTaskTest extends OneWayReplicatorTestBa
                     assertEquals(replicator.getNumberOfEntriesInBacklog(), 0,
                             "replication backlog must drain after recovery"));
 
-            // End-to-end: every message is delivered to the remote cluster.
+            // End-to-end: verify every produced message is delivered to the remote cluster, with no loss
+            // and (in this single-batch scenario, where the discarded read sent nothing) no duplicates.
             remoteConsumer = client2.newConsumer(Schema.STRING).topic(topicName)
                     .subscriptionName("e2e-verify")
                     .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
                     .subscribe();
+            List<String> deliveredValues = new ArrayList<>();
             for (int i = 0; i < messageCount; i++) {
                 Message<String> received = remoteConsumer.receive(30, TimeUnit.SECONDS);
                 Assert.assertNotNull(received, "remote cluster should receive replicated message " + i);
+                deliveredValues.add(received.getValue());
+                remoteConsumer.acknowledge(received);
             }
+            // No duplicate/extra messages were replicated on the rewind/recovery path.
+            Assert.assertNull(remoteConsumer.receive(3, TimeUnit.SECONDS),
+                    "no duplicate messages should be replicated after recovery");
+            Set<String> expectedValues = new HashSet<>();
+            for (int i = 0; i < messageCount; i++) {
+                expectedValues.add("msg-" + i);
+            }
+            assertEquals(new HashSet<>(deliveredValues), expectedValues,
+                    "every produced message must be replicated exactly once (no loss)");
         } finally {
             releaseRead.countDown();
             if (producer != null) {
