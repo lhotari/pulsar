@@ -365,9 +365,11 @@ public abstract class PersistentReplicator extends AbstractReplicator
                 entry.release();
             }
             boolean resumeReads = state != State.Terminated && state != State.Terminating;
-            // Hold the same lock as doRewindCursor()/acquirePermitsIfNotFetchingSchema() so completing the
-            // task and rewinding the cursor are atomic with respect to readMoreEntries(); otherwise a
-            // concurrent read could observe the freed slot but the stale (advanced) read position.
+            // Hold the inFlightTasks lock (the same lock doRewindCursor() and readMoreEntries()'s
+            // read-scheduling path use) so completing the task and rewinding the cursor here are atomic with
+            // respect to readMoreEntries(), which reads both the free read slot and the cursor read position
+            // under that lock; otherwise a concurrent read could observe the freed slot but the stale
+            // (advanced) read position.
             synchronized (inFlightTasks) {
                 if (resumeReads) {
                     // The discarded read already advanced the cursor read position past these still-unacked
