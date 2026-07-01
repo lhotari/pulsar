@@ -662,7 +662,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
                                     initPolicesCache(reader, stageFuture);
                                     return stageFuture
                                             // Read policies in background
-                                            .thenAccept(__ -> readMorePoliciesAsync(reader));
+                                            .thenAccept(__ -> readMorePoliciesAsync(reader, initNamespacePolicyFuture));
                                 }).thenApply(__ -> {
                                     initNamespacePolicyFuture.complete(null);
                                     return null;
@@ -804,7 +804,9 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
 
     /**
      * Identity-guarded cleanup for an initialization that failed (it timed out, the {@code __change_events} reader
-     * could not be created, or reading the topic threw). Unlike {@link #cleanPoliciesCacheInitMap}, which
+     * could not be created, or reading the topic threw), or whose background reader was later closed (an
+     * {@code AlreadyClosedException} surfaced in {@link #readMorePoliciesAsync} after a namespace unload closed the
+     * reader). Unlike {@link #cleanPoliciesCacheInitMap}, which
      * removes/closes by namespace key unconditionally, this only tears down state that still belongs to
      * {@code initFuture}. By the time the failure is observed, a concurrent retry — or a namespace-bundle unload that
      * left the init future orphaned — may already own the namespace with a fresh future and reader; removing by key
@@ -1001,10 +1003,11 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
      * Note: You should not do any blocking call here. because it will affect
      * #{@link SystemTopicBasedTopicPoliciesService#getTopicPoliciesAsync} method to block loading topic.
      */
-    private void readMorePoliciesAsync(SystemTopicClient.Reader<PulsarEvent> reader) {
+    private void readMorePoliciesAsync(SystemTopicClient.Reader<PulsarEvent> reader,
+                                       CompletableFuture<Void> initFuture) {
         NamespaceName namespaceObject = reader.getSystemTopic().getTopicName().getNamespaceObject();
         if (closed.get()) {
-            cleanPoliciesCacheInitMap(namespaceObject, true);
+            cleanupFailedPolicyCacheInit(namespaceObject, initFuture, true);
             return;
         }
         reader.readNextAsync()
@@ -1023,16 +1026,23 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
                 })
                 .whenComplete((__, ex) -> {
                     if (ex == null) {
-                        readMorePoliciesAsync(reader);
+                        readMorePoliciesAsync(reader, initFuture);
                     } else {
                         if (isAlreadyClosedException(ex)) {
                             log.info()
                                     .attr("topic", reader.getSystemTopic().getTopicName())
                                     .log("Closing the topic policies reader for");
-                            cleanPoliciesCacheInitMap(namespaceObject, true);
+                            // Tear down by init-future identity, not by namespace key: this reader may have been
+                            // closed by a namespace unload while a concurrent reload already installed a fresh
+                            // reader and init future for the same namespace (the close only surfaces here, on the
+                            // client executor, afterwards). A namespace-keyed cleanup would clobber that newer
+                            // generation and abort its init with "...aborted because the cached state was cleared",
+                            // failing the reloading topic. cleanupFailedPolicyCacheInit only tears down state that
+                            // still belongs to this initialization, so a superseded reader's late close is a no-op.
+                            cleanupFailedPolicyCacheInit(namespaceObject, initFuture, true);
                         } else {
                             log.warn().exception(ex).log("Read more topic polices exception, read again.");
-                            readMorePoliciesAsync(reader);
+                            readMorePoliciesAsync(reader, initFuture);
                         }
                     }
                 });
