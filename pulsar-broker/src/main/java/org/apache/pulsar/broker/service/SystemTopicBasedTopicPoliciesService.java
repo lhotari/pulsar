@@ -702,13 +702,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
     }
 
     private CompletableFuture<SystemTopicClient.Reader<PulsarEvent>> newReader(NamespaceName ns) {
-        return readerCaches.compute(ns, (__, existingFuture) -> {
-            if (existingFuture == null) {
-                return createSystemTopicClient(ns);
-            }
-
-            return existingFuture;
-        });
+        return readerCaches.computeIfAbsent(ns, __ -> createSystemTopicClient(ns));
     }
 
     protected CompletableFuture<SystemTopicClient.Reader<PulsarEvent>> createSystemTopicClient(
