@@ -807,10 +807,12 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
      * would drop that newer future and close its reader, pinning the namespace again. Guarding on identity ensures a
      * late failure never clobbers a newer initialization.
      *
-     * @param closeReader when {@code true}, also clears the cached policies and closes the reader that belongs to this
-     *                    initialization; when {@code false}, only the init future is dropped, leaving the reader cached
-     *                    for the retry to reuse (mirrors the transient read-error path of
-     *                    {@link #cleanPoliciesCacheInitMap}).
+     * @param closeReader when {@code true}, also closes the reader and message-handler tracker that belong to this
+     *                    initialization; when {@code false}, only the init future is dropped, leaving the reader
+     *                    cached for the retry to reuse (mirrors the transient read-error path of
+     *                    {@link #cleanPoliciesCacheInitMap}). The cached policies are intentionally left in place;
+     *                    they are cleared only when the whole namespace is unloaded, so this cleanup cannot race a
+     *                    concurrent re-initialization.
      */
     @VisibleForTesting
     void cleanupFailedPolicyCacheInit(@NonNull NamespaceName namespace,
@@ -833,11 +835,9 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         if (!closeReader) {
             return;
         }
-        policiesCache.entrySet().removeIf(entry -> Objects.equals(entry.getKey().getNamespaceObject(), namespace));
-        globalPoliciesCache.entrySet()
-                .removeIf(entry -> Objects.equals(entry.getKey().getNamespaceObject(), namespace));
 
-        // removing of tracker can race regardless of the solution to remove a specific tracker
+        // Close the tracker captured above only if it is still the one installed for this namespace, so a
+        // concurrent re-initialization that installed a newer tracker is left untouched.
         if (tracker != null && topicPolicyMessageHandlerTrackers.remove(namespace, tracker)) {
             tracker.close();
         }
