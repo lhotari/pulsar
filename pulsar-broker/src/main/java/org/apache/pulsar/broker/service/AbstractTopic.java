@@ -50,6 +50,7 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Function;
 import java.util.function.ToLongFunction;
 import lombok.Getter;
 import lombok.Setter;
@@ -60,6 +61,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl;
 import org.apache.pulsar.broker.resourcegroup.ResourceGroup;
 import org.apache.pulsar.broker.resourcegroup.ResourceGroupPublishLimiter;
 import org.apache.pulsar.broker.resources.NamespaceResources;
@@ -118,6 +120,10 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
     protected final ConcurrentHashMap<String, Producer> producers;
 
     protected final BrokerService brokerService;
+
+    // Wraps this topic as a TopicPolicyListener so topic-policy updates received while the initial policy is still
+    // loading are buffered and applied in order once initTopicPolicy() completes initialization.
+    protected final TopicPolicyListenerWrapper topicPolicyListener = new TopicPolicyListenerWrapper(this);
 
     // Prefix for replication cursors
     protected final String replicatorPrefix;
@@ -566,7 +572,7 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
     }
 
     protected TopicPolicyListener getTopicPolicyListener() {
-        return this;
+        return topicPolicyListener;
     }
 
     protected void registerTopicPolicyListener() {
@@ -577,6 +583,57 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
     protected void unregisterTopicPolicyListener() {
         brokerService.getPulsar().getTopicPoliciesService()
                 .unregisterListener(TopicName.getPartitionedTopicName(topic), getTopicPolicyListener());
+    }
+
+    /**
+     * Registers the topic-policy listener and applies the topic's initial policies (global and local) to this topic.
+     * Shared by {@link org.apache.pulsar.broker.service.persistent.PersistentTopic} and
+     * {@link org.apache.pulsar.broker.service.nonpersistent.NonPersistentTopic} so both load their own policies on
+     * topic load, which removes the need to broadcast every topic's policy when a namespace's policy cache finishes
+     * loading (see {@code topicPolicyListenerReplayEnabled}).
+     */
+    protected CompletableFuture<Void> initTopicPolicy() {
+        final var topicPoliciesService = brokerService.getPulsar().getTopicPoliciesService();
+        final var partitionedTopicName = TopicName.getPartitionedTopicName(topic);
+
+        return topicPoliciesService.registerListenerAsync(partitionedTopicName, topicPolicyListener)
+                .thenCompose(registered -> {
+                    if (!registered) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    if (ExtensibleLoadManagerImpl.isInternalTopic(topic)) {
+                        // Internal topics don't load topic-level policies, but the listener wrapper must
+                        // still be initialized so any buffered/future updates are forwarded to the topic
+                        // instead of being silently dropped.
+                        return CompletableFuture.runAsync(
+                                () -> topicPolicyListener.completeInitialization(null, null),
+                                getPoliciesNotifyThread());
+                    }
+                    // future for fetching global topic policies
+                    CompletableFuture<Optional<TopicPolicies>> globalPoliciesFuture =
+                            topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
+                                    TopicPoliciesService.GetType.GLOBAL_ONLY);
+                    // future for fetching local topic policies
+                    CompletableFuture<Optional<TopicPolicies>> localPoliciesFuture =
+                            topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
+                                    TopicPoliciesService.GetType.LOCAL_ONLY);
+                    CompletableFuture<Void> initialPoliciesFuture =
+                            globalPoliciesFuture.thenCombine(localPoliciesFuture, (global, local) -> {
+                                // finally update the topic policies with the latest value or loaded value
+                                return CompletableFuture.runAsync(() ->
+                                        topicPolicyListener.completeInitialization(global.orElse(null),
+                                                local.orElse(null)),
+                                        getPoliciesNotifyThread());
+                            }).thenCompose(Function.identity());
+                    return initialPoliciesFuture.exceptionallyCompose(ex ->
+                            // The topic load path logs and continues when initial policy loading fails. Make sure the
+                            // already-registered wrapper is not left buffering future live updates forever.
+                            CompletableFuture.runAsync(
+                                    () -> topicPolicyListener.completeInitialization(null, null),
+                                    getPoliciesNotifyThread())
+                                    .thenCompose(__ -> FutureUtil.failedFuture(
+                                            FutureUtil.unwrapCompletionException(ex))));
+                });
     }
 
     protected boolean isSameAddressProducersExceeded(Producer producer) {
