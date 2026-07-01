@@ -825,6 +825,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         // initialization, never one a concurrent retry creates immediately afterwards.
         CompletableFuture<SystemTopicClient.Reader<PulsarEvent>> readerFuture =
                 closeReader ? readerCaches.get(namespace) : null;
+        TopicPolicyMessageHandlerTracker tracker = topicPolicyMessageHandlerTrackers.get(namespace);
         if (!policyCacheInitMap.remove(namespace, initFuture)) {
             // Superseded by a retry or an unload; that owner is responsible for its own reader/state.
             return;
@@ -838,8 +839,9 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         policiesCache.entrySet().removeIf(entry -> Objects.equals(entry.getKey().getNamespaceObject(), namespace));
         globalPoliciesCache.entrySet()
                 .removeIf(entry -> Objects.equals(entry.getKey().getNamespaceObject(), namespace));
-        TopicPolicyMessageHandlerTracker tracker = topicPolicyMessageHandlerTrackers.remove(namespace);
-        if (tracker != null) {
+
+        // removing of tracker can race regardless of the solution to remove a specific tracker
+        if (tracker != null && topicPolicyMessageHandlerTrackers.remove(namespace, tracker)) {
             tracker.close();
         }
         if (readerFuture != null && readerCaches.remove(namespace, readerFuture)
