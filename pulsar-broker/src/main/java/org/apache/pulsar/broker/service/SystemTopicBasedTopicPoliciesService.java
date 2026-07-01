@@ -961,42 +961,6 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         ownedBundlesCountPerNamespace.remove(namespace);
     }
 
-
-    private void cleanCacheAndCloseReader(@NonNull NamespaceName namespace, boolean cleanOwnedBundlesCount,
-                                          boolean cleanWriterCache) {
-        if (cleanWriterCache) {
-            writerCaches.synchronous().invalidate(namespace);
-        }
-        CompletableFuture<SystemTopicClient.Reader<PulsarEvent>> readerFuture = readerCaches.remove(namespace);
-
-        TopicPolicyMessageHandlerTracker topicPolicyMessageHandlerTracker =
-                topicPolicyMessageHandlerTrackers.remove(namespace);
-        if (topicPolicyMessageHandlerTracker != null) {
-            topicPolicyMessageHandlerTracker.close();
-        }
-
-        if (cleanOwnedBundlesCount) {
-            ownedBundlesCountPerNamespace.remove(namespace);
-        }
-        if (readerFuture != null && !readerFuture.isCompletedExceptionally()) {
-            readerFuture.thenCompose(SystemTopicClient.Reader::closeAsync)
-                    .exceptionally(ex -> {
-                        log.warn().attr("namespace", namespace).exception(ex).log("Close change_event reader fail.");
-                        return null;
-                    });
-        }
-
-        policyCacheInitMap.compute(namespace, (k, v) -> {
-            policiesCache.entrySet().removeIf(entry -> Objects.equals(entry.getKey().getNamespaceObject(), namespace));
-            globalPoliciesCache.entrySet()
-                    .removeIf(entry -> Objects.equals(entry.getKey().getNamespaceObject(), namespace));
-            return null;
-        });
-    }
-
-
-
-
     /**
      * This is an async method for the background reader to continue syncing new messages.
      *
