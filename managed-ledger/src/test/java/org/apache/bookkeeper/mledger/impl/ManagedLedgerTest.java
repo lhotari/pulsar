@@ -194,13 +194,14 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         LedgerHandle currentLedger = ml.currentLedger;
         final LedgerHandle spyLedgerHandle = spy(currentLedger);
         doAnswer(invocation -> {
-            long ledgerId = (long) invocation.getArguments()[0];
-            long entryId = (long) invocation.getArguments()[1];
-            ManagedLedgerException mightError = errorOrNot.get();
-            if (mightError != null) {
-                return CompletableFuture.failedFuture(mightError);
-            }
-            return currentLedger.readUnconfirmedAsync(ledgerId, entryId);
+            long ledgerId = invocation.getArgument(0);
+            long entryId = invocation.getArgument(1);
+            // Evaluate errorOrNot on a separate thread (ForkJoinPool.commonPool()) so the calling thread
+            // isn't blocked while it runs, e.g. when errorOrNot waits on a CountDownLatch.
+            return CompletableFuture.supplyAsync(errorOrNot)
+                    .thenCompose(mightError -> mightError != null
+                            ? CompletableFuture.<LedgerEntries>failedFuture(mightError)
+                            : currentLedger.readUnconfirmedAsync(ledgerId, entryId));
         }).when(spyLedgerHandle).readUnconfirmedAsync(anyLong(), anyLong());
         ml.currentLedger = spyLedgerHandle;
     }
