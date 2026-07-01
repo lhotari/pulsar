@@ -466,7 +466,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
                     // The cached writer will be closed when an exception happens
                     // This is potentially not a great idea since we should be able to rely on the Pulsar client's
                     // behavior for restoring a Producer after a failure.
-                    writerCaches.synchronous().invalidate(topicName.getNamespaceObject());
+                    cleanWriterCache(topicName.getNamespaceObject());
                     throw FutureUtil.wrapToCompletionException(t);
                 });
     }
