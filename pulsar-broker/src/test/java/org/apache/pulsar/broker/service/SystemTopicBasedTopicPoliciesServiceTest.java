@@ -610,7 +610,7 @@ public class SystemTopicBasedTopicPoliciesServiceTest extends MockedPulsarServic
         boolean logFound2 = testLogAppender.getEvents().stream().anyMatch(logEvent ->
                 logEvent.getMessage().toString().contains("Failed to check the move events for the system topic"));
         assertTrue(logFound2);
-        verify(spyService, times(0)).cleanPoliciesCacheInitMap(any(), anyBoolean());
+        verify(spyService, times(0)).cleanPoliciesCacheInitMap(any());
         verify(spyService, times(2)).cleanupFailedPolicyCacheInit(any(), any(), anyBoolean());
 
         // make sure not occur Recursive update
@@ -680,7 +680,7 @@ public class SystemTopicBasedTopicPoliciesServiceTest extends MockedPulsarServic
                         || logEvent.getMessage().toString().contains("Failed to read event from the system topic"));
         assertFalse(logFound2);
         verify(spyService, times(1)).cleanupFailedPolicyCacheInit(any(), any(), anyBoolean());
-        verify(spyService, times(0)).cleanPoliciesCacheInitMap(any(), anyBoolean());
+        verify(spyService, times(0)).cleanPoliciesCacheInitMap(any());
     }
 
     @Test(timeOut = 60_000)
@@ -729,22 +729,16 @@ public class SystemTopicBasedTopicPoliciesServiceTest extends MockedPulsarServic
 
         // Dropping the cached init future (e.g. on a namespace-bundle unload) must complete it so the topic loads
         // awaiting it fail fast and retry, instead of hanging until the broker restarts (issue #25294).
-        CompletableFuture<Void> pendingWithReaderClose = new CompletableFuture<>();
-        service.policyCacheInitMap.put(namespace, pendingWithReaderClose);
-        service.cleanPoliciesCacheInitMap(namespace, true);
-        assertTrue(pendingWithReaderClose.isCompletedExceptionally());
-        assertNull(service.getPoliciesCacheInit(namespace));
-
-        CompletableFuture<Void> pendingWithoutReaderClose = new CompletableFuture<>();
-        service.policyCacheInitMap.put(namespace, pendingWithoutReaderClose);
-        service.cleanPoliciesCacheInitMap(namespace, false);
-        assertTrue(pendingWithoutReaderClose.isCompletedExceptionally());
+        CompletableFuture<Void> pendingInitFuture = new CompletableFuture<>();
+        service.policyCacheInitMap.put(namespace, pendingInitFuture);
+        service.cleanPoliciesCacheInitMap(namespace);
+        assertTrue(pendingInitFuture.isCompletedExceptionally());
         assertNull(service.getPoliciesCacheInit(namespace));
 
         // An already-completed init future must not be overwritten/disturbed.
         CompletableFuture<Void> alreadyDone = CompletableFuture.completedFuture(null);
         service.policyCacheInitMap.put(namespace, alreadyDone);
-        service.cleanPoliciesCacheInitMap(namespace, true);
+        service.cleanPoliciesCacheInitMap(namespace);
         assertFalse(alreadyDone.isCompletedExceptionally());
     }
 

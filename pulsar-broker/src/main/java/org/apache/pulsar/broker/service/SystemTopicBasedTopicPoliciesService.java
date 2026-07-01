@@ -728,7 +728,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         }
         AtomicInteger bundlesCount = ownedBundlesCountPerNamespace.get(namespace);
         if (bundlesCount == null || bundlesCount.decrementAndGet() <= 0) {
-            cleanPoliciesCacheInitMap(namespace, true);
+            cleanPoliciesCacheInitMap(namespace);
             cleanWriterCache(namespace);
             cleanOwnedBundlesCount(namespace);
         }
@@ -809,9 +809,8 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
      *
      * @param closeReader when {@code true}, also closes the reader and message-handler tracker that belong to this
      *                    initialization; when {@code false}, only the init future is dropped, leaving the reader
-     *                    cached for the retry to reuse (mirrors the transient read-error path of
-     *                    {@link #cleanPoliciesCacheInitMap}). The cached policies are intentionally left in place;
-     *                    they are cleared only when the whole namespace is unloaded, so this cleanup cannot race a
+     *                    cached for the retry to reuse. The cached policies are intentionally left in place; they
+     *                    are cleared only when the whole namespace is unloaded, so this cleanup cannot race a
      *                    concurrent re-initialization.
      */
     @VisibleForTesting
@@ -857,7 +856,7 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
     private void initPolicesCache(SystemTopicClient.Reader<PulsarEvent> reader, CompletableFuture<Void> future) {
         if (closed.get()) {
             future.completeExceptionally(new BrokerServiceException(getClass().getName() + " is closed."));
-            cleanPoliciesCacheInitMap(reader.getSystemTopic().getTopicName().getNamespaceObject(), true);
+            cleanPoliciesCacheInitMap(reader.getSystemTopic().getTopicName().getNamespaceObject());
             return;
         }
         reader.hasMoreEventsAsync().whenComplete((hasMore, ex) -> {
@@ -905,13 +904,10 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         });
     }
 
+    // Full teardown of a namespace's topic-policies state: removes and closes the reader, the message-handler
+    // tracker, the cached policies and the init future. Used when the whole namespace is unloaded.
     @VisibleForTesting
-    void cleanPoliciesCacheInitMap(@NonNull NamespaceName namespace, boolean closeReader) {
-        if (!closeReader) {
-            failPendingPolicyCacheInit(namespace, policyCacheInitMap.remove(namespace));
-            return;
-        }
-
+    void cleanPoliciesCacheInitMap(@NonNull NamespaceName namespace) {
         TopicPolicyMessageHandlerTracker topicPolicyMessageHandlerTracker =
                 topicPolicyMessageHandlerTrackers.remove(namespace);
         if (topicPolicyMessageHandlerTracker != null) {
