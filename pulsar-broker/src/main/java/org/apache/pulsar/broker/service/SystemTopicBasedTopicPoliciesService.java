@@ -820,10 +820,13 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         CompletableFuture<SystemTopicClient.Reader<PulsarEvent>> readerFuture =
                 closeReader ? readerCaches.get(namespace) : null;
         TopicPolicyMessageHandlerTracker tracker = topicPolicyMessageHandlerTrackers.get(namespace);
+
+        // Identity guard: only proceed while this initialization still owns the namespace's init future.
         if (!policyCacheInitMap.remove(namespace, initFuture)) {
             // Superseded by a retry or an unload; that owner is responsible for its own reader/state.
             return;
         }
+
         // Complete the dropped future (a no-op if the caller already completed it) outside any map remapping function,
         // so awaiting topic loads fail fast and retry instead of hanging until the broker restarts (issue #25294).
         failPendingPolicyCacheInit(namespace, initFuture);
@@ -838,6 +841,9 @@ public class SystemTopicBasedTopicPoliciesService implements TopicPoliciesServic
         if (tracker != null && topicPolicyMessageHandlerTrackers.remove(namespace, tracker)) {
             tracker.close();
         }
+
+        // Remove and close the reader captured above only if it is still the current one, so a reader
+        // created by a later initialization is never closed by this stale cleanup.
         if (readerFuture != null && readerCaches.remove(namespace, readerFuture)
                 && !readerFuture.isCompletedExceptionally()) {
             readerFuture.thenCompose(SystemTopicClient.Reader::closeAsync)
