@@ -85,8 +85,18 @@ public class TopicPolicyListenerWrapper implements TopicPolicyListener {
         // The listener might have received a newer value (or a delete) than the loaded one while the loading
         // was happening; prefer the latest value received during initialization, falling back to the loaded
         // value only when nothing was received for that scope.
-        emitInitialPolicies(latestGlobalPolicies, loadedGlobalPolicies);
+        //
+        // Emit the local policy before the global policy. A local topic policy takes precedence over a global one,
+        // so applying the local value first means that by the time the global value is applied the local override is
+        // already in place and the merged (local-wins) result is what takes effect. Emitting the global value first
+        // would briefly apply it on its own and let a global-only setting act before the local policy overrides it --
+        // e.g. a compaction subscription being created for a global compaction policy even though the local policy
+        // disables compaction. This does not fully solve such ordering hazards, but it removes them whenever a local
+        // policy exists. When no local policy exists nothing is emitted for the local scope (see emitInitialPolicies),
+        // so this ordering does not change behavior for topics that only have a global policy.
         emitInitialPolicies(latestLocalPolicies, loadedLocalPolicies);
+        emitInitialPolicies(latestGlobalPolicies, loadedGlobalPolicies);
+
         latestGlobalPolicies = null;
         latestLocalPolicies = null;
         initialized = true;
