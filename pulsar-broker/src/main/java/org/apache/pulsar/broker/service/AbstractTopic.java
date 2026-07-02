@@ -586,51 +586,52 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
      * {@link org.apache.pulsar.broker.service.nonpersistent.NonPersistentTopic} so both load their own policies on
      * topic load, which removes the need to broadcast every topic's policy when a namespace's policy cache finishes
      * loading (see {@code topicPolicyListenerReplayEnabled}).
+     *
+     * <p>Each call re-initializes the listener wrapper and, whatever the outcome, always completes its initialization
+     * afterwards, so the wrapper never stays in the buffering phase (dropping updates) even if policy loading fails.
+     * This makes the method safe to run again (e.g. a future retry); runs are expected to be serialized.
      */
     protected CompletableFuture<Void> initTopicPolicy() {
         final var topicPoliciesService = brokerService.getPulsar().getTopicPoliciesService();
         final var partitionedTopicName = TopicName.getPartitionedTopicName(topic);
 
-        return topicPoliciesService.registerListenerAsync(partitionedTopicName, topicPolicyListener)
-                .thenCompose(registered -> {
-                    if (!registered) {
-                        return CompletableFuture.completedFuture(null);
-                    }
-                    if (ExtensibleLoadManagerImpl.isInternalTopic(topic)) {
-                        // Internal topics don't load topic-level policies, but the listener wrapper must
-                        // still be initialized so any buffered/future updates are forwarded to the topic
-                        // instead of being silently dropped.
-                        return CompletableFuture.runAsync(
-                                () -> topicPolicyListener.completeInitialization(null, null),
-                                getPoliciesNotifyThread());
-                    }
-                    // future for fetching global topic policies
-                    CompletableFuture<Optional<TopicPolicies>> globalPoliciesFuture =
-                            topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
-                                    TopicPoliciesService.GetType.GLOBAL_ONLY);
-                    // future for fetching local topic policies
-                    CompletableFuture<Optional<TopicPolicies>> localPoliciesFuture =
-                            topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
-                                    TopicPoliciesService.GetType.LOCAL_ONLY);
-                    CompletableFuture<Void> initialPoliciesFuture =
-                            globalPoliciesFuture.thenCombine(localPoliciesFuture, (global, local) -> {
+        // Begin a fresh initialization phase: updates are buffered until initialization completes below. This resets
+        // any previous phase so the method can be run again.
+        topicPolicyListener.startInitialization();
+        CompletableFuture<Void> initTopicPolicyFuture =
+                topicPoliciesService.registerListenerAsync(partitionedTopicName, topicPolicyListener)
+                        .thenCompose(registered -> {
+                            if (!registered) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            if (ExtensibleLoadManagerImpl.isInternalTopic(topic)) {
+                                // Internal topics don't load topic-level policies
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            // future for fetching global topic policies
+                            CompletableFuture<Optional<TopicPolicies>> globalPoliciesFuture =
+                                    topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
+                                            TopicPoliciesService.GetType.GLOBAL_ONLY);
+                            // future for fetching local topic policies
+                            CompletableFuture<Optional<TopicPolicies>> localPoliciesFuture =
+                                    topicPoliciesService.getTopicPoliciesAsync(partitionedTopicName,
+                                            TopicPoliciesService.GetType.LOCAL_ONLY);
+                            return globalPoliciesFuture.thenCombine(localPoliciesFuture, (global, local) -> {
                                 // finally update the topic policies with the latest value or loaded value
                                 return CompletableFuture.runAsync(() ->
-                                        topicPolicyListener.completeInitialization(global.orElse(null),
-                                                local.orElse(null)),
+                                                topicPolicyListener.completeInitialization(global.orElse(null),
+                                                        local.orElse(null)),
                                         getPoliciesNotifyThread());
                             }).thenCompose(Function.identity());
-                    // Make sure the already-registered wrapper is not left buffering future live updates forever
-                    // when an error occurs
-                    initialPoliciesFuture.whenCompleteAsync((v, ex) -> {
-                        if (ex != null) {
-                            // The topic load path logs and continues when initial policy loading fails.
-                            topicPolicyListener.completeInitialization(null, null);
-                        }
-                    }, getPoliciesNotifyThread());
-                    // return the future, which allows a possible error to propagate
-                    return initialPoliciesFuture;
-                });
+                        });
+        // Whatever the outcome -- success, failure, or the listener not being registered -- make sure the wrapper
+        // leaves the initialization (buffering) phase, so it forwards any buffered value plus all future live updates
+        // instead of dropping them. This is a no-op when the loaded policies were already applied above. Return the
+        // whenComplete stage (not initTopicPolicyFuture) so the returned future completes only after this has run, and
+        // whenComplete's pass-through semantics carry the original success or failure to the caller's initialize().
+        return initTopicPolicyFuture.whenCompleteAsync((v, ex) -> {
+            topicPolicyListener.completeInitializationUnlessAlreadyCompleted();
+        }, getPoliciesNotifyThread());
     }
 
     protected boolean isSameAddressProducersExceeded(Producer producer) {
