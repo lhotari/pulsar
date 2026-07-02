@@ -293,6 +293,31 @@ public class TopicPoliciesTest extends MockedPulsarServiceBaseTest {
         assertEquals(loaded.getHierarchyTopicPolicies().getMaxSubscriptionsPerTopic().get(), Integer.valueOf(10));
     }
 
+    @Test
+    public void testGlobalPolicyUpdateDoesNotClearLocalSubscriptionPolicy() throws Exception {
+        // A global topic policy carries no subscription-level overrides by default (an empty subscriptionPolicies
+        // map). Because AbstractTopic keeps the local and global per-subscription policies separately and merges them
+        // with local precedence, applying such a global policy must not clear the local per-subscription dispatch-rate
+        // policy -- which the previous direct assignment would do under the local-before-global ordering.
+        final String topic = "persistent://" + myNamespace + "/test-sub-policy-merge-" + UUID.randomUUID();
+        final String subName = "sub-1";
+        admin.topics().createNonPartitionedTopic(topic);
+        admin.topics().createSubscription(topic, subName, MessageId.earliest);
+
+        DispatchRate localRate = DispatchRateImpl.builder()
+                .dispatchThrottlingRateInMsg(100).dispatchThrottlingRateInByte(2048).ratePeriodInSecond(1).build();
+        admin.topicPolicies().setSubscriptionDispatchRate(topic, subName, localRate);
+
+        AbstractTopic topicRef = (AbstractTopic) pulsar.getBrokerService().getTopic(topic, false).get().orElseThrow();
+        Awaitility.await().untilAsserted(() ->
+                assertEquals(topicRef.getSubscriptionDispatchRate(subName).getDispatchThrottlingRateInMsg(), 100));
+
+        // Simulate a global topic-policy update that carries no subscription-level overrides.
+        topicRef.onUpdate(TopicPolicies.builder().isGlobal(true).build());
+
+        assertEquals(topicRef.getSubscriptionDispatchRate(subName).getDispatchThrottlingRateInMsg(), 100);
+    }
+
 
     @Test
     public void testSetSizeBasedBacklogQuota() throws Exception {

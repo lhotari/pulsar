@@ -186,7 +186,17 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
             AtomicLongFieldUpdater.newUpdater(AbstractTopic.class, "usageCount");
     private volatile long usageCount = 0;
 
-    private Map<String/*subscription*/, SubscriptionPolicies> subscriptionPolicies = Collections.emptyMap();
+    // Effective per-subscription policies, merged from the local and global topic policies with local precedence.
+    // Unlike the PolicyHierarchyValue-backed fields, subscriptionPolicies is a plain map. It is kept as the merge of
+    // the two scopes below (rather than assigned directly) because the local-before-global initialization order
+    // (see TopicPolicyListenerWrapper) would otherwise let the global map -- empty by default in TopicPolicies --
+    // overwrite and clear the local per-subscription policies that were applied just before it.
+    // subscriptionPolicies is volatile because it is read on dispatch threads (getSubscriptionDispatchRate) while it
+    // is updated on the policy-update thread. localSubscriptionPolicies/globalSubscriptionPolicies are only ever read
+    // and written on the (single) policy-update thread, so they don't need to be volatile.
+    private volatile Map<String/*subscription*/, SubscriptionPolicies> subscriptionPolicies = Collections.emptyMap();
+    private Map<String/*subscription*/, SubscriptionPolicies> localSubscriptionPolicies = Collections.emptyMap();
+    private Map<String/*subscription*/, SubscriptionPolicies> globalSubscriptionPolicies = Collections.emptyMap();
 
     protected final LongAdder msgOutFromRemovedSubscriptions = new LongAdder();
     protected final LongAdder bytesOutFromRemovedSubscriptions = new LongAdder();
@@ -326,9 +336,34 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
         topicPolicies.getEntryFilters().updateTopicValue(data.getEntryFilters(), isGlobalPolicies);
         topicPolicies.getDispatcherPauseOnAckStatePersistentEnabled()
                 .updateTopicValue(data.getDispatcherPauseOnAckStatePersistentEnabled(), isGlobalPolicies);
-        this.subscriptionPolicies = data.getSubscriptionPolicies();
+
+        // Merge instead of assigning directly: keep the local and global per-subscription policies separately and
+        // recompute the effective map with local precedence, so applying the (default-empty) global map does not
+        // clear the local per-subscription policies during the local-before-global initialization.
+        if (isGlobalPolicies) {
+            globalSubscriptionPolicies = data.getSubscriptionPolicies();
+        } else {
+            localSubscriptionPolicies = data.getSubscriptionPolicies();
+        }
+        subscriptionPolicies = mergeSubscriptionPolicies(globalSubscriptionPolicies, localSubscriptionPolicies);
 
         updateEntryFilters();
+    }
+
+    // Merges the global and local per-subscription policies with local precedence: a subscription present in the
+    // local policies keeps its local value; otherwise the global value (if any) is used.
+    private static Map<String, SubscriptionPolicies> mergeSubscriptionPolicies(
+            Map<String, SubscriptionPolicies> globalSubscriptionPolicies,
+            Map<String, SubscriptionPolicies> localSubscriptionPolicies) {
+        if (globalSubscriptionPolicies.isEmpty()) {
+            return localSubscriptionPolicies;
+        }
+        if (localSubscriptionPolicies.isEmpty()) {
+            return globalSubscriptionPolicies;
+        }
+        Map<String, SubscriptionPolicies> merged = new HashMap<>(globalSubscriptionPolicies);
+        merged.putAll(localSubscriptionPolicies);
+        return merged;
     }
 
     protected void updateTopicPolicyByNamespacePolicy(Policies namespacePolicies) {
