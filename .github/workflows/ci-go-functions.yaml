@@ -82,7 +82,7 @@ jobs:
       - name: InstallTool
         run: |
           cd pulsar-function-go
-          wget -O - -q https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s v2.0.2
+          wget -O - -q https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s v2.12.2
           ./bin/golangci-lint --version
 
       - name: Build
