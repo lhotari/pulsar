@@ -55,6 +55,7 @@ import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.common.events.PulsarEvent;
 import org.apache.pulsar.common.naming.NamespaceName;
+import org.apache.pulsar.common.naming.SystemTopicNames;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.policies.data.TenantInfoImpl;
@@ -874,5 +875,28 @@ public class SystemTopicBasedTopicPoliciesServiceTest extends MockedPulsarServic
     @Test
     public void testTopicPolicyListenerReplayDisabledByDefault() {
         Assertions.assertThat(new ServiceConfiguration().isTopicPolicyListenerReplayEnabled()).isFalse();
+    }
+
+    @Test
+    public void testChangeEventsTopicPolicyLoadDoesNotRecurse() throws Exception {
+        SystemTopicBasedTopicPoliciesService service =
+                (SystemTopicBasedTopicPoliciesService) pulsar.getTopicPoliciesService();
+        final String namespaceStr = "system-topic/change-events-recursion";
+        admin.namespaces().createNamespace(namespaceStr);
+        final NamespaceName namespace = NamespaceName.get(namespaceStr);
+        final TopicName changeEvents =
+                TopicName.get("persistent", namespace, SystemTopicNames.NAMESPACE_EVENTS_LOCAL_NAME);
+
+        // The __change_events system topic must not load topic-level policies: that would create a policy-cache
+        // reader on __change_events while __change_events is still loading -- a recursive, deadlocking dependency.
+        // isSelf() guards getTopicPoliciesAsync so it returns empty for the __change_events topic without ever
+        // creating a reader. AbstractTopic#initTopicPolicy (now called for persistent AND non-persistent topics)
+        // relies on this short-circuit when a __change_events topic itself is loaded.
+        Assertions.assertThat(service.getTopicPoliciesAsync(changeEvents, TopicPoliciesService.GetType.LOCAL_ONLY)
+                .get(30, TimeUnit.SECONDS)).isEmpty();
+        Assertions.assertThat(service.getTopicPoliciesAsync(changeEvents, TopicPoliciesService.GetType.GLOBAL_ONLY)
+                .get(30, TimeUnit.SECONDS)).isEmpty();
+        // No policy-cache reader was created as a side effect, which is what would recurse.
+        Assertions.assertThat(service.getReaderCaches()).doesNotContainKey(namespace);
     }
 }
