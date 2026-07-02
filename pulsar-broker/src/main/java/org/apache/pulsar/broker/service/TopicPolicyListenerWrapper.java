@@ -55,6 +55,7 @@ public class TopicPolicyListenerWrapper implements TopicPolicyListener {
 
     public TopicPolicyListenerWrapper(TopicPolicyListener realTopicListener) {
         this.realTopicListener = realTopicListener;
+        startInitialization();
     }
 
     /**
