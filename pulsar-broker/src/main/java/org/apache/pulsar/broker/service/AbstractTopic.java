@@ -620,14 +620,16 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
                                                 local.orElse(null)),
                                         getPoliciesNotifyThread());
                             }).thenCompose(Function.identity());
-                    return initialPoliciesFuture.exceptionallyCompose(ex ->
-                            // The topic load path logs and continues when initial policy loading fails. Make sure the
-                            // already-registered wrapper is not left buffering future live updates forever.
-                            CompletableFuture.runAsync(
-                                    () -> topicPolicyListener.completeInitialization(null, null),
-                                    getPoliciesNotifyThread())
-                                    .thenCompose(__ -> FutureUtil.failedFuture(
-                                            FutureUtil.unwrapCompletionException(ex))));
+                    // Make sure the already-registered wrapper is not left buffering future live updates forever
+                    // when an error occurs
+                    initialPoliciesFuture.whenCompleteAsync((v, ex) -> {
+                        if (ex != null) {
+                            // The topic load path logs and continues when initial policy loading fails.
+                            topicPolicyListener.completeInitialization(null, null);
+                        }
+                    }, getPoliciesNotifyThread());
+                    // return the future, which allows a possible error to propagate
+                    return initialPoliciesFuture;
                 });
     }
 
