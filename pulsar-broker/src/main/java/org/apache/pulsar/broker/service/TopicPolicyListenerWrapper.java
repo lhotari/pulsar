@@ -63,7 +63,7 @@ public class TopicPolicyListenerWrapper implements TopicPolicyListener {
      * scope) instead of forwarding them, until {@link #completeInitialization} applies them. Called at the start of
      * every {@code initTopicPolicy} run so the method can be re-run cleanly (which is what would let a future change
      * retry it; no retry is implemented here). Runs before the listener is registered, so no update can arrive before
-     * the phase (and its warning timer) has started. Runs are serialized, so phases never overlap.
+     * the phase (and its warning timer) has started.
      */
     public synchronized void startInitialization() {
         initialized = false;
