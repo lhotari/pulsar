@@ -509,8 +509,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 .thenCompose(ignore -> removeOrphanReplicationCursors())
                 .exceptionally(ex -> {
                     log.warn()
+                            .attr("topic", topic)
                             .exceptionMessage(ex)
-                            .log("Error getting policies and isEncryptionRequired will be set to false");
+                            .log("Error loading topic policies during initialization. Ignoring the failure. "
+                                    + "isEncryptionRequired will be set to false.");
                     isEncryptionRequired = false;
                     return null;
                 }));
