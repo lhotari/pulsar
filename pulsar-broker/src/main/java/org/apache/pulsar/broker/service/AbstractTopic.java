@@ -575,11 +575,6 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
         return topicPolicyListener;
     }
 
-    protected void registerTopicPolicyListener() {
-        brokerService.getPulsar().getTopicPoliciesService()
-                .registerListenerAsync(TopicName.getPartitionedTopicName(topic), getTopicPolicyListener());
-    }
-
     protected void unregisterTopicPolicyListener() {
         brokerService.getPulsar().getTopicPoliciesService()
                 .unregisterListener(TopicName.getPartitionedTopicName(topic), getTopicPolicyListener());
