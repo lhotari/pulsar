@@ -51,9 +51,15 @@ import org.apache.pulsar.broker.intercept.BrokerInterceptors;
 import org.apache.pulsar.broker.validator.BindAddressValidator;
 import org.apache.pulsar.common.configuration.BindAddress;
 import org.apache.pulsar.common.util.PulsarSslConfiguration;
+import org.apache.pulsar.broker.tls.DefaultBrokerTlsFactory;
+import org.apache.pulsar.broker.tls.TlsFactorySupport;
+import org.apache.pulsar.common.tls.PulsarTlsFactory;
+import org.apache.pulsar.common.tls.TlsFactoryInitContext;
+import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.util.PulsarSslFactory;
 import org.apache.pulsar.jetty.metrics.JettyStatisticsCollector;
 import org.apache.pulsar.jetty.tls.JettySslContextFactory;
+import org.apache.pulsar.jetty.tls.JettyTlsFactory;
 import org.eclipse.jetty.ee8.nested.ContextHandler;
 import org.eclipse.jetty.ee8.nested.ResourceHandler;
 import org.eclipse.jetty.ee8.servlet.FilterHolder;
@@ -109,8 +115,12 @@ public class WebService implements AutoCloseable {
     private final ServerConnector httpsConnector;
     private final FilterInitializer filterInitializer;
     private JettyStatisticsCollector jettyStatisticsCollector;
+    // PIP-337 legacy path.
     private PulsarSslFactory sslFactory;
     private ScheduledFuture<?> sslContextRefreshTask;
+    // PIP-478 path (used when selected instead of the legacy PulsarSslFactory).
+    private PulsarTlsFactory tlsFactory;
+    private JettyTlsFactory.ReloadableServerTls reloadableServerTls;
 
     @Getter
     private static final DynamicSkipUnknownPropertyHandler sharedUnknownPropertyHandler =
@@ -163,21 +173,12 @@ public class WebService implements AutoCloseable {
         SslContextFactory.Server sslCtxFactory = null;
         if (tlsRequired) {
             try {
-                PulsarSslConfiguration sslConfiguration = buildSslConfiguration(config);
-                this.sslFactory = (PulsarSslFactory) Class.forName(config.getSslFactoryPlugin())
-                        .getConstructor().newInstance();
-                this.sslFactory.initialize(sslConfiguration);
-                this.sslFactory.createInternalSslContext();
-                if (config.getTlsCertRefreshCheckDurationSec() > 0) {
-                    this.sslContextRefreshTask = this.pulsar.getExecutor()
-                            .scheduleWithFixedDelay(this::refreshSslContext,
-                                    config.getTlsCertRefreshCheckDurationSec(),
-                                    config.getTlsCertRefreshCheckDurationSec(),
-                                    TimeUnit.SECONDS);
+                if (TlsFactorySupport.selectPath(config.getSslFactoryPlugin(), config.getTlsFactoryClassName())
+                        == TlsFactorySupport.TlsPath.NEW) {
+                    sslCtxFactory = createTlsFactoryWebServer(config);
+                } else {
+                    sslCtxFactory = createLegacySslContextFactory(config);
                 }
-                sslCtxFactory = JettySslContextFactory.createSslContextFactory(config.getWebServiceTlsProvider(),
-                        this.sslFactory, config.isTlsRequireTrustedClientCertOnConnect(),
-                        config.getTlsCiphers(), config.getTlsProtocols());
             } catch (Exception e) {
                 throw new PulsarServerException(e);
             }
@@ -544,6 +545,15 @@ public class WebService implements AutoCloseable {
         if (this.sslContextRefreshTask != null) {
             this.sslContextRefreshTask.cancel(true);
         }
+        // PIP-478: dispose the TLS factory subscription and close the factory, if the new path was used.
+        if (this.reloadableServerTls != null) {
+            this.reloadableServerTls.subscription().dispose();
+            this.reloadableServerTls = null;
+        }
+        if (this.tlsFactory != null) {
+            this.tlsFactory.close();
+            this.tlsFactory = null;
+        }
         webExecutorThreadPoolStats.close();
         this.executorStats.close();
         log.info("Web service closed");
@@ -585,6 +595,40 @@ public class WebService implements AutoCloseable {
                 .serverMode(true)
                 .isHttps(true)
                 .build();
+    }
+
+    private SslContextFactory.Server createLegacySslContextFactory(ServiceConfiguration config) throws Exception {
+        PulsarSslConfiguration sslConfiguration = buildSslConfiguration(config);
+        this.sslFactory = (PulsarSslFactory) Class.forName(config.getSslFactoryPlugin())
+                .getConstructor().newInstance();
+        this.sslFactory.initialize(sslConfiguration);
+        this.sslFactory.createInternalSslContext();
+        if (config.getTlsCertRefreshCheckDurationSec() > 0) {
+            this.sslContextRefreshTask = this.pulsar.getExecutor()
+                    .scheduleWithFixedDelay(this::refreshSslContext,
+                            config.getTlsCertRefreshCheckDurationSec(),
+                            config.getTlsCertRefreshCheckDurationSec(),
+                            TimeUnit.SECONDS);
+        }
+        return JettySslContextFactory.createSslContextFactory(config.getWebServiceTlsProvider(),
+                this.sslFactory, config.isTlsRequireTrustedClientCertOnConnect(),
+                config.getTlsCiphers(), config.getTlsProtocols());
+    }
+
+    // PIP-478: build the PulsarTlsFactory and drive a vanilla Jetty SslContextFactory.Server through the
+    // SSLContext subscription (setSslContext pre-start, reload() on rotation). The web server has no cert
+    // refresh task — the factory delivers rotations to the reloading server factory.
+    private SslContextFactory.Server createTlsFactoryWebServer(ServiceConfiguration config) throws Exception {
+        this.tlsFactory = TlsFactorySupport.createFactory(config.getTlsFactoryClassName(),
+                DefaultBrokerTlsFactory.class, () -> DefaultBrokerTlsFactory.fromServiceConfiguration(config));
+        TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
+                TlsFactorySupport.parseFactoryConfig(config.getTlsFactoryConfig()),
+                pulsar.getExecutor(), pulsar.getExecutor(), pulsar.getOpenTelemetry().getOpenTelemetry());
+        TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
+        this.reloadableServerTls = JettyTlsFactory.createReloadingServerFactory(this.tlsFactory, TlsPurpose.WEB,
+                config.getWebServiceTlsProvider(), config.isTlsRequireTrustedClientCertOnConnect(),
+                config.getTlsCiphers(), config.getTlsProtocols());
+        return this.reloadableServerTls.sslContextFactory();
     }
 
     protected void refreshSslContext() {
