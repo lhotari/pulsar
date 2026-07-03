@@ -14,8 +14,11 @@ implemented, the decisions taken along the way, and where every experiment lives
   inherit patterns from the wider codebase uncritically ("garbage and baggage").
 - Keep scope limited to PIP-478 goals; touch other things only when necessary, and update
   the design when doing so.
-- Keep all experiment branches and commits. Local only — nothing is pushed and no PRs are
-  opened without explicit confirmation.
+- Keep all experiment branches and commits.
+- **Push policy**: NEVER push to `origin` (apache/pulsar) or open PRs there. DO push
+  experiment branches to `forked` (lhotari/pulsar) and open PRs *within the fork* to run
+  Personal CI (see CONTRIBUTING.md; precedent: lhotari/pulsar#229). Ignore the fork's PR
+  title checks; rerun flaky jobs rather than chasing unrelated failures.
 - Orchestrator (Fable 5) plans/reviews/decides; Opus 4.8 agents implement. Parallelize via
   worktrees where useful.
 
