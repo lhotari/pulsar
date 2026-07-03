@@ -19,8 +19,11 @@
 package org.apache.pulsar.client.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -29,6 +32,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import java.net.InetSocketAddress;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.impl.auth.AuthenticationToken;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
@@ -45,40 +49,23 @@ import org.testng.annotations.Test;
  * {@link AsyncAuthenticationDriver}-capable built-in plugin. Guards the acceptance invariants of the
  * single-continuation refactor — the connection's {@code authenticationDataProvider} observable
  * ({@code getCommandData()}) reflects the freshly-resolved credential on connect and on a broker-pushed
- * REFRESH, and a REFRESH does not disconnect ({@code getLastDisconnectedTimestamp()} unchanged). This is
- * the regression the prior implementation attempt dropped when it duplicated the async path.
+ * REFRESH, a REFRESH does not disconnect ({@code getLastDisconnectedTimestamp()} unchanged), and a
+ * credential failure never throws synchronously on the event loop.
  */
 public class ClientCnxAsyncAuthTest {
 
     private EventLoopGroup eventLoop;
-    private ClientCnx cnx;
-    private AtomicInteger tokenCounter;
+    private ChannelHandlerContext ctx;
 
     @BeforeMethod
-    void setup() throws Exception {
+    void setup() {
         eventLoop = EventLoopUtil.newEventLoopGroup(1, false, new DefaultThreadFactory("testClientCnxAsyncAuth"));
-        tokenCounter = new AtomicInteger();
-
-        // A real async-capable built-in plugin (AuthenticationToken implements AsyncAuthenticationDriver via
-        // its v5-native body); the supplier hands out a fresh token on every credential resolution, so the
-        // connect round and each subsequent REFRESH round observe distinct command data.
-        AuthenticationToken auth = new AuthenticationToken(() -> "token-" + tokenCounter.incrementAndGet());
-        assertThat(auth).isInstanceOf(AsyncAuthenticationDriver.class);
-
-        ClientConfigurationData conf = new ClientConfigurationData();
-        conf.setKeepAliveIntervalSeconds(0);
-        conf.setOperationTimeoutMs(1);
-        conf.setAuthentication(auth);
-        cnx = new ClientCnx(InstrumentProvider.NOOP, conf, eventLoop);
-        cnx.setRemoteHostName("localhost");
-
-        ChannelHandlerContext ctx = mock(ChannelHandlerContext.class);
+        ctx = mock(ChannelHandlerContext.class);
         Channel channel = mock(Channel.class);
         when(ctx.writeAndFlush(any())).thenAnswer(args -> mock(ChannelFuture.class));
         when(ctx.channel()).thenReturn(channel);
         when(ctx.executor()).thenReturn(eventLoop.next());
         when(channel.remoteAddress()).thenReturn(new InetSocketAddress("localhost", 6650));
-        cnx.channelActive(ctx);
     }
 
     @AfterMethod(alwaysRun = true)
@@ -88,8 +75,27 @@ public class ClientCnxAsyncAuthTest {
         }
     }
 
+    private ClientCnx connectedCnx(Supplier<String> tokenSupplier) throws Exception {
+        // A real async-capable built-in plugin (AuthenticationToken implements AsyncAuthenticationDriver via
+        // its v5-native body).
+        AuthenticationToken auth = new AuthenticationToken(tokenSupplier);
+        assertThat(auth).isInstanceOf(AsyncAuthenticationDriver.class);
+        ClientConfigurationData conf = new ClientConfigurationData();
+        conf.setKeepAliveIntervalSeconds(0);
+        conf.setOperationTimeoutMs(1);
+        conf.setAuthentication(auth);
+        ClientCnx cnx = new ClientCnx(InstrumentProvider.NOOP, conf, eventLoop);
+        cnx.setRemoteHostName("localhost");
+        cnx.channelActive(ctx);
+        return cnx;
+    }
+
     @Test
-    void refreshRepublishesCredentialWithoutDisconnect() {
+    void refreshRepublishesCredentialWithoutDisconnect() throws Exception {
+        // Every resolution hands out a fresh token, so connect and each REFRESH observe distinct data.
+        AtomicInteger counter = new AtomicInteger();
+        ClientCnx cnx = connectedCnx(() -> "token-" + counter.incrementAndGet());
+
         // Connect resolved the first credential and published it as the observable data provider.
         assertThat(cnx.getAuthenticationDataProvider().getCommandData()).isEqualTo("token-1");
         long lastDisconnect = cnx.getLastDisconnectedTimestamp();
@@ -97,7 +103,6 @@ public class ClientCnxAsyncAuthTest {
         // Broker pushes the REFRESH sentinel: the async path must open a fresh exchange, re-produce the
         // current credential, and republish the data provider — without disconnecting.
         cnx.handleAuthChallenge(refreshChallenge());
-
         assertThat(cnx.getAuthenticationDataProvider().getCommandData()).isEqualTo("token-2");
         assertThat(cnx.getLastDisconnectedTimestamp()).isEqualTo(lastDisconnect);
 
@@ -105,6 +110,16 @@ public class ClientCnxAsyncAuthTest {
         cnx.handleAuthChallenge(refreshChallenge());
         assertThat(cnx.getAuthenticationDataProvider().getCommandData()).isEqualTo("token-3");
         assertThat(cnx.getLastDisconnectedTimestamp()).isEqualTo(lastDisconnect);
+    }
+
+    @Test
+    void connectCredentialFailureClosesChannelWithoutThrowing() {
+        // A plugin whose credential acquisition throws must not throw synchronously on the event loop; the
+        // connect continuation closes the channel gracefully instead (PIP-478 error model).
+        assertThatCode(() -> connectedCnx(() -> {
+            throw new RuntimeException("credential provider is down");
+        })).doesNotThrowAnyException();
+        verify(ctx, timeout(5000)).close();
     }
 
     private static CommandAuthChallenge refreshChallenge() {

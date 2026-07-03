@@ -367,15 +367,19 @@ public class ClientCnx extends PulsarHandler {
      * synchronous challenge rounds keep working), or a minimal command-data adapter for the async path.
      */
     private CompletableFuture<ResolvedAuthData> resolveConnectAuthData() {
-        if (authentication instanceof AsyncAuthenticationDriver asyncAuth) {
-            authenticationExchange = asyncAuth.newAuthenticationExchange(remoteHostName);
-            return authenticationExchange.getAuthDataAsync()
-                    .thenApply(authData -> new ResolvedAuthData(commandDataProvider(authData), authData));
-        }
-        // mutual authentication is to auth between `remoteHostName` and this client for this channel.
-        // each channel will have a mutual client/server pair, mutual client evaluateChallenge with init data,
-        // and return authData to server.
+        // A single try/catch keeps the whole resolution off-throwing: any synchronous failure (a sync
+        // plugin's getAuthData, or an async driver that throws instead of returning a failed future) is
+        // funnelled into a failed future so the continuation always handles it — never a synchronous throw
+        // on the event loop.
         try {
+            if (authentication instanceof AsyncAuthenticationDriver asyncAuth) {
+                authenticationExchange = asyncAuth.newAuthenticationExchange(remoteHostName);
+                return authenticationExchange.getAuthDataAsync()
+                        .thenApply(authData -> new ResolvedAuthData(commandDataProvider(authData), authData));
+            }
+            // mutual authentication is to auth between `remoteHostName` and this client for this channel.
+            // each channel will have a mutual client/server pair, mutual client evaluateChallenge with init
+            // data, and return authData to server.
             AuthenticationDataProvider provider = authentication.getAuthData(remoteHostName);
             AuthData authData = provider.authenticate(AuthData.INIT_AUTH_DATA);
             return CompletableFuture.completedFuture(new ResolvedAuthData(provider, authData));
@@ -551,16 +555,18 @@ public class ClientCnx extends PulsarHandler {
      * on the REFRESH path (a non-refresh round keeps the current provider, exactly as before).
      */
     private CompletableFuture<ResolvedAuthData> resolveChallengeAuthData(AuthData challenge, boolean refresh) {
-        if (authentication instanceof AsyncAuthenticationDriver asyncAuth) {
-            if (refresh) {
-                authenticationExchange = asyncAuth.newAuthenticationExchange(remoteHostName);
-                return authenticationExchange.getAuthDataAsync()
-                        .thenApply(authData -> new ResolvedAuthData(commandDataProvider(authData), authData));
-            }
-            return authenticationExchange.authenticateAsync(challenge)
-                    .thenApply(authData -> new ResolvedAuthData(null, authData));
-        }
+        // As in resolveConnectAuthData, one try/catch guarantees a failed future rather than a synchronous
+        // throw on the event loop, for both the sync and the async plugin paths.
         try {
+            if (authentication instanceof AsyncAuthenticationDriver asyncAuth) {
+                if (refresh) {
+                    authenticationExchange = asyncAuth.newAuthenticationExchange(remoteHostName);
+                    return authenticationExchange.getAuthDataAsync()
+                            .thenApply(authData -> new ResolvedAuthData(commandDataProvider(authData), authData));
+                }
+                return authenticationExchange.authenticateAsync(challenge)
+                        .thenApply(authData -> new ResolvedAuthData(null, authData));
+            }
             AuthenticationDataProvider provider = authenticationDataProvider;
             AuthenticationDataProvider providerToPublish = null;
             if (refresh) {

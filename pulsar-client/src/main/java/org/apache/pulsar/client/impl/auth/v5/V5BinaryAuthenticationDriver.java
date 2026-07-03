@@ -114,17 +114,23 @@ public final class V5BinaryAuthenticationDriver implements AsyncAuthenticationDr
 
         @Override
         public CompletableFuture<AuthData> getAuthDataAsync() {
-            Optional<BinaryAuthDataProvider> provider = v5.capability(BinaryAuthDataProvider.class);
-            if (provider.isEmpty()) {
-                return CompletableFuture.failedFuture(new PulsarClientException.UnsupportedAuthenticationException(
-                        "v5 authentication body " + v5.getClass().getName() + " does not expose "
-                                + "BinaryAuthDataProvider; the Pulsar binary transport requires it (PIP-478)"));
+            // Never throw synchronously (PIP-478 error model): a body that throws while producing its
+            // future is caught here and reported as a failed future, mapped to the v4 exception type.
+            try {
+                Optional<BinaryAuthDataProvider> provider = v5.capability(BinaryAuthDataProvider.class);
+                if (provider.isEmpty()) {
+                    return CompletableFuture.failedFuture(new PulsarClientException.UnsupportedAuthenticationException(
+                            "v5 authentication body " + v5.getClass().getName() + " does not expose "
+                                    + "BinaryAuthDataProvider; the Pulsar binary transport requires it (PIP-478)"));
+                }
+                return provider.get().getAuthDataAsync(callContext)
+                        .thenApply(d -> AuthData.of(d == null ? new byte[0] : d.authData()))
+                        .exceptionally(t -> {
+                            throw new CompletionException(toV4Exception(unwrap(t)));
+                        });
+            } catch (Throwable t) {
+                return CompletableFuture.failedFuture(toV4Exception(unwrap(t)));
             }
-            return provider.get().getAuthDataAsync(callContext)
-                    .thenApply(d -> AuthData.of(d == null ? new byte[0] : d.authData()))
-                    .exceptionally(t -> {
-                        throw new CompletionException(toV4Exception(unwrap(t)));
-                    });
         }
 
         @Override
@@ -134,20 +140,24 @@ public final class V5BinaryAuthenticationDriver implements AsyncAuthenticationDr
             if (isSentinel(challengeOrRefresh)) {
                 return getAuthDataAsync();
             }
-            // Rule 3: any other CommandAuthChallenge goes to the challenge handler; absent capability is a
-            // hard failure (matching v4, where a plugin without authenticate(AuthData) cannot answer).
-            Optional<BinaryAuthChallengeHandler> handler = v5.capability(BinaryAuthChallengeHandler.class);
-            if (handler.isEmpty()) {
-                return CompletableFuture.failedFuture(new PulsarClientException.AuthenticationException(
-                        "v5 authentication body " + v5.getClass().getName() + " received a binary auth "
-                                + "challenge but does not expose BinaryAuthChallengeHandler (PIP-478)"));
+            try {
+                // Rule 3: any other CommandAuthChallenge goes to the challenge handler; absent capability is
+                // a hard failure (matching v4, where a plugin without authenticate(AuthData) cannot answer).
+                Optional<BinaryAuthChallengeHandler> handler = v5.capability(BinaryAuthChallengeHandler.class);
+                if (handler.isEmpty()) {
+                    return CompletableFuture.failedFuture(new PulsarClientException.AuthenticationException(
+                            "v5 authentication body " + v5.getClass().getName() + " received a binary auth "
+                                    + "challenge but does not expose BinaryAuthChallengeHandler (PIP-478)"));
+                }
+                return handler.get()
+                        .respondToChallengeAsync(callContext, new AuthChallenge(challengeOrRefresh.getBytes()))
+                        .thenApply(r -> AuthData.of(r == null ? new byte[0] : r.responseBytes()))
+                        .exceptionally(t -> {
+                            throw new CompletionException(toV4Exception(unwrap(t)));
+                        });
+            } catch (Throwable t) {
+                return CompletableFuture.failedFuture(toV4Exception(unwrap(t)));
             }
-            return handler.get()
-                    .respondToChallengeAsync(callContext, new AuthChallenge(challengeOrRefresh.getBytes()))
-                    .thenApply(r -> AuthData.of(r == null ? new byte[0] : r.responseBytes()))
-                    .exceptionally(t -> {
-                        throw new CompletionException(toV4Exception(unwrap(t)));
-                    });
         }
     }
 
