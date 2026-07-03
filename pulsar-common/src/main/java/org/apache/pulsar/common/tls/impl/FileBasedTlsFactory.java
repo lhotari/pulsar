@@ -66,7 +66,7 @@ import org.apache.pulsar.common.tls.TlsPurpose;
  * change; a subscriber callback that throws is caught and logged, and the subscription stays live.
  */
 @CustomLog
-public final class FileBasedTlsFactory implements PulsarTlsFactory {
+public class FileBasedTlsFactory implements PulsarTlsFactory {
 
     private final Map<TlsPurpose, RegisteredSource> registry;
     private final FileBasedTlsFactorySettings settings;
