@@ -148,6 +148,22 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
   in stage 2 without making the API module heavyweight — may need a PIP Public-API-listing
   correction (split package risk if it moves module but keeps the package).
 
+- **D8 (2026-07-04): new server TLS path ships OPT-IN; the default flips on CI evidence.**
+  Stage 2b's selection rule keeps default config on the legacy PIP-337 path (custom
+  `sslFactoryPlugin` → legacy + deprecation WARN; `tlsFactoryClassName` set → new SPI path;
+  else legacy default). Accepted: it keeps trunk releasable and legacy suites undisturbed.
+  But the "existing v4 TLS tests pass unmodified" bar is only *proven* when the default
+  flips — and bundling that flip with stage-4 PIP-337 removal would entangle two risks. So:
+  a dedicated experiment branch (`lh-pip-478-tls-default-flip`) flips the per-component
+  defaults and gets its own fork Personal CI run; the flip merges into the main branch once
+  green (stage 4 at the latest). Deviations also accepted from 2b: DirectProxyHandler uses a
+  ProxyService-owned subscription + volatile SslContext instead of the PIP's one-shot-per-
+  connection (one-shot's future would block the Netty event loop in a sync channel
+  initializer; endpoint hint moot for the file-based factory) — PIP note when the pattern
+  recurs; websocket/worker WEB factories stay JDK-engine (no netty-handler on their compile
+  classpath; Jetty consumes JDK SSLContext anyway); TLS reload metrics (`pulsar.tls.reload`)
+  not yet emitted by the stage-2a factory — tracked as a follow-up task.
+
 - **D6 (2026-07-03): default-implementation placement (resolves the D5 watch item).**
   `FileBasedTlsFactory` + `TlsContexts` + internal `TlsMaterialSource` → `pulsar-common`,
   package `org.apache.pulsar.common.tls.impl` (netty-handler + tcnative already there; JDK
@@ -243,7 +259,24 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
    (not silently "none"), LegacyV4CredentialAdapter must expose only probed capabilities via
    a capability() override — the capability-factory model working as designed. F5 decided as
    documented no-copy byte[] ownership. Fixup agent queued.
-12. Launched two Opus 4.8 assessment agents (read-only):
+12. **Stage 2b complete** (stage2b-builder, Opus, 7 commits `352c9e78bbc..4af158f15c6`):
+   tlsFactory* config keys across ServiceConfiguration/ProxyConfiguration/
+   WebSocketProxyConfiguration/WorkerConfig + conf files; shared `TlsFactorySupport`
+   selection rule (8/8 unit tests); broker binary (subscribe BROKER, swap-on-rotation) + web
+   (JettyTlsFactory reloading Server); proxy ×4 sites (PROXY/WEB/BROKER_CLIENT incl.
+   AdminProxyHandler one-shot synthesized Jetty Client, DirectProxyHandler shared rotating
+   context); websocket + functions-worker first-time pluggability. New integration tests
+   green (broker mTLS produce/consume + HTTPS admin 2/2, proxy 1/1) AND legacy suites
+   undisturbed (TlsProducerConsumerTest 10/10, ProxyTlsTest 2/2,
+   AdminProxyHandlerKeystoreTLSTest 1/1). Opt-in default → decision D8. Honest gap:
+   websocket/worker have no dedicated e2e TLS test (same JettyTlsFactory driver validated
+   via broker/proxy + stage-2a live-rotation test).
+13. *(entry written by stage1-fixer — see above in file)*
+14. **Stage-3 dossier delivered** (stage3-scout): sub-splits 3a–3d with gates; banked in
+   scratchpad stage3-dossier-index.md. Orchestrator ruling on its R6: the
+   v4-tests-unmodified bar outranks eager probing — if the fail-fast probe breaks lazy v4
+   tests, probing scopes to the v5 builder path and the PIP gets a note.
+15. Launched two Opus 4.8 assessment agents (read-only):
    - **impl-gap-assessor** — classify the old impl branch diff against the current design:
      matches-current / implements-superseded / reusable-integration-scaffolding; deliver a
      reuse map per module.
