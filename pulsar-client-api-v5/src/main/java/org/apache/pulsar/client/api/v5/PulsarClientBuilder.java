@@ -23,8 +23,8 @@ import java.time.Duration;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.config.ConnectionPolicy;
 import org.apache.pulsar.client.api.v5.config.MemorySize;
-import org.apache.pulsar.client.api.v5.config.TlsPolicy;
 import org.apache.pulsar.client.api.v5.config.TransactionPolicy;
+import org.apache.pulsar.common.tls.TlsPolicy;
 
 /**
  * Builder for configuring and creating a {@link PulsarClient}.
@@ -100,13 +100,15 @@ public interface PulsarClientBuilder {
     PulsarClientBuilder transactionPolicy(TransactionPolicy policy);
 
     /**
-     * Configure TLS for the client connection.
+     * Configure TLS for the client connection (PIP-478), using the neutral
+     * {@link org.apache.pulsar.common.tls.TlsPolicy} value shared by the client builder and the
+     * server components. The policy is bound to the default client purposes.
      *
      * @param policy the TLS policy to apply to broker connections
      * @return this builder instance for chaining
-     * @see TlsPolicy#of(String)
-     * @see TlsPolicy#ofMutualTls(String, String, String)
-     * @see TlsPolicy#ofInsecure()
+     * @see TlsPolicy#pem(String, String, String)
+     * @see TlsPolicy#keyStore(String, String, String, String, String)
+     * @see TlsPolicy#insecure()
      */
     PulsarClientBuilder tlsPolicy(TlsPolicy policy);
 

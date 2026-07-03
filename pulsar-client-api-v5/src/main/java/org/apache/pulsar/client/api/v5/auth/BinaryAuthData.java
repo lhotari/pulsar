@@ -16,16 +16,18 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+package org.apache.pulsar.client.api.v5.auth;
 
-plugins {
-    id("pulsar.java-conventions")
-}
-
-dependencies {
-    // PIP-478: the auth SPI's AuthenticationInitContext exposes PulsarHttpClientFactory and the
-    // client builder accepts a common-api TlsPolicy, so the HTTP + TLS SPIs are part of this API's
-    // surface. Unpublished-depends-on-published is allowed by the build guard.
-    api(project(":pulsar-common-api"))
-    compileOnly(libs.protobuf.java)
-    compileOnly(libs.opentelemetry.api)
+/**
+ * The binary-protocol credential: the {@code auth_data} bytes for {@code CommandConnect} (PIP-478).
+ *
+ * <p>The auth-method name is deliberately NOT part of this value — it comes from exactly one place,
+ * {@link BinaryAuthDataProvider#authMethodName()}, so a plugin cannot contradict itself (an earlier
+ * draft carried the name on both the provider and the data value, leaving "which one wins?" to the
+ * javadoc). Kept as a record rather than a bare {@code byte[]} so fields can be added later without an
+ * API break.
+ *
+ * @param authData the credential bytes sent in {@code CommandConnect.auth_data}
+ */
+public record BinaryAuthData(byte[] authData) {
 }

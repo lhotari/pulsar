@@ -17,15 +17,13 @@
  * under the License.
  */
 
-plugins {
-    id("pulsar.java-conventions")
-}
-
-dependencies {
-    // PIP-478: the auth SPI's AuthenticationInitContext exposes PulsarHttpClientFactory and the
-    // client builder accepts a common-api TlsPolicy, so the HTTP + TLS SPIs are part of this API's
-    // surface. Unpublished-depends-on-published is allowed by the build guard.
-    api(project(":pulsar-common-api"))
-    compileOnly(libs.protobuf.java)
-    compileOnly(libs.opentelemetry.api)
-}
+/**
+ * v5 client authentication bridges and the built-in mTLS plugin (PIP-478).
+ *
+ * <p>Contains the built-in {@link org.apache.pulsar.client.impl.v5.auth.TlsAuthentication} plugin and
+ * the compatibility adapters between the v4 and v5 authentication SPIs:
+ * {@link org.apache.pulsar.client.impl.v5.auth.LegacyV4AuthenticationAdapter} (v4 plugin exposed as v5)
+ * and {@link org.apache.pulsar.client.impl.v5.auth.V5ToV4AuthenticationAdapter} (v5 plugin exposed
+ * through the v4 interface that {@code ClientCnx} drives).
+ */
+package org.apache.pulsar.client.impl.v5.auth;

@@ -16,16 +16,18 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+package org.apache.pulsar.client.api.v5.auth;
 
-plugins {
-    id("pulsar.java-conventions")
-}
-
-dependencies {
-    // PIP-478: the auth SPI's AuthenticationInitContext exposes PulsarHttpClientFactory and the
-    // client builder accepts a common-api TlsPolicy, so the HTTP + TLS SPIs are part of this API's
-    // surface. Unpublished-depends-on-published is allowed by the build guard.
-    api(project(":pulsar-common-api"))
-    compileOnly(libs.protobuf.java)
-    compileOnly(libs.opentelemetry.api)
+/**
+ * The reply from {@link BinaryAuthChallengeHandler#respondToChallengeAsync} — the bytes for the next
+ * {@code CommandAuthResponse} (PIP-478).
+ *
+ * <p>There is no completion flag: the broker decides when the handshake is finished (it sends
+ * {@code CommandConnected}); the implementation tracks any cross-round state of its own in the call
+ * context's state slot. Kept as a record rather than a bare {@code byte[]} so fields can be added later
+ * without an API break.
+ *
+ * @param responseBytes the bytes to send in the next {@code CommandAuthResponse}
+ */
+public record ChallengeResponse(byte[] responseBytes) {
 }

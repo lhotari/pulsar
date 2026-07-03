@@ -20,16 +20,19 @@ package org.apache.pulsar.client.impl.v5;
 
 import io.opentelemetry.api.OpenTelemetry;
 import java.time.Duration;
+import java.util.Map;
 import org.apache.pulsar.client.api.v5.PulsarClient;
 import org.apache.pulsar.client.api.v5.PulsarClientBuilder;
 import org.apache.pulsar.client.api.v5.PulsarClientException;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.config.ConnectionPolicy;
 import org.apache.pulsar.client.api.v5.config.MemorySize;
-import org.apache.pulsar.client.api.v5.config.TlsPolicy;
 import org.apache.pulsar.client.api.v5.config.TransactionPolicy;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
+import org.apache.pulsar.client.impl.v5.auth.LegacyV4AuthenticationAdapter;
+import org.apache.pulsar.client.impl.v5.auth.V5ToV4AuthenticationAdapter;
+import org.apache.pulsar.common.tls.TlsPolicy;
 
 /**
  * V5 implementation of PulsarClientBuilder.
@@ -64,8 +67,24 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
 
     @Override
     public PulsarClientBuilder authentication(Authentication authentication) {
-        conf.setAuthentication(AuthenticationAdapter.toV4(authentication));
+        conf.setAuthentication(toV4Authentication(authentication));
         return this;
+    }
+
+    /**
+     * Convert a v5 {@link Authentication} into the v4 {@code Authentication} the underlying
+     * {@link PulsarClientImpl} consumes.
+     *
+     * <p>A plugin bridged from v4 (produced by {@code AuthenticationFactory.token/tls/create}) is routed
+     * back onto the v4 client verbatim, preserving legacy behaviour — including
+     * {@code AuthenticationTls}'s builder-level TLS material configuration — until the full client-side
+     * migration lands. A genuinely v5-native plugin is exposed through
+     * {@link V5ToV4AuthenticationAdapter}. TODO PIP-478 stage 3: wire the real client executors / HTTP
+     * client factory (and the TLS override hook for bridged {@code AuthenticationTls}) here.
+     */
+    private static org.apache.pulsar.client.api.Authentication toV4Authentication(Authentication v5) {
+        return LegacyV4AuthenticationAdapter.unwrapV4(v5)
+                .orElseGet(() -> new V5ToV4AuthenticationAdapter(v5, null, null, null, null, Map.of()));
     }
 
     @Override
@@ -113,9 +132,9 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
 
     @Override
     public PulsarClientBuilder tlsPolicy(TlsPolicy policy) {
-        // TlsPolicy configures TLS settings
-        // For now, just enable TLS — full TLS config adaptation will be
-        // implemented when TlsPolicy internals are defined
+        // Stage-1 stub: accept the new common-api TlsPolicy and enable TLS. Mapping the policy onto the
+        // default FileBasedTlsFactory (purpose->policy map, ciphers/protocols, hostname verification,
+        // insecure mode) is TODO PIP-478 stage 3, when the client-side TLS SPI wiring lands.
         conf.setUseTls(true);
         return this;
     }

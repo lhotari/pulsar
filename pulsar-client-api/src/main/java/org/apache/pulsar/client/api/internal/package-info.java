@@ -17,15 +17,8 @@
  * under the License.
  */
 
-plugins {
-    id("pulsar.java-conventions")
-}
-
-dependencies {
-    // PIP-478: the auth SPI's AuthenticationInitContext exposes PulsarHttpClientFactory and the
-    // client builder accepts a common-api TlsPolicy, so the HTTP + TLS SPIs are part of this API's
-    // surface. Unpublished-depends-on-published is allowed by the build guard.
-    api(project(":pulsar-common-api"))
-    compileOnly(libs.protobuf.java)
-    compileOnly(libs.opentelemetry.api)
-}
+/**
+ * Stable-internal client API types observed by the framework but not intended for application
+ * implementation. See {@link org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver}.
+ */
+package org.apache.pulsar.client.api.internal;

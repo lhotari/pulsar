@@ -16,16 +16,14 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+package org.apache.pulsar.client.api.v5.auth;
 
-plugins {
-    id("pulsar.java-conventions")
-}
-
-dependencies {
-    // PIP-478: the auth SPI's AuthenticationInitContext exposes PulsarHttpClientFactory and the
-    // client builder accepts a common-api TlsPolicy, so the HTTP + TLS SPIs are part of this API's
-    // surface. Unpublished-depends-on-published is allowed by the build guard.
-    api(project(":pulsar-common-api"))
-    compileOnly(libs.protobuf.java)
-    compileOnly(libs.opentelemetry.api)
+/**
+ * Convenience composite: a single-pass credential served over both transports (PIP-478).
+ *
+ * <p>Adds no methods — an implementation may declare this instead of listing
+ * {@link BinaryAuthDataProvider} and {@link HttpAuthHeadersProvider} separately.
+ */
+public interface SinglePassAuthentication
+        extends Authentication, BinaryAuthDataProvider, HttpAuthHeadersProvider {
 }
