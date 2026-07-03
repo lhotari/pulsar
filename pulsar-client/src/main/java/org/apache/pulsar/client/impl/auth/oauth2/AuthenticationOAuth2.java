@@ -38,9 +38,12 @@ import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenEndpointAuthMethod;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenResult;
+import org.apache.pulsar.client.impl.auth.v5.V5BinaryAuthenticationDriver;
 import org.apache.pulsar.common.util.Backoff;
 
 /**
@@ -71,7 +74,8 @@ import org.apache.pulsar.common.util.Backoff;
  * This class is intended to be called from multiple threads, and is therefore designed to be thread-safe.
  */
 @CustomLog
-public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticationParameterSupport {
+public class AuthenticationOAuth2
+        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver {
 
     public static final String CONFIG_PARAM_TYPE = "type";
     public static final String CONFIG_PARAM_TOKEN_ENDPOINT_AUTH_METHOD = "tokenEndpointAuthMethod";
@@ -256,6 +260,24 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
             this.authenticate();
         }
         return this.cachedToken.getAuthData();
+    }
+
+    @Override
+    public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
+        // PIP-478: drive the v5-native OAuth2 body on the async binary path. The heavy flow — token
+        // acquisition, caching and early refresh — stays on this shim; the body reads the current access
+        // token through getAuthData(), so a broker-pushed REFRESH re-fetches an expired token here exactly
+        // as the synchronous path does.
+        return new V5BinaryAuthenticationDriver(new OAuth2AuthenticationV5(this::currentAccessToken))
+                .newAuthenticationExchange(brokerHostName);
+    }
+
+    private String currentAccessToken() {
+        try {
+            return getAuthData().getCommandData();
+        } catch (PulsarClientException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
