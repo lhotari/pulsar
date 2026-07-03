@@ -344,7 +344,8 @@ public class ProxyService implements Closeable {
                     statsExecutor, statsExecutor, OpenTelemetry.noop());
             TlsFactorySupport.initializeBlocking(this.brokerClientTlsFactory, initContext);
             this.brokerClientTlsSubscription = this.brokerClientTlsFactory
-                    .createInstance(TlsPurpose.BROKER_CLIENT, SslContext.class, ctx -> this.brokerClientSslContext = ctx)
+                    .createInstance(TlsPurpose.BROKER_CLIENT, SslContext.class,
+                            ctx -> this.brokerClientSslContext = ctx)
                     .get()
                     .orElseThrow(() -> new IllegalStateException(
                             "TLS factory supplied no Netty SslContext for purpose " + TlsPurpose.BROKER_CLIENT));
