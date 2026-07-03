@@ -63,11 +63,11 @@ public class TlsFactorySupportTest {
     }
 
     @Test
-    public void neitherSelectsLegacyDefault() {
-        // Both default/blank: the legacy default PIP-337 path is kept unchanged (opt-in for stage 2b).
-        assertThat(TlsFactorySupport.selectPath(DEFAULT_PLUGIN, "")).isEqualTo(TlsFactorySupport.TlsPath.LEGACY);
-        assertThat(TlsFactorySupport.selectPath("", "")).isEqualTo(TlsFactorySupport.TlsPath.LEGACY);
-        assertThat(TlsFactorySupport.selectPath(null, null)).isEqualTo(TlsFactorySupport.TlsPath.LEGACY);
+    public void neitherSelectsNewDefault() {
+        // EXPERIMENT (default flip): both default/blank selects the new PIP-478 built-in factory.
+        assertThat(TlsFactorySupport.selectPath(DEFAULT_PLUGIN, "")).isEqualTo(TlsFactorySupport.TlsPath.NEW);
+        assertThat(TlsFactorySupport.selectPath("", "")).isEqualTo(TlsFactorySupport.TlsPath.NEW);
+        assertThat(TlsFactorySupport.selectPath(null, null)).isEqualTo(TlsFactorySupport.TlsPath.NEW);
     }
 
     @Test

@@ -50,18 +50,19 @@ import org.apache.pulsar.common.util.ObjectMapperFactory;
  * {@code pulsar-broker-common} already has. That keeps this class usable by every component, including the
  * websocket proxy and functions-worker web servers whose only TLS consumer is Jetty.
  *
- * <p><b>Selection rule (stage 2b — new path is opt-in).</b> {@link #selectPath} chooses the legacy
- * PIP-337 path or the new PIP-478 path:
+ * <p><b>Selection rule (EXPERIMENT — default flipped to the new factory).</b> {@link #selectPath} chooses
+ * the legacy PIP-337 path or the new PIP-478 path:
  * <ol>
  *   <li>a non-default {@code sslFactoryPlugin}-family value keeps the legacy PIP-337 path (a deprecation
  *       warning is logged once per distinct plugin class);</li>
  *   <li>otherwise, a non-blank {@code tlsFactoryClassName}-family value selects the new PIP-478 path;</li>
- *   <li>otherwise (both default/blank) the legacy default PIP-337 path is kept unchanged.</li>
+ *   <li>otherwise (both default/blank) the new PIP-478 built-in factory is used.</li>
  * </ol>
- * The new path is therefore <em>opt-in</em> for stage 2b so that the legacy default path — and its existing
- * test coverage — is undisturbed while trunk stays releasable. Flipping the default to the new factory (so
- * a blank {@code tlsFactoryClassName} selects {@link #createFactory the built-in default factory}) is a
- * single-line change deferred to the PIP-337 removal stage, where the default must change anyway.
+ * This is the {@code lh-pip-478-tls-default-flip} experiment branch: the default is flipped so a blank
+ * {@code tlsFactoryClassName} selects {@link #createFactory the built-in composed default factory} instead
+ * of the legacy PIP-337 default. On the mainline {@code lh-pip-478-impl-v2} the new path is opt-in (this
+ * last case returns {@code LEGACY}); the flip is the single-line change that stage 4 (PIP-337 removal) makes
+ * permanent. Only a custom {@code sslFactoryPlugin} still selects the legacy path.
  */
 @CustomLog
 public final class TlsFactorySupport {
@@ -108,7 +109,12 @@ public final class TlsFactorySupport {
         if (StringUtils.isNotBlank(tlsFactoryClassName)) {
             return TlsPath.NEW;
         }
-        return TlsPath.LEGACY;
+        // EXPERIMENT (default flip): both default/blank -> the new PIP-478 built-in factory instead of the
+        // legacy PIP-337 default. Each NEW branch resolves a blank tlsFactoryClassName to its component's
+        // composed default factory (see createFactory). Flipping this single return flips every component
+        // (broker binary+web, proxy PROXY/WEB/BROKER_CLIENT, websocket, functions-worker). Only a custom
+        // sslFactoryPlugin still selects the legacy path (above).
+        return TlsPath.NEW;
     }
 
     /**
