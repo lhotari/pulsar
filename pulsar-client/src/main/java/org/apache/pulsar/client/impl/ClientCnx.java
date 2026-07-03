@@ -37,6 +37,7 @@ import java.net.SocketAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.channels.ClosedChannelException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -48,6 +49,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
 import lombok.AccessLevel;
 import lombok.Getter;
 import org.apache.commons.lang3.tuple.Pair;
@@ -57,6 +59,8 @@ import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.PulsarClientException.ConnectException;
 import org.apache.pulsar.client.api.PulsarClientException.TimeoutException;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
 import org.apache.pulsar.client.impl.BinaryProtoLookupService.LookupDataResult;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.metrics.Counter;
@@ -227,6 +231,10 @@ public class ClientCnx extends PulsarHandler {
     // Added for mutual authentication.
     @Getter
     protected AuthenticationDataProvider authenticationDataProvider;
+    // PIP-478: the authentication exchange for the current connection attempt. Non-null only while a
+    // connect driven through an AsyncAuthenticationDriver is in progress; a fresh exchange is created per
+    // connect attempt and whenever the broker pushes the REFRESH sentinel.
+    private AuthenticationExchange authenticationExchange;
     private TransactionBufferHandler transactionBufferHandler;
     @Getter
     private boolean supportsTopicWatchers;
@@ -341,8 +349,63 @@ public class ClientCnx extends PulsarHandler {
             log.info().attr("proxyToTargetBrokerAddress", proxyToTargetBrokerAddress)
                     .log("Connected through proxy to target broker");
         }
-        // Send CONNECT command
-        ctx.writeAndFlush(newConnectCommand())
+        // Send CONNECT command. Sync and async plugins share a single state machine (PIP-478): the initial
+        // credential is resolved as a CompletableFuture — already-completed for a plain v4 plugin (computed
+        // inline, preserving today's behaviour verbatim) or pending for an AsyncAuthenticationDriver — and
+        // fed to one continuation that assigns the data provider, builds the command, transitions state and
+        // writes. The continuation runs inline when the future is already done and hops to the channel's
+        // event executor only when it was pending.
+        driveAuthResolution(resolveConnectAuthData(), this::completeConnect);
+    }
+
+    /**
+     * Resolve the initial credential for {@code CommandConnect}. For a plain v4 plugin this is computed
+     * inline (exactly as the previous {@code newConnectCommand()} did) into an already-completed future so
+     * the continuation runs synchronously on this thread; for an {@link AsyncAuthenticationDriver} it is a
+     * fresh exchange's {@link AuthenticationExchange#getAuthDataAsync()}. The resolution carries the
+     * {@link AuthenticationDataProvider} to publish — the real v4 provider for the sync path (so subsequent
+     * synchronous challenge rounds keep working), or a minimal command-data adapter for the async path.
+     */
+    private CompletableFuture<ResolvedAuthData> resolveConnectAuthData() {
+        if (authentication instanceof AsyncAuthenticationDriver asyncAuth) {
+            authenticationExchange = asyncAuth.newAuthenticationExchange(remoteHostName);
+            return authenticationExchange.getAuthDataAsync()
+                    .thenApply(authData -> new ResolvedAuthData(commandDataProvider(authData), authData));
+        }
+        // mutual authentication is to auth between `remoteHostName` and this client for this channel.
+        // each channel will have a mutual client/server pair, mutual client evaluateChallenge with init data,
+        // and return authData to server.
+        try {
+            AuthenticationDataProvider provider = authentication.getAuthData(remoteHostName);
+            AuthData authData = provider.authenticate(AuthData.INIT_AUTH_DATA);
+            return CompletableFuture.completedFuture(new ResolvedAuthData(provider, authData));
+        } catch (Throwable t) {
+            return CompletableFuture.failedFuture(t);
+        }
+    }
+
+    /**
+     * Continuation for the connect path: publish the resolved data provider (the single assignment site for
+     * connect), build {@code CommandConnect} and write it. On credential failure the channel is closed,
+     * matching today's synchronous path where a throw from the connect-command build ends in
+     * {@code exceptionCaught} → {@code ctx.close()}.
+     */
+    private void completeConnect(ResolvedAuthData resolution, Throwable throwable) {
+        if (throwable != null) {
+            log.warn().exception(FutureUtil.unwrapCompletionException(throwable)).log("Error during handshake");
+            ctx.close();
+            return;
+        }
+        final ByteBuf request;
+        try {
+            authenticationDataProvider = resolution.providerToPublish();
+            request = buildConnectCommand(resolution.authData());
+        } catch (Throwable t) {
+            log.warn().exception(t).log("Error during handshake");
+            ctx.close();
+            return;
+        }
+        ctx.writeAndFlush(request)
                 .addListener(future -> {
                     if (future.isSuccess()) {
                             log.debug().attr("success", future.isSuccess()).log("Complete");
@@ -354,12 +417,12 @@ public class ClientCnx extends PulsarHandler {
                 });
     }
 
-    protected ByteBuf newConnectCommand() throws Exception {
-        // mutual authentication is to auth between `remoteHostName` and this client for this channel.
-        // each channel will have a mutual client/server pair, mutual client evaluateChallenge with init data,
-        // and return authData to server.
-        authenticationDataProvider = authentication.getAuthData(remoteHostName);
-        AuthData authData = authenticationDataProvider.authenticate(AuthData.INIT_AUTH_DATA);
+    /**
+     * Build the {@code CommandConnect} frame from an already-resolved credential. Overridable so subclasses
+     * (e.g. the proxy's broker client) can customise the frame — the resolved {@link AuthData} is passed in
+     * rather than re-fetched, so the override composes with both the sync and async credential paths.
+     */
+    protected ByteBuf buildConnectCommand(AuthData authData) throws Exception {
         return Commands.newConnect(authentication.getAuthMethodName(), authData, this.protocolVersion,
                 clientVersion, proxyToTargetBrokerAddress, originalPrincipal, null, null);
     }
@@ -470,22 +533,63 @@ public class ClientCnx extends PulsarHandler {
         checkArgument(authChallenge.hasChallenge());
         checkArgument(authChallenge.getChallenge().hasAuthData());
 
-        if (Arrays.equals(AuthData.REFRESH_AUTH_DATA_BYTES, authChallenge.getChallenge().getAuthData())) {
-            try {
-                authenticationDataProvider = authentication.getAuthData(remoteHostName);
-            } catch (PulsarClientException e) {
-                log.error()
-                        .exception(e)
-                        .log("Error when refreshing authentication data provider");
-                connectionFuture.completeExceptionally(e);
-                return;
-            }
-        }
-
         // mutual authn. If auth not complete, continue auth; if auth complete, complete connectionFuture.
+        // Sync and async plugins share a single state machine (PIP-478): the response credential is resolved
+        // as a CompletableFuture and fed to one continuation. This is generic across the broker-pushed
+        // REFRESH sentinel, SASL multi-round and any custom challenge/response.
+        AuthData challenge = AuthData.of(authChallenge.getChallenge().getAuthData());
+        boolean refresh = Arrays.equals(AuthData.REFRESH_AUTH_DATA_BYTES, authChallenge.getChallenge().getAuthData());
+        driveAuthResolution(resolveChallengeAuthData(challenge, refresh), this::completeAuthChallenge);
+    }
+
+    /**
+     * Resolve the response to a {@code CommandAuthChallenge}. The broker's REFRESH sentinel restarts
+     * authentication: the sync path re-fetches the data provider, and the async path opens a fresh exchange
+     * whose {@link AuthenticationExchange#getAuthDataAsync()} re-produces the current credential — both
+     * mirror each other. Any other challenge is answered by the existing provider / current exchange, whose
+     * state slot carries conversation state across rounds. The resolution only carries a provider to publish
+     * on the REFRESH path (a non-refresh round keeps the current provider, exactly as before).
+     */
+    private CompletableFuture<ResolvedAuthData> resolveChallengeAuthData(AuthData challenge, boolean refresh) {
+        if (authentication instanceof AsyncAuthenticationDriver asyncAuth) {
+            if (refresh) {
+                authenticationExchange = asyncAuth.newAuthenticationExchange(remoteHostName);
+                return authenticationExchange.getAuthDataAsync()
+                        .thenApply(authData -> new ResolvedAuthData(commandDataProvider(authData), authData));
+            }
+            return authenticationExchange.authenticateAsync(challenge)
+                    .thenApply(authData -> new ResolvedAuthData(null, authData));
+        }
         try {
-            AuthData authData = authenticationDataProvider
-                .authenticate(AuthData.of(authChallenge.getChallenge().getAuthData()));
+            AuthenticationDataProvider provider = authenticationDataProvider;
+            AuthenticationDataProvider providerToPublish = null;
+            if (refresh) {
+                provider = authentication.getAuthData(remoteHostName);
+                providerToPublish = provider;
+            }
+            AuthData authData = provider.authenticate(challenge);
+            return CompletableFuture.completedFuture(new ResolvedAuthData(providerToPublish, authData));
+        } catch (Throwable t) {
+            return CompletableFuture.failedFuture(t);
+        }
+    }
+
+    /**
+     * Continuation for the challenge path: on a REFRESH round publish the freshly-resolved data provider
+     * (the single assignment site for refresh), then send {@code CommandAuthResponse} and transition state.
+     */
+    private void completeAuthChallenge(ResolvedAuthData resolution, Throwable throwable) {
+        if (throwable != null) {
+            Throwable cause = FutureUtil.unwrapCompletionException(throwable);
+            log.error().exception(cause).log("Error mutual verify");
+            connectionFuture.completeExceptionally(cause);
+            return;
+        }
+        try {
+            if (resolution.providerToPublish() != null) {
+                authenticationDataProvider = resolution.providerToPublish();
+            }
+            AuthData authData = resolution.authData();
 
             checkState(!authData.isComplete());
 
@@ -512,8 +616,51 @@ public class ClientCnx extends PulsarHandler {
         } catch (Exception e) {
             log.error().exception(e).log("Error mutual verify");
             connectionFuture.completeExceptionally(e);
-            return;
         }
+    }
+
+    /**
+     * Drive an authentication continuation. To preserve the synchronous path verbatim (and never touch
+     * {@code ctx.executor()} for a plain v4 plugin), the continuation runs inline when the resolution future
+     * is already complete; it hops onto the channel's event executor only when the resolution was pending
+     * (an {@link AsyncAuthenticationDriver} performing off-event-loop credential I/O).
+     */
+    private void driveAuthResolution(CompletableFuture<ResolvedAuthData> resolution,
+            BiConsumer<ResolvedAuthData, Throwable> continuation) {
+        if (resolution.isDone()) {
+            resolution.whenComplete(continuation);
+        } else {
+            resolution.whenCompleteAsync(continuation, ctx.executor());
+        }
+    }
+
+    /**
+     * Adapt an already-resolved {@link AuthData} into a minimal {@link AuthenticationDataProvider} exposing
+     * only the command credential. Used on the async path so {@link #getAuthenticationDataProvider()} reflects
+     * the freshly-resolved credential ({@code getCommandData()} is an observable contract — see
+     * {@code TokenOauth2AuthenticatedProducerConsumerTest}) without re-invoking the plugin.
+     */
+    private static AuthenticationDataProvider commandDataProvider(AuthData authData) {
+        byte[] bytes = authData == null ? null : authData.getBytes();
+        return new AuthenticationDataProvider() {
+            @Override
+            public boolean hasDataFromCommand() {
+                return bytes != null;
+            }
+
+            @Override
+            public String getCommandData() {
+                return bytes == null ? null : new String(bytes, StandardCharsets.UTF_8);
+            }
+        };
+    }
+
+    /**
+     * The outcome of resolving one credential round: the {@link AuthData} to send on the wire, and the
+     * {@link AuthenticationDataProvider} to publish as {@link #authenticationDataProvider} — or {@code null}
+     * to keep the current provider (a non-refresh challenge round).
+     */
+    private record ResolvedAuthData(AuthenticationDataProvider providerToPublish, AuthData authData) {
     }
 
     @Override

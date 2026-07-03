@@ -67,6 +67,10 @@ public class ClientCnxRequestTimeoutQueueTest {
         when(ctx.write(any())).thenAnswer(args -> mock(ChannelFuture.class));
         when(ctx.channel()).thenReturn(channel);
         when(channel.remoteAddress()).thenReturn(new InetSocketAddress(1234));
+        // PIP-478: the connect continuation runs inline for the default (synchronous) AuthenticationDisabled
+        // plugin and never touches ctx.executor(); stub it defensively so an async-driven connect would still
+        // hop onto the test's real event loop rather than NPE on a null executor.
+        when(ctx.executor()).thenReturn(eventLoop.next());
         cnx.channelActive(ctx);
 
         requestMessage = mock(ByteBuf.class);
