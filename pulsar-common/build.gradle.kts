@@ -165,4 +165,7 @@ dependencies {
     testImplementation(libs.snappy.java)
     testImplementation(libs.awaitility)
     testImplementation(libs.jsonassert)
+    // PIP-478: the TLS factory tests implement TlsFactoryInitContext, whose openTelemetry() accessor
+    // exposes the (compileOnly) OpenTelemetry API from pulsar-common-api.
+    testImplementation(libs.opentelemetry.api)
 }
