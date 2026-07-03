@@ -147,6 +147,22 @@ public final class TlsFactorySupport {
     }
 
     /**
+     * Build a production {@link TlsFactoryInitContext} with a no-op {@link OpenTelemetry}. For components
+     * (websocket proxy, functions worker) whose module does not carry {@code opentelemetry-api} on its
+     * compile classpath and only need TLS for the Jetty web path.
+     *
+     * @param params           the factory params (from {@link #parseFactoryConfig}); never null
+     * @param scheduler        the framework scheduler for file-watch polling and rotation
+     * @param blockingExecutor the executor for potentially-blocking material loading
+     * @return a {@link TlsFactoryInitContext} with {@link OpenTelemetry#noop()}
+     */
+    public static TlsFactoryInitContext initContext(Map<String, String> params,
+                                                    ScheduledExecutorService scheduler,
+                                                    Executor blockingExecutor) {
+        return initContext(params, scheduler, blockingExecutor, OpenTelemetry.noop());
+    }
+
+    /**
      * Build a production {@link TlsFactoryInitContext}.
      *
      * @param params           the factory params (from {@link #parseFactoryConfig}); never null
