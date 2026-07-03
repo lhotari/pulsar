@@ -72,8 +72,10 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
         FileBasedTlsFactorySettings settings = FileBasedTlsFactorySettings.builder()
                 .requireTrustedClientCert(conf.isTlsRequireTrustedClientCertOnConnect())
                 .refreshIntervalSeconds(refreshIntervalSeconds(conf))
-                // Engine selection (JDK vs. OpenSSL) mapping from the v4 sslProvider field is wired in
-                // stage 2b together with the config-key plumbing; the JDK engine is the safe default.
+                // Engine selection (JDK vs. OpenSSL) mapped from the broker's tlsProvider field (PIP-478
+                // stage 2b): only an explicit OPENSSL value selects the native engine; JCE provider names
+                // and null keep the JDK engine.
+                .engineProvider(TlsFactorySupport.engineProvider(conf.getTlsProvider()))
                 .build();
         return new DefaultBrokerTlsFactory(policies, settings);
     }
