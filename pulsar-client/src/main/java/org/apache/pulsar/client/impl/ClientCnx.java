@@ -360,7 +360,7 @@ public class ClientCnx extends PulsarHandler {
 
     /**
      * Resolve the initial credential for {@code CommandConnect}. For a plain v4 plugin this is computed
-     * inline (exactly as the previous {@code newConnectCommand()} did) into an already-completed future so
+     * inline (exactly as the previous synchronous connect path did) into an already-completed future so
      * the continuation runs synchronously on this thread; for an {@link AsyncAuthenticationDriver} it is a
      * fresh exchange's {@link AuthenticationExchange#getAuthDataAsync()}. The resolution carries the
      * {@link AuthenticationDataProvider} to publish — the real v4 provider for the sync path (so subsequent
