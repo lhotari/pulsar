@@ -31,10 +31,12 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.handler.ssl.SslContext;
 import io.netty.resolver.dns.DnsAddressResolverGroup;
 import io.netty.resolver.dns.DnsNameResolverBuilder;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import io.netty.util.concurrent.Future;
+import io.opentelemetry.api.OpenTelemetry;
 import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.Counter;
 import io.prometheus.client.Gauge;
@@ -63,6 +65,7 @@ import org.apache.pulsar.broker.limiter.ConnectionController;
 import org.apache.pulsar.broker.resources.PulsarResources;
 import org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsServlet;
 import org.apache.pulsar.broker.stats.prometheus.PrometheusRawMetricsProvider;
+import org.apache.pulsar.broker.tls.TlsFactorySupport;
 import org.apache.pulsar.broker.topiclistlimit.TopicListMemoryLimiter;
 import org.apache.pulsar.broker.topiclistlimit.TopicListSizeResultCache;
 import org.apache.pulsar.broker.web.plugin.servlet.AdditionalServlets;
@@ -70,6 +73,10 @@ import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.common.allocator.PulsarByteBufAllocator;
 import org.apache.pulsar.common.configuration.PulsarConfigurationLoader;
 import org.apache.pulsar.common.semaphore.AsyncDualMemoryLimiterImpl;
+import org.apache.pulsar.common.tls.PulsarTlsFactory;
+import org.apache.pulsar.common.tls.TlsFactoryInitContext;
+import org.apache.pulsar.common.tls.TlsHandle;
+import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.util.netty.DnsResolverUtil;
 import org.apache.pulsar.common.util.netty.EventLoopUtil;
 import org.apache.pulsar.metadata.api.MetadataStoreException;
@@ -122,6 +129,13 @@ public class ProxyService implements Closeable {
 
     private final ScheduledExecutorService statsExecutor;
     private ScheduledExecutorService sslContextRefresher;
+    // PIP-478: the TLS front-end channel initializer that may own a PulsarTlsFactory (closed on shutdown),
+    // and the shared broker-client (proxy->broker) TLS. DirectProxyHandler reads the volatile SslContext
+    // without blocking the event loop; the subscription delivers rotation.
+    private ServiceChannelInitializer tlsServiceChannelInitializer;
+    private PulsarTlsFactory brokerClientTlsFactory;
+    private TlsHandle<SslContext> brokerClientTlsSubscription;
+    private volatile SslContext brokerClientSslContext;
 
     static final Gauge ACTIVE_CONNECTIONS = Gauge
             .build("pulsar_proxy_active_connections", "Number of connections currently active in the proxy").create()
@@ -287,8 +301,9 @@ public class ProxyService implements Closeable {
                     .newSingleThreadScheduledExecutor(
                             new DefaultThreadFactory("proxy-ssl-context-refresher"));
             ServerBootstrap tlsBootstrap = bootstrap.clone();
-            tlsBootstrap.childHandler(new ServiceChannelInitializer(this, proxyConfig, true,
-                    sslContextRefresher));
+            this.tlsServiceChannelInitializer = new ServiceChannelInitializer(this, proxyConfig, true,
+                    sslContextRefresher);
+            tlsBootstrap.childHandler(this.tlsServiceChannelInitializer);
             listenChannelTls = tlsBootstrap.bind(proxyConfig.getBindAddress(),
                     proxyConfig.getServicePortTls().get()).sync().channel();
             log.info()
@@ -309,6 +324,30 @@ public class ProxyService implements Closeable {
             this.serviceUrlTls = String.format("pulsar+ssl://%s:%d/", hostname, getListenPortTls().get());
         } else {
             this.serviceUrlTls = null;
+        }
+
+        // PIP-478: when the broker-client TLS uses the new SPI, build one shared PulsarTlsFactory serving the
+        // BROKER_CLIENT purpose for the proxy->broker binary path and subscribe to a volatile SslContext that
+        // DirectProxyHandler reads without blocking the event loop (rotation delivered by the subscription).
+        // This uses the subscribing overload rather than the client one-shot form on purpose: the proxy is a
+        // long-lived server holding outbound connections, and blocking createInstance().get() on the Netty
+        // event loop per connection is not acceptable. The endpoint hint is moot for the default file-based
+        // factory, which ignores it.
+        if (proxyConfig.isTlsEnabledWithBroker()
+                && TlsFactorySupport.selectPath(proxyConfig.getBrokerClientSslFactoryPlugin(),
+                        proxyConfig.getBrokerClientTlsFactoryClassName()) == TlsFactorySupport.TlsPath.NEW) {
+            this.brokerClientTlsFactory = TlsFactorySupport.createFactory(
+                    proxyConfig.getBrokerClientTlsFactoryClassName(), null,
+                    () -> ProxyTlsFactories.brokerClientFactory(proxyConfig));
+            TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
+                    TlsFactorySupport.parseFactoryConfig(proxyConfig.getBrokerClientTlsFactoryConfig()),
+                    statsExecutor, statsExecutor, OpenTelemetry.noop());
+            TlsFactorySupport.initializeBlocking(this.brokerClientTlsFactory, initContext);
+            this.brokerClientTlsSubscription = this.brokerClientTlsFactory
+                    .createInstance(TlsPurpose.BROKER_CLIENT, SslContext.class, ctx -> this.brokerClientSslContext = ctx)
+                    .get()
+                    .orElseThrow(() -> new IllegalStateException(
+                            "TLS factory supplied no Netty SslContext for purpose " + TlsPurpose.BROKER_CLIENT));
         }
 
         createMetricsServlet();
@@ -427,6 +466,20 @@ public class ProxyService implements Closeable {
             discoveryProvider.close();
         }
 
+        // PIP-478: dispose the new-SPI TLS resources (front-end subscription + shared broker-client factory).
+        if (this.tlsServiceChannelInitializer != null) {
+            this.tlsServiceChannelInitializer.close();
+            this.tlsServiceChannelInitializer = null;
+        }
+        if (this.brokerClientTlsSubscription != null) {
+            this.brokerClientTlsSubscription.dispose();
+            this.brokerClientTlsSubscription = null;
+        }
+        if (this.brokerClientTlsFactory != null) {
+            this.brokerClientTlsFactory.close();
+            this.brokerClientTlsFactory = null;
+        }
+
         if (this.sslContextRefresher != null) {
             this.sslContextRefresher.shutdownNow();
         }
@@ -513,6 +566,17 @@ public class ProxyService implements Closeable {
 
     public ProxyConfiguration getConfiguration() {
         return proxyConfig;
+    }
+
+    /**
+     * PIP-478: the current proxy&rarr;broker (BROKER_CLIENT) Netty {@link SslContext} when the new TLS SPI is
+     * selected for broker-client TLS, or {@code null} when the legacy PIP-337 path is used. Read by
+     * {@code DirectProxyHandler} to build the outbound SslHandler without blocking the event loop.
+     *
+     * @return the shared broker-client SslContext, or {@code null} on the legacy path
+     */
+    public SslContext getBrokerClientSslContext() {
+        return brokerClientSslContext;
     }
 
     public AuthenticationService getAuthenticationService() {
