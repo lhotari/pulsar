@@ -21,6 +21,11 @@ implemented, the decisions taken along the way, and where every experiment lives
   title checks; rerun flaky jobs rather than chasing unrelated failures.
 - Orchestrator (Fable 5) plans/reviews/decides; Opus 4.8 agents implement. Parallelize via
   worktrees where useful.
+- **Cross-model review**: `codex` CLI (v0.141.0, GPT-5.5, user's Max plan) is available for
+  independent review — `codex exec review` against the working diff, or `codex exec "<prompt>"`
+  for targeted questions. Use at design-sensitive checkpoints (new public API surface after
+  stage 1, concurrency-heavy code like the reload/watch machinery, SPI contract questions),
+  not routinely. Codex needs its own network access (runs outside the Bash sandbox).
 
 ## Branch registry
 
