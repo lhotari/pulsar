@@ -105,6 +105,10 @@ sourceSets["main"].resources.srcDir(generatePulsarBuildInfo.map {
 
 dependencies {
     implementation(libs.slog)
+    // PIP-478 D7: the TLS SPI and the relocated hostname-verification helpers
+    // (org.apache.pulsar.common.tls) now live in pulsar-common-api. Exposed as `api` so existing
+    // consumers that reference those FQCNs through pulsar-common keep compiling unchanged.
+    api(project(":pulsar-common-api"))
     api(project(":pulsar-client-api"))
     api(project(":pulsar-client-admin-api"))
 

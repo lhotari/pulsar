@@ -31,5 +31,11 @@
  * <p>This package is hosted in the neutral, dependency-light {@code pulsar-common-api} module so both
  * the v5 client builder and the server-side components (and the sibling broker-side PIP) can consume
  * the same SPI without dragging in heavyweight dependencies.
+ *
+ * <p>The package also hosts the JDK-only TLS hostname-verification helpers
+ * ({@link org.apache.pulsar.common.tls.TlsHostnameVerifier},
+ * {@link org.apache.pulsar.common.tls.PublicSuffixMatcher}, and friends), relocated here from
+ * {@code pulsar-common} in PIP-478's split-package remediation (decision D7) so the whole
+ * {@code org.apache.pulsar.common.tls} package has a single owning module.
  */
 package org.apache.pulsar.common.tls;

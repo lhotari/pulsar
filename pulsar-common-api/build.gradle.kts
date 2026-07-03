@@ -27,6 +27,10 @@ plugins {
 }
 
 dependencies {
+    // slog is the logging facade used by @CustomLog. The relocated hostname-verification helpers
+    // (org.apache.pulsar.common.tls.TlsHostnameVerifier etc. — PIP-478 D7 split-package remediation)
+    // log through it; they are otherwise JDK-only, so the module stays dependency-light.
+    implementation(libs.slog)
     // Only TlsFactoryInitContext / AuthenticationInitContext expose OpenTelemetry; kept compileOnly
     // to keep this API module dependency-light. The Netty/Jetty well-known TLS classes appear only as
     // documented Class<T> values referenced in plain-text javadoc, so no netty/jetty dependency is needed.
