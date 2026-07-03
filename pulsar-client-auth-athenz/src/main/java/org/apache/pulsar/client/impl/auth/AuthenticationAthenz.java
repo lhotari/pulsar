@@ -51,10 +51,23 @@ import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.PulsarClientException.GettingAuthenticationDataException;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
 import org.apache.pulsar.client.api.url.URL;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
+import org.apache.pulsar.client.impl.auth.v5.AthenzAuthenticationV5;
+import org.apache.pulsar.client.impl.auth.v5.V5BinaryAuthenticationDriver;
 
-public class AuthenticationAthenz implements Authentication, EncodedAuthenticationParameterSupport {
+/**
+ * Athenz authentication provider.
+ *
+ * <p>The verbatim v4 synchronous surface ({@link #getAuthData()} / {@link AuthenticationDataAthenz}) is
+ * preserved; PIP-478 additionally exposes {@link AsyncAuthenticationDriver} so {@code ClientCnx} can drive
+ * the role-token credential over the non-blocking binary path via the v5-native
+ * {@link AthenzAuthenticationV5}. The ZTS role-token cache stays on this shim.
+ */
+public class AuthenticationAthenz
+        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver {
 
     private static final long serialVersionUID = 1L;
 
@@ -133,6 +146,47 @@ public class AuthenticationAthenz implements Authentication, EncodedAuthenticati
         // Ensure we refresh the Athenz role token every 90 minutes to avoid using an expired
         // role token
         return (System.nanoTime() - cachedRoleTokenTimestamp) < TimeUnit.MINUTES.toNanos(cacheDurationInMinutes);
+    }
+
+    @Override
+    public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
+        // PIP-478: drive the v5-native Athenz body on the async binary path. The ZTS role-token cache stays
+        // on this shim; the body reads the current role token through getAuthData(), so a broker-pushed
+        // REFRESH re-acquires an expired token here exactly as the synchronous path does.
+        return new V5BinaryAuthenticationDriver(new AthenzAuthenticationV5(new ShimRoleTokenProvider(this)))
+                .newAuthenticationExchange(brokerHostName);
+    }
+
+    @SuppressWarnings("deprecation")
+    private String currentRoleToken() {
+        try {
+            return getAuthData().getCommandData();
+        } catch (PulsarClientException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private String currentRoleHeaderName() {
+        return isNotBlank(roleHeader) ? roleHeader : ZTSClient.getHeader();
+    }
+
+    private static final class ShimRoleTokenProvider implements AthenzAuthenticationV5.RoleTokenProvider {
+        private static final long serialVersionUID = 1L;
+        private final AuthenticationAthenz shim;
+
+        ShimRoleTokenProvider(AuthenticationAthenz shim) {
+            this.shim = shim;
+        }
+
+        @Override
+        public String roleToken() {
+            return shim.currentRoleToken();
+        }
+
+        @Override
+        public String roleHeaderName() {
+            return shim.currentRoleHeaderName();
+        }
     }
 
     @Override
