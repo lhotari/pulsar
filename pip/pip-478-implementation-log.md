@@ -218,7 +218,32 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
    CompletionException unwrapping).
 8. Applied D6 corrections + D7 note to the PIP (module placements, softened native-support
    claim, Public API section split).
-9. Launched two Opus 4.8 assessment agents (read-only):
+9. **Stage 2a complete** (stage2a-builder, Opus): commits `0dc0b0a` (D7 executed — 7
+   hostname-verification helpers relocated to pulsar-common-api, FQCNs unchanged,
+   pulsar-common now depends on pulsar-common-api), `4e86c1c` (FileBasedTlsFactory core in
+   `pulsar-common/.tls.impl`: resolution→fallback→role rule, one-shot + subscribing handles,
+   keep-last-good poll fan-out with value-diff suppression, OpenSSL refcount discipline;
+   TlsMaterialSource with snapshot→load→commit-on-success mtime handling — deliberately NOT
+   FileModifiedTimeUpdater, whose auto-commit-on-check is the retry bug; TlsContexts with
+   build-time hostname verification and the D3 insecure rule, client-auth never below
+   OPTIONAL; TlsFactoryProbe), `06b96db` (DefaultBrokerTlsFactory + fromServiceConfiguration
+   mapping in pulsar-broker-common; JettyTlsFactory — vanilla SslContextFactory.Server,
+   setSslContext pre-start, reload() on rotation; plain synthesized SslContextFactory.Client),
+   `86a3ea0` (synthesis coverage). 24 new tests green incl. a live-handshake D3 test and a
+   live-Jetty rotation test; all pre-existing PIP-337 tests untouched and green. Deviations
+   accepted: FileBasedTlsFactorySettings bundles engine/client-auth/refresh (server
+   client-auth is configuration-level per the PIP); engine mapping from v4 `sslProvider` is a
+   stage-2b TODO.
+10. **Personal CI recipe fixed** (PR lhotari/pulsar#231): stale fork master → CONFLICTING →
+   no workflows; retargeted onto base branch `pulsar-pip478-ci-base` at the true merge-base
+   (name must match pulsar-ci.yaml's `pulsar-*` filter). Recorded in memory.
+11. **codex stage-1 API review**: 3 High (bridge layer) + 3 Medium. Triaged in scratchpad
+   stage1-fixup-queue.md; headline: AsyncAuthenticationDriver must become exchange-scoped
+   (state slot must survive challenge rounds), unsupported binary capability must fail loudly
+   (not silently "none"), LegacyV4CredentialAdapter must expose only probed capabilities via
+   a capability() override — the capability-factory model working as designed. F5 decided as
+   documented no-copy byte[] ownership. Fixup agent queued.
+12. Launched two Opus 4.8 assessment agents (read-only):
    - **impl-gap-assessor** — classify the old impl branch diff against the current design:
      matches-current / implements-superseded / reusable-integration-scaffolding; deliver a
      reuse map per module.
