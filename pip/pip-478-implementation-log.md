@@ -58,7 +58,22 @@ default factory + server side → client side + bridges → PIP-337 removal last
   Rationale: rebasing 385 files across a changed SPI shape fights the old design at every
   step; the integration *knowledge* is the reusable part, not the diffs.
 
-- **D2 (2026-07-03, pending resolution in stage 3): v4 async path vs. old-branch CI evidence.**
+- **D2 — RESOLVED 2026-07-03: verdict (b), fixable — the async path for v4 built-ins ships.**
+  Root-cause investigation (d2-investigator) proved both retreat drivers were not fundamental:
+  (1) the OAuth2 "refresh-without-reconnect" failure was the old branch's *duplicated* async
+  state machine dropping the `ClientCnx.authenticationDataProvider` field write — the wire
+  refresh worked; the observable contract (a pre-existing master test,
+  `TokenOauth2AuthenticatedProducerConsumerTest.testOAuth2TokenRefreshedWithoutReconnect`)
+  broke. (2) the `ClientCnxRequestTimeoutQueueTest` NPE was an unstubbed mock
+  `ctx.executor()` reached only because `AuthenticationDisabled` was made async needlessly.
+  Stage-3 plan: async for the credential-fetching built-ins (Token/Basic/OAuth2/Athenz/SASL),
+  sync-verbatim for Disabled/Tls/KeyStoreTls; ONE continuation-based state machine in
+  ClientCnx (inline when the credential future is already done, executor hop only when
+  pending; single field-assignment site; unwrap CompletionException to v4 exception types).
+  PIP updated with the scope clarification + acceptance invariants + the single-state-machine
+  requirement. Full plan: scratchpad d2-resolution.md.
+
+- **D2-original (superseded by the resolution above): v4 async path vs. old-branch CI evidence.**
   The PIP says the migrated built-in v4 plugins give v4 `PulsarClient` users the async path
   automatically (this is Motivation #1's payoff for v4 users). The old branch tried exactly
   that and had to retreat (`d1e7038de0a`): async-enabled built-ins broke OAuth2
@@ -104,6 +119,14 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
   javadoc (old text said instanceof-based discovery — forbidden by the current design).
 - Caveat: old-branch broker/functions/websocket diffstats are inflated by an unrelated
   jakarta/OTel migration riding the branch — don't mine those parts blindly.
+- **Correction (stage2-scout, 2026-07-03): the old branch has NO Jetty `reload(...)` rework.**
+  Its `JettySslContextFactory` keeps the condemned `getSslContext()` override, merely swapping
+  the PIP-337 factory for a `Supplier<SSLContext>`; server wiring is pull-model throughout and
+  the listener SPI is dead code on server paths. Liftable from it: only the `Server` ctor
+  config block (ciphers/protocols, provider string, client-auth flags, `setSniRequired(false)`,
+  Conscrypt loader). The subscribe+`reload()` push path is fresh stage-2 work. The scout's full
+  dossier (transplant split, D3 exact fix, config-key insertion map, per-component wiring
+  old→new) is preserved in scratchpad stage2-dossier.md and drives the stage-2 brief.
 
 - **D4 (2026-07-03): stage-1 scope includes the bridges and minimal v5-module consumer fixes.**
   The PIP-466 sync `Authentication` stub already has in-module consumers
@@ -124,6 +147,24 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
   exposes it. Watch item: where `FileBasedTlsFactory` (needs netty at runtime) really lands
   in stage 2 without making the API module heavyweight — may need a PIP Public-API-listing
   correction (split package risk if it moves module but keeps the package).
+
+- **D6 (2026-07-03): default-implementation placement (resolves the D5 watch item).**
+  `FileBasedTlsFactory` + `TlsContexts` + internal `TlsMaterialSource` → `pulsar-common`,
+  package `org.apache.pulsar.common.tls.impl` (netty-handler + tcnative already there; JDK
+  *and* OpenSSL contexts natively; `.impl` avoids splitting the SPI package).
+  `DefaultBrokerTlsFactory` → `pulsar-broker-common` (Jetty + ServiceConfiguration knowledge),
+  constructor takes the composed purpose→policy map. `FileBasedTlsFactory` returns `empty()`
+  for the Jetty class (framework synthesizes — the recommended default). PIP Public API
+  section corrected accordingly.
+
+- **D7 (2026-07-03, rule-based, execute in stage 2): split-package remediation.**
+  stage1-builder discovered `org.apache.pulsar.common.tls` already exists in `pulsar-common`
+  (8 hostname-verification helpers: TlsHostnameVerifier, PublicSuffixMatcher, …), so the SPI
+  in `pulsar-common-api` currently splits the package (tolerated by the build; precedent:
+  `org.apache.pulsar.common.api`). Rule: in stage 2, if the helpers are dependency-light
+  (JDK-only), relocate them into `pulsar-common-api` (FQCNs unchanged; `pulsar-common` gains
+  the `pulsar-common-api` dependency anyway) — else move the SPI package before anything is
+  released. Recorded in the PIP's Resolved decision 5.
 
 ## Step log
 
@@ -157,7 +198,27 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
    **F8 partially adopted**: added the explicit automation-breakage acknowledgment and the
    rationale; REJECTED codex's keep-PIP-337-adapter-for-one-release suggestion — it would
    preserve exactly the maintenance burden and surface the removal decision exists to end.
-6. Launched two Opus 4.8 assessment agents (read-only):
+6. **Stage 1 complete** (stage1-builder, Opus): commits `849867689f7` (pulsar-common-api
+   module: published, bom entry, TLS SPI fresh + HTTP SPI) and `80e5d9df9bc` (v5 auth SPI +
+   value types + contexts + exceptions; `AsyncAuthenticationDriver` in pulsar-client-api;
+   bridges TlsAuthentication / LegacyV4AuthenticationAdapter(+3 inners) /
+   V5ToV4AuthenticationAdapter; deleted the PIP-466 sync stub, v5 `AuthenticationData`,
+   experimental `config.TlsPolicy`, old `AuthenticationAdapter`). Verified green:
+   `:pulsar-common-api:build :pulsar-client-api-v5:build :pulsar-client-v5:build` (incl.
+   checkstyle+spotless) + `:pulsar-client-original:compileJava
+   :pulsar-client-admin-original:compileJava` (v4 untouched); new v5 adapter tests 8/8.
+   Notable deviations (all PIP-faithful): PulsarHttpClientConfig carries TlsPurpose only (no
+   insecure/hostname flags — those are per-purpose factory concerns); blockingExecutor wired
+   through adapter + init contexts; BROKER_CLIENT fallback chosen empty. TODOs tagged
+   `TODO PIP-478 stage 3`: real executors/HTTP factory in PulsarClientBuilderV5, tlsPolicy()
+   mapping, extractTlsMaterial() folding, ClientCnx carve-out. Discovered the split-package
+   conflict → D7.
+7. **D2 investigation complete** (d2-investigator, Opus): verdict fixable; see D2 above. PIP
+   updated (async-scope clarification, acceptance invariants, single-state-machine carve-out,
+   CompletionException unwrapping).
+8. Applied D6 corrections + D7 note to the PIP (module placements, softened native-support
+   claim, Public API section split).
+9. Launched two Opus 4.8 assessment agents (read-only):
    - **impl-gap-assessor** — classify the old impl branch diff against the current design:
      matches-current / implements-superseded / reusable-integration-scaffolding; deliver a
      reuse map per module.
