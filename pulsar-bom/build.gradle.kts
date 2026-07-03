@@ -37,6 +37,9 @@ dependencies {
         api(project(":pulsar-client-api"))
         api(project(":pulsar-client-admin-api"))
 
+        // Neutral SPI module (PIP-478 TLS + HTTP client SPIs)
+        api(project(":pulsar-common-api"))
+
         // Shaded clients (the published artifacts users depend on)
         api(project(":pulsar-client-shaded"))
         api(project(":pulsar-client-admin-shaded"))
