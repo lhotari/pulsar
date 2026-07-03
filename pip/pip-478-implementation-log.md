@@ -34,7 +34,8 @@ implemented, the decisions taken along the way, and where every experiment lives
 | `lh-pip-478-v5-client-async-auth-and-tls-material-provider` | The PIP document (design) | active design branch; doc-only |
 | `lh-pip-478-impl` | **Pre-existing** implementation from an earlier design revision (old master base `1fa9e3532b4`, 9 commits, 385 files, +11.6k/−4.6k). Commit message wording ("TLS material provider") suggests the *superseded material-model* SPI, pre-rename capability interfaces | kept as reference / mining source; superseded |
 | `lh-pip-478-impl-prerebase-backup` | Backup of the above from an earlier rebase attempt | kept frozen |
-| `lh-pip-478-impl-v2` | **Current implementation branch**, created 2026-07-03 from the design branch tip (`c1966d8f274`) | active |
+| `lh-pip-478-impl-v2` | **Current implementation branch**, created 2026-07-03 from the design branch tip (`c1966d8f274`) | active; Personal CI = lhotari/pulsar#231 |
+| `lh-pip-478-tls-default-flip` | v2 + one commit (`98ac5804f9a`): server TLS default flipped to the new SPI path (D8 experiment). Locally green incl. legacy TLS suites through the new path; watch item: AuthenticationTls proxy→broker cert override (stage-3 deliverable) | experiment; Personal CI = lhotari/pulsar#232 |
 
 ## Design snapshot implemented
 
