@@ -105,6 +105,26 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
 - Caveat: old-branch broker/functions/websocket diffstats are inflated by an unrelated
   jakarta/OTel migration riding the branch — don't mine those parts blindly.
 
+- **D4 (2026-07-03): stage-1 scope includes the bridges and minimal v5-module consumer fixes.**
+  The PIP-466 sync `Authentication` stub already has in-module consumers
+  (`PulsarClientBuilderV5`, `AuthenticationFactory`, `AuthenticationAdapter`), so "SPI types
+  with no consumers" cannot be literally additive: replacing the stub forces those to move.
+  Stage 1 therefore ships: the `pulsar-common-api` module + TLS SPI types (fresh), the v5
+  auth SPI (mined + renamed), the HTTP SPI types (mined, provider layer deleted), the bridge
+  family + `TlsAuthentication` + `AsyncAuthenticationDriver` (mined/copied — rename-only per
+  the reuse map), and the minimal builder/factory adjustments to keep the v5 modules
+  compiling and their tests meaningful. No ClientCnx wiring, no server changes (stages 2–3).
+  v5-experimental tests may be reshaped freely; the "pass unmodified" criterion protects v4
+  tests only.
+- **D5 (2026-07-03): `pulsar-common-api` is a PUBLISHED module** using
+  `pulsar.public-java-library-conventions` + a `pulsar-bom` constraint. Forced by the build
+  guard: published modules (pulsar-common, broker-common, proxy…) may only depend on
+  published modules, and stage 2 makes them depend on the TLS SPI. Netty/Jetty stay
+  `compileOnly`; `opentelemetry-api` `compileOnly` only because `TlsFactoryInitContext`
+  exposes it. Watch item: where `FileBasedTlsFactory` (needs netty at runtime) really lands
+  in stage 2 without making the API module heavyweight — may need a PIP Public-API-listing
+  correction (split package risk if it moves module but keeps the package).
+
 ## Step log
 
 ### 2026-07-03
