@@ -349,6 +349,13 @@ tlsAllowInsecureConnection: false
 tlsEnableHostnameVerification: false
 # Tls cert refresh duration in seconds (set 0 to check on every new connection)
 tlsCertRefreshCheckDurationSec: 300
+# PIP-478 TLS factory (PulsarTlsFactory) class name for the functions-worker web server TLS (purpose WEB).
+# When set, the new PIP-478 TLS SPI is used instead of the built-in file-based TLS loading: an empty value
+# or the literal 'default' selects the built-in default factory composed from these tls* settings, otherwise
+# the named class is instantiated via its public no-arg constructor.
+tlsFactoryClassName: ""
+# PIP-478 configuration parameters for tlsFactoryClassName (JSON object or comma-separated key=value list)
+tlsFactoryConfig: ""
 # Whether client certificates are required for TLS. Connections are rejected if the client
 # certificate isn't trusted.
 tlsRequireTrustedClientCertOnConnect: false

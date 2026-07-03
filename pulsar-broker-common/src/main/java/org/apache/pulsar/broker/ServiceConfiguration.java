@@ -1896,6 +1896,22 @@ public class ServiceConfiguration implements PulsarConfiguration {
             category = CATEGORY_TLS,
             doc = "SSL Factory plugin configuration parameters.")
     private String sslFactoryPluginParams = "";
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "PIP-478 TLS factory (PulsarTlsFactory) class name for the broker's server-side TLS "
+                    + "(binary listener and web server; purposes BROKER/PROXY/WEB). When set, the broker "
+                    + "uses the new PIP-478 TLS SPI instead of the PIP-337 sslFactoryPlugin path: an empty "
+                    + "value or the literal 'default' selects the built-in DefaultBrokerTlsFactory composed "
+                    + "from these tls* settings, otherwise the named class is instantiated via its public "
+                    + "no-arg constructor. The PIP-337 sslFactoryPlugin/sslFactoryPluginParams keys are "
+                    + "superseded by this and will be removed in a later release; while both remain, a "
+                    + "non-default sslFactoryPlugin keeps the legacy PIP-337 path.")
+    private String tlsFactoryClassName = "";
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "PIP-478 configuration parameters for tlsFactoryClassName, passed to the factory as its "
+                    + "init params. Accepts a JSON object or a comma-separated key=value list.")
+    private String tlsFactoryConfig = "";
 
     /***** --- Authentication. --- ****/
     @FieldContext(
@@ -4135,6 +4151,21 @@ public class ServiceConfiguration implements PulsarConfiguration {
             category = CATEGORY_TLS,
             doc = "SSL Factory plugin configuration parameters used by internal client.")
     private String brokerClientSslFactoryPluginParams = "";
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "PIP-478 TLS factory (PulsarTlsFactory) class name for the broker's own outbound "
+                    + "(broker-to-broker) client connections (purpose BROKER_CLIENT). When set, the broker "
+                    + "uses the new PIP-478 TLS SPI instead of the PIP-337 brokerClientSslFactoryPlugin path: "
+                    + "an empty value or the literal 'default' selects the built-in default factory composed "
+                    + "from the brokerClient tls* settings, otherwise the named class is instantiated via its "
+                    + "public no-arg constructor. Supersedes brokerClientSslFactoryPlugin/"
+                    + "brokerClientSslFactoryPluginParams (removal in a later release).")
+    private String brokerClientTlsFactoryClassName = "";
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "PIP-478 configuration parameters for brokerClientTlsFactoryClassName. Accepts a JSON "
+                    + "object or a comma-separated key=value list.")
+    private String brokerClientTlsFactoryConfig = "";
 
     /* packages management service configurations (begin) */
 
