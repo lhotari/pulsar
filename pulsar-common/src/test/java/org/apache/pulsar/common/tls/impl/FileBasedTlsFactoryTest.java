@@ -346,6 +346,21 @@ public class FileBasedTlsFactoryTest {
     }
 
     @Test
+    public void synthesizeNettyFromJdkWrapsTheJdkContext() throws Exception {
+        FileBasedTlsFactory factory = factory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.pem(RSA_CA, BROKER_CERT, BROKER_KEY)),
+                FileBasedTlsFactorySettings.defaults());
+        SSLContext jdk = (SSLContext) factory.createInstance(TlsPurpose.BROKER, SSLContext.class)
+                .join().get().get();
+
+        SslContext synthesized = TlsContexts.synthesizeNettyFromJdk(jdk, false, true);
+        assertThat(synthesized).isNotNull();
+        assertThat(synthesized.isServer()).isTrue();
+        assertThat(synthesized.newEngine(ByteBufAllocator.DEFAULT)).isNotNull();
+        factory.close();
+    }
+
+    @Test
     public void probeRetainsInitialInstanceAndFailsFastOnBootError() {
         FileBasedTlsFactory ok = factory(
                 Map.of(TlsPurpose.BROKER, TlsPolicy.pem(RSA_CA, BROKER_CERT, BROKER_KEY)),
