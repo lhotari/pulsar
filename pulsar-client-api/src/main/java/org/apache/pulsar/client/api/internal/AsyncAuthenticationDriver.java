@@ -31,26 +31,59 @@ import org.apache.pulsar.common.api.AuthData;
  * synchronous path verbatim. It is generic across all challenge types (initial connect, the broker's
  * {@code REFRESH_AUTH_DATA} sentinel, SASL multi-round, and custom challenge/response).
  *
+ * <p><b>Exchange-scoped.</b> Authentication is driven per <em>exchange</em> — one connection attempt.
+ * {@code ClientCnx} calls {@link #newAuthenticationExchange(String)} once per connect and drives every
+ * round (initial data, refresh, and all challenge rounds) through the single returned
+ * {@link AuthenticationExchange}. The exchange is where per-connection conversation state lives (for
+ * the v5 bridge, one call-context and its state slot), so binding it to the exchange object — rather
+ * than passing the host on each call — makes the state slot's lifetime exactly one {@code ClientCnx}
+ * setup. A fresh exchange is created for every connection attempt (and for the broker's REFRESH
+ * sentinel, which {@code ClientCnx} handles by starting a new exchange), so concurrent handshakes to
+ * different brokers never collide.
+ *
  * <p>The {@code .internal.} subpackage signals "stable internal" — application code should not
  * implement this interface; it is observed by the framework.
  */
 public interface AsyncAuthenticationDriver {
 
     /**
-     * Asynchronously produce the initial authentication data for {@code CommandConnect}.
+     * Begin an authentication exchange for a single connection attempt to the given broker.
+     *
+     * <p>The returned {@link AuthenticationExchange} owns all state for this one connection setup and is
+     * driven by {@code ClientCnx} for every round of the handshake. Create a new exchange per connection
+     * attempt; do not share one across connections.
      *
      * @param brokerHostName the broker host being connected to (for per-host credentials)
-     * @return a future of the auth data; completes exceptionally on failure
+     * @return a new, single-use exchange scoped to this connection attempt
      */
-    CompletableFuture<AuthData> getAuthDataAsync(String brokerHostName);
+    AuthenticationExchange newAuthenticationExchange(String brokerHostName);
 
     /**
-     * Asynchronously compute the response to a broker {@code CommandAuthChallenge} (or to the
-     * {@code REFRESH_AUTH_DATA} refresh sentinel).
+     * A single authentication exchange: the credential rounds of one {@code ClientCnx} connection setup.
      *
-     * @param challenge      the challenge payload from the broker
-     * @param brokerHostName the broker host being connected to
-     * @return a future of the response auth data; completes exceptionally on failure
+     * <p>An exchange is <em>not</em> thread-safe and is not reused across connection attempts. Its rounds
+     * are serialized by the caller ({@code ClientCnx} issues the next round only after the previous
+     * future completes), so an implementation needs no internal synchronization for its per-exchange
+     * conversation state. Every future-returning method reports failures by completing the returned
+     * future exceptionally; it never throws on the calling thread.
      */
-    CompletableFuture<AuthData> authenticateAsync(AuthData challenge, String brokerHostName);
+    interface AuthenticationExchange {
+
+        /**
+         * Asynchronously produce the initial authentication data for {@code CommandConnect}.
+         *
+         * @return a future of the auth data; completes exceptionally on failure
+         */
+        CompletableFuture<AuthData> getAuthDataAsync();
+
+        /**
+         * Asynchronously compute the response to a broker {@code CommandAuthChallenge} (or to the
+         * {@code REFRESH_AUTH_DATA} refresh sentinel, which re-produces the current credential rather
+         * than driving a challenge round).
+         *
+         * @param challengeOrRefresh the challenge payload from the broker, or the refresh sentinel
+         * @return a future of the response auth data; completes exceptionally on failure
+         */
+        CompletableFuture<AuthData> authenticateAsync(AuthData challengeOrRefresh);
+    }
 }

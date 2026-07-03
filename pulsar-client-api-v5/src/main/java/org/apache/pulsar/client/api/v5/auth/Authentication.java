@@ -61,6 +61,8 @@ public interface Authentication extends AutoCloseable {
     /**
      * Initialization step. Called once by the framework with runtime services after configuration. May
      * do I/O; the returned future completes when the implementation is ready to serve credentials.
+     * Never throws synchronously: all failures are reported by completing the returned future
+     * exceptionally, never by throwing on the calling thread.
      *
      * @param ctx the runtime services context
      * @return a future completing when the plugin is ready

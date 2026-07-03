@@ -38,7 +38,9 @@ public interface BinaryAuthDataProvider {
      * Produce a credential for the binary-protocol connection. The returned {@link BinaryAuthData}
      * carries the {@code auth_data} bytes for {@code CommandConnect}; the framework pairs them with
      * {@link #authMethodName()}. Completes exceptionally on failure (see the error model in
-     * {@link org.apache.pulsar.client.api.v5.PulsarClientException}).
+     * {@link org.apache.pulsar.client.api.v5.PulsarClientException}). Never throws synchronously: all
+     * failures are reported by completing the returned future exceptionally, never by throwing on the
+     * calling thread.
      *
      * @param ctx the per-call context
      * @return a future of the binary-protocol credential

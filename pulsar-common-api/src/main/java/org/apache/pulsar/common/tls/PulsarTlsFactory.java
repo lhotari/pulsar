@@ -101,6 +101,10 @@ public interface PulsarTlsFactory extends AutoCloseable {
      * never look at it. The endpoint does NOT replace hostname verification or SNI: those are applied at
      * engine creation from the same peer address.
      *
+     * <p>Never throws synchronously: like every future-returning method here, it reports all failures by
+     * completing the returned future exceptionally. The default delegation is guarded so that even a
+     * delegate that throws on the calling thread surfaces as a failed future rather than propagating.
+     *
      * @param purpose       the TLS purpose to resolve material for
      * @param endpoint      the destination host/port hint
      * @param instanceClass the well-known instance class to build
@@ -109,7 +113,11 @@ public interface PulsarTlsFactory extends AutoCloseable {
      */
     default <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(
             TlsPurpose purpose, TlsEndpoint endpoint, Class<T> instanceClass) {
-        return createInstance(purpose, instanceClass);
+        try {
+            return createInstance(purpose, instanceClass);
+        } catch (Throwable t) {
+            return CompletableFuture.failedFuture(t);
+        }
     }
 
     /**

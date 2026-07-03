@@ -250,6 +250,35 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
    - **v5-module-mapper** — map current `pulsar-client-api-v5` / `pulsar-client-v5` contents,
      Gradle new-module mechanics (settings registration, convention plugins, version
      catalog), and the v4 client auth/TLS integration points for stage 1 scaffolding.
+13. **Stage-1 fixup applied** (all six codex findings from stage1-fixup-queue.md):
+   - **F1 (+ PIP edit)** — `AsyncAuthenticationDriver` reshaped to exchange-scoped:
+     `newAuthenticationExchange(String)` → `AuthenticationExchange {getAuthDataAsync(),
+     authenticateAsync(AuthData challengeOrRefresh)}`. `V5ToV4AuthenticationAdapter` binds ONE
+     `SimpleAuthCallContext` per exchange (initial data + REFRESH + all challenge rounds), routing
+     per the normative binary rules (REFRESH/INIT sentinel → BinaryAuthDataProvider; other
+     challenge → BinaryAuthChallengeHandler, absent → AuthenticationException). Its synthesized v4
+     provider overrides `authenticate(AuthData)` to ride the same exchange (INIT reuses the cached
+     initial credential to avoid re-seeding CR conversations). PIP carve-out listing + prose updated.
+   - **F2** — missing `BinaryAuthDataProvider` now fails loudly: `V5ToV4.start()` throws v4-mapped
+     `UnsupportedAuthenticationException`; the exchange's `getAuthDataAsync()` also fails (no more
+     `"none"`/empty synth).
+   - **F3** — `LegacyV4CredentialAdapter` probes `hasDataFromCommand()`/`hasDataForHttp()` post-start
+     on the blocking executor (cached) and overrides `capability(Class)` → empty for unsupported
+     kinds; claimed-but-null v4 data → `UnsupportedAuthenticationException`.
+   - **F4** — `wrap()` is side-effect-free (method-name heuristic only; no `getAuthData(null)` probe —
+     third-party `hasDataForTls()` merge deferred to builder-time stage 3); `configure()` stores
+     params; configure/start/probe run in `initializeAsync()` on the blocking executor; the
+     `Runnable::run` inline fallback is gone (pre-init capability calls fail with IllegalStateException).
+   - **F5** — no-copy byte[] ownership javadoc on BinaryAuthData/AuthChallenge/ChallengeResponse +
+     HttpRequest.Bytes/HttpResponse (array fields ⇒ record equals/hashCode is identity-based; no
+     value comparisons exist in-tree, so documented, not overridden).
+   - **F6** — `PulsarTlsFactory` default endpoint overload wrapped in try/catch → `failedFuture`;
+     never-throws-synchronously sentence added to the auth capability interfaces + `PulsarHttpClient`.
+   Tests: +3 in `V5ToV4AuthenticationAdapterTest` (exchange state across rounds, REFRESH→provider,
+   start-fails-on-missing-binary) and +3 in `LegacyV4AuthenticationAdapterTest` (wrap/configure do no
+   v4 calls, probed-capabilities-only, pre-init capability → failed future). Verified: spotlessApply +
+   `:pulsar-client-api-v5:build :pulsar-client-v5:build :pulsar-common-api:build
+   :pulsar-client-original:compileJava` green; 14 v5 auth tests pass.
 
 ## Watch items (implementation risks flagged during design)
 

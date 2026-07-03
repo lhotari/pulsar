@@ -30,6 +30,10 @@ import java.util.Optional;
  *
  * <p>The body is fully buffered into a byte array (streaming responses are out of scope for v1).
  * Header lookups via {@link #header(String)} are case-insensitive.
+ *
+ * <p><b>Body ownership: the array is handed off, not copied.</b> {@link #of} takes ownership of the
+ * {@code body} array without copying it, and {@link #body()} returns that same array without copying;
+ * the array must not be mutated after the response is constructed or after {@code body()} hands it out.
  */
 public final class HttpResponse {
 

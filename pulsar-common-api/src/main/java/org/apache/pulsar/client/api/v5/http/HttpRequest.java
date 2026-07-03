@@ -45,6 +45,12 @@ public final class HttpRequest {
     /**
      * A raw byte body with an explicit content type.
      *
+     * <p><b>Ownership: the array is handed off, not copied.</b> The caller transfers ownership of
+     * {@code content} to this body on construction and the framework reads it without copying; neither
+     * side may mutate the array after construction. Because the component is an array, the record's
+     * generated {@code equals}/{@code hashCode} are reference-based, not value-based; do not compare
+     * {@link Bytes} instances for value equality.
+     *
      * @param content     the body bytes
      * @param contentType the {@code Content-Type} value
      */

@@ -39,7 +39,8 @@ public interface HttpAuthChallengeHandler {
      * <p>The server's challenge headers from the prior {@code 401} are available via
      * {@link HttpAuthCallContext#serverChallengeHeaders()}; the returned {@link HttpAuthHeaders} are
      * attached to the resubmitted request. Cross-round conversation state is kept in the context's
-     * state slot.
+     * state slot. Never throws synchronously: all failures are reported by completing the returned
+     * future exceptionally, never by throwing on the calling thread.
      *
      * @param ctx the per-call context (holds the server challenge and cross-round state)
      * @return a future of the headers for the resubmitted request

@@ -31,7 +31,9 @@ public interface BinaryAuthChallengeHandler {
      *
      * <p>The framework places the returned bytes in {@code CommandAuthResponse}. Completion is decided
      * by the broker (it replies with {@code CommandConnected} when satisfied), so the handler does not
-     * signal it; cross-round conversation state is kept in the context's state slot.
+     * signal it; cross-round conversation state is kept in the context's state slot. Never throws
+     * synchronously: all failures are reported by completing the returned future exceptionally, never by
+     * throwing on the calling thread.
      *
      * @param ctx           the per-call context (holds cross-round state)
      * @param authChallenge the challenge from the broker

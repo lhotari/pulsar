@@ -38,6 +38,9 @@ public interface PulsarHttpClient extends AutoCloseable {
     /**
      * Execute an HTTP request asynchronously.
      *
+     * <p>Never throws synchronously: all failures — including argument validation — are reported by
+     * completing the returned future exceptionally, never by throwing on the calling thread.
+     *
      * @param request the request to send
      * @return a future completing with the {@link HttpResponse}, or completing exceptionally on
      *         transport failure

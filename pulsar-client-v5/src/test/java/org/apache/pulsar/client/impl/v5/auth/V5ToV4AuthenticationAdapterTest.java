@@ -18,24 +18,42 @@
  */
 package org.apache.pulsar.client.impl.v5.auth;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.ByteArrayOutputStream;
 import java.io.NotSerializableException;
 import java.io.ObjectOutputStream;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
+import org.apache.pulsar.client.api.v5.auth.AuthChallenge;
+import org.apache.pulsar.client.api.v5.auth.Authentication;
+import org.apache.pulsar.client.api.v5.auth.AuthenticationCallContext;
+import org.apache.pulsar.client.api.v5.auth.AuthenticationInitContext;
+import org.apache.pulsar.client.api.v5.auth.BinaryAuthChallengeHandler;
+import org.apache.pulsar.client.api.v5.auth.BinaryAuthData;
+import org.apache.pulsar.client.api.v5.auth.BinaryAuthDataProvider;
+import org.apache.pulsar.client.api.v5.auth.ChallengeResponse;
+import org.apache.pulsar.common.api.AuthData;
 import org.testng.annotations.Test;
 
 /**
  * Verifies that {@link V5ToV4AuthenticationAdapter} exposes a v5 plugin through the v4
- * {@code Authentication} interface that {@code ClientCnx} drives, and refuses serialization with an
- * actionable message (v5 plugins are deliberately not {@code Serializable}).
+ * {@code Authentication} interface that {@code ClientCnx} drives, drives one exchange-scoped call
+ * context across all challenge rounds, routes the refresh sentinel to the credential provider (never
+ * the challenge handler), fails loudly when the wrapped plugin cannot serve the binary transport, and
+ * refuses serialization with an actionable message (v5 plugins are deliberately not {@code Serializable}).
  */
 public class V5ToV4AuthenticationAdapterTest {
 
+    private static V5ToV4AuthenticationAdapter wrap(Authentication v5) {
+        return new V5ToV4AuthenticationAdapter(v5, null, null, null, "test", Map.of());
+    }
+
     private static V5ToV4AuthenticationAdapter wrap() {
-        return new V5ToV4AuthenticationAdapter(new TlsAuthentication(), null, null, null, "test", Map.of());
+        return wrap(new TlsAuthentication());
     }
 
     @Test
@@ -51,9 +69,101 @@ public class V5ToV4AuthenticationAdapterTest {
     }
 
     @Test
+    public void challengeStatePersistsAcrossRoundsThroughOneExchange() throws Exception {
+        CountingChallengePlugin plugin = new CountingChallengePlugin();
+        V5ToV4AuthenticationAdapter adapter = wrap(plugin);
+        adapter.start();
+
+        AuthenticationExchange exchange = adapter.newAuthenticationExchange("broker-1.example.com");
+        // Initial round seeds the conversation state in the call-context state slot.
+        exchange.getAuthDataAsync().get();
+        AuthData round1 = exchange.authenticateAsync(AuthData.of("challenge-1".getBytes(UTF_8))).get();
+        AuthData round2 = exchange.authenticateAsync(AuthData.of("challenge-2".getBytes(UTF_8))).get();
+
+        // The counter advances 1 -> 2 only because both challenge rounds see the SAME state slot; a
+        // per-call context (the bug this fixup addresses) would reset it to 1 each round.
+        assertThat(new String(round1.getBytes(), UTF_8)).isEqualTo("round-1");
+        assertThat(new String(round2.getBytes(), UTF_8)).isEqualTo("round-2");
+        assertThat(plugin.challengeCalls).isEqualTo(2);
+    }
+
+    @Test
+    public void refreshSentinelRoutesToDataProviderNotChallengeHandler() throws Exception {
+        CountingChallengePlugin plugin = new CountingChallengePlugin();
+        V5ToV4AuthenticationAdapter adapter = wrap(plugin);
+        adapter.start();
+
+        AuthenticationExchange exchange = adapter.newAuthenticationExchange("broker-1.example.com");
+        exchange.getAuthDataAsync().get();
+        int challengeCallsBefore = plugin.challengeCalls;
+
+        AuthData refreshed = exchange.authenticateAsync(AuthData.REFRESH_AUTH_DATA).get();
+
+        // Refresh means "produce the current credential again": the challenge handler must NOT be called,
+        // and BinaryAuthDataProvider is re-invoked instead.
+        assertThat(plugin.challengeCalls).isEqualTo(challengeCallsBefore);
+        assertThat(plugin.dataCalls).isEqualTo(2);
+        assertThat(new String(refreshed.getBytes(), UTF_8)).isEqualTo("init");
+    }
+
+    @Test
+    public void startFailsLoudlyWhenBinaryCapabilityIsMissing() {
+        // A v5 plugin exposing no capabilities cannot serve the binary transport; using it there is an
+        // error (PIP-478 binary routing rule 1) — never a silent "none"/empty credential.
+        Authentication noBinary = ctx -> CompletableFuture.completedFuture(null);
+        V5ToV4AuthenticationAdapter adapter = wrap(noBinary);
+
+        assertThatThrownBy(adapter::start).isInstanceOf(
+                org.apache.pulsar.client.api.PulsarClientException.UnsupportedAuthenticationException.class);
+    }
+
+    @Test
     public void refusesSerializationWithActionableMessage() {
         assertThatThrownBy(() -> new ObjectOutputStream(new ByteArrayOutputStream()).writeObject(wrap()))
                 .isInstanceOf(NotSerializableException.class)
                 .hasMessageContaining("authPluginClassName");
+    }
+
+    /**
+     * A fake v5 challenge/response plugin that keeps a per-exchange round counter in the call-context
+     * state slot, so a test can prove the same context (and slot) is reused across rounds.
+     */
+    private static final class CountingChallengePlugin
+            implements Authentication, BinaryAuthDataProvider, BinaryAuthChallengeHandler {
+
+        private static final class Counter {
+            private int rounds;
+        }
+
+        private int dataCalls;
+        private int challengeCalls;
+
+        @Override
+        public CompletableFuture<Void> initializeAsync(AuthenticationInitContext ctx) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public String authMethodName() {
+            return "counting";
+        }
+
+        @Override
+        public CompletableFuture<BinaryAuthData> getAuthDataAsync(AuthenticationCallContext ctx) {
+            dataCalls++;
+            ctx.setStateObject(Counter.class, new Counter());
+            return CompletableFuture.completedFuture(new BinaryAuthData("init".getBytes(UTF_8)));
+        }
+
+        @Override
+        public CompletableFuture<ChallengeResponse> respondToChallengeAsync(AuthenticationCallContext ctx,
+                AuthChallenge authChallenge) {
+            challengeCalls++;
+            Counter counter = ctx.getStateObject(Counter.class).orElseThrow(
+                    () -> new IllegalStateException("conversation state did not persist across rounds"));
+            counter.rounds++;
+            return CompletableFuture.completedFuture(
+                    new ChallengeResponse(("round-" + counter.rounds).getBytes(UTF_8)));
+        }
     }
 }

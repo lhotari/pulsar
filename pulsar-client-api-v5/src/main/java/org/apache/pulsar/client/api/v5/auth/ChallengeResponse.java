@@ -27,6 +27,12 @@ package org.apache.pulsar.client.api.v5.auth;
  * context's state slot. Kept as a record rather than a bare {@code byte[]} so fields can be added later
  * without an API break.
  *
+ * <p><b>Ownership: the array is handed off, not copied.</b> The handler transfers ownership of
+ * {@code responseBytes} to this value on construction and the framework reads it without copying;
+ * neither side may mutate the array afterwards. Because the component is an array, the record's
+ * generated {@code equals}/{@code hashCode} are reference-based, not value-based; do not compare
+ * {@link ChallengeResponse} instances for value equality.
+ *
  * @param responseBytes the bytes to send in the next {@code CommandAuthResponse}
  */
 public record ChallengeResponse(byte[] responseBytes) {

@@ -22,6 +22,12 @@ package org.apache.pulsar.client.api.v5.auth;
  * A binary-protocol {@code CommandAuthChallenge} payload handed to a
  * {@link BinaryAuthChallengeHandler} (PIP-478).
  *
+ * <p><b>Ownership: the array is handed off, not copied.</b> The framework transfers ownership of
+ * {@code challenge} to this value on construction and the handler reads it without copying; neither
+ * side may mutate the array afterwards. Because the component is an array, the record's generated
+ * {@code equals}/{@code hashCode} are reference-based, not value-based; do not compare
+ * {@link AuthChallenge} instances for value equality.
+ *
  * @param challenge the challenge bytes sent by the broker
  */
 public record AuthChallenge(byte[] challenge) {

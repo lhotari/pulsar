@@ -31,7 +31,9 @@ public interface HttpAuthHeadersProvider {
      *
      * <p>The returned {@link HttpAuthHeaders} are attached to the request; most implementations produce
      * the same credential for every call. Completes exceptionally on failure (see the error model in
-     * {@link org.apache.pulsar.client.api.v5.PulsarClientException}).
+     * {@link org.apache.pulsar.client.api.v5.PulsarClientException}). Never throws synchronously: all
+     * failures are reported by completing the returned future exceptionally, never by throwing on the
+     * calling thread.
      *
      * @param ctx the per-call context
      * @return a future of the HTTP authentication headers
