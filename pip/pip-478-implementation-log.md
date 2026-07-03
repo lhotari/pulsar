@@ -58,6 +58,53 @@ default factory + server side → client side + bridges → PIP-337 removal last
   Rationale: rebasing 385 files across a changed SPI shape fights the old design at every
   step; the integration *knowledge* is the reusable part, not the diffs.
 
+- **D2 (2026-07-03, pending resolution in stage 3): v4 async path vs. old-branch CI evidence.**
+  The PIP says the migrated built-in v4 plugins give v4 `PulsarClient` users the async path
+  automatically (this is Motivation #1's payoff for v4 users). The old branch tried exactly
+  that and had to retreat (`d1e7038de0a`): async-enabled built-ins broke OAuth2
+  token-refresh-without-reconnect and a mock-executor test; its resolution was "built-in v4
+  shims keep the verbatim sync path". That retreat guts Motivation #1 for v4 API users, so
+  v2 will first attempt to make the async path *work* (the old branch already found one root
+  cause: async connect paths must assign `authenticationDataProvider` exactly like the sync
+  path, including on the REFRESH sentinel re-resolve). Fall back to sync-verbatim + update
+  the PIP only if the breakage proves fundamental rather than implementation bugs/test
+  artifacts. Evidence gate: OAuth2 refresh tests + `ClientCnxRequestTimeoutQueueTest`.
+
+- **D3 (2026-07-03): stage-2 hard requirement from old-branch CI.** The built server-side
+  TLS context must honor insecure mode: with `tlsAllowInsecureConnection=true` the factory
+  installs a permissive trust manager so handshakes complete and the client cert remains
+  available for TLS auth (old branch broke `BrokerServiceTest.testTlsAuthAllowInsecure` by
+  omitting this). Also: run spotless/checkstyle before any push.
+
+## Reuse map (from impl-gap-assessor, 2026-07-03)
+
+Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green build of the
+*previous* design revision. Mine-vs-fresh summary:
+
+- **Mine with mechanical renames**: the whole v5 auth capability layer (core, contexts,
+  value types, exceptions), `AsyncAuthenticationDriver` (exact match), the bridge family
+  (`LegacyV4AuthenticationAdapter` + 3 inner adapters, `V5ToV4AuthenticationAdapter`,
+  `TlsAuthentication`), the ~110-LOC `ClientCnx` async carve-out, `PulsarHttpClient` +
+  `Factory`/`Config`/`HttpRequest`/`HttpResponse` shapes, v5-native plugin bodies
+  (Token/Basic/Athenz/SASL/OAuth2), every server/client integration call site, the
+  `JettySslContextFactory` reload rework, file load/watch/cache internals
+  (`FileBasedTlsMaterialLoader`/`Source`), and the stage-4 PIP-337 deletion sweep (385-file
+  migration off the old SPI).
+- **Rewrite fresh**: the TLS SPI core (old = rejected material model exposing
+  PrivateKey/cert chains; new = `PulsarTlsFactory` instance factory), the HTTP provider
+  layer (old = ServiceLoader-pluggable; new = framework-owned, drop
+  `PulsarHttpClientProvider`/`FactoryConfig`/`ClientHttpTlsPurpose`), `FileBasedTlsFactory`
+  / `DefaultBrokerTlsFactory`, the Jetty synthesis path.
+- **Never existed — build new**: the `pulsar-common-api` Gradle module; the new server
+  config keys (`tlsFactoryClassName`/`tlsFactoryConfig` + `brokerClient*`); the
+  retained-deprecated-fail-loud v4 builder dispositions and retained-ignored `ClusterData`
+  fields (old branch removed config without graceful degradation).
+- Deletions to apply during mining: `ChallengeResponseAuthentication`, `StatefulCallContext`,
+  `BinaryProtocolAuthData`+`Default…` → `BinaryAuthData(byte[])` record; fix `capability()`
+  javadoc (old text said instanceof-based discovery — forbidden by the current design).
+- Caveat: old-branch broker/functions/websocket diffstats are inflated by an unrelated
+  jakarta/OTel migration riding the branch — don't mine those parts blindly.
+
 ## Step log
 
 ### 2026-07-03
@@ -68,7 +115,29 @@ default factory + server side → client side + bridges → PIP-337 removal last
 2. Discovered pre-existing `lh-pip-478-impl` (+ backup branch); recorded in branch registry;
    took decision D1.
 3. Created `lh-pip-478-impl-v2`; started this log.
-4. Launched two Opus 4.8 assessment agents (read-only):
+4. **impl-gap-assessor delivered** → reuse map recorded above; decisions D2 (v4 async path)
+   and D3 (server insecure-trust requirement) opened from its CI-fix forensics.
+5. **codex (GPT-5.5) design review** of the revised PIP: 2 blockers, 6 majors, 2 minors —
+   all contract-precision, none conceptual. Applied to `pip/pip-478.md`:
+   F1 endpoint-vs-rotation scope note (HTTP clients select TLS by purpose only; endpoint
+   hint is the one-shot binary path; SslEngineFactory leaves room for future extension);
+   F2 normative binary challenge routing (connect → `BinaryAuthDataProvider`; refresh
+   sentinel → same provider, never the challenge handler; other challenges →
+   `BinaryAuthChallengeHandler`, absent → `AuthenticationException`);
+   F3 `empty()` guardrails (resolved-but-unbuildable fails exceptionally; fallback contract
+   binding for custom factories; CLIENT_OAUTH2 example);
+   F4 capability lookup contract (stable post-init, cacheable, parent-owned, multi-capability
+   objects, concurrent-safe);
+   F5 bounded HTTP challenge exchange (max rounds, original timeout budget spans exchange,
+   no driver retry of plugin failures, GET re-issue sidesteps body replay);
+   F6 factory-owned instance snapshots (consumers never release; Netty refcount rule);
+   F7 rotation vs pooled connections (idle eviction on reload + connection-TTL bound);
+   F9 blanket never-throw-synchronously rule in the Error model;
+   F10 state-slot null-removes + framework-serialized rounds + private-key-class guidance.
+   **F8 partially adopted**: added the explicit automation-breakage acknowledgment and the
+   rationale; REJECTED codex's keep-PIP-337-adapter-for-one-release suggestion — it would
+   preserve exactly the maintenance burden and surface the removal decision exists to end.
+6. Launched two Opus 4.8 assessment agents (read-only):
    - **impl-gap-assessor** — classify the old impl branch diff against the current design:
      matches-current / implements-superseded / reusable-integration-scaffolding; deliver a
      reuse map per module.
