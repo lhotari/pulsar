@@ -107,6 +107,26 @@ public class V5ToV4AuthenticationAdapterTest {
     }
 
     @Test
+    public void emptyChallengeRoutesToChallengeHandlerNotDataProvider() throws Exception {
+        CountingChallengePlugin plugin = new CountingChallengePlugin();
+        V5ToV4AuthenticationAdapter adapter = wrap(plugin);
+        adapter.start();
+
+        AuthenticationExchange exchange = adapter.newAuthenticationExchange("broker-1.example.com");
+        // Seed the conversation state, then present an empty challenge payload.
+        exchange.getAuthDataAsync().get();
+        int dataCallsBefore = plugin.dataCalls;
+
+        AuthData response = exchange.authenticateAsync(AuthData.of(new byte[0])).get();
+
+        // An empty payload is a legitimate challenge round (PIP-478 rule 3), not the refresh sentinel: the
+        // challenge handler answers it and BinaryAuthDataProvider is NOT re-invoked.
+        assertThat(plugin.challengeCalls).isEqualTo(1);
+        assertThat(plugin.dataCalls).isEqualTo(dataCallsBefore);
+        assertThat(new String(response.getBytes(), UTF_8)).isEqualTo("round-1");
+    }
+
+    @Test
     public void startFailsLoudlyWhenBinaryCapabilityIsMissing() {
         // A v5 plugin exposing no capabilities cannot serve the binary transport; using it there is an
         // error (PIP-478 binary routing rule 1) — never a silent "none"/empty credential.

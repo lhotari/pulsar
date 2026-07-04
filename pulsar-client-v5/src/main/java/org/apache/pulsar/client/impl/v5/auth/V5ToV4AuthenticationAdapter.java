@@ -26,22 +26,18 @@ import java.io.ObjectOutputStream;
 import java.time.Clock;
 import java.util.Arrays;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
-import org.apache.pulsar.client.api.v5.auth.AuthChallenge;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.auth.AuthenticationCallContext;
 import org.apache.pulsar.client.api.v5.auth.AuthenticationInitContext;
-import org.apache.pulsar.client.api.v5.auth.BinaryAuthChallengeHandler;
 import org.apache.pulsar.client.api.v5.auth.BinaryAuthDataProvider;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
+import org.apache.pulsar.client.impl.auth.v5.BinaryAuthenticationExchange;
 import org.apache.pulsar.common.api.AuthData;
 
 /**
@@ -49,20 +45,21 @@ import org.apache.pulsar.common.api.AuthData;
  * {@link org.apache.pulsar.client.api.Authentication} interface that {@code ClientCnx} drives
  * (PIP-478).
  *
- * <p>It also implements {@link AsyncAuthenticationDriver} so that a future {@code ClientCnx} carve-out
+ * <p>It also implements {@link AsyncAuthenticationDriver} so that the {@code ClientCnx} carve-out
  * (PIP-478 stage 3) can authenticate via the asynchronous (non event-loop-blocking) path. Both the
  * async driver and the synchronous v4 {@link #getAuthData(String)} path are exchange-scoped: one
- * {@link AuthenticationExchange} — and one {@link AuthenticationCallContext} with its state slot — backs
- * a single connection attempt, so a plugin's challenge/response conversation state survives across all
- * of that connection's rounds (initial data, refresh, and every {@code CommandAuthChallenge}).
+ * {@link AsyncAuthenticationDriver.AuthenticationExchange} — and one {@link AuthenticationCallContext}
+ * with its state slot — backs a single connection attempt, so a plugin's challenge/response
+ * conversation state survives across all of that connection's rounds (initial data, refresh, and every
+ * {@code CommandAuthChallenge}).
  *
- * <p>Binary transport requires the {@link BinaryAuthDataProvider} capability (PIP-478 binary routing
- * rule 1). A wrapped v5 plugin that does not expose it fails loudly — {@link #start()} throws a
+ * <p>The per-connection routing (initial connect / refresh sentinel / challenge) and the v5→v4 exception
+ * mapping are the shared {@link BinaryAuthenticationExchange} — the same implementation the built-in
+ * shims' {@code V5BinaryAuthenticationDriver} uses — so the two adapters cannot drift on the normative
+ * binary rules. Binary transport requires the {@link BinaryAuthDataProvider} capability (PIP-478 binary
+ * routing rule 1); a wrapped v5 plugin that does not expose it fails loudly — {@link #start()} throws a
  * v4-mapped {@link PulsarClientException.UnsupportedAuthenticationException} — rather than synthesizing
  * an empty {@code "none"} credential.
- *
- * <p>v5 {@link org.apache.pulsar.client.api.v5.PulsarClientException} subtypes are translated back to
- * their v4 counterparts.
  */
 // Implements the deprecated v4 Authentication SPI by design (configure(Map)).
 @SuppressWarnings("deprecation")
@@ -122,7 +119,7 @@ public class V5ToV4AuthenticationAdapter
             Thread.currentThread().interrupt();
             throw new PulsarClientException(e);
         } catch (Exception e) {
-            throw toV4Exception(unwrap(e));
+            throw BinaryAuthenticationExchange.toV4Exception(BinaryAuthenticationExchange.unwrap(e));
         }
         // Binary transport requires the BinaryAuthDataProvider capability (PIP-478 binary routing
         // rule 1). Fail loudly here rather than synthesizing a "none"/empty credential.
@@ -143,13 +140,13 @@ public class V5ToV4AuthenticationAdapter
             Thread.currentThread().interrupt();
             throw new PulsarClientException(e);
         } catch (Exception e) {
-            throw toV4Exception(unwrap(e));
+            throw BinaryAuthenticationExchange.toV4Exception(BinaryAuthenticationExchange.unwrap(e));
         }
     }
 
     @Override
     public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
-        return new V4Exchange(brokerHostName);
+        return new BinaryAuthenticationExchange(v5, new SimpleAuthCallContext(brokerHostName, 0));
     }
 
     /**
@@ -165,58 +162,6 @@ public class V5ToV4AuthenticationAdapter
                         "v5 authentication plugin " + v5.getClass().getName() + " does not expose "
                                 + "BinaryAuthDataProvider; it cannot authenticate a Pulsar binary-protocol "
                                 + "connection (PIP-478)"));
-    }
-
-    /**
-     * A single binary-transport authentication exchange: one call context (and its state slot) reused
-     * for the initial credential, every {@code CommandAuthChallenge}, and the refresh sentinel of one
-     * connection attempt.
-     */
-    private final class V4Exchange implements AuthenticationExchange {
-
-        private final AuthenticationCallContext callContext;
-
-        V4Exchange(String brokerHostName) {
-            this.callContext = new SimpleAuthCallContext(brokerHostName, 0);
-        }
-
-        @Override
-        public CompletableFuture<AuthData> getAuthDataAsync() {
-            Optional<BinaryAuthDataProvider> provider = v5.capability(BinaryAuthDataProvider.class);
-            if (provider.isEmpty()) {
-                return CompletableFuture.failedFuture(new PulsarClientException.UnsupportedAuthenticationException(
-                        "v5 authentication plugin " + v5.getClass().getName() + " does not expose "
-                                + "BinaryAuthDataProvider; the Pulsar binary transport requires it (PIP-478)"));
-            }
-            return provider.get().getAuthDataAsync(callContext)
-                    .thenApply(d -> AuthData.of(d == null ? new byte[0] : d.authData()))
-                    .exceptionally(t -> {
-                        throw new CompletionException(toV4Exception(unwrap(t)));
-                    });
-        }
-
-        @Override
-        public CompletableFuture<AuthData> authenticateAsync(AuthData challengeOrRefresh) {
-            // PIP-478 binary routing rule 2: the refresh sentinel (and the init sentinel) re-produce the
-            // current credential through BinaryAuthDataProvider — they never reach the challenge handler.
-            if (isSentinel(challengeOrRefresh)) {
-                return getAuthDataAsync();
-            }
-            // Rule 3: any other CommandAuthChallenge goes to the challenge handler; absent capability is a
-            // hard failure (matching v4, where a plugin without authenticate(AuthData) cannot answer).
-            Optional<BinaryAuthChallengeHandler> handler = v5.capability(BinaryAuthChallengeHandler.class);
-            if (handler.isEmpty()) {
-                return CompletableFuture.failedFuture(new PulsarClientException.AuthenticationException(
-                        "v5 authentication plugin " + v5.getClass().getName() + " received a binary auth "
-                                + "challenge but does not expose BinaryAuthChallengeHandler (PIP-478)"));
-            }
-            return handler.get()
-                    .respondToChallengeAsync(callContext, new AuthChallenge(challengeOrRefresh.getBytes()))
-                    .thenApply(r -> AuthData.of(r == null ? new byte[0] : r.responseBytes()))
-                    .exceptionally(t -> {
-                        throw new CompletionException(toV4Exception(unwrap(t)));
-                    });
-        }
     }
 
     @Override
@@ -244,61 +189,16 @@ public class V5ToV4AuthenticationAdapter
                 + "pre-built Authentication instance.");
     }
 
-    private static boolean isSentinel(AuthData challenge) {
-        if (challenge == null) {
-            return true;
-        }
-        byte[] bytes = challenge.getBytes();
-        return Arrays.equals(bytes, AuthData.INIT_AUTH_DATA_BYTES)
-                || Arrays.equals(bytes, AuthData.REFRESH_AUTH_DATA_BYTES);
-    }
-
     private static boolean isInitSentinel(AuthData challenge) {
         return challenge != null && Arrays.equals(challenge.getBytes(), AuthData.INIT_AUTH_DATA_BYTES);
     }
 
-    private static Throwable unwrap(Throwable t) {
-        if (t instanceof CompletionException || t instanceof ExecutionException) {
-            return t.getCause() != null ? t.getCause() : t;
-        }
-        return t;
-    }
-
     /**
-     * Translate a v5-side throwable into the matching v4 {@link PulsarClientException} subtype.
-     *
-     * @param t the throwable raised by a v5 call
-     * @return the translated v4 exception
-     */
-    private static PulsarClientException toV4Exception(Throwable t) {
-        if (t instanceof org.apache.pulsar.client.api.v5.PulsarClientException.AuthenticationException) {
-            // The v4 AuthenticationException only exposes a (String) constructor, so preserve the
-            // original v5 throwable as the cause explicitly.
-            PulsarClientException.AuthenticationException e =
-                    new PulsarClientException.AuthenticationException(t.getMessage());
-            e.initCause(t);
-            return e;
-        }
-        if (t instanceof org.apache.pulsar.client.api.v5.PulsarClientException.UnsupportedAuthenticationException) {
-            PulsarClientException.UnsupportedAuthenticationException e =
-                    new PulsarClientException.UnsupportedAuthenticationException(t.getMessage());
-            e.initCause(t);
-            return e;
-        }
-        if (t instanceof org.apache.pulsar.client.api.v5.PulsarClientException.GettingAuthenticationDataException) {
-            return new PulsarClientException.GettingAuthenticationDataException(t);
-        }
-        if (t instanceof PulsarClientException pce) {
-            return pce;
-        }
-        return new PulsarClientException(t);
-    }
-
-    /**
-     * A v4 {@link AuthenticationDataProvider} synthesized from a single {@link AuthenticationExchange},
-     * so that the synchronous v4 {@code ClientCnx} code path keeps working — including multi-round
-     * challenge/response, which rides {@link #authenticate(AuthData)} through the same exchange (and thus
-     * the same {@link AuthenticationCallContext} state slot).
+     * A v4 {@link AuthenticationDataProvider} synthesized from a single
+     * {@link AsyncAuthenticationDriver.AuthenticationExchange}, so that the synchronous v4 {@code ClientCnx}
+     * code path keeps working — including multi-round challenge/response, which rides
+     * {@link #authenticate(AuthData)} through the same exchange (and thus the same
+     * {@link AuthenticationCallContext} state slot).
      *
      * <p>This bridge only carries the binary-protocol command credential. HTTP auth headers are served
      * through the v5 {@link org.apache.pulsar.client.api.v5.auth.HttpAuthHeadersProvider} capability via
@@ -359,7 +259,7 @@ public class V5ToV4AuthenticationAdapter
                 Thread.currentThread().interrupt();
                 throw namingAuthException(e);
             } catch (ExecutionException e) {
-                throw namingAuthException(unwrap(e));
+                throw namingAuthException(BinaryAuthenticationExchange.unwrap(e));
             }
         }
 
