@@ -98,6 +98,18 @@ public class CredentialOffloadThroughV5BuilderTest {
         assertThat(builder.resolveAuthenticationForTest()).isSameAs(v4);
     }
 
+    @Test
+    public void combinedTlsAndCredentialV4WithoutTlsPolicyRunsRawToPreserveTls() {
+        // A v4 plugin that presents BOTH a client certificate (mTLS) and a fetched credential must run raw
+        // when no tlsPolicy is configured: the legacy TLS path reads its certificate from getAuthData(), so
+        // wrapping it for credential off-load would drop the certificate. Off-load is regained by
+        // configuring tlsPolicy(...) (which moves TLS material to the factory path).
+        CombinedTlsCredentialV4 v4 = new CombinedTlsCredentialV4();
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        builder.authentication(LegacyV4AuthenticationAdapter.wrap(v4));
+        assertThat(builder.resolveAuthenticationForTest()).isSameAs(v4);
+    }
+
     private static ClientAuthenticationServices services(ExecutorService blocking,
             ScheduledExecutorService scheduler) {
         // The offload path does not use HTTP, so a throwing factory suffices.
@@ -168,6 +180,48 @@ public class CredentialOffloadThroughV5BuilderTest {
                 @Override
                 public boolean hasDataForTls() {
                     return true;
+                }
+            };
+        }
+
+        @Override
+        public void configure(Map<String, String> authParams) {
+        }
+
+        @Override
+        public void start() {
+        }
+
+        @Override
+        public void close() {
+        }
+    }
+
+    /** A v4 plugin that reports BOTH a client certificate (mTLS) and a command credential. */
+    @SuppressWarnings("deprecation")
+    private static final class CombinedTlsCredentialV4 implements org.apache.pulsar.client.api.Authentication {
+
+        @Override
+        public String getAuthMethodName() {
+            return "combined";
+        }
+
+        @Override
+        public AuthenticationDataProvider getAuthData() {
+            return new AuthenticationDataProvider() {
+                @Override
+                public boolean hasDataForTls() {
+                    return true;
+                }
+
+                @Override
+                public boolean hasDataFromCommand() {
+                    return true;
+                }
+
+                @Override
+                public String getCommandData() {
+                    return "the-credential";
                 }
             };
         }

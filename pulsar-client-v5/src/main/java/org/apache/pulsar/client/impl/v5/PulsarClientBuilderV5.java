@@ -192,8 +192,9 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
      *
      * @param v4      the bridged v4 authentication plugin (not a built-in TLS class)
      * @param foldTls whether a {@code tlsPolicy} is configured, so TLS material should be folded
-     * @return {@code true} when the plugin performs no command/HTTP credential I/O (only TLS material or
-     *         nothing), so the raw engine is correct; {@code false} otherwise, keeping it wrapped for off-load
+     * @return {@code true} when the plugin must be driven raw on the v4 client — it performs no credential
+     *         I/O, or it carries TLS material that can only reach the transport through the legacy path;
+     *         {@code false} when it should stay wrapped for credential off-load
      */
     @SuppressWarnings("deprecation")
     private boolean resolveGenericV4(org.apache.pulsar.client.api.Authentication v4, boolean foldTls) {
@@ -211,8 +212,26 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
             return false;
         }
         boolean hasCredentialIo = data.hasDataFromCommand() || data.hasDataForHttp();
-        if (foldTls && data.hasDataForTls()) {
-            foldGenericV4TlsMaterial(data, v4.getClass().getName());
+        if (data.hasDataForTls()) {
+            if (foldTls) {
+                // tlsPolicy is configured: fold the plugin's file material into the client TLS factory path,
+                // so the transport reads TLS from the factory and the plugin may still be wrapped for
+                // credential off-load.
+                foldGenericV4TlsMaterial(data, v4.getClass().getName());
+                return !hasCredentialIo;
+            }
+            // No tlsPolicy: the legacy v4 TLS path reads the plugin's material directly from getAuthData(),
+            // so it MUST run raw or its client certificate would be dropped (the wrapping adapter's
+            // synthesized v4 provider carries only the binary credential, not TLS material). A plugin that
+            // also fetches a credential therefore forgoes off-load here — the two cannot both hold on the
+            // legacy path; configuring tlsPolicy(...) restores off-load by moving TLS to the factory path.
+            if (hasCredentialIo) {
+                LOG.warn("Bridged v4 authentication plugin {} provides both TLS material and a fetched "
+                        + "credential but no tlsPolicy(...) is configured; it runs inline (no credential "
+                        + "off-load) so its client certificate is still presented on the legacy TLS path. "
+                        + "Configure tlsPolicy(...) to off-load the credential.", v4.getClass().getName());
+            }
+            return true;
         }
         return !hasCredentialIo;
     }
