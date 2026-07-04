@@ -1219,3 +1219,94 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
      already absent (removed earlier) — no migration needed there. Heavier broker/proxy TLS e2e beyond
      those two are compile-verified (all migrated test files compile + checkstyle) but not each executed —
      this is a verbatim-move refactor with no behaviour change.
+
+38. **Auth-SPI contract fixes + the two API-freeze blockers (multi-model review, FIX-3)**
+    (2026-07-04, local commits on `lh-pip-478-impl-v2`, no push). Five commits, each closing one review
+    finding group; re-located against HEAD after FIX-1/2/6 landed (FIX-6 had removed `SecurityUtility`, so
+    auth code now reaches PEM material through `PemReader`).
+
+    - **Commit A — `[fix][client] GATE: load v5-native auth plugins by class name (A-H1/G-IS2)`.** The
+      flagship "implement a v5 `Authentication`, deploy it by class name" was broken: every reflective
+      load blind-cast to the v4 `Authentication`, so a v5-only class threw `ClassCastException`. New
+      `V5AuthenticationLoader` detects a v5-native class
+      (`org.apache.pulsar.client.api.v5.auth.Authentication.isAssignableFrom`), instantiates it no-arg and
+      calls `configure(parsedParams)` (JSON or `key:val`, matching `AuthenticationUtil`); a legacy v4
+      class keeps the existing wrap path (raw-string handling preserved for
+      `EncodedAuthenticationParameterSupport`). `PulsarClientProviderV5.createAuthentication` (both
+      overloads) and `PulsarClientBuilderV5.authentication(className, params)` route through it — the
+      builder string path also now eagerly builds the plugin (it previously stashed only the class name
+      and silently yielded `AuthenticationDisabled`) while keeping the serializable `authPluginClassName +
+      authParams` form. **Test** `V5AuthenticationLoaderTest` (5): a fake v5-native
+      `SinglePassAuthentication` is configured and drives the binary transport; v4 still bridges; blank →
+      disabled.
+
+    - **Commit B — `[fix][client] unify the REFRESH-sentinel contract on fresh-exchange (A-H2)`.** The
+      contract was stated three inconsistent ways; the implementation does fresh-exchange-per-REFRESH
+      (`ClientCnx` opens a new exchange and re-produces via `getAuthDataAsync`), verified in code. Blessed
+      that everywhere — **doc/javadoc only, no code change**: `pip-478.md` binary routing rule 2 + the
+      SASL-spanning paragraph + the `AsyncAuthenticationDriver` exchange-scoping paragraph; the
+      `AsyncAuthenticationDriver` class doc + `authenticateAsync` (renamed param `challengeOrRefresh` →
+      `challenge`, now documented to never receive the sentinel); `AuthenticationCallContext` slot lifetime
+      (one exchange; a REFRESH begins a new one).
+
+    - **Commit C — `[fix][client] v5-builder keeps async offload for credential-I/O v4 plugins (G-IS6)`.**
+      `PulsarClientBuilderV5` unwrapped EVERY bridged v4 back to the raw engine, so
+      `LegacyV4AuthenticationAdapter`'s blocking-executor offload never engaged and a third-party v4
+      credential plugin blocked the Netty loop. **Unwrap-selectivity rule implemented:** the decision moved
+      to `build()` (`applyAuthentication`), where the bridged plugin is probed on the application thread
+      (off the event loop, the same place the stage-3c TLS fold already probes). A plugin with **no
+      credential I/O** — `AuthenticationTls`/`AuthenticationKeyStoreTls` (TLS material folded, empty binary
+      payload) and `AuthenticationDisabled`, type-based; plus a generic plugin whose probed
+      `getAuthData()` reports neither `hasDataFromCommand` nor `hasDataForHttp` — runs raw; anything
+      reporting command/HTTP credential stays wrapped in `V5ToV4AuthenticationAdapter` so it off-loads. The
+      probe (not pure type-matching) is required so a TLS-only third-party plugin with a non-`"tls"` method
+      name still folds + runs raw instead of failing at `start()` — this keeps the two
+      `PulsarClientBuilderV5Test` generic-fold gates green. `unwrapV4` de-staled to the pure inverse of
+      `wrap`. **Test** `CredentialOffloadThroughV5BuilderTest` (2): a blocking v4 credential plugin stays
+      wrapped and its `getAuthData` runs on the blocking executor, not the caller; a TLS-only plugin runs
+      raw.
+
+    - **Commit D — `[fix][client] freeze-forever auth/TLS API items (A-M2, A-L5, A-M4)`.** **A-M2:**
+      `TlsPurpose.equals`/`hashCode` now cover `(role, name)` only — the fallback is resolution metadata,
+      not key identity, so `client("x")` and `client("x", CLIENT_DEFAULT)` resolve to the same
+      purpose→policy slot (the old fallback-in-key split one config key into two → silent lookup misses).
+      **Blast radius:** all well-known purpose constants have a `null` fallback so their `(role, name)`
+      identity — and every existing map lookup keyed on them — is unchanged; only plugin-minted
+      `client(name, fallback)` / the new `server(name, fallback)` change, which is the intended fix.
+      `FileBasedTlsFactoryTest` **35/35** confirms the purpose→policy map still resolves. **A-L5:** the
+      three binary-auth records renamed their component to a uniform `bytes()`
+      (`BinaryAuthData.authData()`/`AuthChallenge.challenge()`/`ChallengeResponse.responseBytes()`); every
+      reader updated (compile-driven), positional constructors unchanged. **A-M4:** added
+      `TlsPurpose.server(String, TlsPurpose)`. **Test** `TlsPurposeTest` (4).
+
+    - **Commit E — `[fix][misc] auth/TLS SPI contract javadoc + the 2 missing client-auth metrics
+      (A-M1/M5/M3/M7, G-metrics)`.** Docs: SSLParameters well-known row + synthesis merge-order on
+      `PulsarTlsFactory` + tls `package-info` (A-M1); `v5.auth` `package-info` rewritten as a
+      capability-model overview — 2×2 matrix, two config paths, 3 binary routing rules — + the
+      "sentinel never reaches me" note on `BinaryAuthChallengeHandler` (A-M5); `ProxyConfig.toString`
+      masks the password (A-M3); `AuthenticationFactory.tls` documents the fold + per-field plugin-wins +
+      PEM-only (A-M7). **Metrics (G-metrics):** new `AuthMetrics` emits
+      `pulsar.client.auth.credential.duration` (histogram, s, `{auth_method}`) and
+      `pulsar.client.auth.failure` (counter, `{auth_method, error=terminal|transient}`) from the init
+      context's OpenTelemetry, wired at `BinaryAuthenticationExchange.getAuthDataAsync` (both driver sites)
+      and `HttpAuthenticationDriver` (`getHttpHeadersAsync`); no-op under the default no-op root. **Test**
+      `AuthMetricsTest` (3, in-memory OTel reader): success → duration only; rejected → `error=terminal`;
+      generic fetch error → `error=transient`.
+
+    - **Verify (all local, worktree `async-auth-interface`, `dangerouslyDisableSandbox` for the Gradle
+      wrapper).** spotless clean. Full build GREEN for `:pulsar-common-api` `:pulsar-client-api-v5`;
+      compile (main+test) + spotlessCheck GREEN for `:pulsar-client-original` `:pulsar-client-v5`
+      `:pulsar-client-auth-sasl`; `:pulsar-proxy` compile (main+test) GREEN. Gate suites, all **0 failures /
+      0 errors**: `ClientCnxAsyncAuthTest` **7/7** (carve-out untouched), `V5ToV4AuthenticationAdapterTest`
+      **6/6**, `LegacyV4AuthenticationAdapterTest` **7/7**, `TlsAuthenticationTest` **2/2**,
+      `BinaryAuthenticationExchangeTest` **4/4**, `PulsarClientBuilderV5Test` **9/9**, `CredentialOffloadTest`
+      **3/3**, `HttpAuthenticationDriverTest` **8/8**, `AuthenticationOAuth2Test` **29/29**,
+      `SaslAuthenticateTest` **4/4** (binary+HTTP), `FileBasedTlsFactoryTest` **35/35**, plus the new
+      `V5AuthenticationLoaderTest` **5/5**, `CredentialOffloadThroughV5BuilderTest` **2/2**, `TlsPurposeTest`
+      **4/4**, `AuthMetricsTest` **3/3**.
+
+    - **Deferred (reported, not done in this pass):** the remaining A-L / DOC-POLISH items (A-L1/M6/L9a/L9b/
+      L7/L3/L4/L8/L2, G-IS7 PIP layering amend, Athenz-SDK-HTTP PIP note, stale "until stage N" comment
+      sweep) belong to the FIX-5 doc/PIP batch. Single-pass HTTP `getHttpHeadersAsync` remains dead-code for
+      the v4 built-ins (goals-review DEFER), so the HTTP metric currently only fires on the SASL-over-HTTP
+      driver path.
