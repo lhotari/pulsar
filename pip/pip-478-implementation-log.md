@@ -1161,3 +1161,61 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
     - **Deferred (reported, not done in this pass):** **P2** sslProvider JCE-provider-name delta
       (niche; one-sentence PIP note belongs in the doc/PIP pass FIX-5). No other v4 parity gap found
       beyond `storeType`.
+
+37. **SecurityUtility decomposition + dead TLS-utility removal (user-requested, FIX-6)** — five staged
+   commits (`61f3972bd98..bd66cb32687`), each compiling; applies this PIP's anti-kitchen-sink philosophy
+   (Motivation #2/#4) to the internal TLS util layer. `SecurityUtility` carried no `@InterfaceStability`
+   and had no client-API importer, so it is internal — safe to decompose/remove, not a public-API break.
+
+   - **Commit A — `[feat][misc]` cohesive TLS-util containers.** Three single-concern classes in a new
+     package `org.apache.pulsar.common.util.tls` (kept out of the dependency-light `pulsar-common-api` —
+     these pull BouncyCastle/Netty — and out of `...common.tls` to avoid a split package with
+     pulsar-common-api): `PemReader` (loadCertificatesFromPemFile/Stream + loadPrivateKeyFromPemFile/
+     Stream), `JcaProviders` (getProvider/isBCFIPS + BC/Conscrypt constants + the Conscrypt
+     hostname-verifier workaround; resolveProvider and the TrustManager processing package-private),
+     `JdkSslContexts` (the createSslContext JDK-`SSLContext` assembly, composing PemReader / JcaProviders /
+     the existing `KeyStoreHolder`). Purely additive; `SecurityUtility` untouched so the tree compiles.
+
+   - **Commit B — `[improve][misc]` migrate callers.** 18 files across pulsar-client, pulsar-common,
+     pulsar-broker-common, pulsar-broker (tests) and the bouncy-castle bc/bcfips loaders moved off
+     `SecurityUtility` onto the containers (imports + call sites + two javadoc `{@link}`s):
+     `AuthenticationDataTls` → PemReader; `TlsMaterialSource` / `AuthProvidedMaterialSource` → PemReader;
+     `JettyTlsFactory` → `JcaProviders.CONSCRYPT_PROVIDER`; the bcloaders → static `JcaProviders.BC` /
+     `BC_FIPS`; `TlsContexts` + the common/broker/broker-common TLS test suites → JdkSslContexts / PemReader.
+
+   - **Commit C — `[improve][misc]` delete dead utilities + SecurityUtility.** Each re-verified as 0
+     external callers at HEAD: `KeyManagerProxy`(+Test), `TrustManagerProxy`(+Test) (delegate-swap
+     rotation proxies, obsoleted by the rebuild-not-mutate model — Appendix B), `SSLContextValidatorEngine`
+     + the whole `keystoretls` package (no importers after `KeyStoreSSLContext` went in stage 4c), and
+     `SecurityUtility` itself — taking with it the dead `createAutoRefreshSslContextForClient`,
+     `createNettySslContextForClient` (all 4 overloads), `createNettySslContextForServer`, and
+     `configureSSLHandler` (0 callers; hostname verification is baked into the built context —
+     `PulsarChannelInitializer`'s javadoc reworded). **createSslContext decision:** relocated to the public
+     focused `JdkSslContexts`, NOT package-private on `TlsContexts` as first sketched, because it is shared
+     by TLS tests across four modules (`SslParametersSynthesisTest`, `JettyTlsFactoryTest`,
+     `AdminApiTlsAuthTest`, `BrokerServiceLookupTest`, `ProxyPublishConsumeTlsTest`) that build a JDK
+     `SSLContext` from PEM material — a single cohesive concern, not the grab-bag; `TlsContexts` delegates
+     to it. End-state: no `org.apache.pulsar.common.util.SecurityUtility`.
+
+   - **Commit D — `[improve][misc]` cleaner `TlsContexts` assembly.** With the grab-bag gone, `TlsContexts`
+     already composes only the focused primitives (JDK via `JdkSslContexts`, Netty inline via
+     `SslContextBuilder`); rewrote the class javadoc to state that end-to-end-ownership contract and drop
+     the now-stale "file-path helpers" contrast. No behaviour change; primitives composed, not duplicated.
+
+   - **Commit E — `[improve][pip]` PIP + this log.** The PIP Removal section + compat summary now list the
+     `SecurityUtility` decomposition, the obsolete proxies (cross-referencing the Appendix B rotation
+     model), and the unused `SSLContextValidatorEngine` (superseding the earlier leave-in-place decision),
+     all flagged internal-only / not a compatibility break.
+
+   - **Verify (all local, worktree `async-auth-interface`, `dangerouslyDisableSandbox` for the Gradle
+     wrapper).** spotless clean; per-module compileJava+compileTestJava+checkstyle GREEN for `:pulsar-common`
+     `:pulsar-broker-common` `:pulsar-client-original` `:pulsar-broker` `:bouncy-castle:bouncy-castle-bc`
+     `:bouncy-castle:bcfips`; no residual reference (java or non-java) to any deleted symbol. Gate suites,
+     all **0 failures / 0 errors**: `FileBasedTlsFactoryTest` **35/35**, `SslParametersSynthesisTest`
+     **12/12**, `TlsMaterialSourceTest` **7/7**, `AuthProvidedMaterialFoldTest` **4/4**, `TlsReloadMetricsTest`
+     **4/4** (pulsar-common); `JettyTlsFactoryTest` **6/6**, `DefaultBrokerTlsFactoryTest` **3/3**
+     (broker-common); `AdminApiTlsAuthTest` **20/20** (exercises JdkSslContexts+PemReader e2e),
+     `TlsProducerConsumerTest` **10/10** (AuthenticationDataTls→PemReader e2e). `netty/SslContextTest` was
+     already absent (removed earlier) — no migration needed there. Heavier broker/proxy TLS e2e beyond
+     those two are compile-verified (all migrated test files compile + checkstyle) but not each executed —
+     this is a verbatim-move refactor with no behaviour change.
