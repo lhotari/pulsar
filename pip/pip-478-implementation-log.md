@@ -915,3 +915,56 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
         build-cache hazard the predecessor's draft worried about **did not reproduce**: the fixed
         `pulsar-client-original` recompiled on its changed source and `ProxyTlsWithAuthTest` passed inside the
         full proxy build.
+
+33. **`SSLParameters` companion class (user-approved refinement) — implements the well-known-table row +
+    merge-order paragraph that landed in `pip/pip-478.md` at HEAD (`888f80e4a99`).** New **optional** well-known
+    class `javax.net.ssl.SSLParameters`: the framework asks the factory for it **only on the `SSLContext`-
+    fallback synthesis path** (a factory natively supplying Netty/Jetty objects bakes policy there and is never
+    asked), carrying the engine-level baseline a bare `SSLContext` cannot express (protocols, cipher suites,
+    algorithm constraints, application protocols, endpoint identification, server client-auth mode). No SPI
+    signature change — it rides the generic `createInstance(purpose, Class<T>)` form. Trailer
+    `Assisted-by: Claude Code (Opus 4.8)`. Local commit only.
+    - **`pulsar-common` `.tls.impl` (acquisition + synthesis).** `TlsContextAcquisition` now, on the synthesis
+      fallback, additionally requests `createInstance(purpose, SSLParameters.class)` — in the **same form** as
+      the `SSLContext` (one-shot / endpoint-carrying), lazily so it is not requested when the JDK context is
+      unsupported; on the **subscribing** form it re-requests the companion with each `SSLContext` delivery so
+      engine policy rotates with material (the request is synchronous inside the reload callback, which the SPI
+      runs off any event loop — documented as a factory obligation). `TlsContexts` gained
+      `synthesizeNettyServerFromJdk(sslContext, requireTrustedClientCert, factoryBaseline)` and a 3-arg
+      `synthesizeNettyClientFromJdk(..., factoryBaseline)`; the merge is: factory members form the baseline
+      (non-null only) → `endpointIdentificationAlgorithm` factory-wins-else-consumer-`"HTTPS"` (client) → SNI
+      `serverNames` **never** overlaid (per-connection wins) → server `needClientAuth`/`wantClientAuth`
+      authoritative when the companion is supplied. The generalized `HostnameVerifyingSslContext` was
+      **replaced** by `SynthesizedEngineSslContext`, which applies the composed overlay per `newEngine(...)` via
+      the read-`getSSLParameters()` / overlay-non-null / write-back round-trip (SNI preserved). The **defensive
+      copy** of the mutable companion is `TlsContexts.copyBaselineMembers` (one snapshot per acquisition, fully
+      disconnected from the factory's object). `FileBasedTlsFactory` already returns `empty()` for
+      `SSLParameters` (its `isSupported` allows only `SslContext`/`SSLContext`) — verified and asserted; its
+      javadoc now states it bakes policy natively.
+    - **`pulsar-broker-common` `JettyTlsFactory`.** The synthesized server/client paths now one-shot-request the
+      companion and map its non-null members onto the Jetty setters: `setIncludeProtocols` /
+      `setIncludeCipherSuites`, and (server, rule 4, **authoritative**) `setNeedClientAuth` / `setWantClientAuth`
+      (need wins; neither ⇒ none). One-shot because a synthesized `SslContextFactory` applies
+      protocols/ciphers/client-auth once at build time (a bare `reload(...)` cannot change them).
+    - **Tests.** `SslParametersSynthesisTest` (pulsar-common, new, 9): (a) protocol restriction on the
+      synthesized client engine + live in-memory handshake (matching TLSv1.2 succeeds, TLSv1.3-vs-TLSv1.2
+      fails); (b) factory `endpointIdentificationAlgorithm` wins, consumer-flag `"HTTPS"` fallback when the
+      companion leaves it null, and no-companion behavior unchanged; (c) server `needClientAuth` from the
+      companion enforced at a live handshake (trusted-cert client passes, no-cert client rejected) + the
+      inverse (companion NONE overrides a consumer REQUIRE); (f) mutation-after-supply does not affect an
+      already-acquired context; plus two end-to-end `TlsContextAcquisition` cases proving the companion is
+      requested and threaded (one-shot and subscribing). `FileBasedTlsFactoryTest` +1 (e:
+      `returnsEmptyForSslParametersCompanion`, 28 total). `JettyTlsFactoryTest` +2 (d: server maps
+      protocols/ciphers/needClientAuth, client maps protocols; 5 total).
+    - **Verify (all local, worktree `async-auth-interface`).** `spotlessApply` clean. Full
+      `:pulsar-common:build` **green**, `:pulsar-broker-common:build` **green**. Targeted:
+      `SslParametersSynthesisTest` **9/9**, `FileBasedTlsFactoryTest` **28/28**, `JettyTlsFactoryTest` **5/5**.
+      Proxy: `SslContextFallbackSynthesisTest` **3/3**, `ProxyTlsTest` **2/2**,
+      `AuthedAdminProxyHandlerNewTlsPathTest` **2/2**. Shared acquisition code touched → client gates:
+      `:pulsar-client-original:compileJava` green, `V5TlsProducerConsumerTest` **2/2** (pulsar-broker).
+    - **Contract note (Jetty scope).** Per the work order the Jetty mapping is scoped to
+      protocols/ciphers/client-auth; the finer companion members (`algorithmConstraints`,
+      `applicationProtocols`, `endpointIdentificationAlgorithm`) are applied only on the Netty synthesis path
+      (`SynthesizedEngineSslContext`), since Jetty's `SslContextFactory` has no direct include-setter for them
+      and the PIP merge-order paragraph is written against the Netty `SSLContext`-fallback synthesis. Not a
+      silent deviation — it follows the work order's explicit Jetty setter list.

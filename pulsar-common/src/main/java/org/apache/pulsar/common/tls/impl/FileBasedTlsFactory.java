@@ -54,7 +54,10 @@ import org.apache.pulsar.common.tls.TlsPurpose;
  *
  * <p>Natively supplies the Netty {@code SslContext} (on the configured engine — JDK or OpenSSL) and the
  * JDK {@code SSLContext}; returns {@code empty()} for every other class (notably Jetty's
- * {@code SslContextFactory.Server}), which the framework synthesizes from the JDK {@code SSLContext}.
+ * {@code SslContextFactory.Server}), which the framework synthesizes from the JDK {@code SSLContext}. It also
+ * returns {@code empty()} for the {@code javax.net.ssl.SSLParameters} companion (PIP-478): this factory bakes
+ * its engine policy (protocols, ciphers, client-auth mode, hostname verification) natively into the Netty and
+ * JDK contexts it builds, so it exposes no separate baseline for the framework to overlay.
  *
  * <p><b>Purpose resolution.</b> A request resolves the requested purpose, then walks its single-level
  * {@link TlsPurpose#fallback() fallback} chain; the first purpose configured with a policy wins. When

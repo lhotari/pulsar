@@ -38,22 +38,27 @@ import java.security.cert.X509Certificate;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509ExtendedKeyManager;
 import org.apache.commons.io.FileUtils;
+import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
+import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.tls.impl.FileBasedTlsFactory;
@@ -252,6 +257,125 @@ public class JettyTlsFactoryTest {
         try (JettyServer insecure = startWebServer(true)) {
             handshakeWithClientCert(insecure.port, UNTRUSTED_CLIENT_CERT, UNTRUSTED_CLIENT_KEY);
             handshakeWithClientCert(insecure.port, TRUSTED_CLIENT_CERT, TRUSTED_CLIENT_KEY);
+        }
+    }
+
+    /**
+     * PIP-478: a factory that supplies its {@code SSLContext} together with an {@code SSLParameters} companion
+     * drives the synthesized server {@link SslContextFactory.Server} — its enabled protocols/ciphers and its
+     * client-auth mode are mapped from the companion, the latter authoritatively (merge rule 4).
+     */
+    @Test
+    public void serverFactoryMapsCompanionProtocolsAndClientAuth() throws Exception {
+        SSLParameters companion = new SSLParameters();
+        companion.setProtocols(new String[] {"TLSv1.2"});
+        companion.setCipherSuites(new String[] {"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"});
+        companion.setNeedClientAuth(true);
+
+        FileBasedTlsFactory delegate = new FileBasedTlsFactory(
+                Map.of(TlsPurpose.WEB, TlsPolicy.pem(tempDir.resolve("ca.pem").toString(),
+                        tempDir.resolve("cert.pem").toString(), tempDir.resolve("key.pem").toString())),
+                FileBasedTlsFactorySettings.builder().build());
+        CompanionFactory factory = new CompanionFactory(delegate, companion);
+        factory.initialize(initContext()).join();
+
+        // Consumer config asks for no protocol/cipher restriction and only optional client auth; the companion
+        // overrides all three.
+        JettyTlsFactory.ReloadableServerTls reloadable = JettyTlsFactory.createReloadingServerFactory(
+                factory, TlsPurpose.WEB, null, false, false, null, null);
+        SslContextFactory.Server sslContextFactory = reloadable.sslContextFactory();
+        try {
+            assertThat(sslContextFactory.getIncludeProtocols()).containsExactly("TLSv1.2");
+            assertThat(sslContextFactory.getIncludeCipherSuites())
+                    .containsExactly("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256");
+            assertThat(sslContextFactory.getNeedClientAuth()).isTrue();
+        } finally {
+            reloadable.subscription().dispose();
+            factory.close();
+        }
+    }
+
+    /**
+     * PIP-478: the synthesized client {@link SslContextFactory.Client} maps the companion's enabled
+     * protocols/ciphers (client-auth is a server concept and is not mapped on the client factory).
+     */
+    @Test
+    public void clientFactoryMapsCompanionProtocols() throws Exception {
+        Path clientCert = tempDir.resolve("clientcert.pem");
+        Path clientKey = tempDir.resolve("clientkey.pem");
+        Files.copy(Paths.get(TRUSTED_CLIENT_CERT), clientCert, StandardCopyOption.REPLACE_EXISTING);
+        Files.copy(Paths.get(TRUSTED_CLIENT_KEY), clientKey, StandardCopyOption.REPLACE_EXISTING);
+
+        SSLParameters companion = new SSLParameters();
+        companion.setProtocols(new String[] {"TLSv1.2"});
+
+        FileBasedTlsFactory delegate = new FileBasedTlsFactory(
+                Map.of(TlsPurpose.BROKER_CLIENT, TlsPolicy.pem(tempDir.resolve("ca.pem").toString(),
+                        clientCert.toString(), clientKey.toString())),
+                FileBasedTlsFactorySettings.builder().build());
+        CompanionFactory factory = new CompanionFactory(delegate, companion);
+        factory.initialize(initContext()).join();
+
+        JettyTlsFactory.ReloadableClientTls reloadable = JettyTlsFactory.createReloadingClientFactory(
+                factory, TlsPurpose.BROKER_CLIENT, null);
+        try {
+            assertThat(reloadable.sslContextFactory().getIncludeProtocols()).containsExactly("TLSv1.2");
+        } finally {
+            reloadable.subscription().dispose();
+            factory.close();
+        }
+    }
+
+    /**
+     * A factory that delegates every request to a {@link FileBasedTlsFactory} except the {@code SSLParameters}
+     * companion, which it supplies from a fixed instance (the file-based factory returns {@code empty()} for it).
+     */
+    private static final class CompanionFactory implements PulsarTlsFactory {
+        private final FileBasedTlsFactory delegate;
+        private final SSLParameters companion;
+
+        CompanionFactory(FileBasedTlsFactory delegate, SSLParameters companion) {
+            this.delegate = delegate;
+            this.companion = companion;
+        }
+
+        @Override
+        public CompletableFuture<Void> initialize(TlsFactoryInitContext context) {
+            return delegate.initialize(context);
+        }
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(TlsPurpose purpose,
+                                                                            Class<T> instanceClass) {
+            if (instanceClass == SSLParameters.class) {
+                return CompletableFuture.completedFuture(Optional.of((TlsHandle<T>) companionHandle()));
+            }
+            return delegate.createInstance(purpose, instanceClass);
+        }
+
+        @Override
+        public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(
+                TlsPurpose purpose, Class<T> instanceClass, Consumer<T> onLoadOrReload) {
+            return delegate.createInstance(purpose, instanceClass, onLoadOrReload);
+        }
+
+        private TlsHandle<SSLParameters> companionHandle() {
+            return new TlsHandle<>() {
+                @Override
+                public SSLParameters get() {
+                    return companion;
+                }
+
+                @Override
+                public void dispose() {
+                }
+            };
+        }
+
+        @Override
+        public void close() {
+            delegate.close();
         }
     }
 

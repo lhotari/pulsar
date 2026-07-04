@@ -31,6 +31,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.util.SecurityUtility;
 
@@ -136,26 +137,120 @@ public final class TlsContexts {
     }
 
     /**
-     * Synthesize a <em>client</em> Netty {@link SslContext} from a JDK {@link SSLContext}, baking HTTPS
-     * hostname verification into the produced engines when {@code enableHostnameVerification} is set. Used
-     * by the framework when a custom factory returns {@code empty()} for the Netty class on a client purpose
-     * but supplies the JDK {@code SSLContext} fallback.
+     * Synthesize a <em>client</em> Netty {@link SslContext} from a JDK {@link SSLContext}, applying the
+     * factory's engine-policy {@code SSLParameters} companion (when present) and the consumer's
+     * hostname-verification flag to the produced engines. Used by the framework when a custom factory returns
+     * {@code empty()} for the Netty class on a client purpose but supplies the JDK {@code SSLContext} fallback.
      *
-     * <p>Hostname verification cannot be encoded in the JDK {@code SSLContext} itself — it is an engine-level
-     * {@link javax.net.ssl.SSLParameters} setting — so when enabled the JDK-backed context is wrapped so
-     * every {@code SSLEngine} it creates carries {@code endpointIdentificationAlgorithm = "HTTPS"}. This
-     * mirrors the native path, where {@link #buildNettyClientContext} bakes the algorithm into the context
-     * via {@code SslContextBuilder.endpointIdentificationAlgorithm(...)}; consumers rely on the context to
-     * carry verification and never re-apply it per connection.
+     * <p>Engine-level policy cannot be encoded in the JDK {@code SSLContext} itself — the enabled protocols
+     * and cipher suites, algorithm constraints, application protocols, and the endpoint-identification
+     * algorithm are all {@link SSLParameters} settings — so the composed baseline is applied per engine by a
+     * {@link SynthesizedEngineSslContext} wrapper. This mirrors the native path, where
+     * {@link #buildNettyClientContext} bakes the same settings into the context via {@code SslContextBuilder};
+     * consumers rely on the context to carry the policy and never re-apply it per connection.
+     *
+     * <p>Merge order (PIP-478): the factory {@code SSLParameters} form the baseline (non-null members only);
+     * for {@code endpointIdentificationAlgorithm} the factory's value wins when set, otherwise
+     * {@code enableHostnameVerification} applies {@code "HTTPS"}; SNI {@code serverNames} are never taken from
+     * the factory (the per-connection SNI wins). When the factory supplied no companion and hostname
+     * verification is disabled, the bare JDK-backed context is returned unwrapped (nothing to overlay).
      *
      * @param sslContext                 the JDK context to wrap
      * @param enableHostnameVerification whether the client policy enables hostname verification
-     * @return a Netty client context backed by the JDK context, verifying hostnames when requested
+     * @param factoryBaseline            the factory's engine-policy companion, or {@code null} if none supplied
+     * @return a Netty client context backed by the JDK context, carrying the composed engine policy
      */
     public static SslContext synthesizeNettyClientFromJdk(SSLContext sslContext,
-                                                          boolean enableHostnameVerification) {
+                                                          boolean enableHostnameVerification,
+                                                          SSLParameters factoryBaseline) {
         SslContext clientContext = synthesizeNettyFromJdk(sslContext, true, false);
-        return enableHostnameVerification ? new HostnameVerifyingSslContext(clientContext) : clientContext;
+        SSLParameters overlay = composeClientOverlay(factoryBaseline, enableHostnameVerification);
+        return overlay == null ? clientContext : new SynthesizedEngineSslContext(clientContext, overlay, false);
+    }
+
+    /**
+     * Synthesize a <em>server</em> Netty {@link SslContext} from a JDK {@link SSLContext}, applying the
+     * factory's engine-policy {@code SSLParameters} companion (when present) to the produced engines. Used by
+     * the framework when a custom factory returns {@code empty()} for the Netty class on a server purpose but
+     * supplies the JDK {@code SSLContext} fallback.
+     *
+     * <p>When the factory supplies no companion, the bare JDK-backed context is returned with the consumer's
+     * {@code requireTrustedClientCert} mapped as usual ({@link ClientAuth#REQUIRE}/{@link ClientAuth#OPTIONAL}).
+     * When it does, its non-null baseline members (protocols/ciphers/algorithm-constraints/application-
+     * protocols) are overlaid per engine and — merge rule 4 — its {@code needClientAuth}/{@code wantClientAuth}
+     * are authoritative for the client-auth mode.
+     *
+     * @param sslContext               the JDK context to wrap
+     * @param requireTrustedClientCert the consumer's client-auth requirement (used when no companion supplied)
+     * @param factoryBaseline          the factory's engine-policy companion, or {@code null} if none supplied
+     * @return a Netty server context backed by the JDK context, carrying the composed engine policy
+     */
+    public static SslContext synthesizeNettyServerFromJdk(SSLContext sslContext,
+                                                          boolean requireTrustedClientCert,
+                                                          SSLParameters factoryBaseline) {
+        SslContext serverContext = synthesizeNettyFromJdk(sslContext, false, requireTrustedClientCert);
+        if (factoryBaseline == null) {
+            // No factory engine policy: the base context already carries the consumer's client-auth mode.
+            return serverContext;
+        }
+        return new SynthesizedEngineSslContext(serverContext, copyBaselineMembers(factoryBaseline), true);
+    }
+
+    /**
+     * Compose the per-engine overlay for a client purpose, or {@code null} when there is nothing to apply
+     * (no factory companion and hostname verification disabled — the base context is used verbatim).
+     */
+    private static SSLParameters composeClientOverlay(SSLParameters factoryBaseline,
+                                                      boolean enableHostnameVerification) {
+        if (factoryBaseline == null) {
+            if (!enableHostnameVerification) {
+                return null;
+            }
+            SSLParameters overlay = new SSLParameters();
+            overlay.setEndpointIdentificationAlgorithm("HTTPS");
+            return overlay;
+        }
+        SSLParameters overlay = copyBaselineMembers(factoryBaseline);
+        // Merge rule 2: the factory's endpointIdentificationAlgorithm wins when set; otherwise the consumer's
+        // hostname-verification flag applies "HTTPS".
+        if (overlay.getEndpointIdentificationAlgorithm() == null && enableHostnameVerification) {
+            overlay.setEndpointIdentificationAlgorithm("HTTPS");
+        }
+        return overlay;
+    }
+
+    /**
+     * Take the framework's single defensive snapshot of a factory-supplied {@link SSLParameters} — a mutable
+     * object — copying only the engine-baseline members the framework overlays per engine. SNI
+     * {@code serverNames} are deliberately excluded (merge rule 3: the per-connection SNI always wins). The
+     * returned object is owned by the framework and never mutated after composition, so a later mutation of
+     * the factory's original object cannot affect an already-acquired context.
+     */
+    private static SSLParameters copyBaselineMembers(SSLParameters source) {
+        SSLParameters overlay = new SSLParameters();
+        if (source.getProtocols() != null) {
+            overlay.setProtocols(source.getProtocols().clone());
+        }
+        if (source.getCipherSuites() != null) {
+            overlay.setCipherSuites(source.getCipherSuites().clone());
+        }
+        if (source.getAlgorithmConstraints() != null) {
+            overlay.setAlgorithmConstraints(source.getAlgorithmConstraints());
+        }
+        if (source.getApplicationProtocols() != null) {
+            overlay.setApplicationProtocols(source.getApplicationProtocols().clone());
+        }
+        if (source.getEndpointIdentificationAlgorithm() != null) {
+            overlay.setEndpointIdentificationAlgorithm(source.getEndpointIdentificationAlgorithm());
+        }
+        // Client-auth mode is carried on the overlay for server purposes (applied by
+        // SynthesizedEngineSslContext when applyClientAuth is set); needClientAuth wins over wantClientAuth.
+        if (source.getNeedClientAuth()) {
+            overlay.setNeedClientAuth(true);
+        } else if (source.getWantClientAuth()) {
+            overlay.setWantClientAuth(true);
+        }
+        return overlay;
     }
 
     private static void applyClientTrust(SslContextBuilder builder, TlsMaterial material, TlsPolicy policy) {

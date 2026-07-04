@@ -18,9 +18,11 @@
  */
 package org.apache.pulsar.jetty.tls;
 
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import lombok.CustomLog;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
@@ -40,6 +42,18 @@ import org.eclipse.jetty.util.ssl.SslContextFactory;
  * subscription drives {@link SslContextFactory#setSslContext(SSLContext)} before start, and on each
  * later delivery {@link SslContextFactory#reload(Consumer)} atomically swaps the context and re-selects
  * protocols/ciphers. Existing connections keep their sessions; new connections use the new context.
+ *
+ * <p><b>{@code SSLParameters} companion (PIP-478).</b> Because these are synthesized paths (the factory
+ * returned {@code empty()} for the Jetty class and supplies only the {@code SSLContext}), the framework also
+ * asks the factory for its optional {@code javax.net.ssl.SSLParameters} companion — the engine-level baseline
+ * a bare {@code SSLContext} cannot express — and maps its non-null members onto the Jetty setters: enabled
+ * protocols ({@link SslContextFactory#setIncludeProtocols}) and cipher suites
+ * ({@link SslContextFactory#setIncludeCipherSuites}), and (server side, merge rule 4) the authoritative
+ * client-auth mode ({@link SslContextFactory.Server#setNeedClientAuth} /
+ * {@link SslContextFactory.Server#setWantClientAuth}). The companion is requested one-shot (a
+ * factory-supplied {@code SslContextFactory.Server} would reload internally, but this synthesized factory
+ * applies protocols/ciphers/client-auth once at build time — they cannot change on a bare {@code reload});
+ * {@code empty()} leaves the consumer's configuration in force, exactly as before.
  */
 @CustomLog
 public final class JettyTlsFactory {
@@ -96,6 +110,9 @@ public final class JettyTlsFactory {
         SslContextFactory.Server sslContextFactory = new SslContextFactory.Server();
         applyServerConfig(sslContextFactory, sslProviderString, requireTrustedClientCert, allowInsecureConnection,
                 ciphers, protocols);
+        // Merge the factory's engine-policy companion (if any) over the consumer config, before start.
+        resolveBaselineParameters(factory, purpose)
+                .ifPresent(baseline -> applyServerBaseline(sslContextFactory, baseline));
 
         Consumer<SSLContext> onLoadOrReload = newContext -> {
             if (sslContextFactory.isStarted()) {
@@ -139,6 +156,10 @@ public final class JettyTlsFactory {
         if (StringUtils.isNotBlank(sslProviderString)) {
             client.setProvider(sslProviderString);
         }
+        // Merge the factory's engine-policy companion (if any): protocols/ciphers only — client-auth is a
+        // server concept, and SNI/hostname verification stay per-connection.
+        resolveBaselineParameters(factory, purpose)
+                .ifPresent(baseline -> applyClientBaseline(client, baseline));
 
         Consumer<SSLContext> onLoadOrReload = newContext -> {
             if (client.isStarted()) {
@@ -195,5 +216,58 @@ public final class JettyTlsFactory {
         // https://jetty.org/docs/jetty/12.1/operations-guide/protocols/index.html#ssl-sni
         // Set to false for backwards compatibility with Jetty 9.x
         sslContextFactory.setSniRequired(false);
+    }
+
+    /**
+     * Request the factory's optional {@code SSLParameters} companion for a purpose (one-shot), returning the
+     * supplied instance or {@link Optional#empty()} when the factory supplies none. Runs at factory-build time,
+     * off any event loop; the handle is disposed immediately (a companion carries no reference-counted state).
+     */
+    private static Optional<SSLParameters> resolveBaselineParameters(PulsarTlsFactory factory, TlsPurpose purpose) {
+        return factory.createInstance(purpose, SSLParameters.class)
+                .join()
+                .map(handle -> {
+                    try {
+                        return handle.get();
+                    } finally {
+                        handle.dispose();
+                    }
+                });
+    }
+
+    /**
+     * Overlay a factory-supplied engine baseline onto a synthesized server factory (PIP-478 merge order):
+     * enabled protocols/cipher suites when the companion sets them, and the companion's client-auth mode as
+     * authoritative (rule 4) — {@code needClientAuth} wins over {@code wantClientAuth}, neither means none.
+     */
+    private static void applyServerBaseline(SslContextFactory.Server sslContextFactory, SSLParameters baseline) {
+        if (baseline.getProtocols() != null) {
+            sslContextFactory.setIncludeProtocols(baseline.getProtocols());
+        }
+        if (baseline.getCipherSuites() != null) {
+            sslContextFactory.setIncludeCipherSuites(baseline.getCipherSuites());
+        }
+        if (baseline.getNeedClientAuth()) {
+            sslContextFactory.setNeedClientAuth(true);
+        } else if (baseline.getWantClientAuth()) {
+            sslContextFactory.setNeedClientAuth(false);
+            sslContextFactory.setWantClientAuth(true);
+        } else {
+            sslContextFactory.setNeedClientAuth(false);
+            sslContextFactory.setWantClientAuth(false);
+        }
+    }
+
+    /**
+     * Overlay a factory-supplied engine baseline onto a synthesized client factory: enabled protocols/cipher
+     * suites only (client-auth is a server concept; SNI/hostname verification remain per-connection).
+     */
+    private static void applyClientBaseline(SslContextFactory.Client client, SSLParameters baseline) {
+        if (baseline.getProtocols() != null) {
+            client.setIncludeProtocols(baseline.getProtocols());
+        }
+        if (baseline.getCipherSuites() != null) {
+            client.setIncludeCipherSuites(baseline.getCipherSuites());
+        }
     }
 }

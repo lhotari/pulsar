@@ -43,6 +43,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLPeerUnverifiedException;
 import org.apache.commons.io.FileUtils;
 import org.apache.pulsar.common.tls.TlsHandle;
@@ -360,6 +361,19 @@ public class FileBasedTlsFactoryTest {
         assertThat(synthesized).isNotNull();
         assertThat(synthesized.isServer()).isTrue();
         assertThat(synthesized.newEngine(ByteBufAllocator.DEFAULT)).isNotNull();
+        factory.close();
+    }
+
+    @Test
+    public void returnsEmptyForSslParametersCompanion() {
+        // PIP-478: the default file-based factory bakes engine policy natively into its Netty/JDK contexts,
+        // so it exposes no SSLParameters companion for the framework to overlay -> empty() for every form.
+        FileBasedTlsFactory factory = factory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.pem(RSA_CA, BROKER_CERT, BROKER_KEY)),
+                FileBasedTlsFactorySettings.defaults());
+
+        assertThat(factory.createInstance(TlsPurpose.BROKER, SSLParameters.class).join()).isEmpty();
+        assertThat(factory.createInstance(TlsPurpose.BROKER, SSLParameters.class, p -> { }).join()).isEmpty();
         factory.close();
     }
 

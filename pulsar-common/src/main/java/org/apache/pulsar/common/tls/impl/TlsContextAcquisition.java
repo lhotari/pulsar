@@ -22,7 +22,9 @@ import io.netty.handler.ssl.SslContext;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsEndpoint;
 import org.apache.pulsar.common.tls.TlsHandle;
@@ -45,8 +47,26 @@ import org.apache.pulsar.common.tls.TlsPurpose;
  * <p>The synthesized context bakes the role-appropriate settings the factory could not apply, carried by the
  * {@link TlsSynthesisSpec}: for a client purpose the hostname-verification algorithm (see
  * {@link TlsContexts#synthesizeNettyClientFromJdk}); for a server purpose the client-auth requirement (see
- * {@link TlsContexts#synthesizeNettyFromJdk}). For a subscribing acquisition the synthesis re-wraps on every
- * delivery, so rotated JDK material reaches the consumer as a freshly synthesized Netty context.
+ * {@link TlsContexts#synthesizeNettyServerFromJdk}). For a subscribing acquisition the synthesis re-wraps on
+ * every delivery, so rotated JDK material reaches the consumer as a freshly synthesized Netty context.
+ *
+ * <p><b>{@code SSLParameters} companion (PIP-478).</b> On the synthesis path the framework additionally asks
+ * the factory for {@code createInstance(purpose, SSLParameters.class)} — the optional engine-policy companion
+ * carrying the factory's baseline a bare {@code SSLContext} cannot express (enabled protocols/ciphers,
+ * algorithm constraints, application protocols, endpoint identification, and the server client-auth mode). It
+ * is requested in the same form as the {@code SSLContext} (one-shot, or endpoint-carrying), and on a
+ * subscribing acquisition it is re-requested with each {@code SSLContext} delivery so engine policy may rotate
+ * with material. The merge is deterministic (see {@link TlsContexts#synthesizeNettyClientFromJdk} /
+ * {@link TlsContexts#synthesizeNettyServerFromJdk}): the factory companion forms the engine baseline (non-null
+ * members only); {@code endpointIdentificationAlgorithm} is the factory's when set, otherwise the consumer's
+ * hostname-verification flag applies {@code "HTTPS"} on client purposes; SNI is always set per connection from
+ * the target endpoint (never taken from the companion); and on server purposes the companion's
+ * {@code needClientAuth}/{@code wantClientAuth} are authoritative when it is supplied, else the consumer's
+ * client-auth flag maps as usual. A factory-supplied companion is mutable, so the framework snapshots it once
+ * per acquisition (see {@link TlsContexts}); {@code empty()} means the consumer's configuration applies, as
+ * before. The subscribing form requests the companion synchronously within the reload callback — which the SPI
+ * runs off any event loop — so a factory that supplies it must complete that request without depending on the
+ * thread delivering the {@code SSLContext}.
  */
 public final class TlsContextAcquisition {
 
@@ -67,8 +87,8 @@ public final class TlsContextAcquisition {
         return factory.createInstance(purpose, SslContext.class)
                 .thenCompose(direct -> direct.isPresent()
                         ? CompletableFuture.completedFuture(direct)
-                        : factory.createInstance(purpose, SSLContext.class)
-                                .thenApply(jdk -> jdk.map(handle -> synthesizeOneShot(handle, purpose, synthesis))));
+                        : synthesizeFromFallback(factory.createInstance(purpose, SSLContext.class),
+                                () -> factory.createInstance(purpose, SSLParameters.class), purpose, synthesis));
     }
 
     /**
@@ -86,8 +106,9 @@ public final class TlsContextAcquisition {
         return factory.createInstance(purpose, endpoint, SslContext.class)
                 .thenCompose(direct -> direct.isPresent()
                         ? CompletableFuture.completedFuture(direct)
-                        : factory.createInstance(purpose, endpoint, SSLContext.class)
-                                .thenApply(jdk -> jdk.map(handle -> synthesizeOneShot(handle, purpose, synthesis))));
+                        : synthesizeFromFallback(factory.createInstance(purpose, endpoint, SSLContext.class),
+                                () -> factory.createInstance(purpose, endpoint, SSLParameters.class), purpose,
+                                synthesis));
     }
 
     /**
@@ -109,15 +130,33 @@ public final class TlsContextAcquisition {
                         return CompletableFuture.completedFuture(direct);
                     }
                     SynthesizingSubscription subscription =
-                            new SynthesizingSubscription(purpose, synthesis, onLoadOrReload);
+                            new SynthesizingSubscription(factory, purpose, synthesis, onLoadOrReload);
                     return factory.createInstance(purpose, SSLContext.class, subscription::onDelivery)
                             .thenApply(jdk -> jdk.map(subscription::bind));
                 });
     }
 
+    /**
+     * Complete the synthesis fallback once the JDK {@code SSLContext} is resolved: when present, request the
+     * factory's optional {@code SSLParameters} companion (lazily, via {@code paramsSupplier}, so it is not
+     * requested when the JDK context is unsupported) and synthesize the Netty context from both.
+     */
+    private static CompletableFuture<Optional<TlsHandle<SslContext>>> synthesizeFromFallback(
+            CompletableFuture<Optional<TlsHandle<SSLContext>>> jdkFuture,
+            Supplier<CompletableFuture<Optional<TlsHandle<SSLParameters>>>> paramsSupplier,
+            TlsPurpose purpose, TlsSynthesisSpec synthesis) {
+        return jdkFuture.thenCompose(jdk -> {
+            if (jdk.isEmpty()) {
+                return CompletableFuture.<Optional<TlsHandle<SslContext>>>completedFuture(Optional.empty());
+            }
+            return paramsSupplier.get().thenApply(paramsHandle ->
+                    Optional.of(synthesizeOneShot(jdk.get(), purpose, synthesis, extractBaseline(paramsHandle))));
+        });
+    }
+
     private static TlsHandle<SslContext> synthesizeOneShot(TlsHandle<SSLContext> jdkHandle, TlsPurpose purpose,
-                                                           TlsSynthesisSpec synthesis) {
-        SslContext context = synthesize(jdkHandle.get(), purpose, synthesis);
+                                                           TlsSynthesisSpec synthesis, SSLParameters factoryBaseline) {
+        SslContext context = synthesize(jdkHandle.get(), purpose, synthesis, factoryBaseline);
         return new TlsHandle<>() {
             @Override
             public SslContext get() {
@@ -131,11 +170,31 @@ public final class TlsContextAcquisition {
         };
     }
 
-    private static SslContext synthesize(SSLContext jdkContext, TlsPurpose purpose, TlsSynthesisSpec synthesis) {
+    private static SslContext synthesize(SSLContext jdkContext, TlsPurpose purpose, TlsSynthesisSpec synthesis,
+                                         SSLParameters factoryBaseline) {
         if (purpose.role() == TlsPurpose.Role.CLIENT) {
-            return TlsContexts.synthesizeNettyClientFromJdk(jdkContext, synthesis.enableHostnameVerification());
+            return TlsContexts.synthesizeNettyClientFromJdk(jdkContext, synthesis.enableHostnameVerification(),
+                    factoryBaseline);
         }
-        return TlsContexts.synthesizeNettyFromJdk(jdkContext, false, synthesis.requireTrustedClientCert());
+        return TlsContexts.synthesizeNettyServerFromJdk(jdkContext, synthesis.requireTrustedClientCert(),
+                factoryBaseline);
+    }
+
+    /**
+     * Extract the factory's {@code SSLParameters} companion from its handle, disposing the handle afterwards.
+     * Returns {@code null} when the factory returned {@code empty()} (no companion for this purpose). The
+     * synthesis takes its own defensive snapshot of the returned (mutable) object.
+     */
+    private static SSLParameters extractBaseline(Optional<TlsHandle<SSLParameters>> handle) {
+        if (handle.isEmpty()) {
+            return null;
+        }
+        TlsHandle<SSLParameters> paramsHandle = handle.get();
+        try {
+            return paramsHandle.get();
+        } finally {
+            paramsHandle.dispose();
+        }
     }
 
     /**
@@ -145,23 +204,29 @@ public final class TlsContextAcquisition {
      */
     private static final class SynthesizingSubscription implements TlsHandle<SslContext> {
 
+        private final PulsarTlsFactory factory;
         private final TlsPurpose purpose;
         private final TlsSynthesisSpec synthesis;
         private final Consumer<SslContext> onLoadOrReload;
         private volatile SslContext latest;
         private volatile TlsHandle<SSLContext> underlying;
 
-        SynthesizingSubscription(TlsPurpose purpose, TlsSynthesisSpec synthesis,
+        SynthesizingSubscription(PulsarTlsFactory factory, TlsPurpose purpose, TlsSynthesisSpec synthesis,
                                  Consumer<SslContext> onLoadOrReload) {
+            this.factory = factory;
             this.purpose = purpose;
             this.synthesis = synthesis;
             this.onLoadOrReload = onLoadOrReload;
         }
 
         // Serial per subscription (SPI contract); the first delivery happens-before the subscribe future
-        // completes, so `latest` is set by the time bind() runs.
+        // completes, so `latest` is set by the time bind() runs. The SSLParameters companion is re-requested
+        // with each delivery so engine policy rotates with material; the callback runs off any event loop
+        // (SPI contract), so the synchronous request here never blocks a consumer event loop.
         void onDelivery(SSLContext jdkContext) {
-            SslContext wrapped = synthesize(jdkContext, purpose, synthesis);
+            SSLParameters factoryBaseline = extractBaseline(
+                    factory.createInstance(purpose, SSLParameters.class).join());
+            SslContext wrapped = synthesize(jdkContext, purpose, synthesis, factoryBaseline);
             this.latest = wrapped;
             onLoadOrReload.accept(wrapped);
         }
