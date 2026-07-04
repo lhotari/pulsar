@@ -277,7 +277,29 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
    scratchpad stage3-dossier-index.md. Orchestrator ruling on its R6: the
    v4-tests-unmodified bar outranks eager probing — if the fail-fast probe breaks lazy v4
    tests, probing scopes to the v5 builder path and the PIP gets a note.
-15. Launched two Opus 4.8 assessment agents (read-only):
+15. **Personal CI #231 GREEN through stage 2b**: 42 checks, 41 pass, 1 skip (CodeQL,
+   fork-expected). Flip experiment CI #232 running separately.
+16. **Stage 3a complete** (stage3a-builder, Opus, 7 commits `0f4cfdf..75ab6d1`): ClientCnx
+   single-continuation carve-out (one state machine; inline-when-done; single
+   provider-assignment site on connect+REFRESH; CompletionException unwrapped) +
+   async-enabled Token/Basic/OAuth2/Athenz/SASL via one shared `V5BinaryAuthenticationDriver`
+   pattern (v4 shims keep verbatim sync surface + heavy logic; v5 bodies minimal).
+   **All gates green, including `testOAuth2TokenRefreshedWithoutReconnect` UNMODIFIED on the
+   async OAuth2 path — the exact historical failure, now passing (D2 vindicated).**
+   ClientCnxRequestTimeoutQueueTest 7/7 (defensive executor stub); new ClientCnxAsyncAuthTest
+   (REFRESH ×3 rounds, no reconnect, fresh getCommandData; failure-path close);
+   SaslAuthenticateTest 4/4 (multi-round binary through the async path); TLS shims proven
+   untouched. REFRESH routing: new exchange per sentinel (mirrors sync re-resolve; PIP-
+   consistent). Reviewed deviations, accepted: (a) `newConnectCommand` → overridable
+   `buildConnectCommand(AuthData)` hook, 4 overriders migrated incl. ProxyClientCnx
+   (necessary for single-continuation + proxy forwarded-auth; touches pulsar-proxy main —
+   in-scope collateral); (b) `pulsar-client` gains `api(pulsar-client-api-v5)` (v4 shims
+   delegate to v5 bodies; folds v5 auth API into the shaded v4 jars — PIP note queued for the
+   next doc batch); (c) sync-throw funneling on eager credential suppliers (+ test).
+   3b handoff: late-bind real client services into v5 bodies' init (true off-event-loop
+   offload for OAuth2/Athenz lands there); consolidate V5BinaryAuthenticationDriver /
+   V4Exchange duplication in 3b/3c; SASL HTTP loop untouched for 3d.
+17. Launched two Opus 4.8 assessment agents (read-only):
    - **impl-gap-assessor** — classify the old impl branch diff against the current design:
      matches-current / implements-superseded / reusable-integration-scaffolding; deliver a
      reuse map per module.
