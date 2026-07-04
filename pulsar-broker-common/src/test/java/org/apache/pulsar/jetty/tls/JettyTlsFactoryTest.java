@@ -297,6 +297,53 @@ public class JettyTlsFactoryTest {
     }
 
     /**
+     * T4: the companion's protocol restriction and {@code needClientAuth} are not just mapped onto the
+     * synthesized Jetty {@link SslContextFactory.Server} getters — they decide a real handshake against a live
+     * server. A trusted client certificate over the allowed protocol succeeds; a client presenting no
+     * certificate is rejected (needClientAuth); a client offering only a disallowed protocol is rejected.
+     */
+    @Test
+    public void serverCompanionNeedClientAuthAndProtocolEnforcedAtHandshake() throws Exception {
+        SSLParameters companion = new SSLParameters();
+        companion.setProtocols(new String[] {"TLSv1.2"});
+        companion.setNeedClientAuth(true);
+
+        FileBasedTlsFactory delegate = new FileBasedTlsFactory(
+                Map.of(TlsPurpose.WEB, TlsPolicy.pem(tempDir.resolve("ca.pem").toString(),
+                        tempDir.resolve("cert.pem").toString(), tempDir.resolve("key.pem").toString())),
+                FileBasedTlsFactorySettings.builder().build());
+        CompanionFactory factory = new CompanionFactory(delegate, companion);
+        factory.initialize(initContext()).join();
+
+        // Consumer config asks for no protocol restriction and only optional client auth; the companion wins.
+        JettyTlsFactory.ReloadableServerTls reloadable = JettyTlsFactory.createReloadingServerFactory(
+                factory, TlsPurpose.WEB, null, false, false, null, null);
+        Server server = new Server();
+        ServerConnector connector = new ServerConnector(server, reloadable.sslContextFactory());
+        connector.setPort(0);
+        server.setConnectors(new ServerConnector[] {connector});
+        server.start();
+        int port = connector.getLocalPort();
+        try {
+            // A trusted client certificate over the allowed protocol completes the handshake.
+            handshakeWithClientCert(port, TRUSTED_CLIENT_CERT, TRUSTED_CLIENT_KEY);
+            // The companion's needClientAuth rejects a client that presents no certificate.
+            assertThatThrownBy(() -> handshakeWithoutClientCert(port))
+                    .as("needClientAuth from the companion rejects a client with no certificate")
+                    .isInstanceOf(IOException.class);
+            // The companion's TLSv1.2-only restriction rejects a client offering only TLSv1.3.
+            assertThatThrownBy(() -> handshakeWithClientCert(port, TRUSTED_CLIENT_CERT, TRUSTED_CLIENT_KEY,
+                    "TLSv1.3"))
+                    .as("a TLSv1.3-only client cannot handshake with the companion-pinned TLSv1.2 server")
+                    .isInstanceOf(IOException.class);
+        } finally {
+            reloadable.subscription().dispose();
+            server.stop();
+            factory.close();
+        }
+    }
+
+    /**
      * B3: with no configured protocols and no factory companion, the synthesized Jetty server/client factories
      * pin the {@code {TLSv1.3, TLSv1.2}} floor (matching the native Netty path) rather than deferring to the
      * provider default.
@@ -458,7 +505,32 @@ public class JettyTlsFactoryTest {
     // acceptable-CA list, so an untrusted certificate is actually sent (and therefore rejected) rather than
     // silently withheld by the default JSSE key manager.
     private void handshakeWithClientCert(int port, String clientCert, String clientKey) throws Exception {
+        handshakeWithClientCert(port, clientCert, clientKey, "TLSv1.2");
+    }
+
+    private void handshakeWithClientCert(int port, String clientCert, String clientKey, String protocol)
+            throws Exception {
         SSLContext clientContext = forcingClientContext(clientCert, clientKey);
+        SSLSocketFactory socketFactory = clientContext.getSocketFactory();
+        try (SSLSocket socket = (SSLSocket) socketFactory.createSocket("localhost", port)) {
+            socket.setEnabledProtocols(new String[] {protocol});
+            socket.setSoTimeout(10000);
+            socket.startHandshake();
+        }
+    }
+
+    // Connect trusting the CA but presenting no client certificate; a needClientAuth server rejects this.
+    private void handshakeWithoutClientCert(int port) throws Exception {
+        KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        trustStore.load(null, null);
+        X509Certificate[] ca = PemReader.loadCertificatesFromPemFile(CA);
+        for (int i = 0; i < ca.length; i++) {
+            trustStore.setCertificateEntry("ca-" + i, ca[i]);
+        }
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance("PKIX");
+        tmf.init(trustStore);
+        SSLContext clientContext = SSLContext.getInstance("TLS");
+        clientContext.init(null, tmf.getTrustManagers(), null);
         SSLSocketFactory socketFactory = clientContext.getSocketFactory();
         try (SSLSocket socket = (SSLSocket) socketFactory.createSocket("localhost", port)) {
             socket.setEnabledProtocols(new String[] {"TLSv1.2"});
