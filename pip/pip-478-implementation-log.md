@@ -968,3 +968,15 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
       (`SynthesizedEngineSslContext`), since Jetty's `SslContextFactory` has no direct include-setter for them
       and the PIP merge-order paragraph is written against the Netty `SSLContext`-fallback synthesis. Not a
       silent deviation — it follows the work order's explicit Jetty setter list.
+
+34. **DEFINITIVE CI GREEN — 41/41 pass, 0 failures** (PR lhotari/pulsar#231 @ `f9a0bff86ea`,
+    2026-07-04). The complete implementation — all four stages, PIP-337 removed, the new TLS
+    SPI as the default everywhere, all review-driven hardening, the R4 standalone-OAuth2
+    restoration, and the SSLParameters companion — passes the full Pulsar CI matrix. The
+    implementation phase of PIP-478 is complete.
+
+    Remaining before anything apache-facing (deliberately deferred): rebase onto current
+    master (the branch sits on the master it was designed against); a fresh full-matrix CI
+    after the rebase; human review of the PIP + branch by the author. Known out-of-scope
+    follow-ons recorded in entries above: websocket OTel root, SSLContextValidatorEngine
+    orphan cleanup.
