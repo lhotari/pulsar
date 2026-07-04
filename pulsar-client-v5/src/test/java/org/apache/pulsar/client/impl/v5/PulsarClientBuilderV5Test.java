@@ -22,10 +22,14 @@ import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
+import java.util.Map;
+import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.v5.PulsarClient;
 import org.apache.pulsar.client.api.v5.PulsarClientBuilder;
 import org.apache.pulsar.client.api.v5.PulsarClientException;
+import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.config.ConnectionPolicy;
+import org.apache.pulsar.client.impl.v5.auth.LegacyV4AuthenticationAdapter;
 import org.apache.pulsar.common.tls.TlsPolicy;
 import org.testng.annotations.Test;
 
@@ -119,6 +123,108 @@ public class PulsarClientBuilderV5Test {
         assertNotNull(e, "a bad TLS policy must fail the client build");
         assertTrue(allMessages(e).toLowerCase().contains("tls"),
                 "the failure must be actionable and mention TLS: " + allMessages(e));
+    }
+
+    /**
+     * PIP-478 stage 3c: a bridged third-party v4 plugin (not a built-in TLS class) that reports
+     * {@code hasDataForTls()} with file-based cert/key must have that material folded into
+     * {@link TlsPurpose#CLIENT_DEFAULT} at build time. Proven here by pointing the plugin at a non-existent
+     * cert file: the fold makes the client build fail fast on the missing file; without the fold the
+     * system-default CLIENT_DEFAULT policy would build cleanly.
+     */
+    @Test
+    public void genericV4TlsFilePluginMaterialIsFoldedIntoClientDefault() {
+        AuthenticationDataProvider data = new AuthenticationDataProvider() {
+            @Override
+            public boolean hasDataForTls() {
+                return true;
+            }
+
+            @Override
+            public String getTlsCertificateFilePath() {
+                return "/nonexistent/pip478/generic-cert.pem";
+            }
+
+            @Override
+            public String getTlsPrivateKeyFilePath() {
+                return "/nonexistent/pip478/generic-key.pem";
+            }
+        };
+        Authentication v5 = LegacyV4AuthenticationAdapter.wrap(new GenericTlsV4Auth("custom-tls", data));
+
+        PulsarClientException e = null;
+        try {
+            PulsarClient.builder()
+                    .serviceUrl("pulsar+ssl://localhost:6651")
+                    .authentication(v5)
+                    .tlsPolicy(TlsPolicy.pem(null, null, null))
+                    .build();
+            fail("expected the client build to fail fast on the folded generic TLS material");
+        } catch (PulsarClientException ex) {
+            e = ex;
+        }
+        assertNotNull(e, "the folded generic cert path must fail the client build");
+        assertTrue(allMessages(e).toLowerCase().contains("tls"),
+                "the failure must be actionable and mention TLS: " + allMessages(e));
+    }
+
+    /**
+     * PIP-478 stage 3c: a generic v4 plugin exposing only in-memory TLS material cannot be represented in a
+     * file-path {@link TlsPolicy}; it is logged rather than folded, and the client build still succeeds
+     * (the material simply is not applied on this path).
+     */
+    @Test
+    public void genericV4InMemoryOnlyTlsMaterialDoesNotFailBuild() throws Exception {
+        AuthenticationDataProvider inMemoryOnly = new AuthenticationDataProvider() {
+            @Override
+            public boolean hasDataForTls() {
+                return true;
+            }
+            // No file paths and no keystore params — only (notional) in-memory material.
+        };
+        Authentication v5 = LegacyV4AuthenticationAdapter.wrap(new GenericTlsV4Auth("custom-tls", inMemoryOnly));
+
+        try (PulsarClient client = PulsarClient.builder()
+                .serviceUrl("pulsar+ssl://localhost:6651")
+                .authentication(v5)
+                .tlsPolicy(TlsPolicy.pem(null, null, null))
+                .build()) {
+            assertNotNull(client, "an in-memory-only generic TLS plugin must not fail the client build");
+        }
+    }
+
+    /** A minimal generic (non-built-in) v4 TLS plugin for the fold tests. */
+    @SuppressWarnings("deprecation")
+    private static final class GenericTlsV4Auth implements org.apache.pulsar.client.api.Authentication {
+        private final String methodName;
+        private final AuthenticationDataProvider data;
+
+        GenericTlsV4Auth(String methodName, AuthenticationDataProvider data) {
+            this.methodName = methodName;
+            this.data = data;
+        }
+
+        @Override
+        public String getAuthMethodName() {
+            return methodName;
+        }
+
+        @Override
+        public AuthenticationDataProvider getAuthData() {
+            return data;
+        }
+
+        @Override
+        public void configure(Map<String, String> authParams) {
+        }
+
+        @Override
+        public void start() {
+        }
+
+        @Override
+        public void close() {
+        }
     }
 
     private static String allMessages(Throwable t) {

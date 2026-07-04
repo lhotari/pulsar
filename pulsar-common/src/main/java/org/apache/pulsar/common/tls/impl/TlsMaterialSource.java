@@ -18,18 +18,12 @@
  */
 package org.apache.pulsar.common.tls.impl;
 
-import java.io.FileInputStream;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
-import java.security.Key;
-import java.security.KeyStore;
 import java.security.PrivateKey;
-import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -63,7 +57,7 @@ import org.apache.pulsar.common.util.SecurityUtility;
  *
  * <p>Not thread-safe on its own; the owning factory serialises access under its per-source monitor.
  */
-final class TlsMaterialSource {
+final class TlsMaterialSource implements MaterialSource {
 
     /** Sentinel modification time recorded for a path that is currently missing or unreadable. */
     private static final FileTime MISSING = FileTime.fromMillis(Long.MIN_VALUE);
@@ -91,10 +85,11 @@ final class TlsMaterialSource {
      * @throws Exception if the material could not be loaded (the last-good material and baseline are
      *                   left untouched so the next call retries)
      */
-    RefreshOutcome refresh() throws Exception {
+    @Override
+    public MaterialSource.RefreshOutcome refresh() throws Exception {
         Map<String, FileTime> snapshot = snapshotModificationTimes();
         if (cached != null && snapshot.equals(baseline)) {
-            return new RefreshOutcome(cached, false);
+            return new MaterialSource.RefreshOutcome(cached, false);
         }
         TlsMaterial loaded = load();
         boolean changed = cached == null || !loaded.equals(cached);
@@ -103,7 +98,7 @@ final class TlsMaterialSource {
         if (changed) {
             cached = loaded;
         }
-        return new RefreshOutcome(cached, changed);
+        return new MaterialSource.RefreshOutcome(cached, changed);
     }
 
     private TlsMaterial load() throws Exception {
@@ -115,8 +110,8 @@ final class TlsMaterialSource {
 
     private List<X509Certificate> loadTrustCerts() throws Exception {
         if (StringUtils.isNotBlank(policy.trustStorePath())) {
-            return extractTrustCerts(loadKeyStore(policy.storeType(), policy.trustStorePath(),
-                    policy.trustStorePassword()));
+            return TlsKeyStoreLoader.extractTrustCerts(TlsKeyStoreLoader.loadKeyStore(policy.storeType(),
+                    policy.trustStorePath(), policy.trustStorePassword()));
         }
         if (StringUtils.isNotBlank(policy.trustCertsFilePath())) {
             X509Certificate[] certs = SecurityUtility.loadCertificatesFromPemFile(policy.trustCertsFilePath());
@@ -127,8 +122,8 @@ final class TlsMaterialSource {
 
     private PrivateKey loadPrivateKey() throws Exception {
         if (StringUtils.isNotBlank(policy.keyStorePath())) {
-            return extractPrivateKey(loadKeyStore(policy.storeType(), policy.keyStorePath(),
-                    policy.keyStorePassword()), policy.keyStorePassword());
+            return TlsKeyStoreLoader.extractPrivateKey(TlsKeyStoreLoader.loadKeyStore(policy.storeType(),
+                    policy.keyStorePath(), policy.keyStorePassword()), policy.keyStorePassword());
         }
         if (StringUtils.isNotBlank(policy.keyFilePath())) {
             return SecurityUtility.loadPrivateKeyFromPemFile(policy.keyFilePath());
@@ -138,70 +133,12 @@ final class TlsMaterialSource {
 
     private List<X509Certificate> loadCertificateChain() throws Exception {
         if (StringUtils.isNotBlank(policy.keyStorePath())) {
-            return extractCertificateChain(loadKeyStore(policy.storeType(), policy.keyStorePath(),
-                    policy.keyStorePassword()));
+            return TlsKeyStoreLoader.extractCertificateChain(TlsKeyStoreLoader.loadKeyStore(policy.storeType(),
+                    policy.keyStorePath(), policy.keyStorePassword()));
         }
         if (StringUtils.isNotBlank(policy.certificateFilePath())) {
             X509Certificate[] certs = SecurityUtility.loadCertificatesFromPemFile(policy.certificateFilePath());
             return certs == null ? List.of() : List.of(certs);
-        }
-        return List.of();
-    }
-
-    private static KeyStore loadKeyStore(String type, String path, String password) throws Exception {
-        String storeType = StringUtils.isNotBlank(type) ? type : KeyStore.getDefaultType();
-        KeyStore keyStore = KeyStore.getInstance(storeType);
-        try (InputStream input = new FileInputStream(path)) {
-            keyStore.load(input, password == null ? null : password.toCharArray());
-        }
-        return keyStore;
-    }
-
-    private static List<X509Certificate> extractTrustCerts(KeyStore trustStore) throws Exception {
-        List<X509Certificate> certs = new ArrayList<>();
-        Enumeration<String> aliases = trustStore.aliases();
-        while (aliases.hasMoreElements()) {
-            Certificate certificate = trustStore.getCertificate(aliases.nextElement());
-            if (certificate instanceof X509Certificate x509) {
-                certs.add(x509);
-            }
-        }
-        return certs;
-    }
-
-    private static PrivateKey extractPrivateKey(KeyStore keyStore, String password) throws Exception {
-        char[] pwd = password == null ? null : password.toCharArray();
-        Enumeration<String> aliases = keyStore.aliases();
-        while (aliases.hasMoreElements()) {
-            String alias = aliases.nextElement();
-            if (keyStore.isKeyEntry(alias)) {
-                Key key = keyStore.getKey(alias, pwd);
-                if (key instanceof PrivateKey privateKey) {
-                    return privateKey;
-                }
-            }
-        }
-        return null;
-    }
-
-    private static List<X509Certificate> extractCertificateChain(KeyStore keyStore) throws Exception {
-        Enumeration<String> aliases = keyStore.aliases();
-        while (aliases.hasMoreElements()) {
-            String alias = aliases.nextElement();
-            if (keyStore.isKeyEntry(alias)) {
-                Certificate[] chain = keyStore.getCertificateChain(alias);
-                if (chain != null && chain.length > 0) {
-                    List<X509Certificate> result = new ArrayList<>(chain.length);
-                    for (Certificate certificate : chain) {
-                        if (certificate instanceof X509Certificate x509) {
-                            result.add(x509);
-                        }
-                    }
-                    if (!result.isEmpty()) {
-                        return result;
-                    }
-                }
-            }
         }
         return List.of();
     }
@@ -234,15 +171,5 @@ final class TlsMaterialSource {
         if (StringUtils.isNotBlank(path)) {
             paths.add(path);
         }
-    }
-
-    /**
-     * The result of a {@link TlsMaterialSource#refresh()}: the current material and whether it changed
-     * in value since the previous refresh.
-     *
-     * @param material the current (last-good) material
-     * @param changed  {@code true} when the material's value changed (first load counts as a change)
-     */
-    record RefreshOutcome(TlsMaterial material, boolean changed) {
     }
 }

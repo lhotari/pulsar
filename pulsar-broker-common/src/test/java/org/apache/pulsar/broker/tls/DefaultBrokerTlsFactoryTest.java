@@ -19,6 +19,8 @@
 package org.apache.pulsar.broker.tls;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import com.google.common.io.Resources;
 import io.netty.handler.ssl.SslContext;
 import io.opentelemetry.api.OpenTelemetry;
@@ -30,8 +32,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import javax.net.ssl.SSLContext;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.client.api.Authentication;
+import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsPurpose;
+import org.apache.pulsar.common.util.SecurityUtility;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -98,6 +103,34 @@ public class DefaultBrokerTlsFactoryTest {
 
         assertThat(factory.createInstance(TlsPurpose.BROKER, SslContext.class).join()).isPresent();
         assertThat(factory.createInstance(TlsPurpose.WEB, SSLContext.class).join()).isPresent();
+        factory.close();
+    }
+
+    @Test
+    public void foldsBrokerClientAuthMaterialOverBlankFilePolicy() throws Exception {
+        // No brokerClient*FilePath cert/key: the broker-client authentication plugin supplies the identity.
+        ServiceConfiguration conf = new ServiceConfiguration();
+        conf.setTlsTrustCertsFilePath(CA);
+        conf.setTlsCertificateFilePath(BROKER_CERT);
+        conf.setTlsKeyFilePath(BROKER_KEY);
+        conf.setBrokerClientTrustCertsFilePath(CA);
+        conf.setBrokerClientAuthenticationPlugin("org.apache.pulsar.client.impl.auth.AuthenticationTls");
+
+        AuthenticationDataProvider authData = mock(AuthenticationDataProvider.class);
+        when(authData.hasDataForTls()).thenReturn(true);
+        when(authData.getTlsCertificates()).thenReturn(SecurityUtility.loadCertificatesFromPemFile(ADMIN_CERT));
+        when(authData.getTlsPrivateKey()).thenReturn(SecurityUtility.loadPrivateKeyFromPemFile(ADMIN_KEY));
+        Authentication brokerClientAuth = mock(Authentication.class);
+        when(brokerClientAuth.getAuthData()).thenReturn(authData);
+
+        DefaultBrokerTlsFactory factory = DefaultBrokerTlsFactory.fromServiceConfiguration(conf, brokerClientAuth);
+        factory.initialize(initContext()).join();
+
+        // The BROKER_CLIENT client context builds from the folded auth material (blank file cert/key would
+        // otherwise yield no client identity). The fold semantics are proven in AuthProvidedMaterialFoldTest.
+        assertThat(factory.createInstance(TlsPurpose.BROKER_CLIENT, SslContext.class).join())
+                .as("BROKER_CLIENT context folds the broker-client authentication material").isPresent();
+        assertThat(factory.createInstance(TlsPurpose.BROKER_CLIENT, SSLContext.class).join()).isPresent();
         factory.close();
     }
 

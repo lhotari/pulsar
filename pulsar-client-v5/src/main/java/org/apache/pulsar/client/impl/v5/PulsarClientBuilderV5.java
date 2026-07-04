@@ -22,6 +22,7 @@ import io.opentelemetry.api.OpenTelemetry;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.KeyStoreParams;
 import org.apache.pulsar.client.api.v5.PulsarClient;
 import org.apache.pulsar.client.api.v5.PulsarClientBuilder;
@@ -39,12 +40,16 @@ import org.apache.pulsar.client.impl.v5.auth.V5ToV4AuthenticationAdapter;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * V5 implementation of PulsarClientBuilder.
  * Builds a v4 ClientConfigurationData internally and wraps the v4 PulsarClientImpl.
  */
 final class PulsarClientBuilderV5 implements PulsarClientBuilder {
+
+    private static final Logger LOG = LoggerFactory.getLogger(PulsarClientBuilderV5.class);
 
     private final ClientConfigurationData conf = new ClientConfigurationData();
     private String description;
@@ -179,9 +184,11 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
      * {@code tlsPolicy(...)}; a plain legacy client (no {@code tlsPolicy}) keeps the v4 behaviour where the
      * auth plugin supplies the transport material directly.
      *
-     * <p>The GENERIC third-party {@code hasDataForTls()} probe (folding an arbitrary v4 plugin's material)
-     * is deferred to stage 3c, since it needs the blocking-executor plumbing to run the v4 call off the
-     * caller thread.
+     * <p>An arbitrary third-party v4 plugin that reports {@code hasDataForTls()} but is not one of the
+     * built-in TLS classes is folded generically by {@link #foldGenericV4TlsMaterial}: {@code build()} runs
+     * on the application thread (off the Netty event loop), so probing the plugin's {@code getAuthData()} for
+     * its TLS material here is acceptable. This is scoped to the v5-builder-with-{@code tlsPolicy} path, so a
+     * plain v4 client keeps its lazy behaviour (R6).
      */
     private void foldBridgedV4TlsMaterial() {
         if (conf.getTlsPolicyMap() == null) {
@@ -202,7 +209,56 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
                     .keyStorePassword(ks.getKeyStorePassword())
                     .storeType(ks.getKeyStoreType())
                     .build());
+        } else if (v4 != null) {
+            foldGenericV4TlsMaterial(v4);
         }
+    }
+
+    /**
+     * Fold a bridged third-party v4 plugin's TLS material into {@link TlsPurpose#CLIENT_DEFAULT} when it
+     * reports {@code hasDataForTls()} (PIP-478 stage 3c). Probing {@code getAuthData()} is safe here because
+     * {@code build()} runs on the application thread, not the event loop. Only <em>file-based</em> material
+     * (PEM cert/key file paths or a keystore) can be represented in the file-path {@link TlsPolicy}; a plugin
+     * that exposes only in-memory cert/key material is logged rather than silently dropped, since it cannot
+     * be folded on this path.
+     *
+     * @param v4 the bridged v4 authentication plugin (not a built-in TLS class)
+     */
+    @SuppressWarnings("deprecation")
+    private void foldGenericV4TlsMaterial(org.apache.pulsar.client.api.Authentication v4) {
+        final AuthenticationDataProvider data;
+        try {
+            data = v4.getAuthData();
+        } catch (Exception e) {
+            // A plugin that fails to produce auth data at build time (e.g. a not-yet-reachable credential
+            // endpoint) is not a fatal client-build error; it simply contributes no TLS material here.
+            LOG.debug("Could not probe v4 authentication plugin {} for TLS material", v4.getClass().getName(), e);
+            return;
+        }
+        if (data == null || !data.hasDataForTls()) {
+            return;
+        }
+        String certPath = data.getTlsCertificateFilePath();
+        String keyPath = data.getTlsPrivateKeyFilePath();
+        KeyStoreParams ks = data.getTlsKeyStoreParams();
+        if (isNotBlank(certPath) && isNotBlank(keyPath)) {
+            mergeClientDefault(base -> pemBuilder(base).certificateFilePath(certPath).keyFilePath(keyPath).build());
+        } else if (ks != null && isNotBlank(ks.getKeyStorePath())) {
+            mergeClientDefault(base -> keyStoreBuilder(base)
+                    .keyStorePath(ks.getKeyStorePath())
+                    .keyStorePassword(ks.getKeyStorePassword())
+                    .storeType(ks.getKeyStoreType())
+                    .build());
+        } else {
+            LOG.warn("Bridged v4 authentication plugin {} reports TLS material (hasDataForTls()) but exposes "
+                    + "only in-memory cert/key, which cannot be represented in the file-path client TLS "
+                    + "policy; its material will not be folded into the transport. Configure it via "
+                    + "tlsPolicy(...) or a file-based plugin.", v4.getClass().getName());
+        }
+    }
+
+    private static boolean isNotBlank(String s) {
+        return s != null && !s.isBlank();
     }
 
     private void mergeClientDefault(java.util.function.Function<TlsPolicy, TlsPolicy> merge) {

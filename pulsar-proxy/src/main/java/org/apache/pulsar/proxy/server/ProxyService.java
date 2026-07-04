@@ -338,7 +338,7 @@ public class ProxyService implements Closeable {
                         proxyConfig.getBrokerClientTlsFactoryClassName()) == TlsFactorySupport.TlsPath.NEW) {
             this.brokerClientTlsFactory = TlsFactorySupport.createFactory(
                     proxyConfig.getBrokerClientTlsFactoryClassName(), null,
-                    () -> ProxyTlsFactories.brokerClientFactory(proxyConfig));
+                    () -> ProxyTlsFactories.brokerClientFactory(proxyConfig, proxyClientAuthentication));
             TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
                     TlsFactorySupport.parseFactoryConfig(proxyConfig.getBrokerClientTlsFactoryConfig()),
                     statsExecutor, statsExecutor, OpenTelemetry.noop());

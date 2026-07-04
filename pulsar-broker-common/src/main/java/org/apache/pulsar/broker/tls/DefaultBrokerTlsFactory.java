@@ -22,8 +22,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.client.api.Authentication;
+import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.tls.impl.FileBasedTlsFactory;
@@ -51,17 +54,46 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
     }
 
     /**
-     * Compose a {@link DefaultBrokerTlsFactory} from a {@link ServiceConfiguration}.
+     * Construct a broker factory that additionally folds the broker-client authentication's TLS material
+     * over the {@link TlsPurpose#BROKER_CLIENT} file policy (PIP-478).
      *
-     * <p>The broker's server material is registered for the {@link TlsPurpose#BROKER},
-     * {@link TlsPurpose#PROXY} and {@link TlsPurpose#WEB} purposes; the broker's outbound
-     * (broker-to-broker) material for {@link TlsPurpose#BROKER_CLIENT}. Any purpose may later be
-     * overridden with more specific material by composing a different map.
+     * @param policies              the composed purpose&rarr;policy map
+     * @param settings              the factory-wide engine/refresh/client-auth settings
+     * @param authMaterialSuppliers per-purpose broker-client authentication material suppliers (may be empty)
+     */
+    public DefaultBrokerTlsFactory(Map<TlsPurpose, TlsPolicy> policies, FileBasedTlsFactorySettings settings,
+            Map<TlsPurpose, Supplier<AuthenticationDataProvider>> authMaterialSuppliers) {
+        super(policies, settings, authMaterialSuppliers);
+    }
+
+    /**
+     * Compose a {@link DefaultBrokerTlsFactory} from a {@link ServiceConfiguration}.
      *
      * @param conf the broker service configuration
      * @return an uninitialized broker factory (call {@code initialize(...)} before use)
      */
     public static DefaultBrokerTlsFactory fromServiceConfiguration(ServiceConfiguration conf) {
+        return fromServiceConfiguration(conf, null);
+    }
+
+    /**
+     * Compose a {@link DefaultBrokerTlsFactory} from a {@link ServiceConfiguration}, optionally folding the
+     * broker's broker-client {@link Authentication} TLS material over the {@link TlsPurpose#BROKER_CLIENT}
+     * file policy (PIP-478) for the broker's own outbound (broker-to-broker / replication) connections.
+     *
+     * <p>The broker's server material is registered for the {@link TlsPurpose#BROKER},
+     * {@link TlsPurpose#PROXY} and {@link TlsPurpose#WEB} purposes; the broker's outbound
+     * (broker-to-broker) material for {@link TlsPurpose#BROKER_CLIENT}. When {@code brokerClientAuth} is
+     * supplied and a broker-client authentication plugin is configured, its in-memory cert/key override the
+     * {@code brokerClient*} file paths (auth-cert-wins), so the broker presents the right identity to its
+     * peers — the server-side mirror of the client TLS override hook.
+     *
+     * @param conf             the broker service configuration
+     * @param brokerClientAuth the broker's broker-client authentication, or {@code null} for no fold
+     * @return an uninitialized broker factory (call {@code initialize(...)} before use)
+     */
+    public static DefaultBrokerTlsFactory fromServiceConfiguration(ServiceConfiguration conf,
+            Authentication brokerClientAuth) {
         Map<TlsPurpose, TlsPolicy> policies = new LinkedHashMap<>();
         TlsPolicy serverPolicy = serverPolicy(conf);
         policies.put(TlsPurpose.BROKER, serverPolicy);
@@ -77,7 +109,11 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
                 // and null keep the JDK engine.
                 .engineProvider(TlsFactorySupport.engineProvider(conf.getTlsProvider()))
                 .build();
-        return new DefaultBrokerTlsFactory(policies, settings);
+        Map<TlsPurpose, Supplier<AuthenticationDataProvider>> authSuppliers =
+                (brokerClientAuth != null && StringUtils.isNotBlank(conf.getBrokerClientAuthenticationPlugin()))
+                        ? Map.of(TlsPurpose.BROKER_CLIENT, FileBasedTlsFactory.authMaterialSupplier(brokerClientAuth))
+                        : Map.of();
+        return new DefaultBrokerTlsFactory(policies, settings, authSuppliers);
     }
 
     private static TlsPolicy serverPolicy(ServiceConfiguration conf) {

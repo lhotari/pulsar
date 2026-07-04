@@ -127,7 +127,7 @@ class AdminProxyHandler extends ProxyServlet {
     private PulsarTlsFactory createBrokerClientTlsFactory() {
         try {
             PulsarTlsFactory factory = TlsFactorySupport.createFactory(config.getBrokerClientTlsFactoryClassName(),
-                    null, () -> ProxyTlsFactories.brokerClientFactory(config));
+                    null, () -> ProxyTlsFactories.brokerClientFactory(config, proxyClientAuthentication));
             TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
                     TlsFactorySupport.parseFactoryConfig(config.getBrokerClientTlsFactoryConfig()),
                     sslContextRefresher, sslContextRefresher, OpenTelemetry.noop());

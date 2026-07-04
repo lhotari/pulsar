@@ -21,8 +21,11 @@ package org.apache.pulsar.proxy.server;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.tls.TlsFactorySupport;
+import org.apache.pulsar.client.api.Authentication;
+import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
@@ -57,16 +60,27 @@ final class ProxyTlsFactories {
 
     /**
      * A client-side factory serving {@link TlsPurpose#BROKER_CLIENT} from the proxy's {@code brokerClient*}
-     * TLS material, for the proxy&rarr;broker binary path and the admin HTTP client.
+     * TLS material, for the proxy&rarr;broker binary path and the admin HTTP client. When a broker-client
+     * authentication plugin is configured, its TLS material is folded over the file policy (auth-cert-wins,
+     * PIP-478) so the proxy presents the right identity to the broker and forwarded-principal authorization
+     * works — the server-side mirror of the client TLS override hook, preserving the PIP-337
+     * {@code PulsarSslConfiguration.authData} behavior.
+     *
+     * @param config             the proxy configuration
+     * @param brokerClientAuth   the proxy's broker-client authentication, or {@code null} for no fold
      */
-    static PulsarTlsFactory brokerClientFactory(ProxyConfiguration config) {
+    static PulsarTlsFactory brokerClientFactory(ProxyConfiguration config, Authentication brokerClientAuth) {
         Map<TlsPurpose, TlsPolicy> policies = Map.of(TlsPurpose.BROKER_CLIENT, brokerClientPolicy(config));
         FileBasedTlsFactorySettings settings = FileBasedTlsFactorySettings.builder()
                 .requireTrustedClientCert(false)
                 .refreshIntervalSeconds(refreshIntervalSeconds(config))
                 .engineProvider(TlsFactorySupport.engineProvider(config.getBrokerClientSslProvider()))
                 .build();
-        return new FileBasedTlsFactory(policies, settings);
+        Map<TlsPurpose, Supplier<AuthenticationDataProvider>> authSuppliers =
+                (brokerClientAuth != null && StringUtils.isNotBlank(config.getBrokerClientAuthenticationPlugin()))
+                        ? Map.of(TlsPurpose.BROKER_CLIENT, FileBasedTlsFactory.authMaterialSupplier(brokerClientAuth))
+                        : Map.of();
+        return new FileBasedTlsFactory(policies, settings, authSuppliers);
     }
 
     private static TlsPolicy serverPolicy(ProxyConfiguration config, Set<String> ciphers, Set<String> protocols) {

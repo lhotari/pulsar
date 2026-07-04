@@ -31,8 +31,12 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import javax.net.ssl.SSLContext;
 import lombok.CustomLog;
+import org.apache.pulsar.client.api.Authentication;
+import org.apache.pulsar.client.api.AuthenticationDataProvider;
+import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsEndpoint;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
@@ -83,15 +87,65 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
      * @param settings the factory-wide engine/refresh settings
      */
     public FileBasedTlsFactory(Map<TlsPurpose, TlsPolicy> policies, FileBasedTlsFactorySettings settings) {
+        this(policies, settings, Map.of());
+    }
+
+    /**
+     * Construct an immutable file-based factory that additionally folds an authentication plugin's TLS
+     * material over the configured file policy for the named purposes (the server-side {@code BROKER_CLIENT}
+     * fold — PIP-478). For a purpose present in {@code authMaterialSuppliers}, the supplier's
+     * {@code Authentication} material overrides the file policy's key/cert per
+     * {@link AuthProvidedMaterialSource} (auth-cert-wins); other purposes use the file policy unchanged.
+     *
+     * @param policies              the complete purpose&rarr;policy map (defensively copied)
+     * @param settings              the factory-wide engine/refresh settings
+     * @param authMaterialSuppliers per-purpose broker-client authentication material suppliers (may be empty)
+     */
+    public FileBasedTlsFactory(Map<TlsPurpose, TlsPolicy> policies, FileBasedTlsFactorySettings settings,
+            Map<TlsPurpose, Supplier<AuthenticationDataProvider>> authMaterialSuppliers) {
         Objects.requireNonNull(policies, "policies must not be null");
         this.settings = Objects.requireNonNull(settings, "settings must not be null");
+        Objects.requireNonNull(authMaterialSuppliers, "authMaterialSuppliers must not be null");
         Map<TlsPurpose, RegisteredSource> built = new LinkedHashMap<>();
         for (Map.Entry<TlsPurpose, TlsPolicy> entry : policies.entrySet()) {
             TlsPurpose purpose = Objects.requireNonNull(entry.getKey(), "purpose key must not be null");
             TlsPolicy policy = Objects.requireNonNull(entry.getValue(), "policy must not be null");
-            built.put(purpose, new RegisteredSource(purpose, policy, new TlsMaterialSource(policy)));
+            TlsMaterialSource fileSource = new TlsMaterialSource(policy);
+            Supplier<AuthenticationDataProvider> authSupplier = authMaterialSuppliers.get(purpose);
+            MaterialSource source = authSupplier == null
+                    ? fileSource
+                    : new AuthProvidedMaterialSource(fileSource, authSupplier);
+            built.put(purpose, new RegisteredSource(purpose, policy, source));
         }
         this.registry = Map.copyOf(built);
+    }
+
+    /**
+     * Adapt a component's broker-client {@link Authentication} to a per-refresh
+     * {@link AuthenticationDataProvider} supplier for use with the {@code BROKER_CLIENT} fold constructor.
+     * The supplier re-reads {@code getAuthData()} on each poll so credential rotation is observed; a checked
+     * {@link PulsarClientException} is rethrown unchecked and handled by the factory's keep-last-good poll.
+     *
+     * @param authentication the broker-client authentication plugin (never {@code null})
+     * @return a supplier of the plugin's current authentication data
+     */
+    public static Supplier<AuthenticationDataProvider> authMaterialSupplier(Authentication authentication) {
+        Objects.requireNonNull(authentication, "authentication must not be null");
+        return () -> {
+            try {
+                return resolveAuthData(authentication);
+            } catch (PulsarClientException e) {
+                throw new RuntimeException("Failed to obtain broker-client authentication TLS material", e);
+            }
+        };
+    }
+
+    // The BROKER_CLIENT TLS fold is host-agnostic — TLS key material does not vary by peer — so the
+    // host-less getAuthData() is exactly what we want; isolate its deprecation here.
+    @SuppressWarnings("deprecation")
+    private static AuthenticationDataProvider resolveAuthData(Authentication authentication)
+            throws PulsarClientException {
+        return authentication.getAuthData();
     }
 
     @Override
@@ -269,7 +323,7 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         private final TlsPurpose purpose;
         private final TlsPolicy policy;
         // Null for the system-default source, whose constant material never rotates.
-        private final TlsMaterialSource source;
+        private final MaterialSource source;
         private final CopyOnWriteArrayList<Subscription<?>> subscriptions = new CopyOnWriteArrayList<>();
 
         private SslContext nettyContext;
@@ -277,7 +331,7 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         private SSLContext jdkContext;
         private TlsMaterial jdkMaterial;
 
-        RegisteredSource(TlsPurpose purpose, TlsPolicy policy, TlsMaterialSource source) {
+        RegisteredSource(TlsPurpose purpose, TlsPolicy policy, MaterialSource source) {
             this.purpose = purpose;
             this.policy = policy;
             this.source = source;
@@ -323,7 +377,7 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
             if (source == null || subscriptions.isEmpty()) {
                 return;
             }
-            TlsMaterialSource.RefreshOutcome outcome;
+            MaterialSource.RefreshOutcome outcome;
             try {
                 outcome = source.refresh();
             } catch (Exception e) {
