@@ -34,8 +34,8 @@ import org.eclipse.jetty.util.ssl.SslContextFactory;
  * subclassed) {@link SslContextFactory.Server} / {@link SslContextFactory.Client} from a
  * {@link PulsarTlsFactory} that returns {@code empty()} for the Jetty class.
  *
- * <p>This deliberately abandons the unsound {@code getSslContext()} override of the PIP-337
- * {@code JettySslContextFactory} (still used by PIP-337 paths until they are removed). Instead it uses
+ * <p>This deliberately abandons the unsound {@code getSslContext()} override of the removed PIP-337
+ * {@code JettySslContextFactory}. Instead it uses
  * Jetty's documented hot-reload API — the same one {@code KeyStoreScanner} uses: an {@code SSLContext}
  * subscription drives {@link SslContextFactory#setSslContext(SSLContext)} before start, and on each
  * later delivery {@link SslContextFactory#reload(Consumer)} atomically swaps the context and re-selects

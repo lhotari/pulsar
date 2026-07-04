@@ -25,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslProvider;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -41,6 +42,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLPeerUnverifiedException;
 import org.apache.commons.io.FileUtils;
 import org.apache.pulsar.common.tls.TlsHandle;
@@ -49,6 +51,7 @@ import org.apache.pulsar.common.tls.TlsPurpose;
 import org.awaitility.Awaitility;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 public class FileBasedTlsFactoryTest {
@@ -376,6 +379,96 @@ public class FileBasedTlsFactoryTest {
         assertThatThrownBy(() -> TlsFactoryProbe.probe(broken, TlsPurpose.BROKER, SslContext.class))
                 .isInstanceOf(IllegalStateException.class);
         broken.close();
+    }
+
+    // ---- PIP-478 stage 4c: ports the removed SslContextTest matrix (SslProvider x ciphers x keystore/PEM) ----
+    // onto the new FileBasedTlsFactory. OpenSSL rejects the JDK-named TLS 1.2 ciphers used here (matching the
+    // removed test's assertion); the JDK engine accepts them, and keystore-format material builds regardless.
+
+    private static final List<String> MATRIX_CIPHERS = List.of(
+            "TLS_DHE_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384");
+
+    @DataProvider(name = "engineAndCiphers")
+    public static Object[][] engineAndCiphers() {
+        return new Object[][] {
+                {SslProvider.JDK, MATRIX_CIPHERS},
+                {SslProvider.JDK, null},
+                {SslProvider.OPENSSL, MATRIX_CIPHERS},
+                {SslProvider.OPENSSL, null},
+        };
+    }
+
+    @Test(dataProvider = "engineAndCiphers")
+    public void serverPemContextAcrossEngineAndCiphers(SslProvider provider, List<String> ciphers) {
+        FileBasedTlsFactory factory = factory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.builder()
+                        .trustCertsFilePath(RSA_CA).certificateFilePath(BROKER_CERT).keyFilePath(BROKER_KEY)
+                        .ciphers(ciphers).build()),
+                FileBasedTlsFactorySettings.builder().engineProvider(provider)
+                        .requireTrustedClientCert(true).build());
+        assertNettyContextBuildsUnlessOpenSslWithCiphers(factory, TlsPurpose.BROKER, provider, ciphers);
+        factory.close();
+    }
+
+    @Test(dataProvider = "engineAndCiphers")
+    public void clientPemContextAcrossEngineAndCiphers(SslProvider provider, List<String> ciphers) {
+        FileBasedTlsFactory factory = factory(
+                Map.of(TlsPurpose.CLIENT_DEFAULT, TlsPolicy.builder()
+                        .trustCertsFilePath(RSA_CA).allowInsecureConnection(true)
+                        .ciphers(ciphers).build()),
+                FileBasedTlsFactorySettings.builder().engineProvider(provider).build());
+        assertNettyContextBuildsUnlessOpenSslWithCiphers(factory, TlsPurpose.CLIENT_DEFAULT, provider, ciphers);
+        factory.close();
+    }
+
+    @Test
+    public void serverKeystoreContextBuildsWithCiphers() {
+        FileBasedTlsFactory factory = factory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.builder()
+                        .format(TlsPolicy.Format.KEYSTORE).storeType("JKS")
+                        .trustStorePath(TRUSTSTORE).trustStorePassword(STORE_PW)
+                        .keyStorePath(KEYSTORE).keyStorePassword(STORE_PW)
+                        .ciphers(MATRIX_CIPHERS).build()),
+                FileBasedTlsFactorySettings.builder().requireTrustedClientCert(true).build());
+        Optional<TlsHandle<SslContext>> handle = factory.createInstance(TlsPurpose.BROKER, SslContext.class).join();
+        assertThat(handle).isPresent();
+        assertThat(handle.get().get()).isNotNull();
+        handle.get().dispose();
+        factory.close();
+    }
+
+    @Test
+    public void clientKeystoreContextBuildsWithCiphers() {
+        FileBasedTlsFactory factory = factory(
+                Map.of(TlsPurpose.CLIENT_DEFAULT, TlsPolicy.builder()
+                        .format(TlsPolicy.Format.KEYSTORE).storeType("JKS")
+                        .trustStorePath(TRUSTSTORE).trustStorePassword(STORE_PW)
+                        .ciphers(MATRIX_CIPHERS).build()),
+                FileBasedTlsFactorySettings.defaults());
+        Optional<TlsHandle<SslContext>> handle =
+                factory.createInstance(TlsPurpose.CLIENT_DEFAULT, SslContext.class).join();
+        assertThat(handle).isPresent();
+        assertThat(handle.get().get()).isNotNull();
+        handle.get().dispose();
+        factory.close();
+    }
+
+    private static void assertNettyContextBuildsUnlessOpenSslWithCiphers(FileBasedTlsFactory factory,
+            TlsPurpose purpose, SslProvider provider, List<String> ciphers) {
+        if (ciphers != null && provider == SslProvider.OPENSSL) {
+            // OpenSSL does not support these JDK-named TLS 1.2 ciphers (as the removed SslContextTest asserted).
+            assertThatThrownBy(() -> factory.createInstance(purpose, SslContext.class).join())
+                    .hasCauseInstanceOf(SSLException.class);
+            return;
+        }
+        Optional<TlsHandle<SslContext>> handle = factory.createInstance(purpose, SslContext.class).join();
+        assertThat(handle).isPresent();
+        assertThat(handle.get().get()).isNotNull();
+        handle.get().dispose();
     }
 
     private SSLEngine serverEngine(FileBasedTlsFactory factory) {

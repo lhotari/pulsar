@@ -372,11 +372,12 @@ public class PulsarClientImpl implements PulsarClient {
     }
 
     /**
-     * Resolve the client-side TLS SPI factory for the new PIP-478 path (PIP-478 stage 3b) and stash it on
-     * the configuration so the connection pool ({@code PulsarChannelInitializer}) and the HTTP lookup
-     * ({@code HttpClient}) build engines from it. Leaves {@code conf.getTlsFactory()} null on the legacy
-     * PIP-337 path, where those components keep using the {@code PulsarSslFactory}. On the v5-builder path
-     * a fail-fast probe of {@code CLIENT_DEFAULT} runs, so a bad configuration fails the client build.
+     * Resolve the client-side TLS SPI factory (PIP-478) and stash it on the configuration so the connection
+     * pool ({@code PulsarChannelInitializer}) and the HTTP lookup ({@code HttpClient}) build engines from it.
+     * This is the only client TLS path since the PIP-337 removal (stage 4c); it runs only when TLS is enabled
+     * (a plaintext client leaves {@code conf.getTlsFactory()} null, and its transports never request TLS). On
+     * the v5-builder path a fail-fast probe of {@code CLIENT_DEFAULT} runs, so a bad configuration fails the
+     * client build.
      *
      * @throws PulsarClientException if the TLS factory cannot be built / initialized / probed
      */

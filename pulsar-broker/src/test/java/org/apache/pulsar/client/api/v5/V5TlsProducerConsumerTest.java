@@ -31,7 +31,7 @@ import org.testng.annotations.Test;
  * End-to-end mTLS produce/consume over the v5 client's new PIP-478 TLS path (stage 3b): a v5
  * {@link PulsarClient} configured with {@code tlsPolicy(...)} against a TLS broker that requires a trusted
  * client certificate. The binary transport builds its per-connection {@code SslContext} through the
- * client-side {@code FileBasedTlsFactory}, not the legacy {@code PulsarSslFactory}.
+ * client-side {@code FileBasedTlsFactory} — the only client TLS path since the PIP-337 removal (stage 4c).
  */
 @Test(groups = "broker-api")
 public class V5TlsProducerConsumerTest extends TlsProducerConsumerBase {

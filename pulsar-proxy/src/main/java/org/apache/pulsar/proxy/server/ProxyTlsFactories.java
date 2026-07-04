@@ -63,8 +63,8 @@ final class ProxyTlsFactories {
      * TLS material, for the proxy&rarr;broker binary path and the admin HTTP client. When a broker-client
      * authentication plugin is configured, its TLS material is folded over the file policy (auth-cert-wins,
      * PIP-478) so the proxy presents the right identity to the broker and forwarded-principal authorization
-     * works — the server-side mirror of the client TLS override hook, preserving the PIP-337
-     * {@code PulsarSslConfiguration.authData} behavior.
+     * works — the server-side mirror of the client TLS override hook, preserving the removed PIP-337
+     * auth-data behavior.
      *
      * @param config             the proxy configuration
      * @param brokerClientAuth   the proxy's broker-client authentication, or {@code null} for no fold
