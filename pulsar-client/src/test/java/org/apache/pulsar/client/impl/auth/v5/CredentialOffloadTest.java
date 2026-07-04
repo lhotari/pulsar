@@ -48,8 +48,10 @@ public class CredentialOffloadTest {
 
     private static ClientAuthenticationServices services(ExecutorService blocking,
             ScheduledExecutorService scheduler) {
-        return new DefaultClientAuthenticationServices(new StubHttpClientFactory(), scheduler, blocking,
-                Clock.systemUTC(), OpenTelemetry.noop(), "test-client");
+        // This test exercises the blocking-executor offload, not HTTP, so a throwing factory suffices.
+        return new DefaultClientAuthenticationServices(config -> {
+            throw new UnsupportedOperationException("HTTP client not used in this test");
+        }, scheduler, blocking, Clock.systemUTC(), OpenTelemetry.noop(), "test-client");
     }
 
     @Test

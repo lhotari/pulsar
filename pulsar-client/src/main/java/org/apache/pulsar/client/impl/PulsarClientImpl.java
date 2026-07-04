@@ -79,7 +79,7 @@ import org.apache.pulsar.client.api.transaction.TransactionBuilder;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
 import org.apache.pulsar.client.impl.auth.v5.DefaultClientAuthenticationServices;
-import org.apache.pulsar.client.impl.auth.v5.StubHttpClientFactory;
+import org.apache.pulsar.client.impl.auth.v5.FrameworkHttpClientFactory;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.conf.ConsumerConfigurationData;
 import org.apache.pulsar.client.impl.conf.ProducerConfigurationData;
@@ -144,6 +144,9 @@ public class PulsarClientImpl implements PulsarClient {
     private static final int AUTH_BLOCKING_MAX_THREADS = 16;
     private final String clientInstanceId = "pulsar-client-" + CLIENT_INSTANCE_ID_GENERATOR.incrementAndGet();
     private volatile ExecutorService blockingAuthExecutor;
+    // PIP-478 stage 3c: the framework HTTP client factory handed to an auth driver that wants one; null when
+    // no ClientAuthenticationServicesAware plugin is configured. Closed with the client.
+    private volatile FrameworkHttpClientFactory authHttpClientFactory;
 
     private final boolean createdEventLoopGroup;
     private final boolean createdCnxPool;
@@ -249,12 +252,6 @@ public class PulsarClientImpl implements PulsarClient {
             clientClock = conf.getClock();
             this.scheduledExecutorProvider = scheduledExecutorProvider != null ? scheduledExecutorProvider :
                     PulsarClientResourcesConfigurer.createScheduledExecutorProvider(conf);
-            // PIP-478 stage 3b: late-bind the client's framework services (scheduler, bounded blocking
-            // executor, HTTP client factory, client instance id) into the authentication driver BEFORE
-            // start(), so the plugin's initializeAsync(...) and every capability call thereafter see real
-            // services. The scheduled executor provider is created above precisely so this can run here.
-            bindAuthenticationServices(conf.getAuthentication());
-            conf.getAuthentication().start();
             // PIP-478 stage 3b: resolve the client-side TLS SPI factory (new path) before the connection
             // pool and HTTP lookup are created — both read conf.getTlsFactory() to branch onto it.
             setupClientTlsFactory();
@@ -297,6 +294,14 @@ public class PulsarClientImpl implements PulsarClient {
             } else {
                 this.timer = timer;
             }
+            // PIP-478 stage 3b/3c: late-bind the client's framework services (scheduler, bounded blocking
+            // executor, framework HTTP client factory, client instance id) into the authentication driver and
+            // start it — AFTER the shared event loop, timer, DNS resolver and TLS factory exist, so a plugin
+            // whose start()/initializeAsync(...) reaches for a framework HTTP client (OAuth2, Athenz) gets one
+            // backed by the fully-shared resources. bind precedes start() so the plugin sees the services from
+            // its first call. Nothing between the config above and here consumes started authentication.
+            bindAuthenticationServices(conf.getAuthentication());
+            conf.getAuthentication().start();
             lookup = createLookup(conf.getServiceUrl());
 
             if (conf.getServiceUrlProvider() != null) {
@@ -350,8 +355,13 @@ public class PulsarClientImpl implements PulsarClient {
      */
     private void bindAuthenticationServices(Authentication authentication) {
         if (authentication instanceof ClientAuthenticationServicesAware aware) {
+            // PIP-478 stage 3c: the framework HTTP client factory shares the client's event loop, timer, DNS
+            // resolver and TLS factory, resolved lazily at newHttpClient() time via these suppliers.
+            this.authHttpClientFactory = new FrameworkHttpClientFactory(
+                    () -> eventLoopGroup, () -> timer, this::getNameResolver, conf::getTlsFactory,
+                    conf, clientInstanceId);
             ClientAuthenticationServices services = new DefaultClientAuthenticationServices(
-                    new StubHttpClientFactory(),
+                    authHttpClientFactory,
                     (ScheduledExecutorService) scheduledExecutorProvider.getExecutor(),
                     blockingAuthExecutor(),
                     clientClock,
@@ -1135,6 +1145,19 @@ public class PulsarClientImpl implements PulsarClient {
         try {
             // We will throw the last thrown exception only, though logging all of them.
             Throwable throwable = null;
+            // PIP-478 stage 3c: close the framework HTTP client factory (and every client it still owns)
+            // first — its AsyncHttpClient instances share the client's event loop, timer and DNS resolver and
+            // hold TLS subscriptions, so they must be released before those shared resources and the TLS
+            // factory are torn down below. A plugin's own close() later is idempotent on an already-closed
+            // client.
+            if (authHttpClientFactory != null) {
+                try {
+                    authHttpClientFactory.close();
+                } catch (Throwable t) {
+                    log.warn().exception(t).log("Failed to close framework HTTP client factory");
+                    throwable = t;
+                }
+            }
             if (lookup != null) {
                 try {
                     lookup.close();
