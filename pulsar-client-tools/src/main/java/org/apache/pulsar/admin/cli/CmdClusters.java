@@ -366,11 +366,14 @@ public class CmdClusters extends CmdBase {
         protected String brokerClientCertificateFilePath;
 
         @Option(names = "--tls-factory-plugin",
-                description = "TLS Factory Plugin to be used to generate SSL Context and SSL Engine")
+                description = "Deprecated: no effect since 5.0; TLS factory selection is broker-level "
+                        + "configuration (PIP-478). The value is still written to the cluster metadata but "
+                        + "ignored by 5.0 brokers.")
         protected String brokerClientSslFactoryPlugin;
 
         @Option(names = "--tls-factory-plugin-params",
-                description = "Parameters used by the TLS Factory Plugin")
+                description = "Deprecated: no effect since 5.0; TLS factory selection is broker-level "
+                        + "configuration (PIP-478).")
         protected String brokerClientSslFactoryPluginParams;
 
         @Option(names = "--listener-name",

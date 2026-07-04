@@ -206,15 +206,26 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     )
     private boolean tlsHostnameVerificationEnable = false;
 
+    /**
+     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478); a non-default value fails
+     *     {@code ClientBuilder.build()}. Migrate the custom factory to a {@code PulsarTlsFactory} on the v5
+     *     client builder.
+     */
+    @Deprecated
     @ApiModelProperty(
             name = "sslFactoryPlugin",
-            value = "SSL Factory Plugin class to provide SSLEngine and SSLContext objects. The default "
-                    + " class used is DefaultPulsarSslFactory.")
+            value = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0; a "
+                    + "non-default value fails the client build. Migrate to a v5 PulsarTlsFactory.")
     private String sslFactoryPlugin = "";
 
+    /**
+     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478). Migrate the custom factory
+     *     to a {@code PulsarTlsFactory} on the v5 client builder.
+     */
+    @Deprecated
     @ApiModelProperty(
             name = "sslFactoryPluginParams",
-            value = "SSL Factory plugin configuration parameters.")
+            value = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0.")
     private String sslFactoryPluginParams = "";
 
     // PIP-478 stage 3b: the client-side TLS SPI seam. These transient fields are set by the v5 builder

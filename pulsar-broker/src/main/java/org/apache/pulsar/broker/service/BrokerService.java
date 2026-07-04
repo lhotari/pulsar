@@ -142,6 +142,7 @@ import org.apache.pulsar.broker.stats.prometheus.metrics.ObserverGauge;
 import org.apache.pulsar.broker.stats.prometheus.metrics.Summary;
 import org.apache.pulsar.broker.storage.ManagedLedgerStorage;
 import org.apache.pulsar.broker.storage.ManagedLedgerStorageClass;
+import org.apache.pulsar.broker.tls.TlsFactorySupport;
 import org.apache.pulsar.broker.topiclistlimit.TopicListMemoryLimiter;
 import org.apache.pulsar.broker.topiclistlimit.TopicListSizeResultCache;
 import org.apache.pulsar.broker.validator.BindAddressValidator;
@@ -1562,6 +1563,7 @@ public class BrokerService implements Closeable {
             try {
                 ClusterData data = clusterDataOp
                         .orElseThrow(() -> new MetadataStoreException.NotFoundException(cluster));
+                warnIfRemovedClusterSslFactoryPluginConfigured(cluster, data);
                 ClientBuilder clientBuilder = PulsarClient.builder()
                         .enableTcpNoDelay(false)
                         .connectionsPerBroker(pulsar.getConfiguration().getReplicationConnectionsPerBroker())
@@ -1600,9 +1602,7 @@ public class BrokerService implements Closeable {
                             data.getBrokerClientTrustCertsFilePath(),
                             data.getBrokerClientKeyFilePath(),
                             data.getBrokerClientCertificateFilePath(),
-                            pulsar.getConfiguration().isTlsHostnameVerificationEnabled(),
-                            data.getBrokerClientSslFactoryPlugin(),
-                            data.getBrokerClientSslFactoryPluginParams()
+                            pulsar.getConfiguration().isTlsHostnameVerificationEnabled()
                     );
                 } else if (pulsar.getConfiguration().isBrokerClientTlsEnabled()) {
                     configTlsSettings(clientBuilder, serviceUrlTls,
@@ -1617,9 +1617,7 @@ public class BrokerService implements Closeable {
                             pulsar.getConfiguration().getBrokerClientTrustCertsFilePath(),
                             pulsar.getConfiguration().getBrokerClientKeyFilePath(),
                             pulsar.getConfiguration().getBrokerClientCertificateFilePath(),
-                            pulsar.getConfiguration().isTlsHostnameVerificationEnabled(),
-                            pulsar.getConfiguration().getBrokerClientSslFactoryPlugin(),
-                            pulsar.getConfiguration().getBrokerClientSslFactoryPluginParams()
+                            pulsar.getConfiguration().isTlsHostnameVerificationEnabled()
                     );
                 } else {
                     clientBuilder.serviceUrl(
@@ -1645,6 +1643,22 @@ public class BrokerService implements Closeable {
         });
     }
 
+    /**
+     * PIP-478 stage 4c: the PIP-337 per-cluster {@code brokerClientSslFactoryPlugin} is removed and ignored.
+     * Warns once per cluster (this runs inside the {@code computeIfAbsent} client/admin creation) when a
+     * cluster still carries a non-default value in its metadata, pointing at the broker-level
+     * {@code brokerClientTlsFactoryClassName} successor.
+     */
+    private void warnIfRemovedClusterSslFactoryPluginConfigured(String cluster, ClusterData data) {
+        if (TlsFactorySupport.isLegacyCustom(data.getBrokerClientSslFactoryPlugin())) {
+            log.warn().attr("cluster", cluster)
+                    .attr("brokerClientSslFactoryPlugin", data.getBrokerClientSslFactoryPlugin())
+                    .log("The per-cluster PIP-337 brokerClientSslFactoryPlugin is removed in Pulsar 5.0 "
+                            + "(PIP-478) and is ignored; migrate the cluster to a PulsarTlsFactory via the "
+                            + "broker-level brokerClientTlsFactoryClassName and clear the field.");
+        }
+    }
+
     private void configTlsSettings(ClientBuilder clientBuilder, String serviceUrl,
                                    boolean brokerClientTlsEnabledWithKeyStore, boolean isTlsAllowInsecureConnection,
                                    String brokerClientTlsTrustStoreType, String brokerClientTlsTrustStore,
@@ -1652,16 +1666,13 @@ public class BrokerService implements Closeable {
                                    String brokerClientTlsKeyStore, String brokerClientTlsKeyStorePassword,
                                    String brokerClientTrustCertsFilePath,
                                    String brokerClientKeyFilePath, String brokerClientCertificateFilePath,
-                                   boolean isTlsHostnameVerificationEnabled, String brokerClientSslFactoryPlugin,
-                                   String brokerClientSslFactoryPluginParams) {
+                                   boolean isTlsHostnameVerificationEnabled) {
+        // PIP-478 stage 4c: the PIP-337 sslFactoryPlugin path is removed; the broker-level value is rejected
+        // at startup and the per-cluster ClusterData value is ignored with a WARN (see getReplicationClient).
         clientBuilder
                 .serviceUrl(serviceUrl)
                 .allowTlsInsecureConnection(isTlsAllowInsecureConnection)
                 .enableTlsHostnameVerification(isTlsHostnameVerificationEnabled);
-        if (StringUtils.isNotBlank(brokerClientSslFactoryPlugin)) {
-            clientBuilder.sslFactoryPlugin(brokerClientSslFactoryPlugin)
-                    .sslFactoryPluginParams(brokerClientSslFactoryPluginParams);
-        }
         if (brokerClientTlsEnabledWithKeyStore) {
             clientBuilder.useKeyStoreTls(true)
                     .tlsTrustStoreType(brokerClientTlsTrustStoreType)
@@ -1684,8 +1695,8 @@ public class BrokerService implements Closeable {
                                         String brokerClientTlsKeyStore, String brokerClientTlsKeyStorePassword,
                                         String brokerClientTrustCertsFilePath,
                                         String brokerClientKeyFilePath, String brokerClientCertificateFilePath,
-                                        boolean isTlsHostnameVerificationEnabled, String brokerClientSslFactoryPlugin,
-                                        String brokerClientSslFactoryPluginParams) {
+                                        boolean isTlsHostnameVerificationEnabled) {
+        // PIP-478 stage 4c: the PIP-337 sslFactoryPlugin path is removed (see configTlsSettings).
         if (brokerClientTlsEnabledWithKeyStore) {
             adminBuilder.useKeyStoreTls(true)
                     .tlsTrustStoreType(brokerClientTlsTrustStoreType)
@@ -1700,9 +1711,7 @@ public class BrokerService implements Closeable {
                     .tlsCertificateFilePath(brokerClientCertificateFilePath);
         }
         adminBuilder.allowTlsInsecureConnection(isTlsAllowInsecureConnection)
-                .enableTlsHostnameVerification(isTlsHostnameVerificationEnabled)
-                .sslFactoryPlugin(brokerClientSslFactoryPlugin)
-                .sslFactoryPluginParams(brokerClientSslFactoryPluginParams);
+                .enableTlsHostnameVerification(isTlsHostnameVerificationEnabled);
     }
 
     public PulsarAdmin getClusterPulsarAdmin(String cluster, Optional<ClusterData> clusterDataOp) {
@@ -1714,6 +1723,7 @@ public class BrokerService implements Closeable {
             try {
                 ClusterData data = clusterDataOp
                         .orElseThrow(() -> new MetadataStoreException.NotFoundException(cluster));
+                warnIfRemovedClusterSslFactoryPluginConfigured(cluster, data);
                 PulsarAdminBuilder builder = PulsarAdmin.builder();
 
                 ServiceConfiguration conf = pulsar.getConfig();
@@ -1749,9 +1759,7 @@ public class BrokerService implements Closeable {
                             data.getBrokerClientTrustCertsFilePath(),
                             data.getBrokerClientKeyFilePath(),
                             data.getBrokerClientCertificateFilePath(),
-                            pulsar.getConfiguration().isTlsHostnameVerificationEnabled(),
-                            data.getBrokerClientSslFactoryPlugin(),
-                            data.getBrokerClientSslFactoryPluginParams()
+                            pulsar.getConfiguration().isTlsHostnameVerificationEnabled()
                     );
                 } else if (conf.isBrokerClientTlsEnabled()) {
                     configAdminTlsSettings(builder,
@@ -1766,9 +1774,7 @@ public class BrokerService implements Closeable {
                             conf.getBrokerClientTrustCertsFilePath(),
                             conf.getBrokerClientKeyFilePath(),
                             conf.getBrokerClientCertificateFilePath(),
-                            pulsar.getConfiguration().isTlsHostnameVerificationEnabled(),
-                            conf.getBrokerClientSslFactoryPlugin(),
-                            conf.getBrokerClientSslFactoryPluginParams()
+                            pulsar.getConfiguration().isTlsHostnameVerificationEnabled()
                     );
                 }
 

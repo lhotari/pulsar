@@ -47,6 +47,7 @@ import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationService;
 import org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsServlet;
+import org.apache.pulsar.broker.tls.TlsFactorySupport;
 import org.apache.pulsar.broker.web.plugin.servlet.AdditionalServletWithClassLoader;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationFactory;
@@ -173,6 +174,11 @@ public class ProxyServiceStarter {
                 proxyConfigurationCustomizer.accept(config);
             }
 
+            // PIP-478 stage 4c: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default
+            // sslFactoryPlugin / brokerClientSslFactoryPlugin loudly at startup rather than silently ignore a
+            // security-relevant setting.
+            rejectRemovedPip337SslFactoryPlugin(config);
+
             if (!isBlank(zookeeperServers)) {
                 // Use zookeeperServers from command line
                 config.setMetadataStoreUrl(zookeeperServers);
@@ -241,6 +247,19 @@ public class ProxyServiceStarter {
     private void ensureUrlNotContainsComma(String paramName, String paramValue) {
         checkArgument(!paramValue.contains(","), paramName + " does not support multi urls yet,"
                 + " it should point to the discovery service provider.");
+    }
+
+    // PIP-478 stage 4c: reject a stale, non-default PIP-337 sslFactoryPlugin / brokerClientSslFactoryPlugin
+    // (removed in 5.0) at startup. The @Deprecated getters are read intentionally here to enforce the removal.
+    @SuppressWarnings("deprecation")
+    private static void rejectRemovedPip337SslFactoryPlugin(ProxyConfiguration config) {
+        if (TlsFactorySupport.isLegacyCustom(config.getSslFactoryPlugin())
+                || TlsFactorySupport.isLegacyCustom(config.getBrokerClientSslFactoryPlugin())) {
+            throw new IllegalArgumentException("The PIP-337 sslFactoryPlugin / brokerClientSslFactoryPlugin "
+                    + "configuration is removed in Pulsar 5.0 (PIP-478); migrate the custom factory to a "
+                    + "PulsarTlsFactory via tlsFactoryClassName / brokerClientTlsFactoryClassName and clear "
+                    + "sslFactoryPlugin / brokerClientSslFactoryPlugin.");
+        }
     }
 
     public static void main(String[] args) throws Exception {

@@ -667,24 +667,33 @@ public class ProxyConfiguration implements PulsarConfiguration {
     )
     private String tlsTrustStorePassword = null;
 
+    /**
+     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478); a non-default value is
+     *     rejected at proxy startup. Use {@code tlsFactoryClassName}.
+     */
+    @Deprecated
     @FieldContext(
             category = CATEGORY_TLS,
-            doc = "SSL Factory Plugin class to provide SSLEngine and SSLContext objects. The default "
-                    + " class used is DefaultSslFactory.")
+            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0. Retained only "
+                    + "to reject a stale configuration at startup; use tlsFactoryClassName instead.")
     private String sslFactoryPlugin = "";
+    /**
+     * @deprecated since 5.0.0: superseded by {@code tlsFactoryConfig} (PIP-478).
+     */
+    @Deprecated
     @FieldContext(
             category = CATEGORY_TLS,
-            doc = "SSL Factory plugin configuration parameters.")
+            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0; superseded by "
+                    + "tlsFactoryConfig.")
     private String sslFactoryPluginParams = "";
     @FieldContext(
             category = CATEGORY_TLS,
             doc = "PIP-478 TLS factory (PulsarTlsFactory) class name for the proxy's server-side TLS "
-                    + "(binary front-end and web server; purposes PROXY/WEB). When set, the proxy uses the "
-                    + "new PIP-478 TLS SPI instead of the PIP-337 sslFactoryPlugin path: an empty value or "
-                    + "the literal 'default' selects the built-in default factory composed from these tls* "
-                    + "settings, otherwise the named class is instantiated via its public no-arg "
-                    + "constructor. Supersedes sslFactoryPlugin/sslFactoryPluginParams (removal in a later "
-                    + "release); while both remain, a non-default sslFactoryPlugin keeps the legacy path.")
+                    + "(binary front-end and web server; purposes PROXY/WEB). An empty value or the literal "
+                    + "'default' selects the built-in default factory composed from these tls* settings, "
+                    + "otherwise the named class is instantiated via its public no-arg constructor. This is "
+                    + "the only server TLS path; the removed PIP-337 sslFactoryPlugin keys are rejected at "
+                    + "startup when set to a non-default value.")
     private String tlsFactoryClassName = "";
     @FieldContext(
             category = CATEGORY_TLS,
@@ -761,24 +770,34 @@ public class ProxyConfiguration implements PulsarConfiguration {
     )
     private Set<String> brokerClientTlsProtocols = new TreeSet<>();
 
+    /**
+     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478); a non-default value is
+     *     rejected at proxy startup. Use {@code brokerClientTlsFactoryClassName}.
+     */
+    @Deprecated
     @FieldContext(
             category = CATEGORY_TLS,
-            doc = "SSL Factory Plugin class used by internal client to provide SSLEngine and SSLContext objects. "
-                    + "The default class used is DefaultSslFactory.")
+            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0. Retained only "
+                    + "to reject a stale configuration at startup; use brokerClientTlsFactoryClassName instead.")
     private String brokerClientSslFactoryPlugin = "";
+    /**
+     * @deprecated since 5.0.0: superseded by {@code brokerClientTlsFactoryConfig} (PIP-478).
+     */
+    @Deprecated
     @FieldContext(
             category = CATEGORY_TLS,
-            doc = "SSL Factory plugin configuration parameters used by internal client.")
+            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0; superseded by "
+                    + "brokerClientTlsFactoryConfig.")
     private String brokerClientSslFactoryPluginParams = "";
     @FieldContext(
             category = CATEGORY_TLS,
             doc = "PIP-478 TLS factory (PulsarTlsFactory) class name for the proxy's own outbound "
-                    + "(proxy-to-broker) client connections (purpose BROKER_CLIENT). When set, the proxy uses "
-                    + "the new PIP-478 TLS SPI instead of the PIP-337 brokerClientSslFactoryPlugin path: an "
-                    + "empty value or the literal 'default' selects the built-in default factory composed "
-                    + "from the brokerClient tls* settings, otherwise the named class is instantiated via its "
-                    + "public no-arg constructor. Supersedes brokerClientSslFactoryPlugin/"
-                    + "brokerClientSslFactoryPluginParams (removal in a later release).")
+                    + "(proxy-to-broker) client connections (purpose BROKER_CLIENT). An empty value or the "
+                    + "literal 'default' selects the built-in default factory composed from the brokerClient "
+                    + "tls* settings, otherwise the named class is instantiated via its public no-arg "
+                    + "constructor. This is the only outbound-client TLS path; the removed PIP-337 "
+                    + "brokerClientSslFactoryPlugin keys are rejected at startup when set to a non-default "
+                    + "value.")
     private String brokerClientTlsFactoryClassName = "";
     @FieldContext(
             category = CATEGORY_TLS,
