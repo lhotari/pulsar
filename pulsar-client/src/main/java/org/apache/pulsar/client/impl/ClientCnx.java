@@ -235,6 +235,13 @@ public class ClientCnx extends PulsarHandler {
     // connect driven through an AsyncAuthenticationDriver is in progress; a fresh exchange is created per
     // connect attempt and whenever the broker pushes the REFRESH sentinel.
     private AuthenticationExchange authenticationExchange;
+    // PIP-478 P2: guards for the async auth carve-out. Both are touched only on the channel's event loop
+    // (connect resolution, handleAuthChallenge, and every continuation run there), so they need no
+    // synchronization. authRoundGeneration is bumped when a round starts; a continuation whose generation
+    // is no longer current (superseded by a newer REFRESH/challenge round) or whose channel has closed
+    // no-ops instead of clobbering the published credential or writing to a dead channel.
+    private int authRoundGeneration;
+    private boolean authRoundInProgress;
     private TransactionBufferHandler transactionBufferHandler;
     @Getter
     private boolean supportsTopicWatchers;
@@ -355,7 +362,8 @@ public class ClientCnx extends PulsarHandler {
         // fed to one continuation that assigns the data provider, builds the command, transitions state and
         // writes. The continuation runs inline when the future is already done and hops to the channel's
         // event executor only when it was pending.
-        driveAuthResolution(resolveConnectAuthData(), this::completeConnect);
+        AuthRound round = startAuthRound();
+        driveAuthResolution(round, resolveConnectAuthData(), this::completeConnect);
     }
 
     /**
@@ -396,7 +404,12 @@ public class ClientCnx extends PulsarHandler {
      */
     private void completeConnect(ResolvedAuthData resolution, Throwable throwable) {
         if (throwable != null) {
-            log.warn().exception(FutureUtil.unwrapCompletionException(throwable)).log("Error during handshake");
+            Throwable cause = FutureUtil.unwrapCompletionException(throwable);
+            log.warn().exception(cause).log("Error during handshake");
+            // PIP-478 P1a: surface the real (v4-mapped) credential failure to callers waiting on the
+            // connection future before ctx.close() triggers channelInactive, whose generic "Connection
+            // already closed" message would otherwise be all the caller ever sees.
+            connectionFuture.completeExceptionally(cause);
             ctx.close();
             return;
         }
@@ -406,6 +419,7 @@ public class ClientCnx extends PulsarHandler {
             request = buildConnectCommand(resolution.authData());
         } catch (Throwable t) {
             log.warn().exception(t).log("Error during handshake");
+            connectionFuture.completeExceptionally(t);
             ctx.close();
             return;
         }
@@ -416,6 +430,9 @@ public class ClientCnx extends PulsarHandler {
                         state = State.SentConnectFrame;
                     } else {
                         log.warn().exception(future.cause()).log("Error during handshake");
+                        // PIP-478 P1a: a terminal connect-write failure must likewise fail the connection
+                        // future with its cause rather than defer to channelInactive's generic message.
+                        connectionFuture.completeExceptionally(future.cause());
                         ctx.close();
                     }
                 });
@@ -543,7 +560,18 @@ public class ClientCnx extends PulsarHandler {
         // REFRESH sentinel, SASL multi-round and any custom challenge/response.
         AuthData challenge = AuthData.of(authChallenge.getChallenge().getAuthData());
         boolean refresh = Arrays.equals(AuthData.REFRESH_AUTH_DATA_BYTES, authChallenge.getChallenge().getAuthData());
-        driveAuthResolution(resolveChallengeAuthData(challenge, refresh), this::completeAuthChallenge);
+        // PIP-478 P2 (serialize-or-drop): the broker never pipelines challenges — it waits for each
+        // CommandAuthResponse before sending the next — so a non-refresh challenge arriving while a round
+        // is still in flight is anomalous, and servicing it would re-enter the same single-round,
+        // non-thread-safe exchange concurrently. Drop it. A REFRESH is different: it deliberately restarts
+        // authentication with a fresh exchange, so it may supersede an in-flight round — the superseded
+        // round's continuation detects the newer generation (see driveAuthResolution) and no-ops.
+        if (authRoundInProgress && !refresh) {
+            log.debug().log("Dropping a broker auth challenge received while an auth round is in progress");
+            return;
+        }
+        AuthRound round = startAuthRound();
+        driveAuthResolution(round, resolveChallengeAuthData(challenge, refresh), this::completeAuthChallenge);
     }
 
     /**
@@ -631,13 +659,61 @@ public class ClientCnx extends PulsarHandler {
      * is already complete; it hops onto the channel's event executor only when the resolution was pending
      * (an {@link AsyncAuthenticationDriver} performing off-event-loop credential I/O).
      */
-    private void driveAuthResolution(CompletableFuture<ResolvedAuthData> resolution,
+    private void driveAuthResolution(AuthRound round, CompletableFuture<ResolvedAuthData> resolution,
             BiConsumer<ResolvedAuthData, Throwable> continuation) {
+        BiConsumer<ResolvedAuthData, Throwable> guarded = (resolved, throwable) -> {
+            // The current round owns the in-progress flag; clear it as its continuation lands. A stale
+            // continuation (superseded by a newer round) leaves the flag to the round that now owns it.
+            if (round.generation() == authRoundGeneration) {
+                authRoundInProgress = false;
+            }
+            if (!isAuthRoundCurrent(round)) {
+                // PIP-478 P2: a continuation that is stale (a newer REFRESH/challenge round has started) or
+                // whose channel has closed must not clobber the published credential or write to a dead
+                // channel. The connection future is already handled — by the superseding round, or by
+                // channelInactive when the channel closed.
+                log.debug().log("Ignoring a stale or post-close auth continuation");
+                return;
+            }
+            continuation.accept(resolved, throwable);
+        };
         if (resolution.isDone()) {
-            resolution.whenComplete(continuation);
+            resolution.whenComplete(guarded);
         } else {
-            resolution.whenCompleteAsync(continuation, ctx.executor());
+            resolution.whenCompleteAsync(guarded, ctx.executor());
         }
+    }
+
+    /**
+     * Begin a new async auth round: mark a round in progress and bump the generation, capturing the
+     * channel identity so the continuation can detect a superseded round or a closed/reused channel.
+     * Called on the event loop at the start of connect, the REFRESH sentinel and every challenge round.
+     *
+     * @return the identity of the round just started
+     */
+    private AuthRound startAuthRound() {
+        authRoundInProgress = true;
+        return new AuthRound(++authRoundGeneration, ctx.channel());
+    }
+
+    /**
+     * Whether {@code round} is still the authoritative in-flight round on a live channel — i.e. no newer
+     * round has superseded it and its channel is unchanged and active.
+     *
+     * @param round the round captured when the continuation was scheduled
+     * @return {@code true} if the round's continuation may still perform its side effects
+     */
+    private boolean isAuthRoundCurrent(AuthRound round) {
+        return round.generation() == authRoundGeneration
+                && round.channel() == ctx.channel()
+                && round.channel().isActive();
+    }
+
+    /**
+     * Identity of one async auth round — the generation at which it started and the channel it was issued
+     * on — so a continuation landing after the round was superseded, or after the channel closed, no-ops.
+     */
+    private record AuthRound(int generation, Channel channel) {
     }
 
     /**
