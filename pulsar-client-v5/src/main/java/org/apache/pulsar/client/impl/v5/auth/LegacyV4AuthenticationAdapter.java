@@ -113,11 +113,10 @@ public abstract class LegacyV4AuthenticationAdapter implements Authentication {
 
     /**
      * Unwrap the v4 {@link org.apache.pulsar.client.api.Authentication} that a {@link #wrap}-produced
-     * v5 adapter delegates to, if any.
-     *
-     * <p>Used by the v5 client builder to route a bridged v4 plugin back onto the v4 client verbatim,
-     * preserving the exact legacy behaviour (including {@code AuthenticationTls}'s builder-level TLS
-     * material configuration) until the full client-side migration lands (PIP-478 stage 3).
+     * v5 adapter delegates to, if any. This is the inverse of {@link #wrap} — it recovers the wrapped v4
+     * plugin for any bridged adapter (used by the v5 client builder to inspect a bridged plugin's TLS
+     * material and decide whether it can run raw on the v4 client or must stay wrapped so its credential
+     * I/O off-loads).
      *
      * @param v5 the v5 authentication (possibly a {@code wrap()}-produced adapter)
      * @return the wrapped v4 plugin if {@code v5} is a legacy adapter, otherwise empty
