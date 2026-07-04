@@ -1314,3 +1314,49 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
       sweep) belong to the FIX-5 doc/PIP batch. Single-pass HTTP `getHttpHeadersAsync` remains dead-code for
       the v4 built-ins (goals-review DEFER), so the HTTP metric currently only fires on the SASL-over-HTTP
       driver path.
+
+39. **FIX-5 doc/PIP/polish batch** (2026-07-04, four local commits on `lh-pip-478-impl-v2`, no push;
+    predecessor authored the edits and went idle before verify/commit — this pass verifies + commits them).
+    Comment/javadoc/PIP only, no behaviour change; the four commits are grouped by concern:
+
+    - **Commit `ed5f822cb63` — `[improve][misc]` stale implementation-marker sweep** (~51 files across
+      client, client-v5, client-admin, common(-api), broker(-common), proxy, websocket, functions-worker,
+      athenz/sasl plugins). Removes PIP-478 authoring scaffolding that leaked into shipped javadoc/comments —
+      "stage 3b/3c/4a/4c" tags, decision-ids, and sweep-narrative asides (e.g. `ProxyConnection`'s "ninth
+      call-site the stage-4c sweep missed" reworded to state the current self-built-config contract). Closes
+      the deferred "stale 'until stage N' comment sweep" flagged in entry 38.
+    - **Commit `152ee01f5ce` — `[improve][conf]` deprecate ignored PIP-337 cluster fields + standalone.conf.**
+      `ClusterData` getters/builder-setters `brokerClientSslFactoryPlugin`/`...Params` marked `@Deprecated`
+      (with `@deprecated` javadoc: removed by PIP-478, retained for wire/metadata compat, ignored with WARN,
+      factory selection is broker-level `brokerClientTlsFactoryClassName`); `ClusterDataImpl`'s two builder
+      overrides marked `@Deprecated` to match the interface (silences the override-deprecation warnings).
+      `standalone.conf` documents the four PIP-478 TLS-factory keys already present in `broker.conf`
+      (`tlsFactoryClassName`/`Config`, `brokerClientTlsFactoryClassName`/`Config`).
+    - **Commit `c7c853f7590` — `[improve][client]` tighten auth/TLS/HTTP SPI contract javadoc** (8 files):
+      `TlsHandle` (get() never blocks / after-dispose unspecified / dispose() idempotent), `PulsarTlsFactory`
+      (initialize-once-before-createInstance, concurrent createInstance, close-at-most-once ordering),
+      `PulsarHttpClientFactory.newHttpClient` (construction-time `IllegalStateException`, no request I/O),
+      `HttpAuthHeaders`/`HttpResponse`/`HttpRequest` (single-value-per-canonical-name, last-wins collapse),
+      `Authentication` (capabilities never queried before `initializeAsync` completes),
+      `PulsarClientBuilder.authentication(Authentication)` (programmatic-path adopt contract: instance must be
+      pre-configured; client drives `initializeAsync`+`close`).
+    - **Commit `112720c45f3` — `[improve][pip]` PIP amendments.** Athenz/ZTS reconciliation (only OAuth2 among
+      built-ins gets a framework `PulsarHttpClient`; Athenz stays on the SDK transport); OAuth2/Athenz
+      reuse-not-duplicate layering note (v5 bodies are thin readers over a Supplier, gaining the async path,
+      not a v5-native reimplementation); `ClientAuthenticationServices`/`...Aware` added to the public-API
+      inventory; `SSLContext`/`SSLParameters` added to the well-known TLS instance list; the `sslProvider`
+      JCE-provider-name → JDK-engine delta documented (niche, not a security regression); and the **M-F6
+      known gap** — the proxy's own broker-client credential I/O still runs inline on the Netty loop (proxy
+      lookup/data paths are not a `PulsarClientImpl` and bind no client auth services), same as v4, deferred
+      to a follow-up. **M-F6 decision: document the gap, do NOT attempt proxy service-binding in this PIP.**
+    - **Verify (all local, worktree `async-auth-interface`, `dangerouslyDisableSandbox` for the Gradle
+      wrapper).** `spotlessApply` made no changes across the touched modules. `compileJava`+`compileTestJava`+
+      `checkstyleMain`+`checkstyleTest` all **BUILD SUCCESSFUL** for `:pulsar-common-api`
+      `:pulsar-client-api-v5` `:pulsar-client-admin-api` `:pulsar-common` `:pulsar-client-original`
+      `:pulsar-client-v5` `:pulsar-client-admin-original` `:pulsar-client-auth-athenz` `:pulsar-client-auth-sasl`
+      `:pulsar-broker-common` `:pulsar-proxy` `:pulsar-websocket` `:pulsar-functions:pulsar-functions-worker`
+      `:pulsar-broker`. Only non-fatal deprecation warnings (the intended `@Deprecated` additions); no fixes
+      needed — the edits introduced no compile/checkstyle breakage. **Out-of-scope note:** the pre-existing
+      "**Confined removal.** … `SecurityUtility` … remains" line in `pip-478.md` is now stale relative to
+      FIX-6 (which deleted `SecurityUtility`); it is unchanged context, not a FIX-5 edit, so left untouched
+      here — a candidate for a later PIP-Removal-section reconciliation.
