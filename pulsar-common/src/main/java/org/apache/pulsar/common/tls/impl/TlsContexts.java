@@ -60,6 +60,15 @@ import org.apache.pulsar.common.util.SecurityUtility;
 @CustomLog
 public final class TlsContexts {
 
+    /**
+     * The default enabled TLS protocol set, applied whenever the effective protocol list is empty — a policy
+     * with no {@code protocols()}, or a synthesized context whose factory companion set none. This preserves
+     * the {@code {TLSv1.3, TLSv1.2}} floor the removed {@code DefaultPulsarSslFactory} forced at engine build
+     * (B3): without it the PIP-478 path would silently defer to the JVM/provider default protocol set, a
+     * security-relevant drift on upgrade.
+     */
+    public static final List<String> DEFAULT_ENABLED_PROTOCOLS = List.of("TLSv1.3", "TLSv1.2");
+
     // WARN-once dedup for the insecure (trust-all) mode, keyed by policy value so a rotation's context rebuilds
     // (and both the Netty and JDK builds of the same policy) log at most once (S-F1).
     private static final Set<TlsPolicy> INSECURE_WARNED = ConcurrentHashMap.newKeySet();
@@ -172,8 +181,9 @@ public final class TlsContexts {
      * <p>Merge order (PIP-478): the factory {@code SSLParameters} form the baseline (non-null members only);
      * for {@code endpointIdentificationAlgorithm} the factory's value wins when set, otherwise
      * {@code enableHostnameVerification} applies {@code "HTTPS"}; SNI {@code serverNames} are never taken from
-     * the factory (the per-connection SNI wins). When the factory supplied no companion and hostname
-     * verification is disabled, the bare JDK-backed context is returned unwrapped (nothing to overlay).
+     * the factory (the per-connection SNI wins). When the factory companion sets no enabled protocols, the
+     * {@link #DEFAULT_ENABLED_PROTOCOLS} floor is applied so a synthesized client engine matches the native
+     * path's default (B3).
      *
      * @param sslContext                 the JDK context to wrap
      * @param enableHostnameVerification whether the client policy enables hostname verification
@@ -185,7 +195,7 @@ public final class TlsContexts {
                                                           SSLParameters factoryBaseline) {
         SslContext clientContext = synthesizeNettyFromJdk(sslContext, true, false);
         SSLParameters overlay = composeClientOverlay(factoryBaseline, enableHostnameVerification);
-        return overlay == null ? clientContext : new SynthesizedEngineSslContext(clientContext, overlay, false);
+        return new SynthesizedEngineSslContext(clientContext, overlay, false);
     }
 
     /**
@@ -194,11 +204,12 @@ public final class TlsContexts {
      * the framework when a custom factory returns {@code empty()} for the Netty class on a server purpose but
      * supplies the JDK {@code SSLContext} fallback.
      *
-     * <p>When the factory supplies no companion, the bare JDK-backed context is returned with the consumer's
-     * {@code requireTrustedClientCert} mapped as usual ({@link ClientAuth#REQUIRE}/{@link ClientAuth#OPTIONAL}).
-     * When it does, its non-null baseline members (protocols/ciphers/algorithm-constraints/application-
-     * protocols) are overlaid per engine and — merge rule 4 — its {@code needClientAuth}/{@code wantClientAuth}
-     * are authoritative for the client-auth mode.
+     * <p>The consumer's {@code requireTrustedClientCert} is mapped onto the base context as usual
+     * ({@link ClientAuth#REQUIRE}/{@link ClientAuth#OPTIONAL}). When a companion is supplied its non-null
+     * baseline members (protocols/ciphers/algorithm-constraints/application-protocols) are overlaid per engine
+     * and — merge rule 4 — its {@code needClientAuth}/{@code wantClientAuth} are authoritative for the
+     * client-auth mode; with no companion the base context's client-auth mode is left untouched. In both cases,
+     * when no enabled protocols were set the {@link #DEFAULT_ENABLED_PROTOCOLS} floor is applied (B3).
      *
      * @param sslContext               the JDK context to wrap
      * @param requireTrustedClientCert the consumer's client-auth requirement (used when no companion supplied)
@@ -209,34 +220,36 @@ public final class TlsContexts {
                                                           boolean requireTrustedClientCert,
                                                           SSLParameters factoryBaseline) {
         SslContext serverContext = synthesizeNettyFromJdk(sslContext, false, requireTrustedClientCert);
-        if (factoryBaseline == null) {
-            // No factory engine policy: the base context already carries the consumer's client-auth mode.
-            return serverContext;
-        }
-        return new SynthesizedEngineSslContext(serverContext, copyBaselineMembers(factoryBaseline), true);
+        // Apply the companion's client-auth mode (merge rule 4) only when a companion was supplied; with none,
+        // the base context already carries the consumer's client-auth mode and the overlay pins only protocols.
+        SSLParameters overlay = factoryBaseline == null ? new SSLParameters() : copyBaselineMembers(factoryBaseline);
+        applyDefaultProtocolsIfUnset(overlay);
+        return new SynthesizedEngineSslContext(serverContext, overlay, factoryBaseline != null);
     }
 
     /**
-     * Compose the per-engine overlay for a client purpose, or {@code null} when there is nothing to apply
-     * (no factory companion and hostname verification disabled — the base context is used verbatim).
+     * Compose the per-engine overlay for a client purpose. Always non-null: at minimum it pins the
+     * {@link #DEFAULT_ENABLED_PROTOCOLS} floor (B3), plus the factory's baseline members and — merge rule 2 —
+     * the endpoint-identification algorithm (factory wins when set, else the consumer's hostname-verification
+     * flag applies {@code "HTTPS"}).
      */
     private static SSLParameters composeClientOverlay(SSLParameters factoryBaseline,
                                                       boolean enableHostnameVerification) {
-        if (factoryBaseline == null) {
-            if (!enableHostnameVerification) {
-                return null;
-            }
-            SSLParameters overlay = new SSLParameters();
-            overlay.setEndpointIdentificationAlgorithm("HTTPS");
-            return overlay;
-        }
-        SSLParameters overlay = copyBaselineMembers(factoryBaseline);
+        SSLParameters overlay = factoryBaseline == null ? new SSLParameters() : copyBaselineMembers(factoryBaseline);
+        applyDefaultProtocolsIfUnset(overlay);
         // Merge rule 2: the factory's endpointIdentificationAlgorithm wins when set; otherwise the consumer's
         // hostname-verification flag applies "HTTPS".
         if (overlay.getEndpointIdentificationAlgorithm() == null && enableHostnameVerification) {
             overlay.setEndpointIdentificationAlgorithm("HTTPS");
         }
         return overlay;
+    }
+
+    /** Pin {@link #DEFAULT_ENABLED_PROTOCOLS} on an overlay whose enabled protocols were left unset (B3). */
+    private static void applyDefaultProtocolsIfUnset(SSLParameters overlay) {
+        if (overlay.getProtocols() == null) {
+            overlay.setProtocols(DEFAULT_ENABLED_PROTOCOLS.toArray(new String[0]));
+        }
     }
 
     /**
@@ -299,9 +312,12 @@ public final class TlsContexts {
         if (ciphers != null) {
             builder.ciphers(ciphers);
         }
-        if (protocols != null) {
-            builder.protocols(protocols.toArray(new String[0]));
-        }
+        // Pin the enabled protocols even when the policy configured none, preserving the {TLSv1.3, TLSv1.2}
+        // floor the removed DefaultPulsarSslFactory forced rather than deferring to the provider default (B3).
+        String[] enabledProtocols = protocols != null
+                ? protocols.toArray(new String[0])
+                : DEFAULT_ENABLED_PROTOCOLS.toArray(new String[0]);
+        builder.protocols(enabledProtocols);
     }
 
     private static Set<String> toSet(List<String> values) {

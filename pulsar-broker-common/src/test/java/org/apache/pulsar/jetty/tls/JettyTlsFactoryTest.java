@@ -296,6 +296,35 @@ public class JettyTlsFactoryTest {
     }
 
     /**
+     * B3: with no configured protocols and no factory companion, the synthesized Jetty server/client factories
+     * pin the {@code {TLSv1.3, TLSv1.2}} floor (matching the native Netty path) rather than deferring to the
+     * provider default.
+     */
+    @Test
+    public void defaultProtocolsPinnedWhenUnconfigured() throws Exception {
+        FileBasedTlsFactory factory = new FileBasedTlsFactory(
+                Map.of(TlsPurpose.WEB, TlsPolicy.pem(tempDir.resolve("ca.pem").toString(),
+                        tempDir.resolve("cert.pem").toString(), tempDir.resolve("key.pem").toString())),
+                FileBasedTlsFactorySettings.builder().build());
+        factory.initialize(initContext()).join();
+
+        JettyTlsFactory.ReloadableServerTls server = JettyTlsFactory.createReloadingServerFactory(
+                factory, TlsPurpose.WEB, null, false, false, null, null);
+        JettyTlsFactory.ReloadableClientTls client = JettyTlsFactory.createReloadingClientFactory(
+                factory, TlsPurpose.WEB, null);
+        try {
+            assertThat(server.sslContextFactory().getIncludeProtocols())
+                    .containsExactlyInAnyOrder("TLSv1.3", "TLSv1.2");
+            assertThat(client.sslContextFactory().getIncludeProtocols())
+                    .containsExactlyInAnyOrder("TLSv1.3", "TLSv1.2");
+        } finally {
+            server.subscription().dispose();
+            client.subscription().dispose();
+            factory.close();
+        }
+    }
+
+    /**
      * PIP-478: the synthesized client {@link SslContextFactory.Client} maps the companion's enabled
      * protocols/ciphers (client-auth is a server concept and is not mapped on the client factory).
      */

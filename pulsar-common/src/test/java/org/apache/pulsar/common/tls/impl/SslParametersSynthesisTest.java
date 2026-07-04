@@ -96,6 +96,32 @@ public class SslParametersSynthesisTest {
                 .isInstanceOf(SSLException.class);
     }
 
+    // ---- default protocol floor (B3): unset -> {TLSv1.3, TLSv1.2}, not the provider default ----
+
+    @Test
+    public void synthesizedClientWithoutCompanionPinsDefaultProtocols() throws Exception {
+        SslContext context = TlsContexts.synthesizeNettyClientFromJdk(clientJdkContextTrustOnly(), false, null);
+        assertThat(context.newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols())
+                .containsExactlyInAnyOrder("TLSv1.3", "TLSv1.2");
+    }
+
+    @Test
+    public void synthesizedClientWithCompanionMissingProtocolsPinsDefault() throws Exception {
+        // A companion that sets other members but no protocols still gets the default floor.
+        SSLParameters companion = new SSLParameters();
+        companion.setEndpointIdentificationAlgorithm("HTTPS");
+        SslContext context = TlsContexts.synthesizeNettyClientFromJdk(clientJdkContextTrustOnly(), false, companion);
+        assertThat(context.newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols())
+                .containsExactlyInAnyOrder("TLSv1.3", "TLSv1.2");
+    }
+
+    @Test
+    public void synthesizedServerWithoutCompanionPinsDefaultProtocols() throws Exception {
+        SslContext context = TlsContexts.synthesizeNettyServerFromJdk(serverJdkContext(), false, null);
+        assertThat(context.newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols())
+                .containsExactlyInAnyOrder("TLSv1.3", "TLSv1.2");
+    }
+
     // ---- (b) endpoint identification: factory value wins, else the consumer flag applies "HTTPS" ----
 
     @Test

@@ -28,6 +28,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
+import org.apache.pulsar.common.tls.impl.TlsContexts;
 import org.apache.pulsar.common.util.SecurityUtility;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 
@@ -156,6 +157,8 @@ public final class JettyTlsFactory {
         if (StringUtils.isNotBlank(sslProviderString)) {
             client.setProvider(sslProviderString);
         }
+        // Pin the {TLSv1.3, TLSv1.2} floor (B3), matching the native path; a factory companion overrides it below.
+        client.setIncludeProtocols(TlsContexts.DEFAULT_ENABLED_PROTOCOLS.toArray(new String[0]));
         // Merge the factory's engine-policy companion (if any): protocols/ciphers only — client-auth is a
         // server concept, and SNI/hostname verification stay per-connection.
         resolveBaselineParameters(factory, purpose)
@@ -188,8 +191,13 @@ public final class JettyTlsFactory {
         if (ciphers != null && !ciphers.isEmpty()) {
             sslContextFactory.setIncludeCipherSuites(ciphers.toArray(new String[0]));
         }
+        // Pin the enabled protocols even when unconfigured, matching the {TLSv1.3, TLSv1.2} floor the native
+        // Netty path applies rather than deferring to the provider default (B3). A factory-supplied companion,
+        // applied afterwards by applyServerBaseline, still overrides this.
         if (protocols != null && !protocols.isEmpty()) {
             sslContextFactory.setIncludeProtocols(protocols.toArray(new String[0]));
+        } else {
+            sslContextFactory.setIncludeProtocols(TlsContexts.DEFAULT_ENABLED_PROTOCOLS.toArray(new String[0]));
         }
         if (StringUtils.isNotBlank(sslProviderString)) {
             sslContextFactory.setProvider(sslProviderString);

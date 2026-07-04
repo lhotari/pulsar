@@ -628,6 +628,20 @@ public class FileBasedTlsFactoryTest {
         factory.close();
     }
 
+    @Test
+    public void defaultProtocolsAppliedWhenPolicyLeavesThemUnset() {
+        FileBasedTlsFactory factory = factory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.pem(RSA_CA, BROKER_CERT, BROKER_KEY),
+                        TlsPurpose.CLIENT_DEFAULT, TlsPolicy.builder().trustCertsFilePath(RSA_CA).build()),
+                FileBasedTlsFactorySettings.defaults());
+        // B3: with no protocols configured the {TLSv1.3, TLSv1.2} floor is enabled on both the server and the
+        // client context (the set the removed DefaultPulsarSslFactory forced), not the provider default — so an
+        // upgrade to the PIP-478 TLS path does not silently change the enabled protocol set.
+        assertThat(serverEngine(factory).getEnabledProtocols()).containsExactlyInAnyOrder("TLSv1.3", "TLSv1.2");
+        assertThat(clientEngine(factory).getEnabledProtocols()).containsExactlyInAnyOrder("TLSv1.3", "TLSv1.2");
+        factory.close();
+    }
+
     private static void assertNettyContextBuildsUnlessOpenSslWithCiphers(FileBasedTlsFactory factory,
             TlsPurpose purpose, SslProvider provider, List<String> ciphers) {
         if (ciphers != null && provider == SslProvider.OPENSSL) {
