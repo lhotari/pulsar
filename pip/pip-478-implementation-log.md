@@ -980,3 +980,95 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
     after the rebase; human review of the PIP + branch by the author. Known out-of-scope
     follow-ons recorded in entries above: websocket OTel root, SSLContextValidatorEngine
     orphan cleanup.
+
+35. **GATE-critical TLS-rotation memory-safety + lifecycle hardening (8-model review, FIX-1)**
+    (2026-07-04, local commits on `lh-pip-478-impl-v2`, no push). Four commits address the
+    review's GATE and lifecycle findings; each closes the listed findings.
+
+    - **Commit A — `[fix][misc] PIP-478 GATE: fix OpenSSL TLS-rotation use-after-free (F1+F2)`.**
+      The Netty **OpenSSL** engine frees the native `SSL_CTX` when a context's refcount hits 0;
+      CI runs the JDK provider where refcount ops are no-ops, so this regime was UNTESTED.
+      *F1*: `FileBasedTlsFactory.Subscription.deliver` released the superseded context to
+      refcount 0 on the poll thread the instant the new one was published, while subscribing
+      consumers hold a bare volatile borrow and call `newHandler`/`newEngine` off another thread
+      with no pin. Fixed **both sides**: (1) **deferred release** — the subscription keeps the
+      just-superseded instance one extra generation (releases the N-1th on the N+1th delivery);
+      (2) **per-use pinning** — new `TlsContextAcquisition.withPinnedContext(source, build)` reads
+      the borrow, retains it across the build, releases after (balanced pin, never disturbs
+      factory ownership), re-reading on `IllegalReferenceCountException`. Adopted at all six
+      subscribing consumers: broker `PulsarChannelInitializer`, proxy `ServiceChannelInitializer`,
+      `DirectProxyHandler` (also narrowed — the context is read at connect time inside
+      `initChannel` instead of captured before the async connect), `HttpClient`,
+      `AsyncHttpConnector`, `FrameworkHttpClientFactory`. *F2*: `ProxyService.close` disposed the
+      TLS factories BEFORE quiescing the worker/extension event loops → an in-flight broker-connect
+      could run `newHandler` on a freed context; reordered so TLS disposal happens only after the
+      loops are shut down (mirrors the broker). **Test**: OpenSSL-provider (`SslProvider.OPENSSL`)
+      rotation tests forcing the release/use interleaving while a consumer holds a borrow, plus a
+      `withPinnedContext` re-read unit test — the regime CI never exercises. Native OpenSSL is
+      present in this env, so all three run (0 skipped). Closes **F1, F2**.
+    - **Commit B — `[fix][misc] keep-last-good hardening for TLS reload (L1+F4+L3/S-F3)`.**
+      *L1*: `RegisteredSource` gained a `pendingRedeliver` flag so a rotation whose rebuild failed
+      for a subscriber retries on the next poll even when the source reports changed=false (no
+      permanent wedge). *F4*: `loadInitialInstance` serves the last-good cached context (new
+      `cachedInstance`) on a load failure — extending keep-last-good to the one-shot / initial
+      acquisitions (was subscription-only), failing only when no last-good exists. *L3/S-F3*:
+      `ClientTlsFactorySupport.brokerClientTlsFactory` registers the broker-client TLS fold via
+      `shouldFoldBrokerClientAuthTls` = `isTlsAuthPlugin` (match built-in TLS-auth plugins by TYPE,
+      robust to a transient read failure) OR the material probe (keeps custom-plugin support).
+      **Tests**: one-shot keep-last-good, and fail-fast when no last-good. Closes **L1, F4, L3, S-F3**.
+    - **Commit C — `[fix][client] bound pooled TLS rotation on lookup/admin HTTP clients (L2/T3/H4)`.**
+      Only `FrameworkHttpClientFactory` set an AHC `connectionTtl` (5 min); `HttpClient` (HTTP
+      lookup) and `AsyncHttpConnector` (admin) set none, so a pooled HTTPS connection kept
+      pre-rotation material indefinitely. Centralized in
+      `TlsContextAcquisition.httpTlsRotationConnectionTtlMillis()` (default 5 min, injectable via
+      the `pulsar.tls.http.connectionTtlMillis` system property); both HTTP clients now set it on
+      the rotating-factory path; all three read the shared helper. **Test**:
+      `AsyncHttpConnectorTest.tlsFactoryPathBoundsPooledConnectionTtl` asserts the https path
+      bounds the pooled TTL to the injected value. Closes **L2, T3, H4**.
+    - **Commit D — `[fix][misc] TLS/auth lifecycle hardening (F3+F5+F7+F8+F9 + S-F1)`.**
+      *F3* `V5AuthContexts.supplyBlocking` catches a synchronous `RejectedExecutionException` from
+      a saturated bounded auth pool → `failedFuture` (never sync-throws on the event loop). *F5*
+      `PulsarClientImpl.bindAuthenticationServices` closes the previous `FrameworkHttpClientFactory`
+      before overwriting (updateAuthentication rebind leaked one per AutoClusterFailover swap) and
+      gates the rebind against Closing/Closed. *F7* `FlowBase.close` is now `synchronized` (pairs
+      with the synchronized lazy `getHttpClient`); `StandaloneOAuth2HttpClientFactory` uses daemon
+      IdP-TLS threads and its ctor releases the executor/factory on a build failure. *F8*
+      `TlsContextAcquisition` subscribing synthesis pre-fetches the `SSLParameters` companion ONCE
+      off the delivery thread instead of `.join()`ing it inside the reload callback (that
+      self-deadlocked when a custom factory dispatched creation to the same single-thread executor
+      running the callback). *F9* `FileBasedTlsFactory` rejects createInstance after close and
+      cancels a prior poll on a second initialize(); the client `PulsarChannelInitializer` disposes
+      the one-shot handle when newHandler/pipeline wiring throws; ctor-throw cleanup for broker
+      `PulsarChannelInitializer` and admin `AsyncHttpConnector` (the latter leaked a NON-daemon
+      rotation executor). *S-F1* `TlsContexts` logs a one-time WARN (deduped per policy) when an
+      insecure trust-all policy is applied at context build (covers the WEB/Jetty path too, whose
+      SSLContext is built via `TlsContexts.buildJdkContext`). Closes **F3, F5, F7, F8, F9** (factory
+      closed-check + initialize-twice + client handle-dispose + broker/admin ctor-throw), **S-F1**.
+
+    - **Verify (all local, worktree `async-auth-interface`).** `spotlessApply` clean; full-compile
+      green for `:pulsar-common :pulsar-broker-common :pulsar-client-original
+      :pulsar-client-admin-original :pulsar-proxy` (main + test). Gate suites, all **0 failures /
+      0 errors**: `FileBasedTlsFactoryTest` **34/34** (incl. the new OpenSSL + pin tests),
+      `TlsMaterialSourceTest` **4/4**, `SslParametersSynthesisTest` **9/9**, `JettyTlsFactoryTest`
+      green, `V5TlsProducerConsumerTest` **2/2**, `TlsProducerConsumerTest` **10/12 (2 pre-existing
+      skips)**, `ProxyTlsTest` **2/2**, `ClientCnxAsyncAuthTest` **7/7** (carve-out untouched and
+      green), `ReplicatorTlsFactoryTest` **2/2**, `AuthedAdminProxyHandlerNewTlsPathTest` **2/2**,
+      `CredentialOffloadTest` **3/3**, `StandaloneOAuth2HttpClientFactoryTest` **3/3**,
+      `FrameworkHttpClientFactoryTest` **5/5**, `AsyncHttpConnectorTest` **9/9** (incl. the new
+      TTL-bound test). F1 discipline chosen: **deferred-release AND per-use pinning** (both sides).
+
+    - **Deferred (reported, not done in this pass):**
+      - **S-F2** (synthesis HV default TRUE for CLIENT): the change contradicts the PIP's documented
+        merge rule 2 (`endpointIdentificationAlgorithm` — factory wins else the *consumer's* HV flag
+        applies "HTTPS") and the locked-in `SslParametersSynthesisTest` assertions. It is a
+        documented-contract change best made together with the PIP merge-rule amendment in the
+        doc/PIP pass (FIX-5), not silently here.
+      - **F8 "don't hold the RegisteredSource monitor during callbacks"**: the `.join()` self-deadlock
+        (the concrete bug) is fixed; releasing the monitor around callback invocation is a
+        `poll()`/`deliver()` refactor with real concurrency risk for a latent tier-3 concern
+        (callbacks in practice only set a volatile), deferred as backlog.
+      - **F9 ctor-throw for `WebService` / websocket `ProxyServer` / functions `WorkerServer`**: these
+        are server-startup ctors where a failure aborts the process (leaked scheduler is moot);
+        the high-value non-daemon-executor leaks (`AsyncHttpConnector`, `StandaloneOAuth2`) and the
+        broker binary initializer are fixed. The three web/worker ctors follow the same
+        try/finally-cleanup pattern if picked up later.
