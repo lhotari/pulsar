@@ -1360,7 +1360,7 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
       "**Confined removal.** … `SecurityUtility` … remains" line in `pip-478.md` is now stale relative to
       FIX-6 (which deleted `SecurityUtility`); it is unchanged context, not a FIX-5 edit, so left untouched
       here — a candidate for a later PIP-Removal-section reconciliation.
-||||||| fdaeb412df2
+
 40. **Security-negative + e2e test batch (multi-model review "don't-trust-green-CI", T1/T2/T4/T5)**
     (2026-07-04, local commits on `lh-pip-478-impl-v2` via an isolated worktree, no push). Four additive
     test groups closing the coverage gaps a green CI does *not* prove — the codex test-coverage aspect's
