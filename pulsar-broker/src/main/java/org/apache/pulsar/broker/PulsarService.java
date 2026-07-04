@@ -149,6 +149,7 @@ import org.apache.pulsar.broker.web.plugin.servlet.AdditionalServletWithPulsarSe
 import org.apache.pulsar.broker.web.plugin.servlet.AdditionalServlets;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.PulsarAdminBuilder;
+import org.apache.pulsar.client.admin.internal.PulsarAdminBuilderImpl;
 import org.apache.pulsar.client.api.AuthenticationFactory;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
@@ -1857,6 +1858,38 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         conf.setTlsFactory(ClientTlsFactorySupport.brokerClientTlsFactory(conf, factoryClassName));
     }
 
+    /**
+     * Route the broker's own outbound admin clients (the {@code PulsarAdmin} instances built by
+     * {@link #getCreateAdminClientBuilder} and {@code BrokerService.getClusterPulsarAdmin}) onto the new
+     * PIP-478 TLS SPI (stage 4b), gated on the same {@code brokerClientTlsFactoryClassName} opt-in as the
+     * binary path (decision D8). The admin builder rides a {@link ClientConfigurationData} internally; this
+     * reaches it through {@link PulsarAdminBuilderImpl#getConf()} and attaches a per-client
+     * {@link org.apache.pulsar.common.tls.PulsarTlsFactory} composed from the broker-client {@code tls*}
+     * material already mapped onto the config (folding the broker-client {@code Authentication} TLS material).
+     * The {@code AsyncHttpConnector} adopts, initializes and closes the factory. Leaves the builder on the
+     * legacy PIP-337 path when the gate is off, when the admin URL is not TLS, or when it is already on the
+     * new path.
+     *
+     * @param builder the admin builder to route (a {@link PulsarAdminBuilderImpl}; other implementations are
+     *                left untouched)
+     */
+    public void applyBrokerClientTlsFactoryToAdmin(PulsarAdminBuilder builder) {
+        String factoryClassName = getConfiguration().getBrokerClientTlsFactoryClassName();
+        if (!isNotBlank(factoryClassName) || !(builder instanceof PulsarAdminBuilderImpl adminBuilder)) {
+            return;
+        }
+        ClientConfigurationData conf = adminBuilder.getConf();
+        if (conf.getTlsFactory() != null || conf.getTlsPolicyMap() != null) {
+            return;
+        }
+        // Admin traffic is HTTP; TLS is selected by an https service URL (there is no useTls flag on the
+        // admin builder path).
+        if (conf.getServiceUrl() == null || !conf.getServiceUrl().startsWith("https")) {
+            return;
+        }
+        conf.setTlsFactory(ClientTlsFactorySupport.brokerClientTlsFactory(conf, factoryClassName));
+    }
+
     public synchronized PulsarClient getClient() throws PulsarServerException {
         if (this.client == null) {
             try {
@@ -1991,6 +2024,8 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         // most of the admin request requires to make zk-call so, keep the max read-timeout based on
         // zk-operation timeout
         builder.readTimeout(conf.getMetadataStoreOperationTimeoutSeconds(), TimeUnit.SECONDS);
+        // PIP-478 stage 4b: route the broker's own admin client onto the new TLS SPI when opted in.
+        applyBrokerClientTlsFactoryToAdmin(builder);
         return builder;
     }
 

@@ -29,10 +29,12 @@ import static org.asynchttpclient.util.HttpConstants.ResponseStatusCodes.TEMPORA
 import static org.asynchttpclient.util.MiscUtils.isNonEmpty;
 import com.google.common.annotations.VisibleForTesting;
 import com.spotify.futures.ConcurrencyReducer;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.EventLoopGroup;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.ssl.SslContext;
 import io.netty.resolver.NameResolver;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import java.io.ByteArrayOutputStream;
@@ -53,6 +55,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
+import javax.net.ssl.SSLEngine;
 import javax.ws.rs.ProcessingException;
 import javax.ws.rs.client.Client;
 import javax.ws.rs.core.HttpHeaders;
@@ -71,8 +74,12 @@ import org.apache.pulsar.client.impl.PulsarClientSharedResourcesImpl;
 import org.apache.pulsar.client.impl.PulsarServiceNameResolver;
 import org.apache.pulsar.client.impl.ServiceNameResolver;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
+import org.apache.pulsar.client.impl.tls.ClientTlsFactorySupport;
 import org.apache.pulsar.client.util.ExecutorProvider;
 import org.apache.pulsar.client.util.PulsarHttpAsyncSslEngineFactory;
+import org.apache.pulsar.common.tls.PulsarTlsFactory;
+import org.apache.pulsar.common.tls.TlsHandle;
+import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.PulsarSslConfiguration;
 import org.apache.pulsar.common.util.PulsarSslFactory;
@@ -123,6 +130,13 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
     private final boolean createdEventLoopGroup;
     private final Map<String, ConcurrencyReducer<Response>> concurrencyReducers = new ConcurrentHashMap<>();
     private PulsarSslFactory sslFactory;
+    // PIP-478 stage 4b (new TLS path): the resolved PulsarTlsFactory (this connector owns and closes it),
+    // a live subscription to the CLIENT_DEFAULT SslContext whose callback refreshes the volatile below on
+    // rotation, and the single-thread executor that drives the factory's material rotation / blocking loads.
+    private PulsarTlsFactory tlsFactory;
+    private TlsHandle<SslContext> tlsFactorySubscription;
+    private volatile SslContext tlsFactorySslContext;
+    private ScheduledExecutorService tlsFactoryExecutor;
     @Getter
     @Setter
     private boolean followRedirects = true;
@@ -194,7 +208,12 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
         configureAsyncHttpClientConfig(conf, connectTimeoutMs,
                 readTimeoutMs, requestTimeoutMs, confBuilder, sharedResources);
         if (conf.getServiceUrl().startsWith("https://")) {
-            configureAsyncHttpClientSslEngineFactory(conf, autoCertRefreshTimeSeconds, confBuilder);
+            PulsarTlsFactory factory = resolveNewTlsFactory(conf);
+            if (factory != null) {
+                configureAsyncHttpClientWithTlsFactory(confBuilder, factory);
+            } else {
+                configureAsyncHttpClientSslEngineFactory(conf, autoCertRefreshTimeSeconds, confBuilder);
+            }
         }
         AsyncHttpClientConfig asyncHttpClientConfig = confBuilder.build();
         return asyncHttpClientConfig;
@@ -274,6 +293,71 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
         confBuilder.setSslEngineFactory(sslEngineFactory);
         confBuilder.setUseInsecureTrustManager(conf.isTlsAllowInsecureConnection());
         confBuilder.setDisableHttpsEndpointIdentificationAlgorithm(!conf.isTlsHostnameVerificationEnable());
+    }
+
+    /**
+     * Resolve the new-SPI TLS factory when the admin configuration is on the new PIP-478 TLS path (stage 4b):
+     * a {@link PulsarTlsFactory} adopted through the 3b {@code tlsFactory} seam (the broker's admin-client
+     * attach — see {@code PulsarService.getCreateAdminClientBuilder}), or the client-side flip selection.
+     * Returns {@code null} on the legacy PIP-337 path, where the reflective {@link PulsarSslFactory}
+     * ({@link #configureAsyncHttpClientSslEngineFactory}) is kept unchanged. The connector owns the resolved
+     * factory (and its rotation executor) and closes both in {@link #close()}.
+     */
+    @SneakyThrows
+    private PulsarTlsFactory resolveNewTlsFactory(ClientConfigurationData conf) {
+        // Fast path: stay on the legacy setup without creating an executor when the new path is not selected.
+        if (conf.getTlsFactory() == null && !ClientTlsFactorySupport.useNewTlsPath(conf)) {
+            return null;
+        }
+        // The factory needs a framework scheduler for material-rotation polling and an executor for blocking
+        // material loading; the admin connector owns a small single-thread scheduled executor for both (there
+        // is no shared client scheduler here, unlike the PulsarClientImpl funnel).
+        this.tlsFactoryExecutor = Executors.newSingleThreadScheduledExecutor(
+                new DefaultThreadFactory("pulsar-admin-tls-factory"));
+        PulsarTlsFactory factory = ClientTlsFactorySupport.resolveClientTlsFactory(conf, tlsFactoryExecutor,
+                tlsFactoryExecutor, conf.getOpenTelemetry());
+        if (factory == null) {
+            // The pre-check said new-path, but resolution fell back to legacy; drop the unused executor.
+            this.tlsFactoryExecutor.shutdownNow();
+            this.tlsFactoryExecutor = null;
+        }
+        this.tlsFactory = factory;
+        return factory;
+    }
+
+    /**
+     * New PIP-478 HTTPS TLS setup (stage 4b): subscribe once to the {@link TlsPurpose#CLIENT_DEFAULT} Netty
+     * {@code SslContext} — the callback refreshes a volatile on rotation — and back the AsyncHttpClient
+     * {@link SslEngineFactory} with it, mirroring {@code org.apache.pulsar.client.impl.HttpClient} and the
+     * framework {@code FrameworkHttpClientFactory}. Each connection's engine is built from the most recently
+     * delivered (possibly rotated) context; hostname verification, insecure trust, ciphers and protocols are
+     * baked into the factory-built context per the {@code TlsPolicy}, so the AsyncHttpClient
+     * endpoint-identification / insecure-trust-manager flags are not applied on this path.
+     */
+    @SneakyThrows
+    private void configureAsyncHttpClientWithTlsFactory(DefaultAsyncHttpClientConfig.Builder confBuilder,
+                                                        PulsarTlsFactory factory) {
+        this.tlsFactorySubscription = factory
+                .createInstance(TlsPurpose.CLIENT_DEFAULT, SslContext.class, ctx -> this.tlsFactorySslContext = ctx)
+                .get()
+                .orElseThrow(() -> new IllegalStateException(
+                        "Admin TLS factory supplied no Netty SslContext for purpose " + TlsPurpose.CLIENT_DEFAULT));
+        confBuilder.setSslEngineFactory(new SslEngineFactory() {
+            @Override
+            public SSLEngine newSslEngine(AsyncHttpClientConfig ahcConfig, String peerHost, int peerPort) {
+                // Client mode, SNI and baked-in hostname verification all come from the Netty context.
+                return tlsFactorySslContext.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort);
+            }
+        });
+    }
+
+    /**
+     * @return the resolved PIP-478 TLS factory when this connector is on the new TLS path, or {@code null} on
+     *         the legacy PIP-337 path
+     */
+    @VisibleForTesting
+    public PulsarTlsFactory getTlsFactory() {
+        return tlsFactory;
     }
 
     @Override
@@ -622,6 +706,17 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
             delayer.shutdownNow();
             if (sslRefresher != null) {
                 sslRefresher.shutdownNow();
+            }
+            // PIP-478 stage 4b (new TLS path): release the CLIENT_DEFAULT subscription, close the factory and
+            // stop its rotation executor (all no-ops on the legacy path).
+            if (tlsFactorySubscription != null) {
+                tlsFactorySubscription.dispose();
+            }
+            if (tlsFactory != null) {
+                tlsFactory.close();
+            }
+            if (tlsFactoryExecutor != null) {
+                tlsFactoryExecutor.shutdownNow();
             }
             if (createdEventLoopGroup && eventLoopGroup != null && !eventLoopGroup.isShutdown()) {
                 eventLoopGroup.shutdownGracefully();

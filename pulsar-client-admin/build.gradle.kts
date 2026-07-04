@@ -42,6 +42,11 @@ dependencies {
     implementation(libs.asynchttpclient)
     implementation(libs.commons.lang3)
     implementation(libs.completable.futures)
+    // PIP-478 stage 4b: the admin AsyncHttpConnector rides the PIP-478 TLS SPI on the new path, whose init
+    // context carries an OpenTelemetry root (compile-only; the real root is supplied at runtime by the owning
+    // component, matching pulsar-common / pulsar-common-api).
+    compileOnly(libs.opentelemetry.api)
 
     testImplementation(libs.wiremock)
+    testImplementation(libs.opentelemetry.api)
 }
