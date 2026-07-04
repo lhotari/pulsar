@@ -16,31 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.bcloader;
-
-import static org.apache.pulsar.common.util.tls.JcaProviders.BC;
-import java.security.Provider;
-import java.security.Security;
-import lombok.CustomLog;
-import org.apache.pulsar.common.util.BCLoader;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
 /**
- * This is a Bouncy Castle provider Loader.
+ * Cohesive, single-concern TLS utility containers (PIP-478). Each class holds one concern rather than the
+ * former {@code SecurityUtility} grab-bag: {@link org.apache.pulsar.common.util.tls.PemReader} parses PEM
+ * certificates and keys, {@link org.apache.pulsar.common.util.tls.JcaProviders} resolves JCA/JCE security
+ * providers, and {@link org.apache.pulsar.common.util.tls.JdkSslContexts} assembles JDK
+ * {@code javax.net.ssl.SSLContext} instances from loaded material.
  */
-@CustomLog
-public class BouncyCastleLoader implements BCLoader {
-    public static Provider provider;
-    static {
-        if (Security.getProvider(BC) == null) {
-            Security.addProvider(new BouncyCastleProvider());
-        }
-        provider = Security.getProvider(BC);
-        log.info().attr("provider", provider).log("BouncyCastle Provider BC loaded");
-    }
-
-    @Override
-    public Provider getProvider() {
-        return Security.getProvider(BC);
-    }
-}
+package org.apache.pulsar.common.util.tls;

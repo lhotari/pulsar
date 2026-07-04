@@ -16,31 +16,9 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.bcloader;
-
-import static org.apache.pulsar.common.util.tls.JcaProviders.BC;
-import java.security.Provider;
-import java.security.Security;
-import lombok.CustomLog;
-import org.apache.pulsar.common.util.BCLoader;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
 /**
- * This is a Bouncy Castle provider Loader.
+ * Broker-side wiring for the PIP-478 TLS SPI: {@code DefaultBrokerTlsFactory} composes the default
+ * file-based factory from a {@code ServiceConfiguration}.
  */
-@CustomLog
-public class BouncyCastleLoader implements BCLoader {
-    public static Provider provider;
-    static {
-        if (Security.getProvider(BC) == null) {
-            Security.addProvider(new BouncyCastleProvider());
-        }
-        provider = Security.getProvider(BC);
-        log.info().attr("provider", provider).log("BouncyCastle Provider BC loaded");
-    }
-
-    @Override
-    public Provider getProvider() {
-        return Security.getProvider(BC);
-    }
-}
+package org.apache.pulsar.broker.tls;
