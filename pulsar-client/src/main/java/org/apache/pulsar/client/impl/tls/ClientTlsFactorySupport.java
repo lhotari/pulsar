@@ -162,7 +162,13 @@ public final class ClientTlsFactorySupport {
             // The v5 builder adopted a custom factory; the client owns and closes it.
             factory = conf.getTlsFactory();
         } else {
-            factory = new FileBasedTlsFactory(composePolicies(conf), settings(conf));
+            // Fold the auth plugin's TLS identity (AuthenticationTls / AuthenticationKeyStoreTls) into
+            // CLIENT_DEFAULT (auth-cert-wins), so a plugin-supplied client certificate reaches the transport
+            // now that this is the only client TLS path (PIP-478 stage 4c). The supplier is registered
+            // unconditionally and evaluated lazily at context-build time (per connection, off the event loop),
+            // so client construction never eagerly calls getAuthData() — no eager OAuth2 token fetch.
+            factory = new FileBasedTlsFactory(composePolicies(conf), settings(conf),
+                    clientDefaultAuthMaterialSuppliers(conf));
         }
         initializeBlocking(factory, initContext(conf, scheduler, blockingExecutor, openTelemetry));
         // Fail-fast probe only on the v5-builder path (R6 ruling).
@@ -208,6 +214,8 @@ public final class ClientTlsFactorySupport {
                         "Could not instantiate brokerClientTlsFactoryClassName '" + className + "'", e);
             }
         }
+        // Broker-client (server startup / replication client creation): the eager authHasTlsMaterial probe
+        // runs off the event loop, registering a supplier only for a genuine TLS-auth plugin.
         TlsPolicy policy = clientDefaultPolicy(conf);
         Map<TlsPurpose, Supplier<AuthenticationDataProvider>> authSuppliers = Map.of();
         Authentication auth = conf.getAuthentication();
@@ -215,6 +223,47 @@ public final class ClientTlsFactorySupport {
             authSuppliers = Map.of(TlsPurpose.CLIENT_DEFAULT, FileBasedTlsFactory.authMaterialSupplier(auth));
         }
         return new FileBasedTlsFactory(Map.of(TlsPurpose.CLIENT_DEFAULT, policy), settings(conf), authSuppliers);
+    }
+
+    /**
+     * The auth-cert-wins {@code authMaterialSupplier} fold for the application/admin client's
+     * {@link TlsPurpose#CLIENT_DEFAULT}: a plugin-supplied client identity (e.g. {@code AuthenticationTls} /
+     * {@code AuthenticationKeyStoreTls}) reaches the transport on the new path. Unlike the broker-client
+     * path this registers the supplier <em>unconditionally</em> (no eager probe), so client construction
+     * never calls {@code getAuthData()}; {@code AuthProvidedMaterialSource} applies auth-cert-wins only when
+     * the plugin actually carries TLS material, evaluated lazily at context build/reload.
+     */
+    private static Map<TlsPurpose, Supplier<AuthenticationDataProvider>> clientDefaultAuthMaterialSuppliers(
+            ClientConfigurationData conf) {
+        Authentication auth = conf.getAuthentication();
+        if (auth == null || hasConfiguredClientKeyMaterial(conf)) {
+            // The client identity comes from its tls* cert/key (or keystore) files, so the auth plugin is not
+            // consulted for TLS material — its getAuthData() is not called for a TLS purpose (e.g. a non-TLS
+            // plugin, per TlsProducerConsumerTest.testTlsWithFakeAuthentication).
+            return Map.of();
+        }
+        Supplier<AuthenticationDataProvider> supplier = FileBasedTlsFactory.authMaterialSupplier(auth);
+        // No tls* key material configured, so the identity (if any) must come from a TLS-auth plugin
+        // (AuthenticationTls / AuthenticationKeyStoreTls). Evaluated lazily at CLIENT_DEFAULT build/reload
+        // (off the event loop), so client construction never eagerly calls getAuthData(). A plugin that
+        // cannot supply TLS key material — a token plugin, or an OAuth2 plugin whose getAuthData() acquires a
+        // token (and fails when the plugin is not bound to a client) — yields nothing to fold instead of
+        // failing the build; AuthProvidedMaterialSource ignores a null / non-TLS result.
+        return Map.of(TlsPurpose.CLIENT_DEFAULT, () -> {
+            try {
+                return supplier.get();
+            } catch (RuntimeException e) {
+                return null;
+            }
+        });
+    }
+
+    private static boolean hasConfiguredClientKeyMaterial(ClientConfigurationData conf) {
+        if (conf.isUseKeyStoreTls()) {
+            return StringUtils.isNotBlank(conf.getTlsKeyStorePath());
+        }
+        return StringUtils.isNotBlank(conf.getTlsCertificateFilePath())
+                && StringUtils.isNotBlank(conf.getTlsKeyFilePath());
     }
 
     /**
