@@ -847,7 +847,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
     /**
      * Start the pulsar service instance.
      */
-    // PIP-478 stage 4c: reject a stale, non-default PIP-337 sslFactoryPlugin / brokerClientSslFactoryPlugin
+    // PIP-478: reject a stale, non-default PIP-337 sslFactoryPlugin / brokerClientSslFactoryPlugin
     // (removed in 5.0) at startup. The @Deprecated getters are read intentionally here to enforce the removal.
     @SuppressWarnings("deprecation")
     private static void rejectRemovedPip337SslFactoryPlugin(ServiceConfiguration config)
@@ -911,7 +911,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                         config.getDefaultRetentionTimeInMinutes() * 60));
             }
 
-            // PIP-478 stage 4c: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default
+            // PIP-478: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default
             // sslFactoryPlugin / brokerClientSslFactoryPlugin loudly at startup rather than silently ignore a
             // security-relevant setting.
             rejectRemovedPip337SslFactoryPlugin(config);
@@ -1836,7 +1836,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                                              Consumer<PulsarClientImpl.PulsarClientImplBuilder> customizer)
             throws PulsarClientException {
         ClientConfigurationData clientConf = conf != null ? conf : createClientConfigurationData();
-        // PIP-478 stage 4a: route the broker's own outbound clients (replication + cluster-internal lookup)
+        // PIP-478: route the broker's own outbound clients (replication + cluster-internal lookup)
         // onto the new TLS SPI (BROKER_CLIENT) when opted in via brokerClientTlsFactoryClassName.
         maybeApplyBrokerClientTlsFactory(clientConf);
         PulsarClientImpl.PulsarClientImplBuilder pulsarClientImplBuilder = PulsarClientImpl.builder()
@@ -1856,8 +1856,8 @@ public class PulsarService implements AutoCloseable, ShutdownService {
 
     /**
      * Route the broker's own outbound Pulsar client (geo-replication and cluster-internal lookup) onto the
-     * new PIP-478 TLS SPI for the {@code BROKER_CLIENT} purpose (stage 4a), gated on the
-     * {@code brokerClientTlsFactoryClassName} opt-in (decision D8). The broker-client material — per-cluster
+     * new PIP-478 TLS SPI for the {@code BROKER_CLIENT} purpose, gated on the
+     * {@code brokerClientTlsFactoryClassName} opt-in. The broker-client material — per-cluster
      * {@code ClusterData.brokerClientTls*} first, else the broker's {@code brokerClient*}
      * {@code ServiceConfiguration} — is already mapped onto the config's {@code tls*} fields by the caller
      * ({@code createClientConfigurationData} / {@code BrokerService.configTlsSettings}), so this only attaches
@@ -1876,7 +1876,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             return;
         }
         conf.setTlsFactory(ClientTlsFactorySupport.brokerClientTlsFactory(conf, factoryClassName));
-        // PIP-478 stage 4b: deliver brokerClientTlsFactoryConfig to a custom factory via the init context
+        // PIP-478: deliver brokerClientTlsFactoryConfig to a custom factory via the init context
         // params (parsed the same way as the server-side tlsFactoryConfig).
         conf.setTlsFactoryParams(TlsFactorySupport.parseFactoryConfig(
                 getConfiguration().getBrokerClientTlsFactoryConfig()));
@@ -1885,8 +1885,8 @@ public class PulsarService implements AutoCloseable, ShutdownService {
     /**
      * Route the broker's own outbound admin clients (the {@code PulsarAdmin} instances built by
      * {@link #getCreateAdminClientBuilder} and {@code BrokerService.getClusterPulsarAdmin}) onto the new
-     * PIP-478 TLS SPI (stage 4b), gated on the same {@code brokerClientTlsFactoryClassName} opt-in as the
-     * binary path (decision D8). The admin builder rides a {@link ClientConfigurationData} internally; this
+     * PIP-478 TLS SPI, gated on the same {@code brokerClientTlsFactoryClassName} opt-in as the
+     * binary path. The admin builder rides a {@link ClientConfigurationData} internally; this
      * reaches it through {@link PulsarAdminBuilderImpl#getConf()} and attaches a per-client
      * {@link org.apache.pulsar.common.tls.PulsarTlsFactory} composed from the broker-client {@code tls*}
      * material already mapped onto the config (folding the broker-client {@code Authentication} TLS material).
@@ -1912,7 +1912,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             return;
         }
         conf.setTlsFactory(ClientTlsFactorySupport.brokerClientTlsFactory(conf, factoryClassName));
-        // PIP-478 stage 4b: deliver brokerClientTlsFactoryConfig to a custom factory via the init context
+        // PIP-478: deliver brokerClientTlsFactoryConfig to a custom factory via the init context
         // params (parsed the same way as the server-side tlsFactoryConfig).
         conf.setTlsFactoryParams(TlsFactorySupport.parseFactoryConfig(
                 getConfiguration().getBrokerClientTlsFactoryConfig()));
@@ -2048,7 +2048,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         // most of the admin request requires to make zk-call so, keep the max read-timeout based on
         // zk-operation timeout
         builder.readTimeout(conf.getMetadataStoreOperationTimeoutSeconds(), TimeUnit.SECONDS);
-        // PIP-478 stage 4b: route the broker's own admin client onto the new TLS SPI when opted in.
+        // PIP-478: route the broker's own admin client onto the new TLS SPI when opted in.
         applyBrokerClientTlsFactoryToAdmin(builder);
         return builder;
     }

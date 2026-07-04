@@ -26,7 +26,7 @@ import org.apache.pulsar.client.api.v5.http.PulsarHttpClientFactory;
 
 /**
  * The framework-owned runtime services a {@code PulsarClient} late-binds into its authentication driver
- * once the client instance exists (PIP-478 stage 3b).
+ * once the client instance exists (PIP-478).
  *
  * <p>An {@code Authentication} plugin is configured on the client builder <em>before</em> the client is
  * constructed (via {@code conf.setAuthentication(...)}), so these services cannot be supplied at plugin
@@ -44,8 +44,8 @@ import org.apache.pulsar.client.api.v5.http.PulsarHttpClientFactory;
 public interface ClientAuthenticationServices {
 
     /**
-     * @return the framework's HTTP client factory (a stub returning failing futures until the real
-     *         AsyncHttpClient-backed factory lands in PIP-478 stage 3c); never {@code null}
+     * @return the framework's AsyncHttpClient-backed HTTP client factory, sharing the owning client's
+     *         event loop / timer / DNS resources; never {@code null}
      */
     PulsarHttpClientFactory httpClientFactory();
 

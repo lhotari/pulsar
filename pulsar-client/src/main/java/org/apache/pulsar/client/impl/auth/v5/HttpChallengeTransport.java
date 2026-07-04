@@ -25,7 +25,7 @@ import org.apache.pulsar.client.api.v5.auth.HttpAuthHeaders;
 
 /**
  * The thin, per-client-API request/response adapter the {@link HttpAuthenticationDriver} runs its
- * SASL-style {@code 401}→resubmit→{@code 200} rounds over (PIP-478 stage 3d).
+ * SASL-style {@code 401}→resubmit→{@code 200} rounds over (PIP-478).
  *
  * <p>The driver holds the single shared state machine; the transport is the only per-API piece. Each
  * round is re-issued as a <em>bodiless {@code GET} to the original request URI</em> — the v4 SASL takeover

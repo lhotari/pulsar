@@ -36,7 +36,7 @@ import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsPurpose;
-import org.apache.pulsar.common.util.SecurityUtility;
+import org.apache.pulsar.common.util.tls.PemReader;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -118,8 +118,8 @@ public class DefaultBrokerTlsFactoryTest {
 
         AuthenticationDataProvider authData = mock(AuthenticationDataProvider.class);
         when(authData.hasDataForTls()).thenReturn(true);
-        when(authData.getTlsCertificates()).thenReturn(SecurityUtility.loadCertificatesFromPemFile(ADMIN_CERT));
-        when(authData.getTlsPrivateKey()).thenReturn(SecurityUtility.loadPrivateKeyFromPemFile(ADMIN_KEY));
+        when(authData.getTlsCertificates()).thenReturn(PemReader.loadCertificatesFromPemFile(ADMIN_CERT));
+        when(authData.getTlsPrivateKey()).thenReturn(PemReader.loadPrivateKeyFromPemFile(ADMIN_KEY));
         Authentication brokerClientAuth = mock(Authentication.class);
         when(brokerClientAuth.getAuthData()).thenReturn(authData);
 

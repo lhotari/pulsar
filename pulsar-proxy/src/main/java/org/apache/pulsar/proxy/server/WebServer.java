@@ -104,7 +104,7 @@ public class WebServer {
     private ServerConnector connectorTls;
 
     private ScheduledExecutorService sslRefreshScheduledExecutor;
-    // PIP-478 TLS SPI factory (the only server TLS path since PIP-337 removal, stage 4c).
+    // PIP-478 TLS SPI factory (the only server TLS path since the PIP-337 removal).
     private PulsarTlsFactory tlsFactory;
     private JettyTlsFactory.ReloadableServerTls reloadableServerTls;
 

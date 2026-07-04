@@ -38,7 +38,6 @@ import io.netty.handler.codec.haproxy.HAProxyMessage;
 import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
 import io.netty.handler.codec.haproxy.HAProxyProxiedProtocol;
 import io.netty.handler.flush.FlushConsolidationHandler;
-import io.netty.handler.ssl.SslContext;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.CharsetUtil;
 import java.net.InetSocketAddress;
@@ -61,6 +60,7 @@ import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.FrameDecoderUtil;
 import org.apache.pulsar.common.protocol.PulsarDecoder;
 import org.apache.pulsar.common.stats.Rate;
+import org.apache.pulsar.common.tls.impl.TlsContextAcquisition;
 import org.apache.pulsar.common.util.netty.NettyChannelUtil;
 
 @CustomLog
@@ -111,9 +111,10 @@ public class DirectProxyHandler {
             inboundChannel.close();
             return;
         }
-        // PIP-478: ProxyService holds a shared, rotating SslContext for the BROKER_CLIENT purpose; use it
-        // directly (the only broker-client TLS path since PIP-337 removal, stage 4c).
-        final SslContext brokerClientSslContext = tlsEnabledWithBroker ? service.getBrokerClientSslContext() : null;
+        // PIP-478: ProxyService holds a shared, rotating SslContext for the BROKER_CLIENT purpose; it is read
+        // and pinned per connection inside initChannel below (the only broker-client TLS path since PIP-337
+        // removal). Reading it at connect time (rather than capturing it here, before the async
+        // connect) both narrows the use-after-free window and uses the freshest rotated material.
         ProxyConfiguration config = service.getConfiguration();
 
         // Start the connection attempt.
@@ -141,10 +142,13 @@ public class DirectProxyHandler {
                 if (tlsEnabledWithBroker) {
                     String host = targetBrokerAddress.getHostString();
                     int port = targetBrokerAddress.getPort();
-                    // PIP-478: build the handler from the shared client SslContext. Hostname verification is
-                    // baked into the context at build time (per the client TlsPolicy), so it is not re-applied
-                    // here; host/port drive SNI and the verification target.
-                    ch.pipeline().addLast(TLS_HANDLER, brokerClientSslContext.newHandler(ch.alloc(), host, port));
+                    // PIP-478: build the handler from the shared, rotating client SslContext, pinning it across
+                    // newHandler so a concurrent rotation cannot free the native OpenSSL context mid-build (F1
+                    // use-after-free guard). Hostname verification is baked into the context at build time (per
+                    // the client TlsPolicy), so it is not re-applied here; host/port drive SNI and the
+                    // verification target.
+                    ch.pipeline().addLast(TLS_HANDLER, TlsContextAcquisition.withPinnedContext(
+                            service::getBrokerClientSslContext, ctx -> ctx.newHandler(ch.alloc(), host, port)));
                 }
                 int brokerProxyReadTimeoutMs = service.getConfiguration().getBrokerProxyReadTimeoutMs();
                 if (brokerProxyReadTimeoutMs > 0) {

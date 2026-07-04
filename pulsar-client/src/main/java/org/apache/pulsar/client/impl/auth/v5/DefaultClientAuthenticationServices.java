@@ -27,9 +27,9 @@ import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
 
 /**
  * Immutable {@link ClientAuthenticationServices} the {@code PulsarClientImpl} late-binds into its
- * authentication driver (PIP-478 stage 3b).
+ * authentication driver (PIP-478).
  *
- * @param httpClientFactory the framework HTTP client factory (a stub until stage 3c)
+ * @param httpClientFactory the framework HTTP client factory
  * @param scheduler         the framework scheduler
  * @param blockingExecutor  the framework bounded blocking executor
  * @param clock             the clock implementations schedule against

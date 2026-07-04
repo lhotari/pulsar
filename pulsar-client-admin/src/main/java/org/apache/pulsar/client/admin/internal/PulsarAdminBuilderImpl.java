@@ -49,7 +49,7 @@ public class PulsarAdminBuilderImpl implements PulsarAdminBuilder {
     @Override
     @SuppressWarnings("deprecation")
     public PulsarAdmin build() throws PulsarClientException {
-        // PIP-478 stage 4c: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default value
+        // PIP-478: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default value
         // loudly rather than silently ignore a security-relevant setting.
         if (ClientTlsFactorySupport.isLegacyCustom(conf.getSslFactoryPlugin())) {
             throw new IllegalArgumentException("The PIP-337 sslFactoryPlugin is removed in Pulsar 5.0 "

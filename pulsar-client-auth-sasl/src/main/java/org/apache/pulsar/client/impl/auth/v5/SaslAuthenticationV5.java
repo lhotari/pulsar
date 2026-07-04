@@ -124,14 +124,14 @@ public class SaslAuthenticationV5 implements Authentication, BinaryAuthDataProvi
                 provider = providerFactory.create(ctx.brokerHost());
                 ctx.setStateObject(AuthenticationDataProvider.class, provider);
             }
-            AuthData response = provider.authenticate(AuthData.of(authChallenge.challenge()));
+            AuthData response = provider.authenticate(AuthData.of(authChallenge.bytes()));
             return CompletableFuture.completedFuture(new ChallengeResponse(response.getBytes()));
         } catch (Throwable t) {
             return CompletableFuture.failedFuture(t);
         }
     }
 
-    // ---- SASL-over-HTTP: HttpAuthChallengeHandler + HttpAuthHeadersProvider (PIP-478 stage 3d) ----
+    // ---- SASL-over-HTTP: HttpAuthChallengeHandler + HttpAuthHeadersProvider (PIP-478) ----
     //
     // Ports AuthenticationSasl.newRequestHeader / getHeaders. The framework driver runs the
     // 401->resubmit->200 loop (bodiless GET to the original URI); respondToHttpChallengeAsync computes each

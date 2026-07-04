@@ -27,7 +27,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.common.tls.TlsPolicy;
-import org.apache.pulsar.common.util.SecurityUtility;
+import org.apache.pulsar.common.util.tls.PemReader;
 import org.testng.annotations.Test;
 
 /**
@@ -53,13 +53,13 @@ public class AuthProvidedMaterialFoldTest {
     private static AuthenticationDataProvider tlsAuthData(String certFile, String keyFile) throws Exception {
         AuthenticationDataProvider authData = mock(AuthenticationDataProvider.class);
         when(authData.hasDataForTls()).thenReturn(true);
-        when(authData.getTlsCertificates()).thenReturn(SecurityUtility.loadCertificatesFromPemFile(certFile));
-        when(authData.getTlsPrivateKey()).thenReturn(SecurityUtility.loadPrivateKeyFromPemFile(keyFile));
+        when(authData.getTlsCertificates()).thenReturn(PemReader.loadCertificatesFromPemFile(certFile));
+        when(authData.getTlsPrivateKey()).thenReturn(PemReader.loadPrivateKeyFromPemFile(keyFile));
         return authData;
     }
 
     private static List<X509Certificate> certs(String certFile) throws Exception {
-        return List.of(SecurityUtility.loadCertificatesFromPemFile(certFile));
+        return List.of(PemReader.loadCertificatesFromPemFile(certFile));
     }
 
     @Test
@@ -72,7 +72,7 @@ public class AuthProvidedMaterialFoldTest {
         assertThat(material.hasKeyMaterial()).isTrue();
         assertThat(material.keyCertChain()).as("auth cert wins over the file-policy cert")
                 .isEqualTo(certs(PROXY_CERT));
-        assertThat(material.privateKey()).isEqualTo(SecurityUtility.loadPrivateKeyFromPemFile(PROXY_KEY));
+        assertThat(material.privateKey()).isEqualTo(PemReader.loadPrivateKeyFromPemFile(PROXY_KEY));
         assertThat(material.trustCerts()).as("base file trust (CA) is retained").isNotEmpty();
     }
 

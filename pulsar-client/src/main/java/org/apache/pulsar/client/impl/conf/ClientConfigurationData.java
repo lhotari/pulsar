@@ -228,7 +228,7 @@ public class ClientConfigurationData implements Serializable, Cloneable {
             value = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0.")
     private String sslFactoryPluginParams = "";
 
-    // PIP-478 stage 3b: the client-side TLS SPI seam. These transient fields are set by the v5 builder
+    // PIP-478: the client-side TLS SPI seam. These transient fields are set by the v5 builder
     // (never serialized; a shallow clone() keeps the references so the connection pool / HTTP lookup see
     // them). tlsPolicyMap holds the per-purpose TlsPolicy values configured through the v5 builder's
     // tlsPolicy(...) methods; its presence selects the new PIP-478 TLS path. tlsFactory holds either a
@@ -239,7 +239,7 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     private transient Map<TlsPurpose, TlsPolicy> tlsPolicyMap;
     @JsonIgnore
     private transient PulsarTlsFactory tlsFactory;
-    // PIP-478 stage 4b: factory-specific parameters delivered to a custom (non-default) TLS factory named by
+    // PIP-478: factory-specific parameters delivered to a custom (non-default) TLS factory named by
     // brokerClientTlsFactoryClassName via TlsFactoryInitContext.params(). Set by the broker (parsed from
     // brokerClientTlsFactoryConfig the same way the server-side tlsFactoryConfig is parsed); empty/unset for
     // the default file-based factory, which ignores params.

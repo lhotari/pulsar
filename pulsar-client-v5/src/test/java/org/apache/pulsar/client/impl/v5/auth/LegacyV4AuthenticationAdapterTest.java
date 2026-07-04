@@ -78,7 +78,7 @@ public class LegacyV4AuthenticationAdapterTest {
         assertThat(provider.get().authMethodName()).isEqualTo("token");
 
         BinaryAuthData data = provider.get().getAuthDataAsync(callContext()).get();
-        assertThat(new String(data.authData(), UTF_8)).isEqualTo("my-jwt");
+        assertThat(new String(data.bytes(), UTF_8)).isEqualTo("my-jwt");
     }
 
     @Test

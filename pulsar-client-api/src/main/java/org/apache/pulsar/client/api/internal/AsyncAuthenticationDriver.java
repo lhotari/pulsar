@@ -32,14 +32,17 @@ import org.apache.pulsar.common.api.AuthData;
  * {@code REFRESH_AUTH_DATA} sentinel, SASL multi-round, and custom challenge/response).
  *
  * <p><b>Exchange-scoped.</b> Authentication is driven per <em>exchange</em> — one connection attempt.
- * {@code ClientCnx} calls {@link #newAuthenticationExchange(String)} once per connect and drives every
- * round (initial data, refresh, and all challenge rounds) through the single returned
- * {@link AuthenticationExchange}. The exchange is where per-connection conversation state lives (for
- * the v5 bridge, one call-context and its state slot), so binding it to the exchange object — rather
- * than passing the host on each call — makes the state slot's lifetime exactly one {@code ClientCnx}
- * setup. A fresh exchange is created for every connection attempt (and for the broker's REFRESH
- * sentinel, which {@code ClientCnx} handles by starting a new exchange), so concurrent handshakes to
- * different brokers never collide.
+ * {@code ClientCnx} calls {@link #newAuthenticationExchange(String)} once per connect and drives that
+ * connection's rounds through the single returned {@link AuthenticationExchange} — the initial credential
+ * via {@link AuthenticationExchange#getAuthDataAsync()} and every ordinary challenge round (SASL
+ * multi-round, custom challenge/response) via {@link AuthenticationExchange#authenticateAsync(AuthData)}.
+ * The exchange is where per-connection conversation state lives (for the v5 bridge, one call-context and
+ * its state slot), so binding it to the exchange object — rather than passing the host on each call —
+ * makes the state slot's lifetime exactly one exchange. The broker's {@code REFRESH_AUTH_DATA} sentinel
+ * does <em>not</em> ride the current exchange: {@code ClientCnx} terminates it and starts a <em>fresh</em>
+ * exchange whose {@link AuthenticationExchange#getAuthDataAsync()} re-produces the current credential, so
+ * conversation state does NOT survive a REFRESH. A fresh exchange is likewise created for every connection
+ * attempt, so concurrent handshakes to different brokers never collide.
  *
  * <p>The {@code .internal.} subpackage signals "stable internal" — application code should not
  * implement this interface; it is observed by the framework.
@@ -77,13 +80,17 @@ public interface AsyncAuthenticationDriver {
         CompletableFuture<AuthData> getAuthDataAsync();
 
         /**
-         * Asynchronously compute the response to a broker {@code CommandAuthChallenge} (or to the
-         * {@code REFRESH_AUTH_DATA} refresh sentinel, which re-produces the current credential rather
-         * than driving a challenge round).
+         * Asynchronously compute the response to a broker {@code CommandAuthChallenge} — an ordinary
+         * challenge round (SASL multi-round or custom challenge/response), answered from this exchange's
+         * conversation state.
          *
-         * @param challengeOrRefresh the challenge payload from the broker, or the refresh sentinel
+         * <p>The broker's {@code REFRESH_AUTH_DATA} sentinel is <em>not</em> delivered here: {@code ClientCnx}
+         * services a refresh by starting a fresh exchange and calling {@link #getAuthDataAsync()} on it, so
+         * in the {@code ClientCnx} flow this method only ever sees a genuine challenge payload.
+         *
+         * @param challenge the challenge payload from the broker (not the refresh sentinel)
          * @return a future of the response auth data; completes exceptionally on failure
          */
-        CompletableFuture<AuthData> authenticateAsync(AuthData challengeOrRefresh);
+        CompletableFuture<AuthData> authenticateAsync(AuthData challenge);
     }
 }

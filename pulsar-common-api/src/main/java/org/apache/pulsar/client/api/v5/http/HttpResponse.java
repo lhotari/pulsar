@@ -29,7 +29,9 @@ import java.util.Optional;
  * An immutable buffered HTTP response (PIP-478).
  *
  * <p>The body is fully buffered into a byte array (streaming responses are out of scope for v1).
- * Header lookups via {@link #header(String)} are case-insensitive.
+ * Header lookups via {@link #header(String)} are case-insensitive. The header map is single-valued per
+ * canonical name: two source entries that canonicalise to the same name (case-variants) collapse, and the
+ * one visited last in the source map's iteration order wins; multi-valued headers are not represented.
  *
  * <p><b>Body ownership: the array is handed off, not copied.</b> {@link #of} takes ownership of the
  * {@code body} array without copying it, and {@link #body()} returns that same array without copying;

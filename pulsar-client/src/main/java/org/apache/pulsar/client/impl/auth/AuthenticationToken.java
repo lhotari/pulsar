@@ -54,7 +54,7 @@ public class AuthenticationToken
 
     private static final long serialVersionUID = 1L;
     private Supplier<String> tokenSupplier = null;
-    // PIP-478 stage 3b: the client's framework services, late-bound before start(); null until then.
+    // PIP-478: the client's framework services, late-bound before start(); null until then.
     private transient volatile ClientAuthenticationServices authServices;
 
     public AuthenticationToken() {

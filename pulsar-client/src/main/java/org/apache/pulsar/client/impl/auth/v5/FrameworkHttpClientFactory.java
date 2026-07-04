@@ -52,7 +52,7 @@ import org.asynchttpclient.proxy.ProxyServer;
 import org.asynchttpclient.proxy.ProxyType;
 
 /**
- * The framework-owned {@link PulsarHttpClientFactory} (PIP-478 stage 3c): builds AsyncHttpClient-backed
+ * The framework-owned {@link PulsarHttpClientFactory} (PIP-478): builds AsyncHttpClient-backed
  * {@link PulsarHttpClient} instances for authentication plugins (OAuth2's token endpoint, Athenz's ZTS)
  * that <em>share</em> the owning {@code PulsarClient}'s Netty event loop, timer and DNS resolver — fixing
  * the v4 problem where {@code AuthenticationOAuth2} spun up private {@code DefaultAsyncHttpClient}
@@ -86,13 +86,6 @@ import org.asynchttpclient.proxy.ProxyType;
  */
 @CustomLog
 public final class FrameworkHttpClientFactory implements PulsarHttpClientFactory, AutoCloseable {
-
-    /**
-     * Bounds how long an established pooled connection can keep using pre-rotation TLS material on the new
-     * path (PIP-478's "effective within the TTL bound"). Five minutes trades prompt rotation against
-     * connection churn for the low-volume auth endpoints this factory serves.
-     */
-    private static final int TLS_ROTATION_CONNECTION_TTL_MS = 5 * 60 * 1000;
 
     private final Supplier<EventLoopGroup> eventLoopGroup;
     private final Supplier<Timer> timer;
@@ -131,7 +124,7 @@ public final class FrameworkHttpClientFactory implements PulsarHttpClientFactory
      * @return whether a PIP-478 TLS factory is available (the owning client is on the new TLS path), so a
      *         served {@link PulsarHttpClient} resolves its purpose's context from the factory — e.g. the
      *         folded {@code CLIENT_OAUTH2} IdP material — rather than the platform default trust store
-     *         (PIP-478 stage 4a).
+     *         (PIP-478).
      */
     public boolean hasTlsFactory() {
         return tlsFactory.get() != null;
@@ -197,12 +190,15 @@ public final class FrameworkHttpClientFactory implements PulsarHttpClientFactory
             builder.setSslEngineFactory(new SslEngineFactory() {
                 @Override
                 public SSLEngine newSslEngine(AsyncHttpClientConfig ahcConfig, String peerHost, int peerPort) {
-                    // Client mode, SNI and baked-in hostname verification all come from the Netty context.
-                    return holder.context.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort);
+                    // Client mode, SNI and baked-in hostname verification all come from the Netty context. Pin
+                    // the context across newEngine so a concurrent rotation cannot free the native OpenSSL
+                    // context mid-build (F1 use-after-free guard).
+                    return TlsContextAcquisition.withPinnedContext(() -> holder.context,
+                            ctx -> ctx.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort));
                 }
             });
-            // Bound how long pre-rotation material survives on established pooled connections.
-            builder.setConnectionTtl(TLS_ROTATION_CONNECTION_TTL_MS);
+            // Bound how long pre-rotation material survives on established pooled connections (L2/H4).
+            builder.setConnectionTtl(TlsContextAcquisition.httpTlsRotationConnectionTtlMillis());
             return subscription;
         }
         // Legacy path: only cluster (CLIENT_DEFAULT) traffic maps the client's tls* behavioural flags; a

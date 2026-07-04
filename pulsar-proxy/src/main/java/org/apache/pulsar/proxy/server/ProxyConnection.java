@@ -890,12 +890,11 @@ public class ProxyConnection extends PulsarHandler {
      * <p>PIP-478: when TLS with the broker is enabled the resolved lookup client TLS factory
      * ({@link ProxyService#getLookupClientTlsFactory()}) is stashed on the config so the lookup
      * {@code ConnectionPool}'s client transport can build its per-connection {@code SslContext} for the
-     * {@code CLIENT_DEFAULT} purpose. This was the ninth call-site the stage-4c
-     * {@code PulsarSslFactory}-removal sweep missed (it self-builds the config outside
-     * {@code PulsarClientImpl}, which is where the client factory is normally resolved), which regressed the
-     * proxy binary lookup path to a null-factory NPE. The factory is {@code null} while it is itself being
-     * built at startup, which is harmless: that representative config is only read for its {@code tls*}
-     * fields.
+     * {@code CLIENT_DEFAULT} purpose. This method self-builds the config outside
+     * {@code PulsarClientImpl} (which is where the client factory is normally resolved), so the factory must
+     * be stashed here explicitly; otherwise the proxy binary lookup path hits a null-factory NPE. The factory
+     * is {@code null} while it is itself being built at startup, which is harmless: that representative config
+     * is only read for its {@code tls*} fields.
      */
     static ClientConfigurationData createClientConfiguration(ProxyService service) {
         ClientConfigurationData initialConf = new ClientConfigurationData();

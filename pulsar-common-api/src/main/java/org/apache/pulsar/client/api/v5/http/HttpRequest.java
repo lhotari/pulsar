@@ -30,6 +30,12 @@ import java.util.Optional;
  *
  * <p>Construct via {@link #builder(Method, URI)}. The optional {@link Body} is a sealed type so the
  * set of body shapes ({@link Bytes} or {@link Form}) is closed and exhaustively switchable.
+ *
+ * <p><b>Headers are single-valued and keyed by exact name.</b> Unlike {@link HttpResponse} (whose names
+ * are canonicalised), request header names are NOT case-folded: they are stored verbatim as supplied to
+ * the builder. Setting a header whose name exactly matches an existing one replaces the prior value
+ * (last-wins); names that differ only in case are therefore distinct entries, and multi-valued headers are
+ * not representable.
  */
 public final class HttpRequest {
 

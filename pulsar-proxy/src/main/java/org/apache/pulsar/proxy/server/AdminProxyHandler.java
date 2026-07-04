@@ -87,7 +87,7 @@ class AdminProxyHandler extends ProxyServlet {
     private final Authentication proxyClientAuthentication;
     private final String brokerWebServiceUrl;
     private final String functionWorkerWebServiceUrl;
-    // PIP-478 broker-client TLS SPI factory (the only path since PIP-337 removal, stage 4c).
+    // PIP-478 broker-client TLS SPI factory (the only path since the PIP-337 removal).
     private PulsarTlsFactory brokerClientTlsFactory;
     // PIP-478 (F3): the BROKER_CLIENT SSLContext subscription driving the Jetty HttpClient's reloading
     // SslContextFactory.Client, so rotated broker-client material reaches new admin connections. Disposed

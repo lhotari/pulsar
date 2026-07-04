@@ -61,4 +61,17 @@ public record ProxyConfig(Type type, String host, int port, String username, Str
     public Optional<String> passwordOptional() {
         return Optional.ofNullable(password);
     }
+
+    /**
+     * Masks the password so it never leaks through logs or diagnostics (the default record
+     * {@code toString()} would print it verbatim).
+     *
+     * @return a string representation with the password masked
+     */
+    @Override
+    public String toString() {
+        return "ProxyConfig{type=" + type + ", host=" + host + ", port=" + port
+                + ", username=" + username
+                + ", password=" + (password == null ? "null" : "*****") + '}';
+    }
 }

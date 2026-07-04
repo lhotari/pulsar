@@ -23,9 +23,13 @@
  * <p>A {@link org.apache.pulsar.common.tls.PulsarTlsFactory} answers requests for fully configured TLS
  * objects ({@code io.netty.handler.ssl.SslContext}, Jetty's {@code SslContextFactory.Server}, or
  * {@code javax.net.ssl.SSLContext}) per {@link org.apache.pulsar.common.tls.TlsPurpose}, delivering
- * rebuilt instances through reload callbacks on rotation. How the factory sources key material and
- * builds the objects is entirely factory-internal — nothing material-shaped appears in the SPI and key
- * material never crosses a Pulsar API. The single user-facing configuration value is
+ * rebuilt instances through reload callbacks on rotation. A factory that supplies only the
+ * {@code SSLContext} fallback may additionally supply a {@code javax.net.ssl.SSLParameters} companion —
+ * the optional engine-policy baseline (protocols, cipher suites, client-auth mode, endpoint
+ * identification) consulted on the synthesis path with a deterministic merge order documented on
+ * {@link org.apache.pulsar.common.tls.PulsarTlsFactory}. How the factory sources key material and builds
+ * the objects is entirely factory-internal — nothing material-shaped appears in the SPI and key material
+ * never crosses a Pulsar API. The single user-facing configuration value is
  * {@link org.apache.pulsar.common.tls.TlsPolicy}.
  *
  * <p>This package is hosted in the neutral, dependency-light {@code pulsar-common-api} module so both
@@ -35,7 +39,7 @@
  * <p>The package also hosts the JDK-only TLS hostname-verification helpers
  * ({@link org.apache.pulsar.common.tls.TlsHostnameVerifier},
  * {@link org.apache.pulsar.common.tls.PublicSuffixMatcher}, and friends), relocated here from
- * {@code pulsar-common} in PIP-478's split-package remediation (decision D7) so the whole
+ * {@code pulsar-common} in PIP-478's split-package remediation so the whole
  * {@code org.apache.pulsar.common.tls} package has a single owning module.
  */
 package org.apache.pulsar.common.tls;

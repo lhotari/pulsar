@@ -68,7 +68,7 @@ abstract class FlowBase implements Flow {
     protected final String wellKnownMetadataPath;
 
     protected transient Metadata metadata;
-    // PIP-478 stage 3c: the framework HTTP client factory, late-bound by AuthenticationOAuth2 from the owning
+    // PIP-478: the framework HTTP client factory, late-bound by AuthenticationOAuth2 from the owning
     // PulsarClient/PulsarAdmin's ClientAuthenticationServices before initialize(); null when the plugin runs
     // standalone (outside any client/admin), in which case getHttpClient() self-provisions one (see below).
     private transient PulsarHttpClientFactory httpClientFactory;
@@ -89,13 +89,13 @@ abstract class FlowBase implements Flow {
         this.autoCertRefreshSeconds = getParameterDurationToSeconds(CONFIG_PARAM_AUTO_CERT_REFRESH_DURATION,
                 autoCertRefreshDuration, DEFAULT_AUTO_CERT_REFRESH_DURATION);
         this.wellKnownMetadataPath = wellKnownMetadataPath;
-        // PIP-478 stage 3c: no longer build the HTTP client eagerly here. The flow is constructed during
+        // PIP-478: the HTTP client is not built eagerly here. The flow is constructed during
         // configure() — before the client's framework services (the shared HTTP client factory) are bound —
         // so the client is created lazily on first use (initialize()), once the factory is available.
     }
 
     /**
-     * Late-bind the framework HTTP client factory (PIP-478 stage 3c). Called by
+     * Late-bind the framework HTTP client factory (PIP-478). Called by
      * {@code AuthenticationOAuth2.bindClientAuthenticationServices(...)} before {@code initialize()}, so the
      * lazily-built client is the framework-managed one that shares the owning client's resources.
      *
@@ -121,9 +121,8 @@ abstract class FlowBase implements Flow {
      * {@code PulsarClient}/{@code PulsarAdmin} on the normal path, or a self-provisioned standalone factory
      * when this flow runs outside any client/admin. The proxy, the broker's broker-client and the CLI tools
      * create {@code AuthenticationOAuth2} directly (via {@code AuthenticationFactory.create(...).start()}) and
-     * never bind a factory; before PIP-478 stage 4c removed the private OAuth2 {@code AsyncHttpClient}
-     * {@code FlowBase} built its own HTTP client here, so this preserves that backward-compatible standalone
-     * support on the new SPI ({@link StandaloneOAuth2HttpClientFactory}).
+     * never bind a factory, so {@code FlowBase} self-provisions its own HTTP client here to preserve
+     * backward-compatible standalone support on the new SPI ({@link StandaloneOAuth2HttpClientFactory}).
      */
     private PulsarHttpClientFactory resolveHttpClientFactory() {
         if (httpClientFactory != null) {
@@ -146,7 +145,7 @@ abstract class FlowBase implements Flow {
     /**
      * The IdP TLS material this flow carries (the {@code trustCertsFilePath} / {@code tlsCertFile} /
      * {@code tlsKeyFile} parameters), folded into a {@link TlsPurpose#CLIENT_OAUTH2} {@link TlsPolicy} so the
-     * framework HTTP client can serve IdP mTLS / custom trust on the new PIP-478 TLS path (stage 4a, issue
+     * framework HTTP client can serve IdP mTLS / custom trust on the new PIP-478 TLS path (issue
      * #24944). Empty when the flow carries no IdP TLS material — the OAuth2 call then resolves to the system
      * default trust store (CLIENT_OAUTH2's empty fallback).
      *
@@ -241,7 +240,10 @@ abstract class FlowBase implements Flow {
     }
 
     @Override
-    public void close() throws Exception {
+    // Synchronized to pair with the synchronized getHttpClient()/resolveHttpClientFactory() lazy init (F7):
+    // otherwise a close() racing the first fetch reads pulsarHttpClient/standaloneHttpClientFactory without the
+    // monitor and can miss (and thus leak) a client or standalone factory that the racing fetch just created.
+    public synchronized void close() throws Exception {
         if (pulsarHttpClient != null) {
             // Idempotent: releases the framework client (which the framework factory also closes on client
             // shutdown).

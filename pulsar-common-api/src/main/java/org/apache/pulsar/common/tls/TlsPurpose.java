@@ -28,8 +28,9 @@ import java.util.Optional;
  * {@link Role} (client or server), an open {@link #name()}, and an optional single-level
  * {@link #fallback()} naming the purpose to consult when this one has no material configured.
  * A {@link PulsarTlsFactory} serves distinct TLS material per purpose; the well-known purposes are
- * exposed as constants, and plugins may mint additional open-named purposes with
- * {@link #client(String, TlsPurpose)}.
+ * exposed as constants, and components may mint additional open-named purposes with
+ * {@link #client(String, TlsPurpose)} / {@link #server(String, TlsPurpose)} (or the fallback-less
+ * {@link #client(String)} / {@link #server(String)}).
  *
  * <p><b>Empty-fallback semantics.</b> When {@link #fallback()} is empty and nothing is configured
  * for this purpose, resolution ends: for the {@link Role#CLIENT} role it resolves to the
@@ -39,7 +40,10 @@ import java.util.Optional;
  * material, since the identity provider is a different trust domain.
  *
  * <p>The value is immutable; the fallback is fixed at construction. Instances are safe to use as map
- * keys — {@link #equals(Object)} / {@link #hashCode()} are defined over the role, name, and fallback.
+ * keys — {@link #equals(Object)} / {@link #hashCode()} are defined over the role and name only. The
+ * {@link #fallback()} is <em>resolution metadata</em>, not part of the key identity: a purpose is
+ * uniquely named, and each name is expected to be minted once with a single fallback, so two instances
+ * with the same {@code (role, name)} are the same configuration entry regardless of fallback.
  */
 public final class TlsPurpose {
 
@@ -112,6 +116,10 @@ public final class TlsPurpose {
      * construction). An empty value means: {@link Role#CLIENT} role &rarr; the system default (OS
      * trust store, no client certificate); {@link Role#SERVER} role &rarr; a configuration error.
      *
+     * <p>The fallback is <em>resolution metadata</em>: it steers how an unconfigured purpose resolves, but
+     * it is deliberately excluded from {@link #equals(Object)} / {@link #hashCode()}, so it never affects
+     * this purpose's identity as a map key.
+     *
      * @return the fallback purpose, or empty when this purpose has no fallback
      */
     public Optional<TlsPurpose> fallback() {
@@ -151,6 +159,18 @@ public final class TlsPurpose {
         return new TlsPurpose(Role.SERVER, name, null);
     }
 
+    /**
+     * Mint a server-role purpose with an explicit single-level fallback, e.g. an internal listener that
+     * falls back to the main {@link #BROKER} material — {@code TlsPurpose.server("broker.internal", BROKER)}.
+     *
+     * @param name     the open purpose name
+     * @param fallback the purpose to consult when this one has no material configured
+     * @return a new server-role {@link TlsPurpose}
+     */
+    public static TlsPurpose server(String name, TlsPurpose fallback) {
+        return new TlsPurpose(Role.SERVER, name, Objects.requireNonNull(fallback, "fallback must not be null"));
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -159,12 +179,16 @@ public final class TlsPurpose {
         if (!(o instanceof TlsPurpose that)) {
             return false;
         }
-        return role == that.role && name.equals(that.name) && Objects.equals(fallback, that.fallback);
+        // Identity is (role, name) only. The fallback is resolution metadata — NOT part of the key — so
+        // client("x") and client("x", CLIENT_DEFAULT) are the same configuration entry and resolve to the
+        // same purpose→policy map slot; including the fallback here would split one config key into two and
+        // cause silent lookup misses.
+        return role == that.role && name.equals(that.name);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(role, name, fallback);
+        return Objects.hash(role, name);
     }
 
     @Override

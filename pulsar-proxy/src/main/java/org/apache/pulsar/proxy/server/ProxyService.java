@@ -485,24 +485,6 @@ public class ProxyService implements Closeable {
             discoveryProvider.close();
         }
 
-        // PIP-478: dispose the new-SPI TLS resources (front-end subscription + shared broker-client factory).
-        if (this.tlsServiceChannelInitializer != null) {
-            this.tlsServiceChannelInitializer.close();
-            this.tlsServiceChannelInitializer = null;
-        }
-        if (this.brokerClientTlsSubscription != null) {
-            this.brokerClientTlsSubscription.dispose();
-            this.brokerClientTlsSubscription = null;
-        }
-        if (this.brokerClientTlsFactory != null) {
-            this.brokerClientTlsFactory.close();
-            this.brokerClientTlsFactory = null;
-        }
-        if (this.lookupClientTlsFactory != null) {
-            this.lookupClientTlsFactory.close();
-            this.lookupClientTlsFactory = null;
-        }
-
         if (this.sslContextRefresher != null) {
             this.sslContextRefresher.shutdownNow();
         }
@@ -551,6 +533,30 @@ public class ProxyService implements Closeable {
                 Thread.currentThread().interrupt();
             }
         }
+
+        // PIP-478 (F2): dispose the new-SPI TLS resources (front-end subscription + shared broker-client
+        // factory) ONLY AFTER the worker and extension event loops are fully quiesced. Those loops run the
+        // proxy's inbound TLS handshakes (ServiceChannelInitializer) and outbound broker-connects
+        // (DirectProxyHandler), both of which build handlers from these factory-owned Netty contexts. Freeing
+        // the contexts while a loop can still start a connection would run newHandler on a released native
+        // OpenSSL context (use-after-free) — mirror the broker's loops-before-initializer-close ordering.
+        if (this.tlsServiceChannelInitializer != null) {
+            this.tlsServiceChannelInitializer.close();
+            this.tlsServiceChannelInitializer = null;
+        }
+        if (this.brokerClientTlsSubscription != null) {
+            this.brokerClientTlsSubscription.dispose();
+            this.brokerClientTlsSubscription = null;
+        }
+        if (this.brokerClientTlsFactory != null) {
+            this.brokerClientTlsFactory.close();
+            this.brokerClientTlsFactory = null;
+        }
+        if (this.lookupClientTlsFactory != null) {
+            this.lookupClientTlsFactory.close();
+            this.lookupClientTlsFactory = null;
+        }
+
         log.info("ProxyService closed.");
     }
 

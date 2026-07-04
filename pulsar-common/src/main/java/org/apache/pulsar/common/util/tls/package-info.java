@@ -18,6 +18,10 @@
  */
 
 /**
- * Helpers to work with events from the non-blocking I/O client-server framework.
+ * Cohesive, single-concern TLS utility containers (PIP-478). Each class holds one concern rather than the
+ * former {@code SecurityUtility} grab-bag: {@link org.apache.pulsar.common.util.tls.PemReader} parses PEM
+ * certificates and keys, {@link org.apache.pulsar.common.util.tls.JcaProviders} resolves JCA/JCE security
+ * providers, and {@link org.apache.pulsar.common.util.tls.JdkSslContexts} assembles JDK
+ * {@code javax.net.ssl.SSLContext} instances from loaded material.
  */
-package org.apache.pulsar.common.util.keystoretls;
+package org.apache.pulsar.common.util.tls;

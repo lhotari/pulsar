@@ -162,6 +162,33 @@ public class SslContextFallbackSynthesisTest extends MockedPulsarServiceBaseTest
     }
 
     /**
+     * T2: a full client&rarr;proxy&rarr;broker produce/consume over TLS with the SSLContext-only factory on
+     * every synthesized leg. The client's binary transport, the proxy's PROXY server listener, and the
+     * proxy's BROKER_CLIENT data connection to the broker (via {@code DirectProxyHandler}) are all
+     * framework-synthesized Netty contexts; a successful round trip proves the SSLContext-fallback synthesis
+     * end-to-end on the proxy data path — not just at context construction.
+     *
+     * <p>(The proxy's binary-<em>lookup</em> {@code ConnectionPool} is wired to a default file-based factory
+     * built from the same broker-client PEM material rather than the custom class — by design, see
+     * {@link ProxyService#start()} — so it connects over TLS with a default context; that does not affect the
+     * synthesis proven on the client and proxy-data legs.)
+     */
+    @Test
+    public void clientThroughProxyToBrokerOverSynthesizedContexts() throws Exception {
+        int before = SslContextOnlyTlsFactory.nettyRequestCount();
+        @Cleanup
+        PulsarClient client = PulsarClient.builder()
+                .serviceUrl(proxyService.getServiceUrlTls())
+                .tlsFactory(new SslContextOnlyTlsFactory(CA_CERT_FILE_PATH, null, null, false))
+                .build();
+
+        assertProduceConsume(client, "persistent://public/default/f1-proxy-topic", "proxy-synth");
+        assertThat(SslContextOnlyTlsFactory.nettyRequestCount())
+                .as("the client's produce/consume through the proxy fell back to SSLContext synthesis")
+                .isGreaterThan(before);
+    }
+
+    /**
      * The proxy's broker-client context (BROKER_CLIENT, subscribing form used by {@code DirectProxyHandler})
      * is a usable framework-synthesized Netty context, and the proxy started with the SSLContext-only factory
      * (proving the PROXY-purpose synthesis at startup).

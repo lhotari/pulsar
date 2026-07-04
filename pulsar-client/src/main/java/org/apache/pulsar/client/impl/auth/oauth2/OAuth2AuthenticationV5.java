@@ -42,7 +42,7 @@ import org.apache.pulsar.client.impl.auth.v5.V5AuthContexts;
  * body via the access-token supplier.
  *
  * <p>Token acquisition performs network I/O. As with the existing v4 OAuth2 code, the supplier may block
- * on the underlying flow; off-loading the blocking call belongs to the framework layer (stage 3b), so
+ * on the underlying flow; off-loading the blocking call belongs to the framework layer, so
  * this body introduces no threading of its own.
  *
  * <p>Although the v5 {@code Authentication} SPI deliberately does not extend {@link Serializable}, this
@@ -65,7 +65,7 @@ public class OAuth2AuthenticationV5 implements SinglePassAuthentication, Seriali
 
     // Late-bound at initializeAsync(...): the client's bounded blocking executor, onto which the
     // (network-blocking) access-token fetch is off-loaded so it never runs on the Netty event loop
-    // (PIP-478 stage 3b). Null when used outside a client, in which case the fetch runs inline.
+    // (PIP-478). Null when used outside a client, in which case the fetch runs inline.
     private transient volatile Executor blockingExecutor;
 
     /**

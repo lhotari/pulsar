@@ -35,8 +35,18 @@ public interface PulsarHttpClientFactory {
      * <p>The returned instance is owned by the framework; the framework closes it when the
      * {@code PulsarClient} is closed.
      *
+     * <p><b>Construction-time errors.</b> This is a construction method, not a future-returning request
+     * method: it resolves the config's {@link org.apache.pulsar.common.tls.TlsPurpose} to TLS material and
+     * builds the client eagerly. It therefore throws {@link IllegalStateException} synchronously when the
+     * factory has already been closed, and when the configured {@code TlsPurpose} cannot be resolved to TLS
+     * material (an unknown or unbuildable purpose). It performs no request I/O — per-request and network
+     * failures surface later on the returned {@link PulsarHttpClient}'s request {@code CompletableFuture}s,
+     * never as a synchronous throw.
+     *
      * @param config per-instance configuration (timeouts, proxy, TLS purpose, ...)
      * @return a configured HTTP client
+     * @throws IllegalStateException if the factory is closed, or the config's {@code TlsPurpose} cannot be
+     *         resolved to TLS material
      */
     PulsarHttpClient newHttpClient(PulsarHttpClientConfig config);
 }

@@ -86,7 +86,7 @@ public class HttpClient implements Closeable {
     private final NameResolver<InetAddress> nameResolver;
     protected final Authentication authentication;
     protected final ClientConfigurationData clientConf;
-    // PIP-478 stage 3b (new TLS path): a subscription to the CLIENT_DEFAULT SslContext whose callback
+    // PIP-478 (new TLS path): a subscription to the CLIENT_DEFAULT SslContext whose callback
     // updates the volatile below on rotation; the AsyncHttpClient SslEngineFactory builds engines from it.
     private TlsHandle<SslContext> tlsSubscription;
     private volatile SslContext clientSslContext;
@@ -146,7 +146,7 @@ public class HttpClient implements Closeable {
     }
 
     /**
-     * New PIP-478 HTTPS TLS setup (stage 3b): subscribe once to the {@link TlsPurpose#CLIENT_DEFAULT}
+     * New PIP-478 HTTPS TLS setup: subscribe once to the {@link TlsPurpose#CLIENT_DEFAULT}
      * Netty {@code SslContext} — the callback updates a volatile on rotation — and back AsyncHttpClient's
      * {@link SslEngineFactory} with it. The AsyncHttpClient {@code SslEngineFactory} is invoked
      * synchronously per connection, so (unlike the binary path's one-shot form) a live subscription plus
@@ -171,11 +171,18 @@ public class HttpClient implements Closeable {
             @Override
             public javax.net.ssl.SSLEngine newSslEngine(AsyncHttpClientConfig config, String peerHost,
                     int peerPort) {
-                // Build the engine from the current (possibly rotated) factory-owned context. Client mode,
-                // SNI and baked-in hostname verification all come from the Netty context.
-                return clientSslContext.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort);
+                // Build the engine from the current (possibly rotated) factory-owned context, pinning it across
+                // newEngine so a concurrent rotation cannot free the native OpenSSL context mid-build (F1
+                // use-after-free guard). Client mode, SNI and baked-in hostname verification all come from the
+                // Netty context.
+                return TlsContextAcquisition.withPinnedContext(() -> clientSslContext,
+                        ctx -> ctx.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort));
             }
         });
+        // Bound how long an established pooled HTTPS connection keeps pre-rotation material (L2/H4): new
+        // connections pick up rotation via the SslEngineFactory above, but a pooled connection would otherwise
+        // hold pre-rotation trust/cert indefinitely. Aligns with FrameworkHttpClientFactory.
+        confBuilder.setConnectionTtl(TlsContextAcquisition.httpTlsRotationConnectionTtlMillis());
     }
 
     String getServiceUrl() {
@@ -193,7 +200,7 @@ public class HttpClient implements Closeable {
     @Override
     public void close() throws IOException {
         httpClient.close();
-        // PIP-478 stage 3b: release the CLIENT_DEFAULT TLS subscription (the factory itself is owned and
+        // PIP-478: release the CLIENT_DEFAULT TLS subscription (the factory itself is owned and
         // closed by PulsarClientImpl).
         if (tlsSubscription != null) {
             tlsSubscription.dispose();
@@ -324,7 +331,7 @@ public class HttpClient implements Closeable {
 
     /**
      * Compute the authentication headers to attach to the outgoing lookup {@code GET}, or a future of
-     * {@code null} when the plugin contributes none (PIP-478 stage 3d).
+     * {@code null} when the plugin contributes none (PIP-478).
      *
      * <p>When the plugin exposes the v5-native SASL-over-HTTP capability (via the
      * {@link AsyncHttpAuthenticationProvider} bridge), the framework {@link HttpAuthenticationDriver} runs
@@ -379,7 +386,7 @@ public class HttpClient implements Closeable {
     }
 
     /**
-     * A {@link HttpChallengeTransport} backed by this client's shared AsyncHttpClient (PIP-478 stage 3d):
+     * A {@link HttpChallengeTransport} backed by this client's shared AsyncHttpClient (PIP-478):
      * the SASL warmup rounds re-use the same event-loop / DNS resolver as the real lookup request. Each
      * round is a bodiless {@code GET} to the original URI.
      */

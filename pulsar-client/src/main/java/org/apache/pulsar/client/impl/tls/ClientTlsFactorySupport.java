@@ -55,7 +55,7 @@ import org.apache.pulsar.common.tls.impl.TlsSynthesisSpec;
  * {@code pulsar-broker-common}, off the client classpath): the
  * {@code ClientConfigurationData}&rarr;{@link TlsPolicy} composition, the {@code sslProvider}&rarr;Netty
  * engine mapping, and the default {@link FileBasedTlsFactory} construction the v4 client's transport uses.
- * Since the PIP-337 {@code PulsarSslFactory} removal (stage 4c) this is the only client TLS path: a TLS
+ * Since the PIP-337 {@code PulsarSslFactory} removal this is the only client TLS path: a TLS
  * client always builds a {@link PulsarTlsFactory} (an adopted v5 {@code tlsFactory(...)} or the built-in
  * file-based default composed from the {@code tls*} fields).
  *
@@ -71,7 +71,7 @@ public final class ClientTlsFactorySupport {
 
     /**
      * FQCN of the removed PIP-337 default SSL factory. Matched as a string literal (the class itself is
-     * removed in PIP-478 stage 4c) so a blank {@code sslFactoryPlugin} value OR this literal is treated as
+     * removed in PIP-478) so a blank {@code sslFactoryPlugin} value OR this literal is treated as
      * "the default" — any other non-blank value names a custom PIP-337 plugin.
      */
     static final String REMOVED_DEFAULT_SSL_FACTORY_CLASS_NAME =
@@ -82,7 +82,7 @@ public final class ClientTlsFactorySupport {
 
     /**
      * Whether a {@code sslFactoryPlugin} value names a removed PIP-337 custom factory — a non-blank value
-     * that is not the removed default's FQCN. The PIP-337 path no longer exists (stage 4c), so
+     * that is not the removed default's FQCN. The PIP-337 path no longer exists, so
      * {@code ClientBuilder.build()} fails loudly when this returns {@code true}.
      *
      * @param sslFactoryPlugin the configured {@code sslFactoryPlugin} class name
@@ -125,16 +125,15 @@ public final class ClientTlsFactorySupport {
                 .protocols(toList(conf.getTlsProtocols()))
                 .ciphers(toList(conf.getTlsCiphers()));
         if (conf.isUseKeyStoreTls()) {
-            // TlsPolicy carries a single store type; prefer the keystore type when a keystore is set,
-            // otherwise fall back to the truststore type (they are usually identical).
-            String storeType = conf.getTlsKeyStorePath() != null
-                    ? conf.getTlsKeyStoreType() : conf.getTlsTrustStoreType();
+            // Map the keystore and truststore types independently (v4 parity): a mixed setup such as a PKCS12
+            // keystore with a JKS truststore must load each store with its own type.
             b.format(TlsPolicy.Format.KEYSTORE)
                     .trustStorePath(conf.getTlsTrustStorePath())
                     .trustStorePassword(conf.getTlsTrustStorePassword())
                     .keyStorePath(conf.getTlsKeyStorePath())
                     .keyStorePassword(conf.getTlsKeyStorePassword())
-                    .storeType(storeType);
+                    .keyStoreType(conf.getTlsKeyStoreType())
+                    .trustStoreType(conf.getTlsTrustStoreType());
         } else {
             b.format(TlsPolicy.Format.PEM)
                     .trustCertsFilePath(conf.getTlsTrustCertsFilePath())
@@ -146,7 +145,7 @@ public final class ClientTlsFactorySupport {
 
     /**
      * Resolve the effective client TLS factory, initialized and (on the v5-builder path) probed. Since the
-     * PIP-337 removal (stage 4c) this always returns a non-null factory: an adopted v5 {@code tlsFactory}, or
+     * PIP-337 removal this always returns a non-null factory: an adopted v5 {@code tlsFactory}, or
      * the built-in file-based factory composed from the {@code tls*} fields.
      *
      * @param conf             the client configuration
@@ -168,7 +167,7 @@ public final class ClientTlsFactorySupport {
         } else {
             // Fold the auth plugin's TLS identity (AuthenticationTls / AuthenticationKeyStoreTls) into
             // CLIENT_DEFAULT (auth-cert-wins), so a plugin-supplied client certificate reaches the transport
-            // now that this is the only client TLS path (PIP-478 stage 4c). The supplier is registered
+            // now that this is the only client TLS path (PIP-478). The supplier is registered
             // unconditionally and evaluated lazily at context-build time (per connection, off the event loop),
             // so client construction never eagerly calls getAuthData() — no eager OAuth2 token fetch.
             factory = new FileBasedTlsFactory(composePolicies(conf), settings(conf),
@@ -186,7 +185,7 @@ public final class ClientTlsFactorySupport {
     /**
      * Build the (uninitialized) broker-client {@link PulsarTlsFactory} for a server component's own outbound
      * Pulsar client — geo-replication and cluster-internal lookup connections (the {@code BROKER_CLIENT}
-     * purpose, PIP-478 stage 4a). The broker-client material is already mapped onto the config's
+     * purpose, PIP-478). The broker-client material is already mapped onto the config's
      * {@code tls*} fields (per-cluster {@code ClusterData.brokerClientTls*} first, else the broker's
      * {@code brokerClient*} {@code ServiceConfiguration}), so this composes {@link TlsPurpose#CLIENT_DEFAULT}
      * — the purpose the outbound transport requests — from those fields, additionally folding the
@@ -219,15 +218,27 @@ public final class ClientTlsFactorySupport {
                         "Could not instantiate brokerClientTlsFactoryClassName '" + className + "'", e);
             }
         }
-        // Broker-client (server startup / replication client creation): the eager authHasTlsMaterial probe
-        // runs off the event loop, registering a supplier only for a genuine TLS-auth plugin.
+        // Broker-client (server startup / replication client creation): register the broker-client TLS fold
+        // when the plugin carries TLS material.
         TlsPolicy policy = clientDefaultPolicy(conf);
         Map<TlsPurpose, Supplier<AuthenticationDataProvider>> authSuppliers = Map.of();
         Authentication auth = conf.getAuthentication();
-        if (auth != null && authHasTlsMaterial(auth)) {
+        if (auth != null && shouldFoldBrokerClientAuthTls(auth)) {
             authSuppliers = Map.of(TlsPurpose.CLIENT_DEFAULT, FileBasedTlsFactory.authMaterialSupplier(auth));
         }
         return new FileBasedTlsFactory(Map.of(TlsPurpose.CLIENT_DEFAULT, policy), settings(conf), authSuppliers);
+    }
+
+    /**
+     * Whether to register the broker-client {@code BROKER_CLIENT} TLS fold for this plugin (L3/S-F3). The
+     * built-in TLS-auth plugins are matched by TYPE ({@code AuthenticationTls} / {@code AuthenticationKeyStoreTls})
+     * so a transient read failure at factory build — the key file briefly missing while it is being rotated —
+     * does not permanently skip the fold and disable rotation; {@code AuthProvidedMaterialSource} keeps the
+     * last-good material and retries per poll. For an unknown custom plugin fall back to the material probe,
+     * preserving support for third-party plugins that supply TLS material without extending the built-in types.
+     */
+    private static boolean shouldFoldBrokerClientAuthTls(Authentication auth) {
+        return isTlsAuthPlugin(auth) || authHasTlsMaterial(auth);
     }
 
     /**
@@ -334,7 +345,7 @@ public final class ClientTlsFactorySupport {
         // Always ensure CLIENT_DEFAULT resolves — derive it from the conf fields if the v5 builder did
         // not supply one explicitly.
         policies.putIfAbsent(TlsPurpose.CLIENT_DEFAULT, clientDefaultPolicy(conf));
-        // PIP-478 stage 4a: fold an OAuth2 plugin's own IdP TLS material (trustCerts / cert / key params,
+        // PIP-478: fold an OAuth2 plugin's own IdP TLS material (trustCerts / cert / key params,
         // issue #24944) into CLIENT_OAUTH2, so the framework HTTP client serves IdP mTLS / custom trust on
         // the new path instead of the deprecated private client. Only when the plugin carries IdP TLS
         // material; otherwise CLIENT_OAUTH2 keeps resolving to the system default (its empty fallback). The
@@ -404,7 +415,7 @@ public final class ClientTlsFactorySupport {
     private static TlsFactoryInitContext initContext(ClientConfigurationData conf,
             ScheduledExecutorService scheduler, Executor blockingExecutor, OpenTelemetry openTelemetry) {
         OpenTelemetry ot = openTelemetry == null ? OpenTelemetry.noop() : openTelemetry;
-        // PIP-478 stage 4b: deliver the broker-supplied factory params (from brokerClientTlsFactoryConfig) to
+        // PIP-478: deliver the broker-supplied factory params (from brokerClientTlsFactoryConfig) to
         // a custom factory; empty for the default file-based factory, which ignores them.
         Map<String, String> params = conf.getTlsFactoryParams() == null
                 ? Map.of() : Map.copyOf(conf.getTlsFactoryParams());

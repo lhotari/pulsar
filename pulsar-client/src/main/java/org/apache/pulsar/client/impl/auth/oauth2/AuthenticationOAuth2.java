@@ -117,7 +117,7 @@ public class AuthenticationOAuth2
     private transient Backoff backoff;
     private transient ScheduledFuture<?> nextRefreshAttempt;
 
-    // PIP-478 stage 3b: the client's framework services, late-bound before start(); null until then.
+    // PIP-478: the client's framework services, late-bound before start(); null until then.
     private transient volatile ClientAuthenticationServices authServices;
 
     // No args constructor used when creating class with reflection
@@ -274,7 +274,7 @@ public class AuthenticationOAuth2
     /**
      * The IdP TLS material the configured flow carries, folded into a {@link TlsPurpose#CLIENT_OAUTH2}
      * {@link TlsPolicy} so the framework HTTP client can serve IdP mTLS / custom trust on the new PIP-478 TLS
-     * path (stage 4a). Read at client-build / TLS-compose time (the flow is created during
+     * path. Read at client-build / TLS-compose time (the flow is created during
      * {@link #configure}, before the client is constructed). Empty when no flow is configured or it carries
      * no IdP TLS material.
      *
@@ -288,7 +288,7 @@ public class AuthenticationOAuth2
     @Override
     public void bindClientAuthenticationServices(ClientAuthenticationServices services) {
         this.authServices = services;
-        // PIP-478 stage 3c: thread the framework HTTP client factory into the flow (built during configure(),
+        // PIP-478: thread the framework HTTP client factory into the flow (built during configure(),
         // before services existed) so its lazily-built client — resolved on initialize()/start() — is the
         // framework-managed one sharing the client's event loop / timer / DNS resolver.
         Flow currentFlow = this.flow;
@@ -303,7 +303,7 @@ public class AuthenticationOAuth2
         // acquisition, caching and early refresh — stays on this shim; the body reads the current access
         // token through getAuthData(), so a broker-pushed REFRESH re-fetches an expired token here exactly
         // as the synchronous path does. The bound blocking executor off-loads that (network-blocking)
-        // fetch so it never runs on the Netty event loop (stage 3b).
+        // fetch so it never runs on the Netty event loop.
         return new V5BinaryAuthenticationDriver(new OAuth2AuthenticationV5(this::currentAccessToken), authServices)
                 .newAuthenticationExchange(brokerHostName);
     }

@@ -28,13 +28,13 @@ package org.apache.pulsar.client.api.v5.auth;
  * API break.
  *
  * <p><b>Ownership: the array is handed off, not copied.</b> The producer transfers ownership of
- * {@code authData} to this value on construction, and the framework reads it without copying; neither
+ * {@code bytes} to this value on construction, and the framework reads it without copying; neither
  * side may mutate the array after construction. (Copying is deliberately avoided — this is a
  * single-producer-to-single-consumer transfer, matching the v4 {@code AuthData} contract.) Because the
  * component is an array, the record's generated {@code equals}/{@code hashCode} are reference-based on
  * the bytes, not value-based; do not compare {@link BinaryAuthData} instances for value equality.
  *
- * @param authData the credential bytes sent in {@code CommandConnect.auth_data}
+ * @param bytes the credential bytes sent in {@code CommandConnect.auth_data}
  */
-public record BinaryAuthData(byte[] authData) {
+public record BinaryAuthData(byte[] bytes) {
 }

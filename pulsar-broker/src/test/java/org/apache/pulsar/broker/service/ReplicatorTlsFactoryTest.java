@@ -18,6 +18,8 @@
  */
 package org.apache.pulsar.broker.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
@@ -29,6 +31,7 @@ import org.apache.pulsar.broker.BrokerTestUtil;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.policies.data.ClusterData;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
@@ -109,5 +112,43 @@ public class ReplicatorTlsFactoryTest extends ReplicatorTestBase {
         // Replicated: broker-to-broker delivery over the new-SPI TLS connection.
         consumer2.receive(2, 30);
         consumer3.receive(2, 30);
+    }
+
+    /**
+     * PIP-478 B1/H2 (escalating ruling R6): a per-cluster {@code brokerClientSslFactoryPlugin} that names a
+     * CUSTOM PIP-337 factory must FAIL LOUDLY at cluster-client / cluster-admin creation — silently falling
+     * back to file-based TLS would downgrade the broker-client identity/trust for that cluster on upgrade. A
+     * blank / removed-default-FQCN value is not a custom factory and is still tolerated.
+     */
+    @Test
+    public void perClusterCustomSslFactoryPluginFailsLoud() throws Exception {
+        ClusterData base = admin1.clusters().getCluster(cluster1);
+        ClusterData custom = ClusterData.builder()
+                .serviceUrl(base.getServiceUrl())
+                .serviceUrlTls(base.getServiceUrlTls())
+                .brokerServiceUrl(base.getBrokerServiceUrl())
+                .brokerServiceUrlTls(base.getBrokerServiceUrlTls())
+                .brokerClientSslFactoryPlugin("com.example.CustomKmsSslFactory")
+                .build();
+
+        assertThatThrownBy(() -> ns1.getReplicationClient("pip478-b1-fail-loud-repl", Optional.of(custom)))
+                .as("custom per-cluster SSL factory -> replication client creation fails loud")
+                .hasMessageContaining("brokerClientTlsFactoryClassName")
+                .hasRootCauseInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> ns1.getClusterPulsarAdmin("pip478-b1-fail-loud-admin", Optional.of(custom)))
+                .as("custom per-cluster SSL factory -> cluster admin creation fails loud")
+                .hasMessageContaining("brokerClientTlsFactoryClassName")
+                .hasRootCauseInstanceOf(IllegalStateException.class);
+
+        // A removed-default-FQCN value is not a custom factory: the check does not throw and the client builds.
+        ClusterData defaultFqcn = ClusterData.builder()
+                .serviceUrl(base.getServiceUrl())
+                .serviceUrlTls(base.getServiceUrlTls())
+                .brokerServiceUrl(base.getBrokerServiceUrl())
+                .brokerServiceUrlTls(base.getBrokerServiceUrlTls())
+                .brokerClientSslFactoryPlugin("org.apache.pulsar.common.util.DefaultPulsarSslFactory")
+                .build();
+        assertThat(ns1.getReplicationClient("pip478-b1-default-ok", Optional.of(defaultFqcn)))
+                .as("removed-default FQCN is tolerated -> client builds").isNotNull();
     }
 }

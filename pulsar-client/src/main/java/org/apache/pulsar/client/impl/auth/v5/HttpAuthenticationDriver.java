@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import org.apache.pulsar.client.api.v5.PulsarClientException;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
+import org.apache.pulsar.client.api.v5.auth.BinaryAuthDataProvider;
 import org.apache.pulsar.client.api.v5.auth.HttpAuthChallengeHandler;
 import org.apache.pulsar.client.api.v5.auth.HttpAuthHeaders;
 import org.apache.pulsar.client.api.v5.auth.HttpAuthHeadersProvider;
@@ -32,7 +33,7 @@ import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
 /**
  * The single framework-side HTTP authentication driver — the shared {@code 401}→resubmit→{@code 200}
  * state machine that both HTTP client APIs (the AsyncHttpClient topic-lookup client and the JAX-RS admin
- * client) reach through a thin {@link HttpChallengeTransport} adapter (PIP-478 stage 3d).
+ * client) reach through a thin {@link HttpChallengeTransport} adapter (PIP-478).
  *
  * <p>The binary protocol runs its multi-round loop in one place ({@code ClientCnx}); HTTP is reached
  * through two client APIs, so the loop lives here instead of inside the plugin (the v4 hazard). The driver
@@ -66,6 +67,7 @@ public final class HttpAuthenticationDriver {
     private final String clientInstanceId;
     private final Map<String, String> params;
     private final HttpChallengeTransport defaultTransport;
+    private final AuthMetrics authMetrics;
     private volatile boolean initialized;
 
     /**
@@ -83,6 +85,7 @@ public final class HttpAuthenticationDriver {
         this.clientInstanceId = services == null ? null : services.clientInstanceId();
         this.params = Map.of();
         this.defaultTransport = defaultTransport;
+        this.authMetrics = AuthMetrics.create(services == null ? null : services.openTelemetry());
     }
 
     /**
@@ -137,11 +140,21 @@ public final class HttpAuthenticationDriver {
             HttpAuthCallContextImpl ctx = new HttpAuthCallContextImpl(uri);
             long budgetNanos = Math.max(0L, budget == null ? 0L : budget.toNanos());
             long deadlineNanos = System.nanoTime() + budgetNanos;
-            return challengeRound(ctx, handler, t, uri, null, 0, deadlineNanos)
-                    .thenCompose(ignored -> provider.getHttpHeadersAsync(ctx));
+            CompletableFuture<HttpAuthHeaders> credential = challengeRound(ctx, handler, t, uri, null, 0,
+                    deadlineNanos).thenCompose(ignored -> provider.getHttpHeadersAsync(ctx));
+            // Metrics (PIP-478): time the HTTP credential acquisition and count failures by error class.
+            return authMetrics.timeCredential(credential, httpAuthMethod());
         } catch (Throwable th) {
             return CompletableFuture.failedFuture(th);
         }
+    }
+
+    // The HTTP capabilities carry no method name of their own; fall back to the binary capability's name
+    // (a plugin serving HTTP usually also serves the binary transport) or the plugin's class name.
+    private String httpAuthMethod() {
+        return v5.capability(BinaryAuthDataProvider.class)
+                .map(BinaryAuthDataProvider::authMethodName)
+                .orElseGet(() -> v5.getClass().getSimpleName());
     }
 
     private CompletableFuture<Void> challengeRound(HttpAuthCallContextImpl ctx, HttpAuthChallengeHandler handler,

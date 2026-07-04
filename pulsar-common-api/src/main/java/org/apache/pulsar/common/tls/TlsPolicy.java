@@ -56,7 +56,8 @@ public final class TlsPolicy {
     private final String trustStorePassword;
     private final String keyStorePath;
     private final String keyStorePassword;
-    private final String storeType;
+    private final String keyStoreType;
+    private final String trustStoreType;
     // common flags (both formats)
     private final boolean allowInsecureConnection;
     private final boolean enableHostnameVerification;
@@ -72,7 +73,8 @@ public final class TlsPolicy {
         this.trustStorePassword = b.trustStorePassword;
         this.keyStorePath = b.keyStorePath;
         this.keyStorePassword = b.keyStorePassword;
-        this.storeType = b.storeType;
+        this.keyStoreType = b.keyStoreType;
+        this.trustStoreType = b.trustStoreType;
         this.allowInsecureConnection = b.allowInsecureConnection;
         this.enableHostnameVerification = b.enableHostnameVerification;
         this.protocols = List.copyOf(b.protocols);
@@ -136,10 +138,19 @@ public final class TlsPolicy {
     }
 
     /**
-     * @return the keystore type (e.g. {@code JKS} / {@code PKCS12}), or {@code null}
+     * @return the keystore type (e.g. {@code JKS} / {@code PKCS12}); blank/{@code null} means the JDK
+     *         {@link java.security.KeyStore#getDefaultType() default keystore type}
      */
-    public String storeType() {
-        return storeType;
+    public String keyStoreType() {
+        return keyStoreType;
+    }
+
+    /**
+     * @return the truststore type (e.g. {@code JKS} / {@code PKCS12}); blank/{@code null} means the JDK
+     *         {@link java.security.KeyStore#getDefaultType() default keystore type}
+     */
+    public String trustStoreType() {
+        return trustStoreType;
     }
 
     /**
@@ -188,13 +199,17 @@ public final class TlsPolicy {
     }
 
     /**
-     * Create a keystore-format policy.
+     * Create a keystore-format policy that uses a single store type for both the keystore and the
+     * truststore (the common case). To use different types (e.g. a PKCS12 keystore with a JKS truststore),
+     * build via {@link #builder()} and set {@link Builder#keyStoreType(String)} and
+     * {@link Builder#trustStoreType(String)} separately.
      *
      * @param trustStore   the truststore path
      * @param trustStorePw the truststore password
      * @param keyStore     the keystore path (may be {@code null} when not using mTLS)
      * @param keyStorePw   the keystore password (may be {@code null} when not using mTLS)
-     * @param storeType    the keystore type (e.g. {@code JKS} / {@code PKCS12})
+     * @param storeType    the store type (e.g. {@code JKS} / {@code PKCS12}) applied to BOTH the keystore and
+     *                     the truststore
      * @return a new keystore-format {@link TlsPolicy}
      */
     public static TlsPolicy keyStore(String trustStore, String trustStorePw,
@@ -205,7 +220,8 @@ public final class TlsPolicy {
                 .trustStorePassword(trustStorePw)
                 .keyStorePath(keyStore)
                 .keyStorePassword(keyStorePw)
-                .storeType(storeType)
+                .keyStoreType(storeType)
+                .trustStoreType(storeType)
                 .build();
     }
 
@@ -247,7 +263,8 @@ public final class TlsPolicy {
                 && Objects.equals(trustStorePassword, that.trustStorePassword)
                 && Objects.equals(keyStorePath, that.keyStorePath)
                 && Objects.equals(keyStorePassword, that.keyStorePassword)
-                && Objects.equals(storeType, that.storeType)
+                && Objects.equals(keyStoreType, that.keyStoreType)
+                && Objects.equals(trustStoreType, that.trustStoreType)
                 && protocols.equals(that.protocols)
                 && ciphers.equals(that.ciphers);
     }
@@ -255,8 +272,8 @@ public final class TlsPolicy {
     @Override
     public int hashCode() {
         return Objects.hash(format, trustCertsFilePath, certificateFilePath, keyFilePath,
-                trustStorePath, trustStorePassword, keyStorePath, keyStorePassword, storeType,
-                allowInsecureConnection, enableHostnameVerification, protocols, ciphers);
+                trustStorePath, trustStorePassword, keyStorePath, keyStorePassword, keyStoreType,
+                trustStoreType, allowInsecureConnection, enableHostnameVerification, protocols, ciphers);
     }
 
     @Override
@@ -270,7 +287,8 @@ public final class TlsPolicy {
                 + ", trustStorePassword=" + (trustStorePassword == null ? "null" : "****")
                 + ", keyStorePath=" + keyStorePath
                 + ", keyStorePassword=" + (keyStorePassword == null ? "null" : "****")
-                + ", storeType=" + storeType
+                + ", keyStoreType=" + keyStoreType
+                + ", trustStoreType=" + trustStoreType
                 + ", allowInsecureConnection=" + allowInsecureConnection
                 + ", enableHostnameVerification=" + enableHostnameVerification
                 + ", protocols=" + protocols
@@ -291,7 +309,8 @@ public final class TlsPolicy {
         private String trustStorePassword;
         private String keyStorePath;
         private String keyStorePassword;
-        private String storeType;
+        private String keyStoreType;
+        private String trustStoreType;
         private boolean allowInsecureConnection = false;
         private boolean enableHostnameVerification = true;
         private List<String> protocols = List.of();
@@ -373,11 +392,22 @@ public final class TlsPolicy {
         }
 
         /**
-         * @param storeType the keystore type (e.g. {@code JKS} / {@code PKCS12})
+         * @param keyStoreType the keystore type (e.g. {@code JKS} / {@code PKCS12}); blank/{@code null} uses
+         *                     the JDK default keystore type
          * @return this builder
          */
-        public Builder storeType(String storeType) {
-            this.storeType = storeType;
+        public Builder keyStoreType(String keyStoreType) {
+            this.keyStoreType = keyStoreType;
+            return this;
+        }
+
+        /**
+         * @param trustStoreType the truststore type (e.g. {@code JKS} / {@code PKCS12}); blank/{@code null}
+         *                       uses the JDK default keystore type
+         * @return this builder
+         */
+        public Builder trustStoreType(String trustStoreType) {
+            this.trustStoreType = trustStoreType;
             return this;
         }
 
@@ -419,9 +449,40 @@ public final class TlsPolicy {
 
         /**
          * @return a new immutable {@link TlsPolicy}
+         * @throws IllegalArgumentException if a configured field is inconsistent with the chosen
+         *         {@link Format} — a keystore/truststore field on a {@link Format#PEM} policy, or a PEM file
+         *         field on a {@link Format#KEYSTORE} policy. Validating here (a constructor/builder may throw
+         *         synchronously) keeps the fail-loud contract: a misplaced field is a configuration error, not
+         *         a silently-ignored value.
          */
         public TlsPolicy build() {
+            validateFormatConsistency();
             return new TlsPolicy(this);
+        }
+
+        private void validateFormatConsistency() {
+            if (format == Format.PEM) {
+                rejectForFormat("trustStorePath", trustStorePath);
+                rejectForFormat("trustStorePassword", trustStorePassword);
+                rejectForFormat("keyStorePath", keyStorePath);
+                rejectForFormat("keyStorePassword", keyStorePassword);
+                rejectForFormat("keyStoreType", keyStoreType);
+                rejectForFormat("trustStoreType", trustStoreType);
+            } else { // Format.KEYSTORE
+                rejectForFormat("trustCertsFilePath", trustCertsFilePath);
+                rejectForFormat("certificateFilePath", certificateFilePath);
+                rejectForFormat("keyFilePath", keyFilePath);
+            }
+        }
+
+        private void rejectForFormat(String field, String value) {
+            if (value != null && !value.isBlank()) {
+                throw new IllegalArgumentException("TlsPolicy field '" + field + "' is set but is not valid for "
+                        + "format " + format + "; use the fields matching the chosen format (PEM: "
+                        + "trustCertsFilePath/certificateFilePath/keyFilePath; KEYSTORE: "
+                        + "trustStorePath/keyStorePath/... with keyStoreType/trustStoreType), or set the format "
+                        + "to match the material.");
+            }
         }
     }
 }

@@ -373,12 +373,14 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
         }
 
         @Override
+        @Deprecated
         public ClusterDataImplBuilder brokerClientSslFactoryPlugin(String sslFactoryPlugin) {
             this.brokerClientSslFactoryPlugin = sslFactoryPlugin;
             return this;
         }
 
         @Override
+        @Deprecated
         public ClusterDataImplBuilder brokerClientSslFactoryPluginParams(String sslFactoryPluginParams) {
             this.brokerClientSslFactoryPluginParams = sslFactoryPluginParams;
             return this;

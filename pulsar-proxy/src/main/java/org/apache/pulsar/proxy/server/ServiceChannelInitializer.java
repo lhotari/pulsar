@@ -50,7 +50,7 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
     private final int brokerProxyReadTimeoutMs;
     private final int maxMessageSize;
 
-    // PIP-478 TLS SPI factory (the only server TLS path since PIP-337 removal, stage 4c).
+    // PIP-478 TLS SPI factory (the only server TLS path since the PIP-337 removal).
     private PulsarTlsFactory tlsFactory;
     private TlsHandle<SslContext> tlsSubscription;
     private volatile SslContext tlsServerContext;
@@ -108,7 +108,10 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
         ch.pipeline().addLast("consolidation", new FlushConsolidationHandler(1024,
                 true));
         if (this.enableTls) {
-            ch.pipeline().addLast(TLS_HANDLER, this.tlsServerContext.newHandler(ch.alloc()));
+            // PIP-478: pin the current (possibly rotated) factory-owned SslContext across newHandler so a
+            // concurrent rotation cannot free the native OpenSSL context mid-build (F1 use-after-free guard).
+            ch.pipeline().addLast(TLS_HANDLER, TlsContextAcquisition.withPinnedContext(
+                    () -> this.tlsServerContext, ctx -> ctx.newHandler(ch.alloc())));
         }
         if (brokerProxyReadTimeoutMs > 0) {
             ch.pipeline().addLast("readTimeoutHandler",

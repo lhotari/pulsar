@@ -19,7 +19,7 @@
 /**
  * v5-native binary-protocol implementation of the built-in SASL authentication plugin (PIP-478). The v4
  * {@code AuthenticationSasl} class in the parent package is a shim that keeps its verbatim synchronous
- * surface (including the SASL-over-HTTP loop, deferred to stage 3d) and drives
+ * surface (including the SASL-over-HTTP loop) and drives
  * {@link org.apache.pulsar.client.impl.auth.v5.SaslAuthenticationV5} on the async binary path via the
  * shared {@code V5BinaryAuthenticationDriver}.
  */

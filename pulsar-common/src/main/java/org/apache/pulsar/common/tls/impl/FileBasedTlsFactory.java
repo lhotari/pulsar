@@ -157,6 +157,12 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         try {
             this.initContext = Objects.requireNonNull(context, "context must not be null");
             this.metrics = TlsReloadMetrics.create(context.openTelemetry(), context.clock());
+            // Cancel any poll scheduled by a prior initialize() so a second call does not orphan the first
+            // (F9): the field is overwritten below and the old task would otherwise run forever.
+            ScheduledFuture<?> previousPoll = this.pollFuture;
+            if (previousPoll != null) {
+                previousPoll.cancel(false);
+            }
             int interval = settings.refreshIntervalSeconds();
             if (interval > 0 && context.scheduler() != null) {
                 this.pollFuture = context.scheduler().scheduleWithFixedDelay(
@@ -189,6 +195,9 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         if (!isSupported(instanceClass)) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
+        if (closed) {
+            return CompletableFuture.failedFuture(new IllegalStateException("FileBasedTlsFactory is closed"));
+        }
         return runAsync(() -> {
             RegisteredSource source = resolve(purpose);
             synchronized (source) {
@@ -205,6 +214,9 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
     private <T> CompletableFuture<Optional<TlsHandle<T>>> createOneShot(TlsPurpose purpose, Class<T> instanceClass) {
         if (!isSupported(instanceClass)) {
             return CompletableFuture.completedFuture(Optional.empty());
+        }
+        if (closed) {
+            return CompletableFuture.failedFuture(new IllegalStateException("FileBasedTlsFactory is closed"));
         }
         return runAsync(() -> {
             RegisteredSource source = resolve(purpose);
@@ -230,6 +242,17 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
             return instance;
         } catch (Exception e) {
             recordLoad(source.purpose, false);
+            // Keep-last-good (PIP-478 F4): a one-shot (or initial subscribing) acquisition during a
+            // non-atomic rotation window — e.g. the cert file briefly unreadable while it is being replaced —
+            // must not fail when a prior load already built a context of this class. Serve that last-good
+            // instance and WARN; the reload-failure metric was recorded above. Fail only when there is no
+            // last-good to fall back on (a genuine startup misconfiguration, per the fail-fast contract).
+            T cached = source.cachedInstance(instanceClass);
+            if (cached != null) {
+                log.warn().attr("purpose", source.purpose).exception(e)
+                        .log("Failed to load TLS material; serving the last-good instance");
+                return cached;
+            }
             throw e;
         }
     }
@@ -362,6 +385,9 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         private TlsMaterial nettyMaterial;
         private SSLContext jdkContext;
         private TlsMaterial jdkMaterial;
+        // Set when a rotation's rebuild/delivery to some subscriber failed, so the next poll re-attempts the
+        // rebuild even if the source now reports changed=false (PIP-478 L1 reload-wedge guard).
+        private boolean pendingRedeliver;
 
         RegisteredSource(TlsPurpose purpose, TlsPolicy policy, MaterialSource source) {
             this.purpose = purpose;
@@ -405,6 +431,20 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
             throw new IllegalArgumentException("Unsupported instance class " + instanceClass);
         }
 
+        /**
+         * The last-good cached context of the requested class, or {@code null} if none has been built yet.
+         * Used by the keep-last-good one-shot path (F4) when a fresh load fails mid-rotation.
+         */
+        synchronized <T> T cachedInstance(Class<T> instanceClass) {
+            if (instanceClass == SslContext.class && nettyContext != null) {
+                return instanceClass.cast(nettyContext);
+            }
+            if (instanceClass == SSLContext.class && jdkContext != null) {
+                return instanceClass.cast(jdkContext);
+            }
+            return null;
+        }
+
         synchronized void poll(FileBasedTlsFactorySettings settings, TlsReloadMetrics metrics) {
             if (source == null || subscriptions.isEmpty()) {
                 return;
@@ -420,8 +460,12 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
                 return;
             }
             // A poll that finds no change is not a reload — do not count it, so the reload counter and the
-            // last-success gauge reflect real (re)load events only.
-            if (!outcome.changed()) {
+            // last-success gauge reflect real (re)load events only. But if a prior rotation's rebuild/delivery
+            // to some subscriber failed (pendingRedeliver), retry it even when the source now reports
+            // changed=false: otherwise, once the source commits the new baseline, every later poll sees
+            // changed=false and that subscriber stays wedged on the old instance until the next file change
+            // (L1). The retry rebuilds against the current last-good material.
+            if (!outcome.changed() && !pendingRedeliver) {
                 return;
             }
             boolean allRebuilt = true;
@@ -435,6 +479,8 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
                             .exception(e).log("Failed to rebuild rotated TLS instance; keeping the last-good one");
                 }
             }
+            // Re-attempt on the next poll until every subscriber has the rotated instance (L1).
+            pendingRedeliver = !allRebuilt;
             recordLoad(metrics, allRebuilt);
         }
 
@@ -463,11 +509,19 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         }
     }
 
-    /** A live server-side subscription: its instance class, callback, and last-delivered instance. */
+    /** A live server-side subscription: its instance class, callback, and last-delivered instances. */
     private static final class Subscription<T> {
         private final Class<T> instanceClass;
         private final Consumer<T> callback;
         private T current;
+        // Deferred release (PIP-478 F1 use-after-free): the instance superseded by the most recent delivery
+        // is kept alive one extra generation rather than released immediately. Consumers hold a bare volatile
+        // borrow of the delivered instance and later call newHandler/newEngine on it off a different thread;
+        // releasing the superseded Netty/OpenSSL context to refcount 0 on the poll thread the instant the new
+        // one is published would free the native SSL_CTX out from under such an in-flight borrow. Retaining it
+        // for one further rotation gives every reader a full poll interval to finish. Pairs with per-use
+        // pinning at the consumers (see TlsContextAcquisition.withPinnedContext) for the descheduling case.
+        private T previous;
 
         Subscription(Class<T> instanceClass, Consumer<T> callback) {
             this.instanceClass = instanceClass;
@@ -476,7 +530,10 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
 
         void deliver(T instance) {
             retain(instance);
-            release(current);
+            // Release the instance delivered two rotations ago (N-1) on this (N+1th) delivery, not the one
+            // just superseded, so the just-superseded instance survives one more generation for readers.
+            release(previous);
+            previous = current;
             current = instance;
             safeInvoke(instance);
         }
@@ -493,6 +550,8 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         void releaseCurrent() {
             release(current);
             current = null;
+            release(previous);
+            previous = null;
         }
 
         private void safeInvoke(T instance) {

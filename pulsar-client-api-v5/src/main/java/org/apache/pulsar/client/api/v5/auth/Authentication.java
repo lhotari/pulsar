@@ -78,7 +78,9 @@ public interface Authentication extends AutoCloseable {
      * covering the common case with no override.
      *
      * <p>Contract: results are STABLE once {@link #initializeAsync} has completed — the framework may
-     * look a capability up once and cache it for the client's lifetime. One object may serve several
+     * look a capability up once and cache it for the client's lifetime. The framework never queries
+     * capabilities before {@code initializeAsync} completes; a result returned before initialization is
+     * unspecified. One object may serve several
      * capabilities. Capability objects are owned by this plugin and released by {@link #close()}; the
      * framework never closes them individually. All capability methods must tolerate concurrent
      * invocation (multiple connections authenticate in parallel); only the rounds of a single exchange

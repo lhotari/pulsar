@@ -43,11 +43,10 @@ import org.apache.pulsar.common.tls.impl.FileBasedTlsFactorySettings;
 /**
  * A self-contained {@link PulsarHttpClientFactory} for an OAuth2 {@link FlowBase} that runs <em>standalone</em>
  * — outside any {@code PulsarClient} / {@code PulsarAdmin} that would late-bind the framework HTTP client
- * factory (PIP-478 stage 3c). This is the path the proxy, the broker's broker-client and the CLI tools use
+ * factory (PIP-478). This is the path the proxy, the broker's broker-client and the CLI tools use
  * when they create {@code AuthenticationOAuth2} directly via {@code AuthenticationFactory.create(...).start()}
- * (e.g. {@code ProxyServiceStarter}); before PIP-478 stage 4c removed the private OAuth2 {@code AsyncHttpClient},
- * {@code FlowBase} built its own HTTP client for exactly this case, so this restores that backward-compatible
- * behaviour on the new SPI.
+ * (e.g. {@code ProxyServiceStarter}); {@code FlowBase} self-provisions its own HTTP client for exactly this
+ * case, providing backward-compatible standalone support on the new SPI.
  *
  * <p>It wraps a framework {@link FrameworkHttpClientFactory} whose Netty event loop / timer / DNS resolver are
  * self-provisioned by AsyncHttpClient (HTTP-only, mirroring {@code PulsarAdminImpl.bindAuthenticationServices}),
@@ -70,19 +69,34 @@ final class StandaloneOAuth2HttpClientFactory implements PulsarHttpClientFactory
 
     StandaloneOAuth2HttpClientFactory(Optional<TlsPolicy> idpTlsPolicy, int refreshIntervalSeconds,
             String instanceId) {
-        if (idpTlsPolicy.isPresent()) {
-            this.tlsExecutor = Executors.newSingleThreadScheduledExecutor(
-                    new DefaultThreadFactory("oauth2-idp-tls"));
-            this.idpTlsFactory = buildIdpTlsFactory(idpTlsPolicy.get(), refreshIntervalSeconds, tlsExecutor);
-        } else {
-            this.tlsExecutor = null;
-            this.idpTlsFactory = null;
+        ScheduledExecutorService executor = null;
+        PulsarTlsFactory tlsFactory = null;
+        try {
+            if (idpTlsPolicy.isPresent()) {
+                // Daemon threads (F7): the standalone factory may be created by a short-lived tool; a leaked
+                // (never-closed) rotation scheduler with non-daemon threads would block JVM exit.
+                executor = Executors.newSingleThreadScheduledExecutor(
+                        new DefaultThreadFactory("oauth2-idp-tls", true));
+                tlsFactory = buildIdpTlsFactory(idpTlsPolicy.get(), refreshIntervalSeconds, executor);
+            }
+            PulsarTlsFactory factoryForSupplier = tlsFactory;
+            // HTTP-only: AsyncHttpClient provisions its own event loop / timer / DNS resolver (as the removed
+            // private OAuth2 client did), so the shared-resource suppliers return null.
+            this.delegate = new FrameworkHttpClientFactory(() -> null, () -> null, () -> null,
+                    () -> factoryForSupplier, new ClientConfigurationData(), instanceId);
+            this.tlsExecutor = executor;
+            this.idpTlsFactory = tlsFactory;
+        } catch (RuntimeException | Error e) {
+            // Ctor-throw cleanup (F7): buildIdpTlsFactory or the delegate build failed after we allocated the
+            // IdP TLS factory / scheduler; release them here since close() will never run on this instance.
+            if (tlsFactory != null) {
+                closeQuietly(tlsFactory);
+            }
+            if (executor != null) {
+                executor.shutdownNow();
+            }
+            throw e;
         }
-        PulsarTlsFactory tlsFactory = this.idpTlsFactory;
-        // HTTP-only: AsyncHttpClient provisions its own event loop / timer / DNS resolver (as the removed
-        // private OAuth2 client did), so the shared-resource suppliers return null.
-        this.delegate = new FrameworkHttpClientFactory(() -> null, () -> null, () -> null,
-                () -> tlsFactory, new ClientConfigurationData(), instanceId);
     }
 
     private static PulsarTlsFactory buildIdpTlsFactory(TlsPolicy policy, int refreshIntervalSeconds,

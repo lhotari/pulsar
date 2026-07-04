@@ -35,7 +35,8 @@ import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
-import org.apache.pulsar.common.util.SecurityUtility;
+import org.apache.pulsar.common.util.tls.JdkSslContexts;
+import org.apache.pulsar.common.util.tls.PemReader;
 import org.testng.annotations.Test;
 
 /**
@@ -55,15 +56,15 @@ public class SslParametersSynthesisTest {
     private static final String CLIENT_KEY = resource("certificate-authority/client-keys/admin.key-pk8.pem");
 
     private static SSLContext serverJdkContext() throws Exception {
-        return SecurityUtility.createSslContext(false, CA, SERVER_CERT, SERVER_KEY, null);
+        return JdkSslContexts.createSslContext(false, CA, SERVER_CERT, SERVER_KEY, null);
     }
 
     private static SSLContext clientJdkContextWithCert() throws Exception {
-        return SecurityUtility.createSslContext(false, CA, CLIENT_CERT, CLIENT_KEY, null);
+        return JdkSslContexts.createSslContext(false, CA, CLIENT_CERT, CLIENT_KEY, null);
     }
 
     private static SSLContext clientJdkContextTrustOnly() throws Exception {
-        return SecurityUtility.createSslContext(false, SecurityUtility.loadCertificatesFromPemFile(CA), null);
+        return JdkSslContexts.createSslContext(false, PemReader.loadCertificatesFromPemFile(CA), null);
     }
 
     // ---- (a) protocol restriction from the factory companion ----
@@ -94,6 +95,32 @@ public class SslParametersSynthesisTest {
         assertThatThrownBy(() -> handshake(client13.newEngine(ByteBufAllocator.DEFAULT),
                 server12.newEngine(ByteBufAllocator.DEFAULT)))
                 .isInstanceOf(SSLException.class);
+    }
+
+    // ---- default protocol floor (B3): unset -> {TLSv1.3, TLSv1.2}, not the provider default ----
+
+    @Test
+    public void synthesizedClientWithoutCompanionPinsDefaultProtocols() throws Exception {
+        SslContext context = TlsContexts.synthesizeNettyClientFromJdk(clientJdkContextTrustOnly(), false, null);
+        assertThat(context.newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols())
+                .containsExactlyInAnyOrder("TLSv1.3", "TLSv1.2");
+    }
+
+    @Test
+    public void synthesizedClientWithCompanionMissingProtocolsPinsDefault() throws Exception {
+        // A companion that sets other members but no protocols still gets the default floor.
+        SSLParameters companion = new SSLParameters();
+        companion.setEndpointIdentificationAlgorithm("HTTPS");
+        SslContext context = TlsContexts.synthesizeNettyClientFromJdk(clientJdkContextTrustOnly(), false, companion);
+        assertThat(context.newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols())
+                .containsExactlyInAnyOrder("TLSv1.3", "TLSv1.2");
+    }
+
+    @Test
+    public void synthesizedServerWithoutCompanionPinsDefaultProtocols() throws Exception {
+        SslContext context = TlsContexts.synthesizeNettyServerFromJdk(serverJdkContext(), false, null);
+        assertThat(context.newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols())
+                .containsExactlyInAnyOrder("TLSv1.3", "TLSv1.2");
     }
 
     // ---- (b) endpoint identification: factory value wins, else the consumer flag applies "HTTPS" ----
@@ -205,7 +232,7 @@ public class SslParametersSynthesisTest {
     }
 
     @Test
-    public void subscribingAcquisitionReRequestsCompanionOnEachDelivery() throws Exception {
+    public void subscribingAcquisitionPreFetchesCompanionOnce() throws Exception {
         SSLParameters companion = new SSLParameters();
         companion.setProtocols(new String[] {"TLSv1.2"});
         CompanionFactory factory = new CompanionFactory(serverJdkContext(), companion);
@@ -214,9 +241,68 @@ public class SslParametersSynthesisTest {
                 factory, TlsPurpose.BROKER, TlsSynthesisSpec.server(false), ctx -> { }).join().orElseThrow();
 
         assertThat(handle.get().newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols()).containsExactly("TLSv1.2");
-        // Requested once for the SslContext-empty fallback and once per SSLContext delivery (initial load here).
-        assertThat(factory.companionRequests).as("the companion is re-requested on each delivery").isPositive();
+        // F8: the companion is pre-fetched exactly once at subscribe time (not re-requested inside each delivery
+        // callback), so a custom factory that dispatches its creation to the same single-thread executor running
+        // the reload callback cannot self-deadlock. Material still rotates per delivery; engine policy snapshots.
+        assertThat(factory.companionRequests).as("companion pre-fetched once at subscribe").isEqualTo(1);
         handle.dispose();
+    }
+
+    // ---- T4: LIVE handshakes driven through the full factory -> acquisition path (not the low-level
+    // synthesize helper, and not just getters): the factory-supplied companion actually decides a real
+    // handshake outcome after flowing through TlsContextAcquisition.acquireNettyContext. ----
+
+    @Test
+    public void acquiredCompanionProtocolRestrictionEnforcedAtHandshake() throws Exception {
+        // A companion pinning TLSv1.2 on contexts obtained through the acquisition path completes a matching
+        // TLSv1.2 handshake and rejects a TLSv1.3-only peer.
+        TlsHandle<SslContext> server = acquireServer(serverJdkContext(), protocols("TLSv1.2"));
+        TlsHandle<SslContext> okClient = acquireClient(clientJdkContextTrustOnly(), protocols("TLSv1.2"));
+        handshake(okClient.get().newEngine(ByteBufAllocator.DEFAULT),
+                server.get().newEngine(ByteBufAllocator.DEFAULT));
+
+        TlsHandle<SslContext> badClient = acquireClient(clientJdkContextTrustOnly(), protocols("TLSv1.3"));
+        assertThatThrownBy(() -> handshake(badClient.get().newEngine(ByteBufAllocator.DEFAULT),
+                server.get().newEngine(ByteBufAllocator.DEFAULT)))
+                .as("a TLSv1.3-only client cannot handshake with the companion-pinned TLSv1.2 server")
+                .isInstanceOf(SSLException.class);
+
+        server.dispose();
+        okClient.dispose();
+        badClient.dispose();
+    }
+
+    @Test
+    public void acquiredCompanionNeedClientAuthEnforcedAtHandshake() throws Exception {
+        // The consumer requests only OPTIONAL client auth (server(false)); the companion's needClientAuth is
+        // authoritative through the acquisition path — a client presenting a trusted certificate completes the
+        // handshake, a client presenting none is rejected.
+        TlsHandle<SslContext> server = acquireServer(serverJdkContext(), needClientAuthTls12());
+        TlsHandle<SslContext> clientWithCert = acquireClient(clientJdkContextWithCert(), protocols("TLSv1.2"));
+        handshake(clientWithCert.get().newEngine(ByteBufAllocator.DEFAULT),
+                server.get().newEngine(ByteBufAllocator.DEFAULT));
+
+        TlsHandle<SslContext> clientNoCert = acquireClient(clientJdkContextTrustOnly(), protocols("TLSv1.2"));
+        assertThatThrownBy(() -> handshake(clientNoCert.get().newEngine(ByteBufAllocator.DEFAULT),
+                server.get().newEngine(ByteBufAllocator.DEFAULT)))
+                .as("the companion's needClientAuth rejects a client presenting no certificate")
+                .isInstanceOf(SSLException.class);
+
+        server.dispose();
+        clientWithCert.dispose();
+        clientNoCert.dispose();
+    }
+
+    private static TlsHandle<SslContext> acquireServer(SSLContext jdkContext, SSLParameters companion)
+            throws Exception {
+        return TlsContextAcquisition.acquireNettyContext(new CompanionFactory(jdkContext, companion),
+                TlsPurpose.BROKER, TlsSynthesisSpec.server(false)).join().orElseThrow();
+    }
+
+    private static TlsHandle<SslContext> acquireClient(SSLContext jdkContext, SSLParameters companion)
+            throws Exception {
+        return TlsContextAcquisition.acquireNettyContext(new CompanionFactory(jdkContext, companion),
+                TlsPurpose.CLIENT_DEFAULT, TlsSynthesisSpec.client(false)).join().orElseThrow();
     }
 
     private static SSLParameters protocols(String... protocols) {

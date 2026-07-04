@@ -22,7 +22,7 @@ import java.util.Optional;
 
 /**
  * Internal bridge a v4 {@code org.apache.pulsar.client.api.Authentication} plugin implements to expose its
- * v5-native HTTP multi-round authentication to the framework's HTTP client APIs (PIP-478 stage 3d).
+ * v5-native HTTP multi-round authentication to the framework's HTTP client APIs (PIP-478).
  *
  * <p>This mirrors, on the HTTP transport, what
  * {@code org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver} does on the binary transport:
@@ -30,7 +30,7 @@ import java.util.Optional;
  * for the admin client) test a plugin for this marker and, when present, route the SASL-style
  * {@code 401}→resubmit→{@code 200} exchange through the shared {@link HttpAuthenticationDriver} instead of
  * the deprecated v4 {@code authenticationStage(...)} hook. A third-party v4 plugin that does not implement
- * this marker keeps working unchanged on the v4 hook (which stays until stage 4).
+ * this marker keeps working unchanged on the v4 hook.
  *
  * <p>The {@code instanceof} test used to detect this marker is on the <em>bridge</em>, not on a capability;
  * the driver still discovers what the returned v5 body supports only via {@code capability(...)} lookup,

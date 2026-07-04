@@ -51,7 +51,7 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     private final String listenerName;
     private final boolean enableTls;
     private final ServiceConfiguration brokerConf;
-    // PIP-478 TLS SPI factory (the only server TLS path since PIP-337 removal, stage 4c).
+    // PIP-478 TLS SPI factory (the only server TLS path since PIP-337 removal).
     private PulsarTlsFactory tlsFactory;
     private TlsHandle<SslContext> tlsSubscription;
     private volatile SslContext tlsServerContext;
@@ -82,16 +82,24 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         this.tlsFactory = TlsFactorySupport.createFactory(serviceConfig.getTlsFactoryClassName(),
                 DefaultBrokerTlsFactory.class,
                 () -> DefaultBrokerTlsFactory.fromServiceConfiguration(serviceConfig));
-        TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
-                TlsFactorySupport.parseFactoryConfig(serviceConfig.getTlsFactoryConfig()),
-                pulsar.getExecutor(), pulsar.getExecutor(), pulsar.getOpenTelemetry().getOpenTelemetry());
-        TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
-        this.tlsSubscription = TlsContextAcquisition.acquireNettyContext(this.tlsFactory, TlsPurpose.BROKER,
-                        TlsSynthesisSpec.server(serviceConfig.isTlsRequireTrustedClientCertOnConnect()),
-                        ctx -> this.tlsServerContext = ctx)
-                .get()
-                .orElseThrow(() -> new IllegalStateException(
-                        "TLS factory supplied no Netty SslContext for purpose " + TlsPurpose.BROKER));
+        try {
+            TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
+                    TlsFactorySupport.parseFactoryConfig(serviceConfig.getTlsFactoryConfig()),
+                    pulsar.getExecutor(), pulsar.getExecutor(), pulsar.getOpenTelemetry().getOpenTelemetry());
+            TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
+            this.tlsSubscription = TlsContextAcquisition.acquireNettyContext(this.tlsFactory, TlsPurpose.BROKER,
+                            TlsSynthesisSpec.server(serviceConfig.isTlsRequireTrustedClientCertOnConnect()),
+                            ctx -> this.tlsServerContext = ctx)
+                    .get()
+                    .orElseThrow(() -> new IllegalStateException(
+                            "TLS factory supplied no Netty SslContext for purpose " + TlsPurpose.BROKER));
+        } catch (Exception e) {
+            // Ctor-throw cleanup (F9): the factory was created (and possibly initialized, its rotation
+            // scheduler running) but the subscription failed; close() will not be called on a half-constructed
+            // initializer, so release it here. close() is null-safe and idempotent.
+            close();
+            throw e;
+        }
     }
 
     /** Dispose the PIP-478 TLS factory and its subscription, if any. Safe to call more than once. */
@@ -117,8 +125,11 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         ch.config().setWriteBufferLowWaterMark(pulsar.getConfig().getPulsarChannelWriteBufferLowWaterMark());
         ch.pipeline().addLast("consolidation", new FlushConsolidationHandler(1024, true));
         if (this.enableTls) {
-            // PIP-478: build the handler from the current (possibly rotated) factory-owned SslContext.
-            ch.pipeline().addLast(TLS_HANDLER, this.tlsServerContext.newHandler(ch.alloc()));
+            // PIP-478: build the handler from the current (possibly rotated) factory-owned SslContext, pinning
+            // it across newHandler so a concurrent rotation cannot free the native OpenSSL context mid-build
+            // (F1 use-after-free guard).
+            ch.pipeline().addLast(TLS_HANDLER, TlsContextAcquisition.withPinnedContext(
+                    () -> this.tlsServerContext, ctx -> ctx.newHandler(ch.alloc())));
         }
         ch.pipeline().addLast("ByteBufPairEncoder", ByteBufPair.getEncoder(this.enableTls));
 

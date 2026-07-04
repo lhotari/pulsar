@@ -26,7 +26,7 @@ import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
 
 /**
  * Drives a v5-native {@link Authentication} body over the Pulsar binary transport, exposing it as the
- * legacy {@link AsyncAuthenticationDriver} that {@code ClientCnx} consumes (PIP-478 stage 3a). This is
+ * legacy {@link AsyncAuthenticationDriver} that {@code ClientCnx} consumes (PIP-478). This is
  * the single exchange pattern shared by the built-in v4 auth shims (Token, Basic, OAuth2, Athenz, SASL);
  * each shim wraps its v5 body in this driver rather than re-implementing the exchange.
  *
@@ -42,6 +42,7 @@ public final class V5BinaryAuthenticationDriver implements AsyncAuthenticationDr
     private final String clientInstanceId;
     private final Map<String, String> params;
     private final ClientAuthenticationServices services;
+    private final AuthMetrics authMetrics;
     private volatile boolean initialized;
 
     /**
@@ -73,12 +74,14 @@ public final class V5BinaryAuthenticationDriver implements AsyncAuthenticationDr
         this.services = services;
         this.clientInstanceId = clientInstanceId;
         this.params = params == null ? Map.of() : params;
+        this.authMetrics = AuthMetrics.create(services == null ? null : services.openTelemetry());
     }
 
     @Override
     public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
         ensureInitialized();
-        return new BinaryAuthenticationExchange(v5, V5AuthContexts.binaryCallContext(brokerHostName, 0));
+        return new BinaryAuthenticationExchange(v5, V5AuthContexts.binaryCallContext(brokerHostName, 0),
+                authMetrics);
     }
 
     private void ensureInitialized() {

@@ -30,7 +30,7 @@ import java.util.Map;
 import java.util.Objects;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.common.tls.TlsPolicy;
-import org.apache.pulsar.common.util.SecurityUtility;
+import org.apache.pulsar.common.util.tls.PemReader;
 
 /**
  * Loads, watches and caches ONE material set (the crypto for a single {@code TlsPurpose}) from a
@@ -42,7 +42,7 @@ import org.apache.pulsar.common.util.SecurityUtility;
  *
  * <p><b>Keystore-over-PEM per-field precedence.</b> For each of the three material slots (trust
  * certs, private key, key certificate chain) the keystore location wins when set, otherwise the PEM
- * location is used. PEM material is loaded via {@link SecurityUtility}; keystores (PKCS12/JKS) are read
+ * location is used. PEM material is loaded via {@link PemReader}; keystores (PKCS12/JKS) are read
  * with the raw {@link KeyStore} API and an alias walk.
  *
  * <p><b>Rotation detection (fixed mtime baseline).</b> Change detection snapshots the modification
@@ -110,11 +110,11 @@ final class TlsMaterialSource implements MaterialSource {
 
     private List<X509Certificate> loadTrustCerts() throws Exception {
         if (StringUtils.isNotBlank(policy.trustStorePath())) {
-            return TlsKeyStoreLoader.extractTrustCerts(TlsKeyStoreLoader.loadKeyStore(policy.storeType(),
+            return TlsKeyStoreLoader.extractTrustCerts(TlsKeyStoreLoader.loadKeyStore(policy.trustStoreType(),
                     policy.trustStorePath(), policy.trustStorePassword()));
         }
         if (StringUtils.isNotBlank(policy.trustCertsFilePath())) {
-            X509Certificate[] certs = SecurityUtility.loadCertificatesFromPemFile(policy.trustCertsFilePath());
+            X509Certificate[] certs = PemReader.loadCertificatesFromPemFile(policy.trustCertsFilePath());
             return certs == null ? List.of() : List.of(certs);
         }
         return List.of();
@@ -122,22 +122,22 @@ final class TlsMaterialSource implements MaterialSource {
 
     private PrivateKey loadPrivateKey() throws Exception {
         if (StringUtils.isNotBlank(policy.keyStorePath())) {
-            return TlsKeyStoreLoader.extractPrivateKey(TlsKeyStoreLoader.loadKeyStore(policy.storeType(),
+            return TlsKeyStoreLoader.extractPrivateKey(TlsKeyStoreLoader.loadKeyStore(policy.keyStoreType(),
                     policy.keyStorePath(), policy.keyStorePassword()), policy.keyStorePassword());
         }
         if (StringUtils.isNotBlank(policy.keyFilePath())) {
-            return SecurityUtility.loadPrivateKeyFromPemFile(policy.keyFilePath());
+            return PemReader.loadPrivateKeyFromPemFile(policy.keyFilePath());
         }
         return null;
     }
 
     private List<X509Certificate> loadCertificateChain() throws Exception {
         if (StringUtils.isNotBlank(policy.keyStorePath())) {
-            return TlsKeyStoreLoader.extractCertificateChain(TlsKeyStoreLoader.loadKeyStore(policy.storeType(),
+            return TlsKeyStoreLoader.extractCertificateChain(TlsKeyStoreLoader.loadKeyStore(policy.keyStoreType(),
                     policy.keyStorePath(), policy.keyStorePassword()));
         }
         if (StringUtils.isNotBlank(policy.certificateFilePath())) {
-            X509Certificate[] certs = SecurityUtility.loadCertificatesFromPemFile(policy.certificateFilePath());
+            X509Certificate[] certs = PemReader.loadCertificatesFromPemFile(policy.certificateFilePath());
             return certs == null ? List.of() : List.of(certs);
         }
         return List.of();

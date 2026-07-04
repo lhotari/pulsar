@@ -54,7 +54,7 @@ import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.tls.ClientTlsFactorySupport;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsPurpose;
-import org.apache.pulsar.common.util.SecurityUtility;
+import org.apache.pulsar.common.util.tls.PemReader;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -117,9 +117,9 @@ public class OAuth2IdpTlsFrameworkClientTest {
 
     /** Build a JKS keystore holding broker.cert.pem (SAN:localhost) + its key, chained to the test CA. */
     private static Path buildServerKeystore() throws Exception {
-        PrivateKey key = SecurityUtility.loadPrivateKeyFromPemFile(BROKER_KEY);
-        X509Certificate[] leaf = SecurityUtility.loadCertificatesFromPemFile(BROKER_CERT);
-        X509Certificate[] ca = SecurityUtility.loadCertificatesFromPemFile(CA_CERT);
+        PrivateKey key = PemReader.loadPrivateKeyFromPemFile(BROKER_KEY);
+        X509Certificate[] leaf = PemReader.loadCertificatesFromPemFile(BROKER_CERT);
+        X509Certificate[] ca = PemReader.loadCertificatesFromPemFile(CA_CERT);
         Certificate[] chain = new Certificate[leaf.length + ca.length];
         System.arraycopy(leaf, 0, chain, 0, leaf.length);
         System.arraycopy(ca, 0, chain, leaf.length, ca.length);

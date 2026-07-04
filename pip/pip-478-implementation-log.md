@@ -980,3 +980,486 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
     after the rebase; human review of the PIP + branch by the author. Known out-of-scope
     follow-ons recorded in entries above: websocket OTel root, SSLContextValidatorEngine
     orphan cleanup.
+
+35. **GATE-critical TLS-rotation memory-safety + lifecycle hardening (8-model review, FIX-1)**
+    (2026-07-04, local commits on `lh-pip-478-impl-v2`, no push). Four commits address the
+    review's GATE and lifecycle findings; each closes the listed findings.
+
+    - **Commit A — `[fix][misc] PIP-478 GATE: fix OpenSSL TLS-rotation use-after-free (F1+F2)`.**
+      The Netty **OpenSSL** engine frees the native `SSL_CTX` when a context's refcount hits 0;
+      CI runs the JDK provider where refcount ops are no-ops, so this regime was UNTESTED.
+      *F1*: `FileBasedTlsFactory.Subscription.deliver` released the superseded context to
+      refcount 0 on the poll thread the instant the new one was published, while subscribing
+      consumers hold a bare volatile borrow and call `newHandler`/`newEngine` off another thread
+      with no pin. Fixed **both sides**: (1) **deferred release** — the subscription keeps the
+      just-superseded instance one extra generation (releases the N-1th on the N+1th delivery);
+      (2) **per-use pinning** — new `TlsContextAcquisition.withPinnedContext(source, build)` reads
+      the borrow, retains it across the build, releases after (balanced pin, never disturbs
+      factory ownership), re-reading on `IllegalReferenceCountException`. Adopted at all six
+      subscribing consumers: broker `PulsarChannelInitializer`, proxy `ServiceChannelInitializer`,
+      `DirectProxyHandler` (also narrowed — the context is read at connect time inside
+      `initChannel` instead of captured before the async connect), `HttpClient`,
+      `AsyncHttpConnector`, `FrameworkHttpClientFactory`. *F2*: `ProxyService.close` disposed the
+      TLS factories BEFORE quiescing the worker/extension event loops → an in-flight broker-connect
+      could run `newHandler` on a freed context; reordered so TLS disposal happens only after the
+      loops are shut down (mirrors the broker). **Test**: OpenSSL-provider (`SslProvider.OPENSSL`)
+      rotation tests forcing the release/use interleaving while a consumer holds a borrow, plus a
+      `withPinnedContext` re-read unit test — the regime CI never exercises. Native OpenSSL is
+      present in this env, so all three run (0 skipped). Closes **F1, F2**.
+    - **Commit B — `[fix][misc] keep-last-good hardening for TLS reload (L1+F4+L3/S-F3)`.**
+      *L1*: `RegisteredSource` gained a `pendingRedeliver` flag so a rotation whose rebuild failed
+      for a subscriber retries on the next poll even when the source reports changed=false (no
+      permanent wedge). *F4*: `loadInitialInstance` serves the last-good cached context (new
+      `cachedInstance`) on a load failure — extending keep-last-good to the one-shot / initial
+      acquisitions (was subscription-only), failing only when no last-good exists. *L3/S-F3*:
+      `ClientTlsFactorySupport.brokerClientTlsFactory` registers the broker-client TLS fold via
+      `shouldFoldBrokerClientAuthTls` = `isTlsAuthPlugin` (match built-in TLS-auth plugins by TYPE,
+      robust to a transient read failure) OR the material probe (keeps custom-plugin support).
+      **Tests**: one-shot keep-last-good, and fail-fast when no last-good. Closes **L1, F4, L3, S-F3**.
+    - **Commit C — `[fix][client] bound pooled TLS rotation on lookup/admin HTTP clients (L2/T3/H4)`.**
+      Only `FrameworkHttpClientFactory` set an AHC `connectionTtl` (5 min); `HttpClient` (HTTP
+      lookup) and `AsyncHttpConnector` (admin) set none, so a pooled HTTPS connection kept
+      pre-rotation material indefinitely. Centralized in
+      `TlsContextAcquisition.httpTlsRotationConnectionTtlMillis()` (default 5 min, injectable via
+      the `pulsar.tls.http.connectionTtlMillis` system property); both HTTP clients now set it on
+      the rotating-factory path; all three read the shared helper. **Test**:
+      `AsyncHttpConnectorTest.tlsFactoryPathBoundsPooledConnectionTtl` asserts the https path
+      bounds the pooled TTL to the injected value. Closes **L2, T3, H4**.
+    - **Commit D — `[fix][misc] TLS/auth lifecycle hardening (F3+F5+F7+F8+F9 + S-F1)`.**
+      *F3* `V5AuthContexts.supplyBlocking` catches a synchronous `RejectedExecutionException` from
+      a saturated bounded auth pool → `failedFuture` (never sync-throws on the event loop). *F5*
+      `PulsarClientImpl.bindAuthenticationServices` closes the previous `FrameworkHttpClientFactory`
+      before overwriting (updateAuthentication rebind leaked one per AutoClusterFailover swap) and
+      gates the rebind against Closing/Closed. *F7* `FlowBase.close` is now `synchronized` (pairs
+      with the synchronized lazy `getHttpClient`); `StandaloneOAuth2HttpClientFactory` uses daemon
+      IdP-TLS threads and its ctor releases the executor/factory on a build failure. *F8*
+      `TlsContextAcquisition` subscribing synthesis pre-fetches the `SSLParameters` companion ONCE
+      off the delivery thread instead of `.join()`ing it inside the reload callback (that
+      self-deadlocked when a custom factory dispatched creation to the same single-thread executor
+      running the callback). *F9* `FileBasedTlsFactory` rejects createInstance after close and
+      cancels a prior poll on a second initialize(); the client `PulsarChannelInitializer` disposes
+      the one-shot handle when newHandler/pipeline wiring throws; ctor-throw cleanup for broker
+      `PulsarChannelInitializer` and admin `AsyncHttpConnector` (the latter leaked a NON-daemon
+      rotation executor). *S-F1* `TlsContexts` logs a one-time WARN (deduped per policy) when an
+      insecure trust-all policy is applied at context build (covers the WEB/Jetty path too, whose
+      SSLContext is built via `TlsContexts.buildJdkContext`). Closes **F3, F5, F7, F8, F9** (factory
+      closed-check + initialize-twice + client handle-dispose + broker/admin ctor-throw), **S-F1**.
+
+    - **Verify (all local, worktree `async-auth-interface`).** `spotlessApply` clean; full-compile
+      green for `:pulsar-common :pulsar-broker-common :pulsar-client-original
+      :pulsar-client-admin-original :pulsar-proxy` (main + test). Gate suites, all **0 failures /
+      0 errors**: `FileBasedTlsFactoryTest` **34/34** (incl. the new OpenSSL + pin tests),
+      `TlsMaterialSourceTest` **4/4**, `SslParametersSynthesisTest` **9/9**, `JettyTlsFactoryTest`
+      green, `V5TlsProducerConsumerTest` **2/2**, `TlsProducerConsumerTest` **10/12 (2 pre-existing
+      skips)**, `ProxyTlsTest` **2/2**, `ClientCnxAsyncAuthTest` **7/7** (carve-out untouched and
+      green), `ReplicatorTlsFactoryTest` **2/2**, `AuthedAdminProxyHandlerNewTlsPathTest` **2/2**,
+      `CredentialOffloadTest` **3/3**, `StandaloneOAuth2HttpClientFactoryTest` **3/3**,
+      `FrameworkHttpClientFactoryTest` **5/5**, `AsyncHttpConnectorTest` **9/9** (incl. the new
+      TTL-bound test). F1 discipline chosen: **deferred-release AND per-use pinning** (both sides).
+
+    - **Deferred (reported, not done in this pass):**
+      - **S-F2** (synthesis HV default TRUE for CLIENT): the change contradicts the PIP's documented
+        merge rule 2 (`endpointIdentificationAlgorithm` — factory wins else the *consumer's* HV flag
+        applies "HTTPS") and the locked-in `SslParametersSynthesisTest` assertions. It is a
+        documented-contract change best made together with the PIP merge-rule amendment in the
+        doc/PIP pass (FIX-5), not silently here.
+      - **F8 "don't hold the RegisteredSource monitor during callbacks"**: the `.join()` self-deadlock
+        (the concrete bug) is fixed; releasing the monitor around callback invocation is a
+        `poll()`/`deliver()` refactor with real concurrency risk for a latent tier-3 concern
+        (callbacks in practice only set a volatile), deferred as backlog.
+      - **F9 ctor-throw for `WebService` / websocket `ProxyServer` / functions `WorkerServer`**: these
+        are server-startup ctors where a failure aborts the process (leaked scheduler is moot);
+        the high-value non-daemon-executor leaks (`AsyncHttpConnector`, `StandaloneOAuth2`) and the
+        broker binary initializer are fixed. The three web/worker ctors follow the same
+        try/finally-cleanup pattern if picked up later.
+
+36. **TlsPolicy v4-parity + TLS defaults (user-flagged P1 + review B3/B1/A-L1, FIX-2)**
+    (2026-07-04, local commits on `lh-pip-478-impl-v2`, no push). Four commits; each closes the
+    listed finding. Re-based against the FIX-1 HEAD (`a3f0f5552d2`), which had reshaped
+    `FileBasedTlsFactory`/`TlsMaterialSource`/`TlsContexts`.
+
+    - **Commit A — `[fix][misc] GATE: TlsPolicy separate key/trust store types (P1)`.** The only
+      real v4-parity gap. `TlsPolicy` carried one `storeType()` applied to the keystore, the key
+      cert chain, AND the truststore; v4 has separate `tlsKeyStoreType` / `tlsTrustStoreType`
+      (both default JKS). A mixed setup (PKCS12 keystore + JKS truststore, or a BCFKS/FIPS mix)
+      loaded the truststore with the wrong type and broke at handshake. Since `TlsPolicy` is
+      unreleased there is no compat constraint: `storeType` → `keyStoreType` + `trustStoreType`
+      across fields/accessors/builder/`equals`/`hashCode`/`toString` (password masking kept). The
+      5-arg `keyStore(...)` factory keeps its single `storeType` arg but now sets BOTH types (the
+      common case); split types go through the builder. `TlsMaterialSource` routes the truststore
+      load through `trustStoreType()` and the key/chain loads through `keyStoreType()`.
+      `ClientTlsFactorySupport.clientDefaultPolicy` drops the `keyStorePath!=null` heuristic and
+      maps both conf types directly. Six server compose sites map both types and drop their
+      `firstNonBlank` helpers: `DefaultBrokerTlsFactory` (server + brokerClient), `ProxyTlsFactories`
+      (server + brokerClient), functions `WorkerServer`, websocket `ProxyServer`.
+      `PulsarClientBuilderV5.keyStoreBuilder` now preserves `base.trustStoreType()` when folding an
+      `AuthenticationKeyStoreTls` (previously the key store type would clobber it). **Test**:
+      mixed-type regression at the `TlsMaterialSource` level (PKCS12 keystore + JKS truststore both
+      load; invalid-type discrimination — a bad `trustStoreType`/`keyStoreType` fails the respective
+      load — proves each store is parsed with its OWN type, which the pre-fix single type could not)
+      and at `clientDefaultPolicy` (`ClientDefaultPolicyStoreTypeTest`: the two types map
+      independently, not collapsed). Note: on this JDK `keystore.type.compat=true` masks a
+      JKS-as-PKCS12 cross-read, so the regression is made deterministic via the invalid-type path
+      rather than relying on a cross-read `IOException`. **Only parity gap found** — the rest of the
+      v4 TLS surface already maps (sslProvider stays factory-level, per the earlier P2 DEFER).
+
+    - **Commit B — `[fix][misc] preserve default TLS protocol set {TLSv1.3, TLSv1.2} (B3)`.** The
+      removed `DefaultPulsarSslFactory` forced `{TLSv1.3, TLSv1.2}` at engine build when
+      `tlsProtocols` was empty; the PIP-478 path only set protocols when the policy configured them,
+      so an unconfigured deployment silently deferred to the JVM/provider default on upgrade. Single
+      well-named constant `TlsContexts.DEFAULT_ENABLED_PROTOCOLS`, applied when the effective
+      protocol list is empty at: the native Netty client+server build (`applyCiphersAndProtocols`),
+      the JDK/synthesis overlays (`composeClientOverlay` + `synthesizeNettyServerFromJdk`, which now
+      always wrap to carry the pinned protocols), and both Jetty include-protocols paths (server
+      `applyServerConfig` + client factory). A factory-supplied `SSLParameters` companion still wins.
+      **Test**: native-path default (`FileBasedTlsFactoryTest`), synthesis client/server defaults
+      (`SslParametersSynthesisTest`), Jetty server/client defaults (`JettyTlsFactoryTest`). Verified
+      the old Jetty web path also used the JVM default (no historical `{1.3,1.2}` force), so this
+      makes web consistent with the binary path at ~zero practical risk on modern JDKs (their default
+      is already `{1.3,1.2}`).
+
+    - **Commit C — `[fix][broker] per-cluster custom TLS factory fail-loud (B1/H2)`.**
+      `BrokerService.getReplicationClient` / `getClusterPulsarAdmin` only LOGGED when a per-cluster
+      `ClusterData.brokerClientSslFactoryPlugin` named a CUSTOM PIP-337 factory, then built file TLS
+      — so a per-cluster KMS/HSM factory silently downgraded to file-based TLS on 5.0 upgrade
+      (wrong-identity or failed replication/admin). Escalates ruling R6:
+      `warnIfRemovedClusterSslFactoryPluginConfigured` → `failIfRemovedCustomClusterSslFactoryPlugin
+      Configured` throws `IllegalStateException` with an actionable migration message (same
+      `TlsFactorySupport.isLegacyCustom` literal-FQCN logic as the broker-level fail-loud sites); a
+      blank or removed-default FQCN is not custom and is still tolerated for metadata compat.
+      **Test** (`ReplicatorTlsFactoryTest`): a custom value fails both client and admin creation with
+      the migration hint; a removed-default FQCN is tolerated and the client builds.
+
+    - **Commit D — `[fix][misc] TlsPolicy.build() validates format consistency (A-L1)`.** `build()`
+      silently accepted keystore fields on a PEM policy (and PEM file fields on a keystore policy);
+      it now throws `IllegalArgumentException` naming the offending cross-format field (a builder may
+      throw synchronously — not a future-returning API). Mixed store TYPES stay valid within KEYSTORE
+      format. **Test** (`TlsPolicyValidationTest`): rejection both ways; consistent PEM / keystore /
+      flag-only policies still build. Verified the full `org.apache.pulsar.common.tls.impl.*` suite
+      builds nothing that the validation rejects.
+
+    - **PIP updated** (in the relevant commits): the `TlsPolicy` listing (`storeType()` →
+      `keyStoreType()`/`trustStoreType()`, factory javadoc), the v4-mapping note (separate store
+      types preserved), one sentence on the `{TLSv1.3, TLSv1.2}` default in Security Considerations,
+      and the removal-impact `ClusterData` row + geo-replication note (custom-factory fail-loud).
+
+    - **Verify (all local, worktree `async-auth-interface`, `dangerouslyDisableSandbox` for
+      Gradle wrapper).** `spotlessApply` clean; full compile green (main + test) for `:pulsar-common`
+      `:pulsar-common-api` `:pulsar-broker-common` `:pulsar-client-original`
+      `:pulsar-client-admin-original` `:pulsar-client-v5` `:pulsar-proxy`
+      `:pulsar-functions:pulsar-functions-worker` `:pulsar-websocket` `:pulsar-broker`. Gate suites,
+      all **0 failures / 0 errors**: `TlsPolicyValidationTest` **3/3**, `ClientDefaultPolicyStoreType
+      Test` **2/2**, `TlsMaterialSourceTest` **7/7** (+3 mixed-type), `FileBasedTlsFactoryTest`
+      green (+1 default-protocols), `SslParametersSynthesisTest` **12/12** (+3 default-protocols),
+      `JettyTlsFactoryTest` green (+1 default-protocols), `DefaultBrokerTlsFactoryTest` **3/3**,
+      `PulsarClientBuilderV5Test` green, `KeyStoreTlsProducerConsumerTestWithAuthTest` **7/7** (proves
+      the keystore rename end-to-end), `TlsProducerConsumerTest` **10/10**, `V5TlsProducerConsumerTest`
+      **2/2**, `ProxyTlsTest` **2/2**, `ReplicatorTlsTest` **1/1** (legacy path unaffected by the
+      protocol default), `ReplicatorTlsFactoryTest` **4** (1 retry-artifact skip, incl. the new
+      fail-loud test), `ConfigValidationTest` **7/7**.
+
+    - **Deferred (reported, not done in this pass):** **P2** sslProvider JCE-provider-name delta
+      (niche; one-sentence PIP note belongs in the doc/PIP pass FIX-5). No other v4 parity gap found
+      beyond `storeType`.
+
+37. **SecurityUtility decomposition + dead TLS-utility removal (user-requested, FIX-6)** — five staged
+   commits (`61f3972bd98..bd66cb32687`), each compiling; applies this PIP's anti-kitchen-sink philosophy
+   (Motivation #2/#4) to the internal TLS util layer. `SecurityUtility` carried no `@InterfaceStability`
+   and had no client-API importer, so it is internal — safe to decompose/remove, not a public-API break.
+
+   - **Commit A — `[feat][misc]` cohesive TLS-util containers.** Three single-concern classes in a new
+     package `org.apache.pulsar.common.util.tls` (kept out of the dependency-light `pulsar-common-api` —
+     these pull BouncyCastle/Netty — and out of `...common.tls` to avoid a split package with
+     pulsar-common-api): `PemReader` (loadCertificatesFromPemFile/Stream + loadPrivateKeyFromPemFile/
+     Stream), `JcaProviders` (getProvider/isBCFIPS + BC/Conscrypt constants + the Conscrypt
+     hostname-verifier workaround; resolveProvider and the TrustManager processing package-private),
+     `JdkSslContexts` (the createSslContext JDK-`SSLContext` assembly, composing PemReader / JcaProviders /
+     the existing `KeyStoreHolder`). Purely additive; `SecurityUtility` untouched so the tree compiles.
+
+   - **Commit B — `[improve][misc]` migrate callers.** 18 files across pulsar-client, pulsar-common,
+     pulsar-broker-common, pulsar-broker (tests) and the bouncy-castle bc/bcfips loaders moved off
+     `SecurityUtility` onto the containers (imports + call sites + two javadoc `{@link}`s):
+     `AuthenticationDataTls` → PemReader; `TlsMaterialSource` / `AuthProvidedMaterialSource` → PemReader;
+     `JettyTlsFactory` → `JcaProviders.CONSCRYPT_PROVIDER`; the bcloaders → static `JcaProviders.BC` /
+     `BC_FIPS`; `TlsContexts` + the common/broker/broker-common TLS test suites → JdkSslContexts / PemReader.
+
+   - **Commit C — `[improve][misc]` delete dead utilities + SecurityUtility.** Each re-verified as 0
+     external callers at HEAD: `KeyManagerProxy`(+Test), `TrustManagerProxy`(+Test) (delegate-swap
+     rotation proxies, obsoleted by the rebuild-not-mutate model — Appendix B), `SSLContextValidatorEngine`
+     + the whole `keystoretls` package (no importers after `KeyStoreSSLContext` went in stage 4c), and
+     `SecurityUtility` itself — taking with it the dead `createAutoRefreshSslContextForClient`,
+     `createNettySslContextForClient` (all 4 overloads), `createNettySslContextForServer`, and
+     `configureSSLHandler` (0 callers; hostname verification is baked into the built context —
+     `PulsarChannelInitializer`'s javadoc reworded). **createSslContext decision:** relocated to the public
+     focused `JdkSslContexts`, NOT package-private on `TlsContexts` as first sketched, because it is shared
+     by TLS tests across four modules (`SslParametersSynthesisTest`, `JettyTlsFactoryTest`,
+     `AdminApiTlsAuthTest`, `BrokerServiceLookupTest`, `ProxyPublishConsumeTlsTest`) that build a JDK
+     `SSLContext` from PEM material — a single cohesive concern, not the grab-bag; `TlsContexts` delegates
+     to it. End-state: no `org.apache.pulsar.common.util.SecurityUtility`.
+
+   - **Commit D — `[improve][misc]` cleaner `TlsContexts` assembly.** With the grab-bag gone, `TlsContexts`
+     already composes only the focused primitives (JDK via `JdkSslContexts`, Netty inline via
+     `SslContextBuilder`); rewrote the class javadoc to state that end-to-end-ownership contract and drop
+     the now-stale "file-path helpers" contrast. No behaviour change; primitives composed, not duplicated.
+
+   - **Commit E — `[improve][pip]` PIP + this log.** The PIP Removal section + compat summary now list the
+     `SecurityUtility` decomposition, the obsolete proxies (cross-referencing the Appendix B rotation
+     model), and the unused `SSLContextValidatorEngine` (superseding the earlier leave-in-place decision),
+     all flagged internal-only / not a compatibility break.
+
+   - **Verify (all local, worktree `async-auth-interface`, `dangerouslyDisableSandbox` for the Gradle
+     wrapper).** spotless clean; per-module compileJava+compileTestJava+checkstyle GREEN for `:pulsar-common`
+     `:pulsar-broker-common` `:pulsar-client-original` `:pulsar-broker` `:bouncy-castle:bouncy-castle-bc`
+     `:bouncy-castle:bcfips`; no residual reference (java or non-java) to any deleted symbol. Gate suites,
+     all **0 failures / 0 errors**: `FileBasedTlsFactoryTest` **35/35**, `SslParametersSynthesisTest`
+     **12/12**, `TlsMaterialSourceTest` **7/7**, `AuthProvidedMaterialFoldTest` **4/4**, `TlsReloadMetricsTest`
+     **4/4** (pulsar-common); `JettyTlsFactoryTest` **6/6**, `DefaultBrokerTlsFactoryTest` **3/3**
+     (broker-common); `AdminApiTlsAuthTest` **20/20** (exercises JdkSslContexts+PemReader e2e),
+     `TlsProducerConsumerTest` **10/10** (AuthenticationDataTls→PemReader e2e). `netty/SslContextTest` was
+     already absent (removed earlier) — no migration needed there. Heavier broker/proxy TLS e2e beyond
+     those two are compile-verified (all migrated test files compile + checkstyle) but not each executed —
+     this is a verbatim-move refactor with no behaviour change.
+
+38. **Auth-SPI contract fixes + the two API-freeze blockers (multi-model review, FIX-3)**
+    (2026-07-04, local commits on `lh-pip-478-impl-v2`, no push). Five commits, each closing one review
+    finding group; re-located against HEAD after FIX-1/2/6 landed (FIX-6 had removed `SecurityUtility`, so
+    auth code now reaches PEM material through `PemReader`).
+
+    - **Commit A — `[fix][client] GATE: load v5-native auth plugins by class name (A-H1/G-IS2)`.** The
+      flagship "implement a v5 `Authentication`, deploy it by class name" was broken: every reflective
+      load blind-cast to the v4 `Authentication`, so a v5-only class threw `ClassCastException`. New
+      `V5AuthenticationLoader` detects a v5-native class
+      (`org.apache.pulsar.client.api.v5.auth.Authentication.isAssignableFrom`), instantiates it no-arg and
+      calls `configure(parsedParams)` (JSON or `key:val`, matching `AuthenticationUtil`); a legacy v4
+      class keeps the existing wrap path (raw-string handling preserved for
+      `EncodedAuthenticationParameterSupport`). `PulsarClientProviderV5.createAuthentication` (both
+      overloads) and `PulsarClientBuilderV5.authentication(className, params)` route through it — the
+      builder string path also now eagerly builds the plugin (it previously stashed only the class name
+      and silently yielded `AuthenticationDisabled`) while keeping the serializable `authPluginClassName +
+      authParams` form. **Test** `V5AuthenticationLoaderTest` (5): a fake v5-native
+      `SinglePassAuthentication` is configured and drives the binary transport; v4 still bridges; blank →
+      disabled.
+
+    - **Commit B — `[fix][client] unify the REFRESH-sentinel contract on fresh-exchange (A-H2)`.** The
+      contract was stated three inconsistent ways; the implementation does fresh-exchange-per-REFRESH
+      (`ClientCnx` opens a new exchange and re-produces via `getAuthDataAsync`), verified in code. Blessed
+      that everywhere — **doc/javadoc only, no code change**: `pip-478.md` binary routing rule 2 + the
+      SASL-spanning paragraph + the `AsyncAuthenticationDriver` exchange-scoping paragraph; the
+      `AsyncAuthenticationDriver` class doc + `authenticateAsync` (renamed param `challengeOrRefresh` →
+      `challenge`, now documented to never receive the sentinel); `AuthenticationCallContext` slot lifetime
+      (one exchange; a REFRESH begins a new one).
+
+    - **Commit C — `[fix][client] v5-builder keeps async offload for credential-I/O v4 plugins (G-IS6)`.**
+      `PulsarClientBuilderV5` unwrapped EVERY bridged v4 back to the raw engine, so
+      `LegacyV4AuthenticationAdapter`'s blocking-executor offload never engaged and a third-party v4
+      credential plugin blocked the Netty loop. **Unwrap-selectivity rule implemented:** the decision moved
+      to `build()` (`applyAuthentication`), where the bridged plugin is probed on the application thread
+      (off the event loop, the same place the stage-3c TLS fold already probes). A plugin with **no
+      credential I/O** — `AuthenticationTls`/`AuthenticationKeyStoreTls` (TLS material folded, empty binary
+      payload) and `AuthenticationDisabled`, type-based; plus a generic plugin whose probed
+      `getAuthData()` reports neither `hasDataFromCommand` nor `hasDataForHttp` — runs raw; anything
+      reporting command/HTTP credential stays wrapped in `V5ToV4AuthenticationAdapter` so it off-loads. The
+      probe (not pure type-matching) is required so a TLS-only third-party plugin with a non-`"tls"` method
+      name still folds + runs raw instead of failing at `start()` — this keeps the two
+      `PulsarClientBuilderV5Test` generic-fold gates green. `unwrapV4` de-staled to the pure inverse of
+      `wrap`. **Test** `CredentialOffloadThroughV5BuilderTest` (2): a blocking v4 credential plugin stays
+      wrapped and its `getAuthData` runs on the blocking executor, not the caller; a TLS-only plugin runs
+      raw. **Follow-up** (self-review, commit `c4b85da2418`): a bridged v4 plugin presenting BOTH mTLS
+      material AND a fetched credential, used *without* `tlsPolicy(...)`, must run raw so the legacy TLS
+      path still presents its client certificate (the wrapping adapter's synthesized v4 provider carries
+      only the binary credential, not TLS material) — it forgoes off-load with a WARN, restored by
+      configuring `tlsPolicy(...)`. Regression test added; the two generic-fold gates stay green.
+
+    - **Commit D — `[fix][client] freeze-forever auth/TLS API items (A-M2, A-L5, A-M4)`.** **A-M2:**
+      `TlsPurpose.equals`/`hashCode` now cover `(role, name)` only — the fallback is resolution metadata,
+      not key identity, so `client("x")` and `client("x", CLIENT_DEFAULT)` resolve to the same
+      purpose→policy slot (the old fallback-in-key split one config key into two → silent lookup misses).
+      **Blast radius:** all well-known purpose constants have a `null` fallback so their `(role, name)`
+      identity — and every existing map lookup keyed on them — is unchanged; only plugin-minted
+      `client(name, fallback)` / the new `server(name, fallback)` change, which is the intended fix.
+      `FileBasedTlsFactoryTest` **35/35** confirms the purpose→policy map still resolves. **A-L5:** the
+      three binary-auth records renamed their component to a uniform `bytes()`
+      (`BinaryAuthData.authData()`/`AuthChallenge.challenge()`/`ChallengeResponse.responseBytes()`); every
+      reader updated (compile-driven), positional constructors unchanged. **A-M4:** added
+      `TlsPurpose.server(String, TlsPurpose)`. **Test** `TlsPurposeTest` (4).
+
+    - **Commit E — `[fix][misc] auth/TLS SPI contract javadoc + the 2 missing client-auth metrics
+      (A-M1/M5/M3/M7, G-metrics)`.** Docs: SSLParameters well-known row + synthesis merge-order on
+      `PulsarTlsFactory` + tls `package-info` (A-M1); `v5.auth` `package-info` rewritten as a
+      capability-model overview — 2×2 matrix, two config paths, 3 binary routing rules — + the
+      "sentinel never reaches me" note on `BinaryAuthChallengeHandler` (A-M5); `ProxyConfig.toString`
+      masks the password (A-M3); `AuthenticationFactory.tls` documents the fold + per-field plugin-wins +
+      PEM-only (A-M7). **Metrics (G-metrics):** new `AuthMetrics` emits
+      `pulsar.client.auth.credential.duration` (histogram, s, `{auth_method}`) and
+      `pulsar.client.auth.failure` (counter, `{auth_method, error=terminal|transient}`) from the init
+      context's OpenTelemetry, wired at `BinaryAuthenticationExchange.getAuthDataAsync` (both driver sites)
+      and `HttpAuthenticationDriver` (`getHttpHeadersAsync`); no-op under the default no-op root. **Test**
+      `AuthMetricsTest` (3, in-memory OTel reader): success → duration only; rejected → `error=terminal`;
+      generic fetch error → `error=transient`.
+
+    - **Verify (all local, worktree `async-auth-interface`, `dangerouslyDisableSandbox` for the Gradle
+      wrapper).** spotless clean. Full build GREEN for `:pulsar-common-api` `:pulsar-client-api-v5`;
+      compile (main+test) + spotlessCheck GREEN for `:pulsar-client-original` `:pulsar-client-v5`
+      `:pulsar-client-auth-sasl`; `:pulsar-proxy` compile (main+test) GREEN. Gate suites, all **0 failures /
+      0 errors**: `ClientCnxAsyncAuthTest` **7/7** (carve-out untouched), `V5ToV4AuthenticationAdapterTest`
+      **6/6**, `LegacyV4AuthenticationAdapterTest` **7/7**, `TlsAuthenticationTest` **2/2**,
+      `BinaryAuthenticationExchangeTest` **4/4**, `PulsarClientBuilderV5Test` **9/9**, `CredentialOffloadTest`
+      **3/3**, `HttpAuthenticationDriverTest` **8/8**, `AuthenticationOAuth2Test` **29/29**,
+      `SaslAuthenticateTest` **4/4** (binary+HTTP), `FileBasedTlsFactoryTest` **35/35**, plus the new
+      `V5AuthenticationLoaderTest` **5/5**, `CredentialOffloadThroughV5BuilderTest` **2/2**, `TlsPurposeTest`
+      **4/4**, `AuthMetricsTest` **3/3**.
+
+    - **Deferred (reported, not done in this pass):** the remaining A-L / DOC-POLISH items (A-L1/M6/L9a/L9b/
+      L7/L3/L4/L8/L2, G-IS7 PIP layering amend, Athenz-SDK-HTTP PIP note, stale "until stage N" comment
+      sweep) belong to the FIX-5 doc/PIP batch. Single-pass HTTP `getHttpHeadersAsync` remains dead-code for
+      the v4 built-ins (goals-review DEFER), so the HTTP metric currently only fires on the SASL-over-HTTP
+      driver path.
+
+39. **FIX-5 doc/PIP/polish batch** (2026-07-04, four local commits on `lh-pip-478-impl-v2`, no push;
+    predecessor authored the edits and went idle before verify/commit — this pass verifies + commits them).
+    Comment/javadoc/PIP only, no behaviour change; the four commits are grouped by concern:
+
+    - **Commit `ed5f822cb63` — `[improve][misc]` stale implementation-marker sweep** (~51 files across
+      client, client-v5, client-admin, common(-api), broker(-common), proxy, websocket, functions-worker,
+      athenz/sasl plugins). Removes PIP-478 authoring scaffolding that leaked into shipped javadoc/comments —
+      "stage 3b/3c/4a/4c" tags, decision-ids, and sweep-narrative asides (e.g. `ProxyConnection`'s "ninth
+      call-site the stage-4c sweep missed" reworded to state the current self-built-config contract). Closes
+      the deferred "stale 'until stage N' comment sweep" flagged in entry 38.
+    - **Commit `152ee01f5ce` — `[improve][conf]` deprecate ignored PIP-337 cluster fields + standalone.conf.**
+      `ClusterData` getters/builder-setters `brokerClientSslFactoryPlugin`/`...Params` marked `@Deprecated`
+      (with `@deprecated` javadoc: removed by PIP-478, retained for wire/metadata compat, ignored with WARN,
+      factory selection is broker-level `brokerClientTlsFactoryClassName`); `ClusterDataImpl`'s two builder
+      overrides marked `@Deprecated` to match the interface (silences the override-deprecation warnings).
+      `standalone.conf` documents the four PIP-478 TLS-factory keys already present in `broker.conf`
+      (`tlsFactoryClassName`/`Config`, `brokerClientTlsFactoryClassName`/`Config`).
+    - **Commit `c7c853f7590` — `[improve][client]` tighten auth/TLS/HTTP SPI contract javadoc** (8 files):
+      `TlsHandle` (get() never blocks / after-dispose unspecified / dispose() idempotent), `PulsarTlsFactory`
+      (initialize-once-before-createInstance, concurrent createInstance, close-at-most-once ordering),
+      `PulsarHttpClientFactory.newHttpClient` (construction-time `IllegalStateException`, no request I/O),
+      `HttpAuthHeaders`/`HttpResponse`/`HttpRequest` (single-value-per-canonical-name, last-wins collapse),
+      `Authentication` (capabilities never queried before `initializeAsync` completes),
+      `PulsarClientBuilder.authentication(Authentication)` (programmatic-path adopt contract: instance must be
+      pre-configured; client drives `initializeAsync`+`close`).
+    - **Commit `112720c45f3` — `[improve][pip]` PIP amendments.** Athenz/ZTS reconciliation (only OAuth2 among
+      built-ins gets a framework `PulsarHttpClient`; Athenz stays on the SDK transport); OAuth2/Athenz
+      reuse-not-duplicate layering note (v5 bodies are thin readers over a Supplier, gaining the async path,
+      not a v5-native reimplementation); `ClientAuthenticationServices`/`...Aware` added to the public-API
+      inventory; `SSLContext`/`SSLParameters` added to the well-known TLS instance list; the `sslProvider`
+      JCE-provider-name → JDK-engine delta documented (niche, not a security regression); and the **M-F6
+      known gap** — the proxy's own broker-client credential I/O still runs inline on the Netty loop (proxy
+      lookup/data paths are not a `PulsarClientImpl` and bind no client auth services), same as v4, deferred
+      to a follow-up. **M-F6 decision: document the gap, do NOT attempt proxy service-binding in this PIP.**
+    - **Verify (all local, worktree `async-auth-interface`, `dangerouslyDisableSandbox` for the Gradle
+      wrapper).** `spotlessApply` made no changes across the touched modules. `compileJava`+`compileTestJava`+
+      `checkstyleMain`+`checkstyleTest` all **BUILD SUCCESSFUL** for `:pulsar-common-api`
+      `:pulsar-client-api-v5` `:pulsar-client-admin-api` `:pulsar-common` `:pulsar-client-original`
+      `:pulsar-client-v5` `:pulsar-client-admin-original` `:pulsar-client-auth-athenz` `:pulsar-client-auth-sasl`
+      `:pulsar-broker-common` `:pulsar-proxy` `:pulsar-websocket` `:pulsar-functions:pulsar-functions-worker`
+      `:pulsar-broker`. Only non-fatal deprecation warnings (the intended `@Deprecated` additions); no fixes
+      needed — the edits introduced no compile/checkstyle breakage. **Out-of-scope note:** the pre-existing
+      "**Confined removal.** … `SecurityUtility` … remains" line in `pip-478.md` is now stale relative to
+      FIX-6 (which deleted `SecurityUtility`); it is unchanged context, not a FIX-5 edit, so left untouched
+      here — a candidate for a later PIP-Removal-section reconciliation.
+
+40. **Security-negative + e2e test batch (multi-model review "don't-trust-green-CI", T1/T2/T4/T5)**
+    (2026-07-04, local commits on `lh-pip-478-impl-v2` via an isolated worktree, no push). Four additive
+    test groups closing the coverage gaps a green CI does *not* prove — the codex test-coverage aspect's
+    top items. Each group committed separately. No product code changed; one stale test-coverage note
+    corrected. **No shipping defect surfaced** — the two security-critical negatives (T1 secure-reject, T4
+    needClientAuth-reject) both fail the handshake as required, and the proxy lookup-pool null-factory NPE
+    the old note warned of is already fixed on this branch.
+
+    - **T1 — `[improve][test] PIP-478 T1: forced-untrusted-cert Netty mTLS rejection negative`.** The
+      existing `FileBasedTlsFactoryTest` secure/insecure client-cert pair only proved the client silently
+      *withholds* its cross-CA cert (the server advertises only its trusted CA), never that a *presented*
+      untrusted cert is rejected. Added a real negative on the Netty engine mirroring the Jetty forced test:
+      a `ForcingKeyManager` makes the client actually present the untrusted (EC, cross-CA) certificate.
+      `forcedUntrustedClientCertRejectedBySecureServer` (secure server, real trust manager,
+      `requireTrustedClientCert=true` → handshake `SSLException`) +
+      `forcedUntrustedClientCertAcceptedAndCapturedByInsecureServer` (insecure server → accepted and
+      captured, the D3 behavior). TLSv1.2 pinned so the rejection surfaces synchronously in the in-memory
+      handshake pump. `FileBasedTlsFactoryTest` **37/37** (was 35).
+
+    - **T4 — `[improve][test] PIP-478 T4: SSLParameters companion LIVE-handshake enforcement`.** Existing
+      companion coverage asserted getters (Jetty) / the low-level synthesize helper (Netty). Added live
+      handshakes flowing a companion through the full factory → `TlsContextAcquisition` path on BOTH
+      engines: Netty (`SslParametersSynthesisTest` +2 — protocol restriction and `needClientAuth` via
+      `acquireNettyContext`) and Jetty (`JettyTlsFactoryTest` +1 — a live `CompanionFactory`-driven server
+      rejects a no-cert client and a TLSv1.3-only client, accepts a trusted-cert TLSv1.2 client).
+      `SslParametersSynthesisTest` **14/14** (was 12); `JettyTlsFactoryTest` **7/7** (was 6).
+
+    - **T2 — `[improve][test] PIP-478 T2: proxy e2e SSLContext-fallback synthesis on the data path`.**
+      `SslContextFallbackSynthesisTest` had skipped the client→proxy→broker produce/consume data path,
+      citing a proxy lookup-pool null-factory NPE. That NPE was already fixed on this branch (commit
+      `51929992e84`, R1, resolves the binary-lookup pool's `CLIENT_DEFAULT` factory), so the note was
+      stale. Added the e2e: a v5 client with the SSLContext-only factory produces/consumes through the TLS
+      proxy; every synthesized leg (client transport, proxy PROXY listener, proxy `BROKER_CLIENT` via
+      `DirectProxyHandler`) is exercised and the refused-Netty counter advances. The stale coverage note is
+      corrected — the proxy binary-*lookup* leg uses a default file-based context by design (it does not
+      honor the custom `brokerClientTlsFactoryClassName`; a deliberate `ProxyService.start` choice), which
+      does not affect the synthesis proven on the client and proxy-data legs.
+      `SslContextFallbackSynthesisTest` **4/4** (was 3).
+
+    - **T5 — `[improve][test] PIP-478 T5: websocket + functions-worker WEB TLS via tlsFactoryClassName`.**
+      No test had selected a custom factory via `tlsFactoryClassName` for these modules. Added a shared
+      counting fixture `CountingWebTlsFactory` (counts *every* `createInstance`, so the JDK-`SSLContext` WEB
+      path registers — unlike `SslContextOnlyTlsFactory`, which counts only refused Netty requests) and two
+      broker-free e2e tests, placed in `pulsar-broker/src/test` (the module that carries the test-cert
+      convention and depends on both ws + worker): `WebSocketProxyTlsFactoryTest` (standalone `ProxyServer`,
+      HTTPS `GET /status.html` → 200 "OK") and `WorkerServerTlsFactoryTest` (standalone `WorkerServer` with
+      a mocked `WorkerService`, HTTPS `GET /version` → 200). Each asserts the custom-factory counter
+      advanced, proving the WEB purpose is served through the new SPI end-to-end. **1/1** each.
+
+    - **Verify (all local, isolated worktree, `dangerouslyDisableSandbox` for the Gradle wrapper).** spotless
+      clean. Targeted `--tests` runs, all **0 failures / 0 errors**: `FileBasedTlsFactoryTest` **37/37**,
+      `SslParametersSynthesisTest` **14/14**, `JettyTlsFactoryTest` **7/7**, `SslContextFallbackSynthesisTest`
+      **4/4**, `WebSocketProxyTlsFactoryTest` **1/1**, `WorkerServerTlsFactoryTest` **1/1**; the pre-existing
+      `ProxyKeyStoreTlsTransportTest` **1/1** was run to confirm the R1 lookup-pool fix. Touched modules
+      compile: `:pulsar-common`, `:pulsar-broker-common`, `:pulsar-proxy`, `:pulsar-broker` (which pulls
+      `:pulsar-websocket` + the `:pulsar-functions` worker).
+
+41. **Multi-model review cycle COMPLETE (8 reviewers → 7 fix workstreams → verified).** An 8-lens
+    review board (5 Fable: api-design, concurrency, security, goals, TlsPolicy-parity; 3 Codex:
+    lifecycle/rotation, backward-compat, test-coverage) delivered the verdict that the mission's core
+    goal is achieved — all 5 Motivations materially delivered with thread-level evidence, the ClientCnx
+    async carve-out **verified production-ready** (concurrency lens could not construct a failing
+    interleaving), security ship-ready. Every finding was edge-hardening, triaged against the original
+    goals (documented-intentional items — PIP-337 removal, the Jetty trust-scoping security fix, ruled
+    CLI removals — rejected-as-defect, not "fixed"). Fixes landed as FIX-1..6 + the test batch (commits
+    `2165753bc7b`..`4e300e58c7f`):
+    - FIX-1 [GATE]: the one serious defect — an OpenSSL TLS-rotation use-after-free (release-before-
+      publish + unpinned volatile borrows; CI never exercised the OpenSSL regime) — fixed both sides
+      (deferred-release + per-use `withPinnedContext`) with a new OpenSSL-provider rotation test.
+      **Codex re-reviewed the exact diff: zero findings, fix sound.**
+    - FIX-2: TlsPolicy `storeType`→separate `keyStoreType`/`trustStoreType` (v4-parity regression),
+      `{TLSv1.3,TLSv1.2}` default preservation, per-cluster custom-factory fail-loud.
+    - FIX-3: the two API-freeze blockers (v5-native reflective config path = In-Scope #2 gap; REFRESH
+      contract unified) + freeze-forever items (TlsPurpose equals over (role,name), uniform `bytes()`)
+      + 2 missing metrics; self-review caught a combined-TLS+credential mTLS-drop bug.
+    - FIX-6 (user-requested): dissolved the `SecurityUtility` grab-bag into `PemReader`/`JcaProviders`/
+      `JdkSslContexts`; deleted the obsolete `KeyManagerProxy`/`TrustManagerProxy` delegate-swap helpers
+      (rebuild-not-mutate rotation makes them dead) + `SSLContextValidatorEngine`.
+    - FIX-4: security-negative + e2e tests (forced untrusted-cert rejection Netty+Jetty, proxy e2e
+      fallback synthesis, SSLParameters live handshakes, ws/worker HTTPS) — **no defects, no weakened
+      assertions.**
+    - FIX-5: doc/PIP/javadoc polish; M-F6 (proxy→broker credential offload) documented as a v4-parity
+      known-gap (deferred, not a regression); corrected the review's wrong A-L4 assumption.
+    Deferred non-blocking follow-ups (logged): proxy binary-lookup leg honoring a custom
+    `brokerClientTlsFactoryClassName`; the M-F6 proxy credential-offload gap. Remaining before
+    apache-facing: master rebase + post-rebase CI + human review.
+
+42. **CI note (2026-07-04): Personal-CI Preconditions gate blocked by a GitHub diff-endpoint error.**
+    After the review-fix push, the Pulsar CI `Preconditions` job (which fetches the PR's changed-files
+    list from the GitHub API for path-based test selection) began failing with
+    `Server Error: Sorry, this diff is temporarily unavailable due to heavy server load.
+    {"resource":"PullRequest","field":"diff","code":"not_available"}` — a GitHub-side failure to compute
+    PR #231's diff, not a code/test failure (the same branch passed 41/41 at c9749a16afc; every fix
+    workstream was locally verified compile + targeted gates green + codex-cleared for FIX-1). Mitigations:
+    advanced the CI base branch `pulsar-pip478-ci-base` from the original merge-base `1fa9e3532b4` to
+    `c9749a16afc` (PR diff 249→130 files) and opened a fresh PR (#233, head=tip, base=c9749a16afc) so the
+    changed-files computation isn't burdened by PR #231's long update history. CONFIRMED sustained
+    GitHub outage: the fresh PR #233 failed Preconditions with the identical error, so it is server-side,
+    not PR #231's history (#233 closed). The full-matrix Personal-CI pass on the review-fix delta is
+    therefore a "retry when GitHub's diff endpoint recovers" item; the code itself is complete, 8-model
+    reviewed, hardened across FIX-1..6 + test batch, FIX-1 codex-cleared, and every workstream
+    locally verified (compile + targeted gates green) on top of the 41/41-green c9749a16afc base.

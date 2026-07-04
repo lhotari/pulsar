@@ -29,7 +29,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import javax.servlet.DispatcherType;
 import lombok.CustomLog;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.authentication.AuthenticationService;
 import org.apache.pulsar.broker.tls.TlsFactorySupport;
 import org.apache.pulsar.broker.web.AuthenticationFilter;
@@ -89,7 +88,7 @@ public class WorkerServer {
 
     private final FilterInitializer filterInitializer;
     private ScheduledExecutorService scheduledExecutorService;
-    // PIP-478 TLS SPI factory (the only server TLS path since PIP-337 removal, stage 4c).
+    // PIP-478 TLS SPI factory (the only server TLS path since the PIP-337 removal).
     private PulsarTlsFactory tlsFactory;
     private JettyTlsFactory.ReloadableServerTls reloadableServerTls;
 
@@ -350,7 +349,8 @@ public class WorkerServer {
                 .ciphers(toList(config.getWebServiceTlsCiphers()));
         if (config.isTlsEnabledWithKeyStore()) {
             policyBuilder.format(TlsPolicy.Format.KEYSTORE)
-                    .storeType(firstNonBlank(config.getTlsKeyStoreType(), config.getTlsTrustStoreType()))
+                    .keyStoreType(config.getTlsKeyStoreType())
+                    .trustStoreType(config.getTlsTrustStoreType())
                     .keyStorePath(config.getTlsKeyStore())
                     .keyStorePassword(config.getTlsKeyStorePassword())
                     .trustStorePath(config.getTlsTrustStore())
@@ -374,9 +374,5 @@ public class WorkerServer {
 
     private static List<String> toList(Set<String> values) {
         return values == null ? List.of() : List.copyOf(values);
-    }
-
-    private static String firstNonBlank(String primary, String fallback) {
-        return StringUtils.isNotBlank(primary) ? primary : fallback;
     }
 }

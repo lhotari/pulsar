@@ -38,6 +38,13 @@ package org.apache.pulsar.common.tls;
 public interface TlsHandle<T> {
 
     /**
+     * Returns the current instance snapshot. This <b>never blocks</b>: for a one-shot request it returns
+     * the already-built instance; for a subscribing request the initial value is present before this
+     * method is first callable, because the {@code createInstance} future completes only after the first
+     * reload delivery (see {@link PulsarTlsFactory}). Calling {@code get()} after {@link #dispose()} is
+     * unspecified — the factory may already have released the instance's backing resources — so a consumer
+     * MUST stop calling {@code get()} once it has disposed the handle.
+     *
      * @return the built instance for a one-shot request, or the most recently delivered instance for
      *         a subscribing request (never {@code null}); treated by consumers as an immutable borrow
      */
@@ -46,7 +53,8 @@ public interface TlsHandle<T> {
     /**
      * Unregister the reload callback (if any) and release the factory-side resources backing this
      * handle (background refresh, caches). Signals only that this consumer is done; the factory owns
-     * the built instance's lifecycle.
+     * the built instance's lifecycle. <b>Idempotent</b>: only the first call has effect; subsequent
+     * calls are no-ops and never double-release the instance.
      */
     void dispose();
 }

@@ -91,7 +91,8 @@ final class ProxyTlsFactories {
                 .ciphers(toList(ciphers));
         if (config.isTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
-                    .storeType(firstNonBlank(config.getTlsKeyStoreType(), config.getTlsTrustStoreType()))
+                    .keyStoreType(config.getTlsKeyStoreType())
+                    .trustStoreType(config.getTlsTrustStoreType())
                     .keyStorePath(config.getTlsKeyStore())
                     .keyStorePassword(config.getTlsKeyStorePassword())
                     .trustStorePath(config.getTlsTrustStore())
@@ -113,8 +114,8 @@ final class ProxyTlsFactories {
                 .ciphers(toList(config.getBrokerClientTlsCiphers()));
         if (config.isBrokerClientTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
-                    .storeType(firstNonBlank(config.getBrokerClientTlsKeyStoreType(),
-                            config.getBrokerClientTlsTrustStoreType()))
+                    .keyStoreType(config.getBrokerClientTlsKeyStoreType())
+                    .trustStoreType(config.getBrokerClientTlsTrustStoreType())
                     .keyStorePath(config.getBrokerClientTlsKeyStore())
                     .keyStorePassword(config.getBrokerClientTlsKeyStorePassword())
                     .trustStorePath(config.getBrokerClientTlsTrustStore())
@@ -138,9 +139,5 @@ final class ProxyTlsFactories {
 
     private static List<String> toList(Set<String> values) {
         return values == null ? List.of() : List.copyOf(values);
-    }
-
-    private static String firstNonBlank(String primary, String fallback) {
-        return StringUtils.isNotBlank(primary) ? primary : fallback;
     }
 }

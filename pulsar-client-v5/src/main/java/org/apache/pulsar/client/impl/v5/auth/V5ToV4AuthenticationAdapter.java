@@ -37,6 +37,7 @@ import org.apache.pulsar.client.api.v5.auth.AuthenticationInitContext;
 import org.apache.pulsar.client.api.v5.auth.BinaryAuthDataProvider;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
+import org.apache.pulsar.client.impl.auth.v5.AuthMetrics;
 import org.apache.pulsar.client.impl.auth.v5.BinaryAuthenticationExchange;
 import org.apache.pulsar.common.api.AuthData;
 
@@ -46,7 +47,7 @@ import org.apache.pulsar.common.api.AuthData;
  * (PIP-478).
  *
  * <p>It also implements {@link AsyncAuthenticationDriver} so that the {@code ClientCnx} carve-out
- * (PIP-478 stage 3) can authenticate via the asynchronous (non event-loop-blocking) path. Both the
+ * (PIP-478) can authenticate via the asynchronous (non event-loop-blocking) path. Both the
  * async driver and the synchronous v4 {@link #getAuthData(String)} path are exchange-scoped: one
  * {@link AsyncAuthenticationDriver.AuthenticationExchange} — and one {@link AuthenticationCallContext}
  * with its state slot — backs a single connection attempt, so a plugin's challenge/response
@@ -71,10 +72,12 @@ public class V5ToV4AuthenticationAdapter
 
     private final transient Authentication v5;
     private final transient Map<String, String> params;
-    // Late-bound by the client via bindClientAuthenticationServices(...) before start() (PIP-478 stage 3b);
+    // Late-bound by the client via bindClientAuthenticationServices(...) before start() (PIP-478);
     // null until then (e.g. when the adapter is exercised outside a client), yielding an init context with
     // no framework services.
     private transient volatile ClientAuthenticationServices services;
+    // Built from the bound services' OpenTelemetry in start(); NOOP until then.
+    private transient volatile AuthMetrics authMetrics = AuthMetrics.NOOP;
 
     /**
      * Create an adapter that exposes a v5 authentication plugin through the v4 interface. The framework
@@ -107,6 +110,7 @@ public class V5ToV4AuthenticationAdapter
     @Override
     public void start() throws PulsarClientException {
         ClientAuthenticationServices bound = this.services;
+        this.authMetrics = AuthMetrics.create(bound == null ? null : bound.openTelemetry());
         AuthenticationInitContext initContext = bound == null
                 ? new SimpleAuthInitContext(null, null, null, Clock.systemUTC(), OpenTelemetry.noop(), null, params)
                 : new SimpleAuthInitContext(bound.httpClientFactory(), bound.scheduler(), bound.blockingExecutor(),
@@ -146,7 +150,7 @@ public class V5ToV4AuthenticationAdapter
 
     @Override
     public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
-        return new BinaryAuthenticationExchange(v5, new SimpleAuthCallContext(brokerHostName, 0));
+        return new BinaryAuthenticationExchange(v5, new SimpleAuthCallContext(brokerHostName, 0), authMetrics);
     }
 
     /**

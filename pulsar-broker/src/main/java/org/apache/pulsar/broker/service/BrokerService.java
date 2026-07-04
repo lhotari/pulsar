@@ -1563,7 +1563,7 @@ public class BrokerService implements Closeable {
             try {
                 ClusterData data = clusterDataOp
                         .orElseThrow(() -> new MetadataStoreException.NotFoundException(cluster));
-                warnIfRemovedClusterSslFactoryPluginConfigured(cluster, data);
+                failIfRemovedCustomClusterSslFactoryPluginConfigured(cluster, data);
                 ClientBuilder clientBuilder = PulsarClient.builder()
                         .enableTcpNoDelay(false)
                         .connectionsPerBroker(pulsar.getConfiguration().getReplicationConnectionsPerBroker())
@@ -1644,18 +1644,23 @@ public class BrokerService implements Closeable {
     }
 
     /**
-     * PIP-478 stage 4c: the PIP-337 per-cluster {@code brokerClientSslFactoryPlugin} is removed and ignored.
-     * Warns once per cluster (this runs inside the {@code computeIfAbsent} client/admin creation) when a
-     * cluster still carries a non-default value in its metadata, pointing at the broker-level
-     * {@code brokerClientTlsFactoryClassName} successor.
+     * PIP-478 (B1/H2, escalating ruling R6): a per-cluster {@code brokerClientSslFactoryPlugin} that names a
+     * CUSTOM PIP-337 factory (a per-cluster KMS/HSM SSL factory) is removed in Pulsar 5.0. Silently building
+     * file-based TLS instead would downgrade the cluster's broker-client identity/trust after an upgrade — a
+     * security regression that could send replication/admin traffic with the wrong identity or fail the
+     * handshake. So fail loudly at cluster-client/admin creation with an actionable migration message, instead
+     * of the prior WARN-and-ignore. A blank value or the removed default's FQCN is not a custom factory (the
+     * new path builds the same file-based TLS), so it is still tolerated for metadata compatibility.
      */
-    private void warnIfRemovedClusterSslFactoryPluginConfigured(String cluster, ClusterData data) {
-        if (TlsFactorySupport.isLegacyCustom(data.getBrokerClientSslFactoryPlugin())) {
-            log.warn().attr("cluster", cluster)
-                    .attr("brokerClientSslFactoryPlugin", data.getBrokerClientSslFactoryPlugin())
-                    .log("The per-cluster PIP-337 brokerClientSslFactoryPlugin is removed in Pulsar 5.0 "
-                            + "(PIP-478) and is ignored; migrate the cluster to a PulsarTlsFactory via the "
-                            + "broker-level brokerClientTlsFactoryClassName and clear the field.");
+    private void failIfRemovedCustomClusterSslFactoryPluginConfigured(String cluster, ClusterData data) {
+        String plugin = data.getBrokerClientSslFactoryPlugin();
+        if (TlsFactorySupport.isLegacyCustom(plugin)) {
+            throw new IllegalStateException("The per-cluster brokerClientSslFactoryPlugin '" + plugin
+                    + "' for cluster '" + cluster + "' names a custom PIP-337 SSL factory, which is removed in "
+                    + "Pulsar 5.0 (PIP-478). The broker will not silently fall back to file-based TLS (that would "
+                    + "downgrade the broker-client identity/trust for this cluster); migrate the cluster to a "
+                    + "PulsarTlsFactory via the broker-level brokerClientTlsFactoryClassName and clear "
+                    + "ClusterData.brokerClientSslFactoryPlugin.");
         }
     }
 
@@ -1667,7 +1672,7 @@ public class BrokerService implements Closeable {
                                    String brokerClientTrustCertsFilePath,
                                    String brokerClientKeyFilePath, String brokerClientCertificateFilePath,
                                    boolean isTlsHostnameVerificationEnabled) {
-        // PIP-478 stage 4c: the PIP-337 sslFactoryPlugin path is removed; the broker-level value is rejected
+        // PIP-478: the PIP-337 sslFactoryPlugin path is removed; the broker-level value is rejected
         // at startup and the per-cluster ClusterData value is ignored with a WARN (see getReplicationClient).
         clientBuilder
                 .serviceUrl(serviceUrl)
@@ -1696,7 +1701,7 @@ public class BrokerService implements Closeable {
                                         String brokerClientTrustCertsFilePath,
                                         String brokerClientKeyFilePath, String brokerClientCertificateFilePath,
                                         boolean isTlsHostnameVerificationEnabled) {
-        // PIP-478 stage 4c: the PIP-337 sslFactoryPlugin path is removed (see configTlsSettings).
+        // PIP-478: the PIP-337 sslFactoryPlugin path is removed (see configTlsSettings).
         if (brokerClientTlsEnabledWithKeyStore) {
             adminBuilder.useKeyStoreTls(true)
                     .tlsTrustStoreType(brokerClientTlsTrustStoreType)
@@ -1723,7 +1728,7 @@ public class BrokerService implements Closeable {
             try {
                 ClusterData data = clusterDataOp
                         .orElseThrow(() -> new MetadataStoreException.NotFoundException(cluster));
-                warnIfRemovedClusterSslFactoryPluginConfigured(cluster, data);
+                failIfRemovedCustomClusterSslFactoryPluginConfigured(cluster, data);
                 PulsarAdminBuilder builder = PulsarAdmin.builder();
 
                 ServiceConfiguration conf = pulsar.getConfig();
@@ -1782,7 +1787,7 @@ public class BrokerService implements Closeable {
                 // zk-operation timeout
                 builder.readTimeout(conf.getMetadataStoreOperationTimeoutSeconds(), TimeUnit.SECONDS);
 
-                // PIP-478 stage 4b: route this per-cluster admin client onto the new TLS SPI when opted in.
+                // PIP-478: route this per-cluster admin client onto the new TLS SPI when opted in.
                 pulsar.applyBrokerClientTlsFactoryToAdmin(builder);
 
                 PulsarAdmin adminClient = builder.build();
