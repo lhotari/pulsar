@@ -57,9 +57,17 @@ public interface PulsarClientBuilder {
     PulsarClientBuilder serviceUrl(String serviceUrl);
 
     /**
-     * Set the authentication provider.
+     * Set the authentication provider from an instance supplied programmatically.
      *
-     * @param authentication the authentication provider to use for connecting to the broker
+     * <p><b>Programmatic-path contract.</b> The instance is presumed already configured — the framework
+     * does NOT call {@link Authentication#configure(java.util.Map)} on it (that step runs only for the
+     * reflective {@link #authentication(String, String)} path). The built client <em>adopts</em> the
+     * instance: it drives {@code initializeAsync(...)} before first use and {@link Authentication#close()}
+     * when the client is closed, so callers must not close the instance themselves or share one instance
+     * across clients with differing lifetimes.
+     *
+     * @param authentication the authentication provider to use for connecting to the broker; must already
+     *                       be configured
      * @return this builder instance for chaining
      */
     PulsarClientBuilder authentication(Authentication authentication);

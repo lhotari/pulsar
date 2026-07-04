@@ -85,6 +85,12 @@ import java.util.function.Consumer;
  * {@code createInstance} reports all failures — including argument validation and build errors — by
  * completing the returned future exceptionally; it never throws on the calling thread.
  *
+ * <p><b>Thread-safety and lifecycle ordering.</b> {@link #initialize} is called <em>exactly once</em> and
+ * completes before any {@code createInstance} call. After initialization, {@code createInstance} may be
+ * invoked <em>concurrently</em> — for the same and for different purposes — as many connections resolve
+ * TLS in parallel; implementations must be thread-safe. {@link #close} is called at most once and after
+ * the owning component has stopped issuing {@code createInstance} calls.
+ *
  * <p><b>Reload callbacks</b> (subscribing overload) are serial per subscription, never concurrent,
  * never invoked on a consumer event loop, and the first delivery <em>happens-before</em> the returned
  * future completes. A failed rebuild on rotation keeps serving the last-good instance (logged at WARN,

@@ -30,6 +30,11 @@ import java.util.Optional;
  *
  * <p>Header names are canonicalised on construction (RFC 7230 §3.2 treats them case-insensitively);
  * {@link #get(String)} is case-insensitive; {@link #asMap()} returns a stable canonical-cased view.
+ *
+ * <p><b>Single value per name.</b> This collapses to one value per canonical name: when the source map
+ * passed to {@link #of(Map)} holds two entries that canonicalise to the same name (case-variants such as
+ * {@code Authorization} and {@code authorization}), the one visited last in the source map's iteration
+ * order wins. Multi-valued headers are not represented.
  */
 public final class HttpAuthHeaders {
 
@@ -62,7 +67,9 @@ public final class HttpAuthHeaders {
     }
 
     /**
-     * Create headers from a map.
+     * Create headers from a map. Names are canonicalised; two source entries that canonicalise to the
+     * same name (case-variants) collapse to one, and the entry visited last in {@code headers}' iteration
+     * order wins.
      *
      * @param headers the source headers (names canonicalised)
      * @return a new {@link HttpAuthHeaders}
