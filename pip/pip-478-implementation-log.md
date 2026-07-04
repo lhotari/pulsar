@@ -1264,7 +1264,11 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
       `PulsarClientBuilderV5Test` generic-fold gates green. `unwrapV4` de-staled to the pure inverse of
       `wrap`. **Test** `CredentialOffloadThroughV5BuilderTest` (2): a blocking v4 credential plugin stays
       wrapped and its `getAuthData` runs on the blocking executor, not the caller; a TLS-only plugin runs
-      raw.
+      raw. **Follow-up** (self-review, commit `c4b85da2418`): a bridged v4 plugin presenting BOTH mTLS
+      material AND a fetched credential, used *without* `tlsPolicy(...)`, must run raw so the legacy TLS
+      path still presents its client certificate (the wrapping adapter's synthesized v4 provider carries
+      only the binary credential, not TLS material) — it forgoes off-load with a WARN, restored by
+      configuring `tlsPolicy(...)`. Regression test added; the two generic-fold gates stay green.
 
     - **Commit D — `[fix][client] freeze-forever auth/TLS API items (A-M2, A-L5, A-M4)`.** **A-M2:**
       `TlsPurpose.equals`/`hashCode` now cover `(role, name)` only — the fallback is resolution metadata,
