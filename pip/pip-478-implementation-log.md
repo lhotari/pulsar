@@ -393,6 +393,56 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
    `:pulsar-client-api-v5:build :pulsar-client-v5:build :pulsar-common-api:build
    :pulsar-client-original:compileJava` green; 14 v5 auth tests pass.
 
+24. **Stage 3d complete** (stage3d-builder, Opus): the framework HTTP SASL auth driver —
+   the last stage-3 piece. New in `pulsar-client-original` `.impl.auth.v5`:
+   `HttpAuthenticationDriver` (the single shared 401→resubmit→200 state machine; bounded
+   ≤10 rounds via `MAX_CHALLENGE_ROUNDS`, the original request's timeout budget spans the
+   whole exchange, plugin failure fails the request with no driver retry), the thin
+   `HttpChallengeTransport` adapter SPI (bodiless GET to the original URI + status/headers),
+   `HttpAuthCallContextImpl` (exchange-scoped state slot), and the `AsyncHttpAuthenticationProvider`
+   bridge marker (the HTTP mirror of the binary `AsyncAuthenticationDriver`; callers `instanceof`
+   the bridge, then discover handling via `capability(HttpAuthChallengeHandler.class)`, never
+   instanceof-on-capability). `SaslAuthenticationV5` gained `HttpAuthChallengeHandler` +
+   `HttpAuthHeadersProvider`, porting `AuthenticationSasl.newRequestHeader`/`getHeaders`
+   (Init/ING/Done/ServerCheckToken, SASL-Token/State/SASL-Server-ID, role-token capture) with the
+   PulsarSaslClient conversation + role token held in the call-context slot (exchange-scoped, per
+   the PIP — NOT cached across requests; each request re-runs the negotiation, so the client-side
+   ServerCheckToken/role-token-expired branches are ported-but-unreached).
+   - **Driver dispatch is a side-channel warmup**: the driver runs the GET-loop to obtain the role
+     token, then `getHttpHeadersAsync` produces the real request's headers (role token + Done) — the
+     faithful shape of what v4 `authenticationStage` + `newRequestHeader` do today.
+   - **Admin-adapter shape chosen**: pre-computed exchange (like today) but **driver-owned**, over the
+     built-in SASL plugin's **own JAX-RS client** as the default transport (exposed via the bridge) —
+     exactly what `authenticationStage` uses. Rejected: (a) plumbing the admin's shared AsyncHttpClient
+     into ~40 `BaseResource` subclasses (too invasive; admin also does NOT bind `ClientAuthenticationServices`,
+     so no framework HTTP client is available there); (b) a Jersey `ClientRequestFilter` (moves the loop
+     into the real-request path, risking body replay for admin PUT/POST — the SASL GET-to-original-URI
+     side-channel sidesteps replay). The lookup path uses its **shared AsyncHttpClient** as the transport
+     (reuses the client's event-loop/DNS).
+   - **Callers wired via the capability**: `HttpClient.executeGet` (lookup, AHC transport),
+     `BaseResource.requestAsync` + `ComponentResource.getAuthHeaders` (admin, plugin JAX-RS transport;
+     shared `computeAuthHeaders` helper). `ComponentResource`'s blocking `.get()` runs on the admin/app
+     thread (never the event loop) and the SASL warmup completes on the plugin's JAX-RS pool → no deadlock.
+     The v4 `authenticationStage`/`newRequestHeader` hooks stay **verbatim** as the fallback for third-party
+     v4 plugins and single-pass built-ins (Token/Basic/OAuth2 continue on the v4 path unchanged).
+   - **Tests**: `HttpAuthenticationDriverTest` (8: multi-round→200, single-round, max-rounds abort,
+     timeout-budget abort, plugin-failure-no-retry, non-200/401 fail, default-transport, missing-capability),
+     `SaslAuthenticationV5HttpTest` (2: real body + real driver + fake server transport — 2-round + 1-round,
+     asserting role-token replay, one-conversation-per-exchange state-slot persistence, Init/ING sequencing).
+     Added `testImplementation(project(":pulsar-client-original"))` to auth-sasl for the latter.
+   - **Gates green**: `SaslAuthenticateTest` 4/4 (proves HTTP-lookup SASL via `HttpClient` **and** admin
+     HTTP SASL via Jersey `BaseResource` **and** binary connect, all e2e over MiniKdc; `isTcpLookup=false`);
+     `ProxySaslAuthenticationTest` 1/1 (binary-via-SASL-proxy + admin HTTP SASL setup); `HttpClientTest`,
+     `HttpLookupServiceTest`, `SameAuthParamsLookupAutoClusterFailoverTest` 4 (non-SASL lookup regression);
+     3a/3b/3c spot gates `ClientCnxAsyncAuthTest` 7/7, `CredentialOffloadTest` 3/3, `TokenOauth2…Test` 2/2;
+     `:pulsar-client-original:build` FULL + `:pulsar-client-admin-original:build` + `:pulsar-client-v5:build`
+     + `:pulsar-client-auth-sasl:build` all green; spotless + checkstyle clean.
+   - **Stage-4 handoff**: the built-in SASL plugin's private JAX-RS client is still the admin-warmup
+     transport (and the v4 `authenticationStage`/`newRequestHeader` HTTP hooks remain) — both to be removed
+     in stage 4 once the admin path binds framework services / a framework `PulsarHttpClient` (or the driver's
+     warmup for admin is moved onto a shared client). The exchange-scoped role token means no cross-request
+     role-token cache (extra KDC round-trips vs v4); revisit only if a perf gate needs it.
+
 ## Watch items (implementation risks flagged during design)
 
 - `DefaultBrokerTlsFactory` is specced "configured from ServiceConfiguration" but lives in

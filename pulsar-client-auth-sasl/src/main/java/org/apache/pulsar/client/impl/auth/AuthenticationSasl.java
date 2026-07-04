@@ -38,10 +38,14 @@ import static org.apache.pulsar.common.sasl.SaslConstants.SASL_STATE_SERVER_CHEC
 import static org.apache.pulsar.common.sasl.SaslConstants.SASL_TYPE_VALUE;
 import java.io.IOException;
 import java.net.HttpURLConnection;
+import java.net.URI;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import javax.security.auth.login.LoginException;
@@ -60,10 +64,14 @@ import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
+import org.apache.pulsar.client.api.v5.auth.HttpAuthHeaders;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
 import org.apache.pulsar.client.impl.auth.PulsarSaslClient.ClientCallbackHandler;
+import org.apache.pulsar.client.impl.auth.v5.AsyncHttpAuthenticationProvider;
+import org.apache.pulsar.client.impl.auth.v5.HttpAuthenticationDriver;
+import org.apache.pulsar.client.impl.auth.v5.HttpChallengeTransport;
 import org.apache.pulsar.client.impl.auth.v5.SaslAuthenticationV5;
 import org.apache.pulsar.client.impl.auth.v5.V5BinaryAuthenticationDriver;
 import org.apache.pulsar.common.api.AuthData;
@@ -79,7 +87,7 @@ import org.apache.pulsar.common.sasl.JAASCredentialsContainer;
 @CustomLog
 public class AuthenticationSasl
         implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver,
-        ClientAuthenticationServicesAware {
+        AsyncHttpAuthenticationProvider, ClientAuthenticationServicesAware {
     private static final long serialVersionUID = 1L;
     // this is a static object that shares amongst client.
     private static JAASCredentialsContainer jaasCredentialsContainer;
@@ -90,6 +98,10 @@ public class AuthenticationSasl
     private String serverType = null;
     // PIP-478 stage 3b: the client's framework services, late-bound before start(); null until then.
     private transient volatile ClientAuthenticationServices authServices;
+    // PIP-478 stage 3d: the framework HTTP auth driver for the SASL-over-HTTP flow, created lazily on the
+    // first HTTP request after start(). Its default transport is this plugin's own JAX-RS client (the
+    // faithful admin-path transport; the lookup path supplies its shared AsyncHttpClient instead).
+    private transient volatile HttpAuthenticationDriver httpAuthenticationDriver;
 
     public AuthenticationSasl() {
     }
@@ -124,6 +136,73 @@ public class AuthenticationSasl
         // multi-round handshake; the SASL-over-HTTP loop stays on this shim (stage 3d).
         return new V5BinaryAuthenticationDriver(new SaslAuthenticationV5(new ShimSaslProviderFactory(this)),
                 authServices).newAuthenticationExchange(brokerHostName);
+    }
+
+    @Override
+    public Optional<HttpAuthenticationDriver> httpAuthenticationDriver() {
+        // PIP-478 stage 3d: expose the v5-native SASL-over-HTTP body to the framework HTTP auth driver so the
+        // HTTP callers route the 401->resubmit->200 exchange through the shared state machine instead of the
+        // deprecated authenticationStage(...) hook (which stays for third-party v4 plugins). The default
+        // transport is this plugin's own JAX-RS client — exactly what authenticationStage(...) uses today.
+        HttpAuthenticationDriver driver = httpAuthenticationDriver;
+        if (driver == null) {
+            synchronized (this) {
+                driver = httpAuthenticationDriver;
+                if (driver == null) {
+                    driver = new HttpAuthenticationDriver(
+                            new SaslAuthenticationV5(new ShimSaslProviderFactory(this)),
+                            authServices, new JaxRsChallengeTransport());
+                    httpAuthenticationDriver = driver;
+                }
+            }
+        }
+        return Optional.of(driver);
+    }
+
+    /**
+     * A {@link HttpChallengeTransport} backed by this plugin's own JAX-RS {@link Client} (created in
+     * {@link #start()}) — the faithful transport for the admin-path SASL warmup, matching what
+     * {@code authenticationStage(...)} does today. Each round is a bodiless {@code GET} to the original URI.
+     * The per-request {@code timeout} is not applied to the JAX-RS request (the driver's overall
+     * timeout-budget guard bounds the exchange between rounds); the client's own connect/read timeouts apply.
+     */
+    private final class JaxRsChallengeTransport implements HttpChallengeTransport {
+        @Override
+        public CompletableFuture<Result> get(URI uri, HttpAuthHeaders requestHeaders, Duration timeout) {
+            CompletableFuture<Result> future = new CompletableFuture<>();
+            try {
+                Client c = client;
+                if (c == null) {
+                    throw new IllegalStateException("SASL authentication HTTP client is not started");
+                }
+                Builder builder = c.target(uri).request(MediaType.APPLICATION_JSON);
+                requestHeaders.asMap().forEach(builder::header);
+                builder.async().get(new InvocationCallback<Response>() {
+                    @Override
+                    public void completed(Response response) {
+                        future.complete(new Result(response.getStatus(), toHeaders(response)));
+                    }
+
+                    @Override
+                    public void failed(Throwable throwable) {
+                        future.completeExceptionally(throwable);
+                    }
+                });
+            } catch (Throwable t) {
+                future.completeExceptionally(t);
+            }
+            return future;
+        }
+
+        private HttpAuthHeaders toHeaders(Response response) {
+            Map<String, String> headers = new LinkedHashMap<>();
+            response.getStringHeaders().forEach((name, values) -> {
+                if (values != null && !values.isEmpty() && values.get(0) != null) {
+                    headers.put(name, values.get(0));
+                }
+            });
+            return HttpAuthHeaders.of(headers);
+        }
     }
 
     private static final class ShimSaslProviderFactory implements SaslAuthenticationV5.SaslProviderFactory {
@@ -205,6 +284,8 @@ public class AuthenticationSasl
             client.close();
             client = null;
         }
+        // Drop the cached HTTP driver; its default transport captured the now-closed JAX-RS client.
+        httpAuthenticationDriver = null;
         if (jaasCredentialsContainer != null) {
             jaasCredentialsContainer.close();
             jaasCredentialsContainer = null;

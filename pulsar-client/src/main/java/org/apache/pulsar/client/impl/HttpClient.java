@@ -33,10 +33,14 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URL;
+import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -48,6 +52,10 @@ import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.PulsarClientException.NotFoundException;
 import org.apache.pulsar.client.api.Socks5ProxyScope;
+import org.apache.pulsar.client.api.v5.auth.HttpAuthHeaders;
+import org.apache.pulsar.client.impl.auth.v5.AsyncHttpAuthenticationProvider;
+import org.apache.pulsar.client.impl.auth.v5.HttpAuthenticationDriver;
+import org.apache.pulsar.client.impl.auth.v5.HttpChallengeTransport;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.util.ExecutorProvider;
 import org.apache.pulsar.client.util.PulsarHttpAsyncSslEngineFactory;
@@ -252,25 +260,14 @@ public class HttpClient implements Closeable {
                                 int redirectsRemaining, CompletableFuture<T> future, Class<T> clazz) {
         try {
             URI currentUri = URI.create(requestUrl);
-            String remoteHostName = currentUri.getHost();
-            AuthenticationDataProvider authData = authentication.getAuthData(remoteHostName);
 
-            CompletableFuture<Map<String, String>> authFuture = new CompletableFuture<>();
-
-            // bring a authenticationStage for sasl auth.
-            if (authData.hasDataForHttp()) {
-                authentication.authenticationStage(requestUrl, authData, null, authFuture);
-            } else {
-                authFuture.complete(null);
-            }
-
-            authFuture.whenComplete((respHeaders, ex) -> {
+            computeAuthHeaders(currentUri).whenComplete((authHeaders, ex) -> {
                 if (ex != null) {
                     serviceNameResolver.markHostAvailability(originalHost, false);
                     log.warn().attr("requestUrl", requestUrl)
                             .exceptionMessage(ex)
                             .log("Failed to perform http request at authentication stage");
-                    future.completeExceptionally(new PulsarClientException(ex));
+                    future.completeExceptionally(toPulsarClientException(ex));
                     return;
                 }
 
@@ -279,20 +276,8 @@ public class HttpClient implements Closeable {
                         .setNameResolver(nameResolver)
                         .setHeader("Accept", "application/json");
 
-                if (authData.hasDataForHttp()) {
-                    Set<Entry<String, String>> headers;
-                    try {
-                        headers = authentication.newRequestHeader(requestUrl, authData, respHeaders);
-                    } catch (Exception e) {
-                        log.warn().attr("requestUrl", requestUrl)
-                                .exceptionMessage(e)
-                                .log("Error during HTTP get headers");
-                        future.completeExceptionally(new PulsarClientException(e));
-                        return;
-                    }
-                    if (headers != null) {
-                        headers.forEach(entry -> builder.addHeader(entry.getKey(), entry.getValue()));
-                    }
+                if (authHeaders != null) {
+                    authHeaders.forEach((name, value) -> builder.addHeader(name, value));
                 }
 
                 // Add X-Original-Principal header if originalPrincipal is configured (for proxy scenarios)
@@ -371,6 +356,95 @@ public class HttpClient implements Closeable {
             } else {
                 future.completeExceptionally(new PulsarClientException(e));
             }
+        }
+    }
+
+    /**
+     * Compute the authentication headers to attach to the outgoing lookup {@code GET}, or a future of
+     * {@code null} when the plugin contributes none (PIP-478 stage 3d).
+     *
+     * <p>When the plugin exposes the v5-native SASL-over-HTTP capability (via the
+     * {@link AsyncHttpAuthenticationProvider} bridge), the framework {@link HttpAuthenticationDriver} runs
+     * the bounded {@code 401}→resubmit→{@code 200} exchange over this client's shared AsyncHttpClient
+     * (a bodiless {@code GET} to the original URI each round) and yields the validated role-token headers.
+     * Otherwise the deprecated v4 {@code authenticationStage(...)} / {@code newRequestHeader(...)} hooks
+     * run verbatim, preserving behaviour for third-party plugins and single-pass built-ins.
+     */
+    private CompletableFuture<Map<String, String>> computeAuthHeaders(URI uri) {
+        try {
+            if (authentication instanceof AsyncHttpAuthenticationProvider provider) {
+                Optional<HttpAuthenticationDriver> driver = provider.httpAuthenticationDriver()
+                        .filter(HttpAuthenticationDriver::supportsHttpChallenge);
+                if (driver.isPresent()) {
+                    long lookupTimeoutMs = clientConf.getLookupTimeoutMs();
+                    Duration budget = Duration.ofMillis(lookupTimeoutMs > 0 ? lookupTimeoutMs : 60_000L);
+                    return driver.get().authenticateAsync(uri, new AhcChallengeTransport(), budget)
+                            .thenApply(headers -> (headers == null || headers.isEmpty()) ? null : headers.asMap());
+                }
+            }
+            AuthenticationDataProvider authData = authentication.getAuthData(uri.getHost());
+            if (!authData.hasDataForHttp()) {
+                return CompletableFuture.completedFuture(null);
+            }
+            // v4 SASL-style multi-round hook: authenticationStage warms the role token, then newRequestHeader
+            // composes the real request's headers. Non-SASL single-pass plugins complete the stage with null
+            // and newRequestHeader returns their static HTTP headers.
+            CompletableFuture<Map<String, String>> stage = new CompletableFuture<>();
+            authentication.authenticationStage(uri.toString(), authData, null, stage);
+            return stage.thenApply(respHeaders -> {
+                try {
+                    Set<Entry<String, String>> headers =
+                            authentication.newRequestHeader(uri.toString(), authData, respHeaders);
+                    if (headers == null) {
+                        return null;
+                    }
+                    Map<String, String> map = new LinkedHashMap<>();
+                    headers.forEach(entry -> map.put(entry.getKey(), entry.getValue()));
+                    return map;
+                } catch (Exception e) {
+                    throw new CompletionException(e);
+                }
+            });
+        } catch (Throwable t) {
+            return CompletableFuture.failedFuture(t);
+        }
+    }
+
+    private static PulsarClientException toPulsarClientException(Throwable ex) {
+        Throwable cause = (ex instanceof CompletionException && ex.getCause() != null) ? ex.getCause() : ex;
+        return cause instanceof PulsarClientException pce ? pce : new PulsarClientException(cause);
+    }
+
+    /**
+     * A {@link HttpChallengeTransport} backed by this client's shared AsyncHttpClient (PIP-478 stage 3d):
+     * the SASL warmup rounds re-use the same event-loop / DNS resolver as the real lookup request. Each
+     * round is a bodiless {@code GET} to the original URI.
+     */
+    private final class AhcChallengeTransport implements HttpChallengeTransport {
+        @Override
+        public CompletableFuture<Result> get(URI uri, HttpAuthHeaders requestHeaders, Duration timeout) {
+            CompletableFuture<Result> resultFuture = new CompletableFuture<>();
+            try {
+                BoundRequestBuilder builder = httpClient.prepareGet(uri.toString())
+                        .setNameResolver(nameResolver)
+                        .setHeader("Accept", "application/json");
+                requestHeaders.asMap().forEach((name, value) -> builder.addHeader(name, value));
+                if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
+                    builder.setRequestTimeout((int) Math.min(Integer.MAX_VALUE, timeout.toMillis()));
+                }
+                builder.execute().toCompletableFuture().whenComplete((response, t) -> {
+                    if (t != null) {
+                        resultFuture.completeExceptionally(t);
+                        return;
+                    }
+                    Map<String, String> headers = new LinkedHashMap<>();
+                    response.getHeaders().forEach(entry -> headers.put(entry.getKey(), entry.getValue()));
+                    resultFuture.complete(new Result(response.getStatusCode(), HttpAuthHeaders.of(headers)));
+                });
+            } catch (Throwable t) {
+                resultFuture.completeExceptionally(t);
+            }
+            return resultFuture;
         }
     }
 
