@@ -305,8 +305,11 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
         confBuilder.setSslEngineFactory(new SslEngineFactory() {
             @Override
             public SSLEngine newSslEngine(AsyncHttpClientConfig ahcConfig, String peerHost, int peerPort) {
-                // Client mode, SNI and baked-in hostname verification all come from the Netty context.
-                return tlsFactorySslContext.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort);
+                // Client mode, SNI and baked-in hostname verification all come from the Netty context. Pin the
+                // context across newEngine so a concurrent rotation cannot free the native OpenSSL context
+                // mid-build (F1 use-after-free guard).
+                return TlsContextAcquisition.withPinnedContext(() -> tlsFactorySslContext,
+                        ctx -> ctx.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort));
             }
         });
     }

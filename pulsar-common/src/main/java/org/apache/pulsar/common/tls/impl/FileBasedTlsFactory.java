@@ -463,11 +463,19 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         }
     }
 
-    /** A live server-side subscription: its instance class, callback, and last-delivered instance. */
+    /** A live server-side subscription: its instance class, callback, and last-delivered instances. */
     private static final class Subscription<T> {
         private final Class<T> instanceClass;
         private final Consumer<T> callback;
         private T current;
+        // Deferred release (PIP-478 F1 use-after-free): the instance superseded by the most recent delivery
+        // is kept alive one extra generation rather than released immediately. Consumers hold a bare volatile
+        // borrow of the delivered instance and later call newHandler/newEngine on it off a different thread;
+        // releasing the superseded Netty/OpenSSL context to refcount 0 on the poll thread the instant the new
+        // one is published would free the native SSL_CTX out from under such an in-flight borrow. Retaining it
+        // for one further rotation gives every reader a full poll interval to finish. Pairs with per-use
+        // pinning at the consumers (see TlsContextAcquisition.withPinnedContext) for the descheduling case.
+        private T previous;
 
         Subscription(Class<T> instanceClass, Consumer<T> callback) {
             this.instanceClass = instanceClass;
@@ -476,7 +484,10 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
 
         void deliver(T instance) {
             retain(instance);
-            release(current);
+            // Release the instance delivered two rotations ago (N-1) on this (N+1th) delivery, not the one
+            // just superseded, so the just-superseded instance survives one more generation for readers.
+            release(previous);
+            previous = current;
             current = instance;
             safeInvoke(instance);
         }
@@ -493,6 +504,8 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         void releaseCurrent() {
             release(current);
             current = null;
+            release(previous);
+            previous = null;
         }
 
         private void safeInvoke(T instance) {

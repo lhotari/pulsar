@@ -108,7 +108,10 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
         ch.pipeline().addLast("consolidation", new FlushConsolidationHandler(1024,
                 true));
         if (this.enableTls) {
-            ch.pipeline().addLast(TLS_HANDLER, this.tlsServerContext.newHandler(ch.alloc()));
+            // PIP-478: pin the current (possibly rotated) factory-owned SslContext across newHandler so a
+            // concurrent rotation cannot free the native OpenSSL context mid-build (F1 use-after-free guard).
+            ch.pipeline().addLast(TLS_HANDLER, TlsContextAcquisition.withPinnedContext(
+                    () -> this.tlsServerContext, ctx -> ctx.newHandler(ch.alloc())));
         }
         if (brokerProxyReadTimeoutMs > 0) {
             ch.pipeline().addLast("readTimeoutHandler",

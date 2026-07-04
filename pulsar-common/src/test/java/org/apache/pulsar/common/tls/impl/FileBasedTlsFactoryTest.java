@@ -24,8 +24,12 @@ import static org.apache.pulsar.common.tls.impl.TlsTestSupport.resource;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.netty.buffer.ByteBufAllocator;
+import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
+import io.netty.util.ReferenceCountUtil;
+import io.netty.util.ReferenceCounted;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -40,6 +44,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLException;
@@ -50,6 +55,7 @@ import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.awaitility.Awaitility;
+import org.testng.SkipException;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.DataProvider;
@@ -334,6 +340,96 @@ public class FileBasedTlsFactoryTest {
         overwriteServerCerts(PROXY_CERT, PROXY_KEY);
         Awaitility.await().atMost(Duration.ofSeconds(15)).until(() -> deliveries.get() == 2);
         factory.close();
+    }
+
+    // ---- PIP-478 F1: OpenSSL rotation use-after-free guard (deferred release + per-use pinning). ----
+    // These exercise the OpenSSL engine specifically: on the JDK engine SslContext ref-counting is a no-op, so
+    // CI's default JDK provider can never surface the use-after-free the review flagged. On OpenSSL the native
+    // SSL_CTX is freed when a context's refcount reaches zero.
+
+    @Test
+    public void openSslRotationKeepsSupersededContextUsableWhileBorrowed() throws Exception {
+        assumeOpenSslAvailable();
+        TlsPolicy policy = copyServerCertsToTemp(BROKER_CERT, BROKER_KEY);
+        FileBasedTlsFactory factory = factory(Map.of(TlsPurpose.BROKER, policy),
+                FileBasedTlsFactorySettings.builder().engineProvider(SslProvider.OPENSSL)
+                        .refreshIntervalSeconds(1).build());
+
+        List<SslContext> deliveries = new CopyOnWriteArrayList<>();
+        factory.createInstance(TlsPurpose.BROKER, SslContext.class, deliveries::add).join();
+        assertThat(deliveries).hasSize(1);
+        SslContext borrowed = deliveries.get(0);
+        assertThat(borrowed).as("OpenSSL contexts are reference-counted").isInstanceOf(ReferenceCounted.class);
+
+        // A consumer read the borrow off its volatile and is about to build a handler/engine from it; interleave
+        // a rotation that supersedes it on the poll thread.
+        overwriteServerCerts(PROXY_CERT, PROXY_KEY);
+        Awaitility.await().atMost(Duration.ofSeconds(15)).until(() -> deliveries.size() == 2);
+
+        // Deferred release (F1): the just-superseded borrow was NOT released to refcount 0 on the poll thread,
+        // so the in-flight consumer can still build an engine from it. Pre-fix, its native SSL_CTX was freed the
+        // instant the new context was published, and this newEngine would use freed memory.
+        assertThat(((ReferenceCounted) borrowed).refCnt()).as("superseded borrow kept alive").isPositive();
+        SSLEngine engine = borrowed.newEngine(ByteBufAllocator.DEFAULT);
+        assertThat(engine).isNotNull();
+        ReferenceCountUtil.release(engine);
+        factory.close();
+    }
+
+    @Test
+    public void openSslRotationReleasesSupersededContextOneGenerationLater() throws Exception {
+        assumeOpenSslAvailable();
+        TlsPolicy policy = copyServerCertsToTemp(BROKER_CERT, BROKER_KEY);
+        FileBasedTlsFactory factory = factory(Map.of(TlsPurpose.BROKER, policy),
+                FileBasedTlsFactorySettings.builder().engineProvider(SslProvider.OPENSSL)
+                        .refreshIntervalSeconds(1).build());
+
+        List<SslContext> deliveries = new CopyOnWriteArrayList<>();
+        factory.createInstance(TlsPurpose.BROKER, SslContext.class, deliveries::add).join();
+        SslContext gen0 = deliveries.get(0);
+
+        // One rotation: gen0 is superseded but kept alive one extra generation.
+        overwriteServerCerts(PROXY_CERT, PROXY_KEY);
+        Awaitility.await().atMost(Duration.ofSeconds(15)).until(() -> deliveries.size() == 2);
+        assertThat(((ReferenceCounted) gen0).refCnt()).as("survives one generation").isPositive();
+
+        // A second rotation makes gen0 the N-1 instance, released on this (N+1th) delivery — the deferral is
+        // bounded, so nothing leaks.
+        overwriteServerCerts(BROKER_CERT, BROKER_KEY);
+        Awaitility.await().atMost(Duration.ofSeconds(15)).until(() -> deliveries.size() == 3);
+        Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(((ReferenceCounted) gen0).refCnt()).as("released one generation later").isZero());
+        factory.close();
+    }
+
+    @Test
+    public void withPinnedContextReReadsWhenBorrowWasFreed() throws Exception {
+        assumeOpenSslAvailable();
+        // Two independent OpenSSL contexts: the first is freed, standing in for a borrow that a rotation
+        // released between the volatile read and the pin; the second is the live current context.
+        SslContext dead = SslContextBuilder.forClient().sslProvider(SslProvider.OPENSSL).build();
+        SslContext live = SslContextBuilder.forClient().sslProvider(SslProvider.OPENSSL).build();
+        ReferenceCountUtil.release(dead);
+        assertThat(((ReferenceCounted) dead).refCnt()).as("freed borrow").isZero();
+
+        AtomicInteger reads = new AtomicInteger();
+        Supplier<SslContext> source = () -> reads.getAndIncrement() == 0 ? dead : live;
+        int liveBefore = ((ReferenceCounted) live).refCnt();
+
+        // retain() on the freed borrow throws IllegalReferenceCountException; the helper must re-read the source
+        // and pin the live context instead.
+        SslContext used = TlsContextAcquisition.withPinnedContext(source, ctx -> ctx);
+
+        assertThat(used).as("re-read past the freed borrow").isSameAs(live);
+        assertThat(reads.get()).as("read at least twice").isGreaterThanOrEqualTo(2);
+        assertThat(((ReferenceCounted) live).refCnt()).as("pin is balanced (nets to zero)").isEqualTo(liveBefore);
+        ReferenceCountUtil.release(live);
+    }
+
+    private static void assumeOpenSslAvailable() {
+        if (!OpenSsl.isAvailable()) {
+            throw new SkipException("Native OpenSSL (netty-tcnative) not available in this environment");
+        }
     }
 
     @Test

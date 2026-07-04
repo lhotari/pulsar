@@ -171,9 +171,12 @@ public class HttpClient implements Closeable {
             @Override
             public javax.net.ssl.SSLEngine newSslEngine(AsyncHttpClientConfig config, String peerHost,
                     int peerPort) {
-                // Build the engine from the current (possibly rotated) factory-owned context. Client mode,
-                // SNI and baked-in hostname verification all come from the Netty context.
-                return clientSslContext.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort);
+                // Build the engine from the current (possibly rotated) factory-owned context, pinning it across
+                // newEngine so a concurrent rotation cannot free the native OpenSSL context mid-build (F1
+                // use-after-free guard). Client mode, SNI and baked-in hostname verification all come from the
+                // Netty context.
+                return TlsContextAcquisition.withPinnedContext(() -> clientSslContext,
+                        ctx -> ctx.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort));
             }
         });
     }

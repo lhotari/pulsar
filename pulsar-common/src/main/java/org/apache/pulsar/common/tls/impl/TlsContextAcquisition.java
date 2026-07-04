@@ -19,9 +19,12 @@
 package org.apache.pulsar.common.tls.impl;
 
 import io.netty.handler.ssl.SslContext;
+import io.netty.util.IllegalReferenceCountException;
+import io.netty.util.ReferenceCountUtil;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
@@ -71,6 +74,57 @@ import org.apache.pulsar.common.tls.TlsPurpose;
 public final class TlsContextAcquisition {
 
     private TlsContextAcquisition() {
+    }
+
+    /**
+     * Build something from a rotating factory-owned Netty {@link SslContext} borrow while <em>pinning</em> the
+     * context across the build (PIP-478 F1 use-after-free guard). A subscribing consumer holds the latest
+     * context in a volatile that the reload callback updates on rotation; it then reads that volatile and calls
+     * {@code newHandler}/{@code newEngine} on it — potentially on a different thread and after the poll thread
+     * has moved on. On the OpenSSL engine a rotated context whose refcount reaches zero has its native
+     * {@code SSL_CTX} freed, so an unpinned build races a free.
+     *
+     * <p>This reads the current borrow from {@code source}, retains it for the duration of {@code build}, and
+     * releases it afterward — a <em>balanced</em> pin that nets to zero and never disturbs the factory's own
+     * ownership (consumers still treat the context as an immutable borrow per the SPI contract). If the borrow
+     * was already superseded and freed between the read and the pin (an {@link IllegalReferenceCountException}
+     * from {@code retain()}), the current borrow is re-read and the build retried: the factory publishes the
+     * new context to the volatile before the old one can be released two generations later (see
+     * {@code FileBasedTlsFactory.Subscription} deferred release), so the re-read always yields a live context.
+     * On the JDK engine {@code retain}/{@code release} are no-ops and this reduces to a plain build.
+     *
+     * @param source a supplier of the current (possibly rotated) factory-owned context borrow
+     * @param build  the build to run against the pinned context (e.g. {@code ctx -> ctx.newHandler(alloc)})
+     * @return the build result
+     * @throws IllegalStateException if no context is available (e.g. the factory was closed)
+     */
+    public static <R> R withPinnedContext(Supplier<SslContext> source, Function<SslContext, R> build) {
+        // Bounded retry: in steady state the first read yields a live context; the loop only re-reads if a
+        // rotation freed the just-read borrow between the read and the pin. The bound prevents an unbounded
+        // spin in the narrow shutdown race where the factory closed and the volatile still points at a freed
+        // context — there the last attempt's IllegalReferenceCountException propagates and the connection fails
+        // cleanly, which is correct during shutdown.
+        IllegalReferenceCountException lastFreed = null;
+        for (int attempt = 0; attempt < 8; attempt++) {
+            SslContext context = source.get();
+            if (context == null) {
+                throw new IllegalStateException("No TLS context available (factory not initialized or closed)");
+            }
+            try {
+                ReferenceCountUtil.retain(context);
+            } catch (IllegalReferenceCountException superseded) {
+                // The borrow was released to refcount 0 (rotated out) between the read and the pin; re-read.
+                lastFreed = superseded;
+                continue;
+            }
+            try {
+                return build.apply(context);
+            } finally {
+                ReferenceCountUtil.release(context);
+            }
+        }
+        throw lastFreed != null ? lastFreed
+                : new IllegalReferenceCountException("TLS context repeatedly unavailable while pinning");
     }
 
     /**
