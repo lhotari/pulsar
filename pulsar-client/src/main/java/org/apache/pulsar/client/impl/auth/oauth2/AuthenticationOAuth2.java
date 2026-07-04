@@ -271,6 +271,13 @@ public class AuthenticationOAuth2
     @Override
     public void bindClientAuthenticationServices(ClientAuthenticationServices services) {
         this.authServices = services;
+        // PIP-478 stage 3c: thread the framework HTTP client factory into the flow (built during configure(),
+        // before services existed) so its lazily-built client — resolved on initialize()/start() — is the
+        // framework-managed one sharing the client's event loop / timer / DNS resolver.
+        Flow currentFlow = this.flow;
+        if (services != null && currentFlow instanceof FlowBase flowBase) {
+            flowBase.bindHttpClientFactory(services.httpClientFactory());
+        }
     }
 
     @Override

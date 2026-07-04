@@ -52,7 +52,7 @@ import org.asynchttpclient.Response;
  * completes the returned future exceptionally with an {@link IOException} rather than silently truncating.
  */
 @CustomLog
-final class FrameworkHttpClient implements PulsarHttpClient {
+public final class FrameworkHttpClient implements PulsarHttpClient {
 
     private final AsyncHttpClient asyncHttpClient;
     private final PulsarHttpClientConfig config;
@@ -64,7 +64,7 @@ final class FrameworkHttpClient implements PulsarHttpClient {
     private final Runnable onClose;
     private final AtomicBoolean closed = new AtomicBoolean();
 
-    FrameworkHttpClient(AsyncHttpClient asyncHttpClient, PulsarHttpClientConfig config,
+    public FrameworkHttpClient(AsyncHttpClient asyncHttpClient, PulsarHttpClientConfig config,
             NameResolver<InetAddress> nameResolver, TlsHandle<?> tlsSubscription, Runnable onClose) {
         this.asyncHttpClient = asyncHttpClient;
         this.config = config;
