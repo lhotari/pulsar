@@ -19,25 +19,39 @@
 package org.apache.pulsar.jetty.tls;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.google.common.io.Resources;
 import io.opentelemetry.api.OpenTelemetry;
 import java.io.File;
+import java.io.IOException;
 import java.math.BigInteger;
+import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
+import java.security.KeyStore;
+import java.security.Principal;
+import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509ExtendedKeyManager;
 import org.apache.commons.io.FileUtils;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsPolicy;
@@ -48,6 +62,7 @@ import org.apache.pulsar.common.util.SecurityUtility;
 import org.awaitility.Awaitility;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
+import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -59,6 +74,14 @@ public class JettyTlsFactoryTest {
     private static final String BROKER_KEY = resource("certificate-authority/server-keys/broker.key-pk8.pem");
     private static final String PROXY_CERT = resource("certificate-authority/server-keys/proxy.cert.pem");
     private static final String PROXY_KEY = resource("certificate-authority/server-keys/proxy.key-pk8.pem");
+    // Client certificates (clientAuth EKU) trusted by the shared CA above.
+    private static final String TRUSTED_CLIENT_CERT = resource("certificate-authority/client-keys/admin.cert.pem");
+    private static final String TRUSTED_CLIENT_KEY = resource("certificate-authority/client-keys/admin.key-pk8.pem");
+    private static final String USER1_CLIENT_CERT = resource("certificate-authority/client-keys/user1.cert.pem");
+    private static final String USER1_CLIENT_KEY = resource("certificate-authority/client-keys/user1.key-pk8.pem");
+    // A self-signed client certificate NOT signed by the shared CA (from a separate my-ca root).
+    private static final String UNTRUSTED_CLIENT_CERT = resource("ssl/my-ca/client-ca.pem");
+    private static final String UNTRUSTED_CLIENT_KEY = resource("ssl/my-ca/client-key.pem");
 
     private ScheduledExecutorService scheduler;
     private Path tempDir;
@@ -89,7 +112,7 @@ public class JettyTlsFactoryTest {
         factory.initialize(initContext()).join();
 
         JettyTlsFactory.ReloadableServerTls reloadable = JettyTlsFactory.createReloadingServerFactory(
-                factory, TlsPurpose.WEB, null, false, null, null);
+                factory, TlsPurpose.WEB, null, false, false, null, null);
 
         Server server = new Server();
         ServerConnector connector = new ServerConnector(server, reloadable.sslContextFactory());
@@ -121,6 +144,235 @@ public class JettyTlsFactoryTest {
             reloadable.subscription().dispose();
             server.stop();
             factory.close();
+        }
+    }
+
+    /**
+     * PIP-478 (F3): a self-reloading {@link SslContextFactory.Client} presents rotated client-certificate
+     * material to new connections while the factory stays alive (mirrors the stage-2a server rotation test).
+     */
+    @Test
+    public void reloadingClientFactoryPresentsRotatedClientCertOnNewConnections() throws Exception {
+        // Distinct filenames from the server rotation test's cert.pem/key.pem; these hold a client-auth
+        // certificate (the broker/proxy server certs carry a serverAuth-only EKU and cannot be presented as
+        // a client identity).
+        Path clientCert = tempDir.resolve("clientcert.pem");
+        Path clientKey = tempDir.resolve("clientkey.pem");
+        Files.copy(Paths.get(TRUSTED_CLIENT_CERT), clientCert, StandardCopyOption.REPLACE_EXISTING);
+        Files.copy(Paths.get(TRUSTED_CLIENT_KEY), clientKey, StandardCopyOption.REPLACE_EXISTING);
+
+        FileBasedTlsFactory factory = new FileBasedTlsFactory(
+                Map.of(TlsPurpose.BROKER_CLIENT, TlsPolicy.pem(tempDir.resolve("ca.pem").toString(),
+                        clientCert.toString(), clientKey.toString())),
+                FileBasedTlsFactorySettings.builder().refreshIntervalSeconds(1).build());
+        factory.initialize(initContext()).join();
+
+        JettyTlsFactory.ReloadableClientTls reloadable = JettyTlsFactory.createReloadingClientFactory(
+                factory, TlsPurpose.BROKER_CLIENT, null);
+        SslContextFactory.Client clientFactory = reloadable.sslContextFactory();
+        clientFactory.start();
+        try {
+            assertThat(presentedClientCertSerial(clientFactory)).isEqualTo(certSerial(TRUSTED_CLIENT_CERT));
+
+            // Rotate the client identity to a different client certificate signed by the same CA.
+            Files.copy(Paths.get(USER1_CLIENT_CERT), clientCert, StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(Paths.get(USER1_CLIENT_KEY), clientKey, StandardCopyOption.REPLACE_EXISTING);
+            long later = System.currentTimeMillis() + 5000;
+            Files.setLastModifiedTime(clientCert, FileTime.fromMillis(later));
+            Files.setLastModifiedTime(clientKey, FileTime.fromMillis(later));
+
+            BigInteger rotatedSerial = certSerial(USER1_CLIENT_CERT);
+            Awaitility.await().atMost(Duration.ofSeconds(15))
+                    .until(() -> presentedClientCertSerial(clientFactory).equals(rotatedSerial));
+            assertThat(presentedClientCertSerial(clientFactory))
+                    .as("new connections present the rotated client certificate")
+                    .isEqualTo(rotatedSerial).isNotEqualTo(certSerial(TRUSTED_CLIENT_CERT));
+        } finally {
+            clientFactory.stop();
+            reloadable.subscription().dispose();
+            factory.close();
+        }
+    }
+
+    // Handshake the reloading client factory's current context against a client-auth-requiring server and
+    // return the serial of the client certificate the server observed.
+    private BigInteger presentedClientCertSerial(SslContextFactory.Client clientFactory) throws Exception {
+        SSLContext serverContext = SecurityUtility.createSslContext(false, CA, BROKER_CERT, BROKER_KEY, null);
+        try (SSLServerSocket serverSocket =
+                     (SSLServerSocket) serverContext.getServerSocketFactory().createServerSocket(0)) {
+            serverSocket.setNeedClientAuth(true);
+            // TLSv1.2 so client auth completes symmetrically within the handshake (avoids the TLS 1.3
+            // post-handshake close race where the server closes before the client flushes its Finished).
+            serverSocket.setEnabledProtocols(new String[] {"TLSv1.2"});
+            serverSocket.setSoTimeout(15000);
+            int port = serverSocket.getLocalPort();
+            CompletableFuture<BigInteger> serverSaw = new CompletableFuture<>();
+            Thread serverThread = new Thread(() -> {
+                try (SSLSocket accepted = (SSLSocket) serverSocket.accept()) {
+                    accepted.setSoTimeout(15000);
+                    accepted.startHandshake();
+                    X509Certificate peer = (X509Certificate) accepted.getSession().getPeerCertificates()[0];
+                    serverSaw.complete(peer.getSerialNumber());
+                } catch (Throwable t) {
+                    serverSaw.completeExceptionally(t);
+                }
+            });
+            serverThread.setDaemon(true);
+            serverThread.start();
+
+            SSLContext clientContext = clientFactory.getSslContext();
+            try (SSLSocket clientSocket =
+                         (SSLSocket) clientContext.getSocketFactory().createSocket("localhost", port)) {
+                clientSocket.setEnabledProtocols(new String[] {"TLSv1.2"});
+                clientSocket.setSoTimeout(15000);
+                clientSocket.startHandshake();
+            }
+            return serverSaw.get(15, TimeUnit.SECONDS);
+        }
+    }
+
+    /**
+     * PIP-478 (F2): under optional client auth ({@code requireTrustedClientCert=false}), an <em>untrusted</em>
+     * client certificate is rejected at the web listener's handshake when {@code allowInsecureConnection=false}
+     * and accepted when it is true; a trusted client certificate is accepted in both cases.
+     */
+    @Test
+    public void optionalClientAuthScopesTrustAllToInsecureFlag() throws Exception {
+        // Secure (insecure=false): untrusted client cert is rejected, trusted client cert is accepted. The
+        // server aborts the handshake, surfaced to the client either as an SSLHandshakeException or, once the
+        // server has already sent its close/alert, as a broken-pipe SocketException — both are handshake
+        // failures.
+        try (JettyServer secure = startWebServer(false)) {
+            assertThatThrownBy(() -> handshakeWithClientCert(secure.port, UNTRUSTED_CLIENT_CERT, UNTRUSTED_CLIENT_KEY))
+                    .as("an untrusted client cert must be rejected when insecure=false")
+                    .isInstanceOf(IOException.class);
+            handshakeWithClientCert(secure.port, TRUSTED_CLIENT_CERT, TRUSTED_CLIENT_KEY);
+        }
+        // Insecure (insecure=true): both untrusted and trusted client certs are accepted (trust-all).
+        try (JettyServer insecure = startWebServer(true)) {
+            handshakeWithClientCert(insecure.port, UNTRUSTED_CLIENT_CERT, UNTRUSTED_CLIENT_KEY);
+            handshakeWithClientCert(insecure.port, TRUSTED_CLIENT_CERT, TRUSTED_CLIENT_KEY);
+        }
+    }
+
+    /** A running Jetty HTTPS server (WEB purpose, optional client auth) and its resources. */
+    private final class JettyServer implements AutoCloseable {
+        private final Server server;
+        private final FileBasedTlsFactory factory;
+        private final JettyTlsFactory.ReloadableServerTls reloadable;
+        private final int port;
+
+        JettyServer(boolean allowInsecureConnection) throws Exception {
+            // The trust gate lives in the WEB SSLContext's trust managers (built from the policy's insecure
+            // flag), which the framework hands to Jetty via setSslContext — Jetty's own setTrustAll is inert
+            // on that path. So the policy's allowInsecureConnection is what actually scopes client-cert trust.
+            factory = new FileBasedTlsFactory(
+                    Map.of(TlsPurpose.WEB, TlsPolicy.builder()
+                            .format(TlsPolicy.Format.PEM)
+                            .trustCertsFilePath(CA).certificateFilePath(BROKER_CERT).keyFilePath(BROKER_KEY)
+                            .allowInsecureConnection(allowInsecureConnection)
+                            .enableHostnameVerification(false)
+                            .build()),
+                    FileBasedTlsFactorySettings.builder().build());
+            factory.initialize(initContext()).join();
+            // Optional client auth (requireTrustedClientCert=false); TLSv1.2 so an untrusted-cert rejection
+            // surfaces synchronously in the client handshake rather than as a post-handshake alert.
+            reloadable = JettyTlsFactory.createReloadingServerFactory(factory, TlsPurpose.WEB, null,
+                    false, allowInsecureConnection, null, Set.of("TLSv1.2"));
+            server = new Server();
+            ServerConnector connector = new ServerConnector(server, reloadable.sslContextFactory());
+            connector.setPort(0);
+            server.setConnectors(new ServerConnector[] {connector});
+            server.start();
+            port = connector.getLocalPort();
+        }
+
+        @Override
+        public void close() throws Exception {
+            reloadable.subscription().dispose();
+            server.stop();
+            factory.close();
+        }
+    }
+
+    private JettyServer startWebServer(boolean allowInsecureConnection) throws Exception {
+        return new JettyServer(allowInsecureConnection);
+    }
+
+    // Connect presenting a client certificate over TLSv1.2 and complete the handshake (throws on rejection).
+    // The key manager is forced to always present the given certificate regardless of the server's advertised
+    // acceptable-CA list, so an untrusted certificate is actually sent (and therefore rejected) rather than
+    // silently withheld by the default JSSE key manager.
+    private void handshakeWithClientCert(int port, String clientCert, String clientKey) throws Exception {
+        SSLContext clientContext = forcingClientContext(clientCert, clientKey);
+        SSLSocketFactory socketFactory = clientContext.getSocketFactory();
+        try (SSLSocket socket = (SSLSocket) socketFactory.createSocket("localhost", port)) {
+            socket.setEnabledProtocols(new String[] {"TLSv1.2"});
+            socket.setSoTimeout(10000);
+            socket.startHandshake();
+        }
+    }
+
+    private static SSLContext forcingClientContext(String clientCert, String clientKey) throws Exception {
+        X509Certificate[] chain = SecurityUtility.loadCertificatesFromPemFile(clientCert);
+        PrivateKey key = SecurityUtility.loadPrivateKeyFromPemFile(clientKey);
+        KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        trustStore.load(null, null);
+        X509Certificate[] ca = SecurityUtility.loadCertificatesFromPemFile(CA);
+        for (int i = 0; i < ca.length; i++) {
+            trustStore.setCertificateEntry("ca-" + i, ca[i]);
+        }
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance("PKIX");
+        tmf.init(trustStore);
+        SSLContext context = SSLContext.getInstance("TLS");
+        context.init(new KeyManager[] {new ForcingKeyManager(chain, key)}, tmf.getTrustManagers(), null);
+        return context;
+    }
+
+    /** A key manager that always presents a fixed certificate chain, ignoring the server's CA hints. */
+    private static final class ForcingKeyManager extends X509ExtendedKeyManager {
+        private static final String ALIAS = "client";
+        private final X509Certificate[] chain;
+        private final PrivateKey key;
+
+        ForcingKeyManager(X509Certificate[] chain, PrivateKey key) {
+            this.chain = chain;
+            this.key = key;
+        }
+
+        @Override
+        public String[] getClientAliases(String keyType, Principal[] issuers) {
+            return new String[] {ALIAS};
+        }
+
+        @Override
+        public String chooseClientAlias(String[] keyType, Principal[] issuers, Socket socket) {
+            return ALIAS;
+        }
+
+        @Override
+        public String chooseEngineClientAlias(String[] keyType, Principal[] issuers, SSLEngine engine) {
+            return ALIAS;
+        }
+
+        @Override
+        public String[] getServerAliases(String keyType, Principal[] issuers) {
+            return null;
+        }
+
+        @Override
+        public String chooseServerAlias(String keyType, Principal[] issuers, Socket socket) {
+            return null;
+        }
+
+        @Override
+        public X509Certificate[] getCertificateChain(String alias) {
+            return chain;
+        }
+
+        @Override
+        public PrivateKey getPrivateKey(String alias) {
+            return key;
         }
     }
 

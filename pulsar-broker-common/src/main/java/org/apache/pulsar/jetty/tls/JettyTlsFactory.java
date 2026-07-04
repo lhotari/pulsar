@@ -65,6 +65,17 @@ public final class JettyTlsFactory {
     }
 
     /**
+     * A synthesized, self-reloading Jetty client factory together with the subscription that drives it;
+     * dispose the {@link #subscription()} when the owning HTTP client / servlet is destroyed.
+     *
+     * @param sslContextFactory the (unstarted) Jetty client factory
+     * @param subscription      the reload subscription backing the factory
+     */
+    public record ReloadableClientTls(SslContextFactory.Client sslContextFactory,
+                                      TlsHandle<SSLContext> subscription) {
+    }
+
+    /**
      * Build a self-reloading {@link SslContextFactory.Server} for a purpose, handed back <em>unstarted</em>
      * (Jetty starts it with the connector lifecycle) with its initial {@code SSLContext} already set.
      *
@@ -72,6 +83,7 @@ public final class JettyTlsFactory {
      * @param purpose                  the server purpose (e.g. {@link TlsPurpose#WEB})
      * @param sslProviderString        the JCE provider name, or {@code null}/empty for the default
      * @param requireTrustedClientCert whether to require (vs. request) a trusted client certificate
+     * @param allowInsecureConnection  whether an untrusted client cert is accepted under optional client auth
      * @param ciphers                  enabled cipher suites, or {@code null} for defaults
      * @param protocols                enabled protocols, or {@code null} for defaults
      * @return the reloading factory and its subscription handle
@@ -79,9 +91,11 @@ public final class JettyTlsFactory {
     public static ReloadableServerTls createReloadingServerFactory(PulsarTlsFactory factory, TlsPurpose purpose,
                                                                    String sslProviderString,
                                                                    boolean requireTrustedClientCert,
+                                                                   boolean allowInsecureConnection,
                                                                    Set<String> ciphers, Set<String> protocols) {
         SslContextFactory.Server sslContextFactory = new SslContextFactory.Server();
-        applyServerConfig(sslContextFactory, sslProviderString, requireTrustedClientCert, ciphers, protocols);
+        applyServerConfig(sslContextFactory, sslProviderString, requireTrustedClientCert, allowInsecureConnection,
+                ciphers, protocols);
 
         Consumer<SSLContext> onLoadOrReload = newContext -> {
             if (sslContextFactory.isStarted()) {
@@ -105,32 +119,50 @@ public final class JettyTlsFactory {
     }
 
     /**
-     * Build a plain {@link SslContextFactory.Client} from a one-shot {@code SSLContext} for the purpose
-     * (used later by the proxy's {@code AdminProxyHandler}). Client-side, this is a one-shot snapshot —
-     * no subscription.
+     * Build a self-reloading {@link SslContextFactory.Client} for a purpose (used by the proxy's
+     * {@code AdminProxyHandler}, whose Jetty {@code HttpClient} outlives broker-client material rotation),
+     * handed back <em>unstarted</em> with its initial {@code SSLContext} already set. This mirrors
+     * {@link #createReloadingServerFactory}: an {@code SSLContext} subscription drives
+     * {@link SslContextFactory#setSslContext(SSLContext)} before start, and on each later delivery
+     * {@link SslContextFactory#reload(Consumer)} atomically swaps the context so new connections use the
+     * rotated material. Dispose the returned {@link ReloadableClientTls#subscription()} when the owning
+     * client is destroyed.
      *
-     * @param factory           the TLS factory
+     * @param factory           the TLS factory to subscribe to
      * @param purpose           the client purpose (e.g. {@link TlsPurpose#BROKER_CLIENT})
      * @param sslProviderString the JCE provider name, or {@code null}/empty for the default
-     * @return the configured client factory
+     * @return the reloading client factory and its subscription handle
      */
-    public static SslContextFactory.Client createClientFactory(PulsarTlsFactory factory, TlsPurpose purpose,
-                                                               String sslProviderString) {
-        TlsHandle<SSLContext> handle = factory.createInstance(purpose, SSLContext.class).join()
-                .orElseThrow(() -> new IllegalStateException(
-                        "TLS factory supplied no SSLContext for purpose " + purpose));
+    public static ReloadableClientTls createReloadingClientFactory(PulsarTlsFactory factory, TlsPurpose purpose,
+                                                                   String sslProviderString) {
         SslContextFactory.Client client = new SslContextFactory.Client();
-        client.setSslContext(handle.get());
         if (StringUtils.isNotBlank(sslProviderString)) {
             client.setProvider(sslProviderString);
         }
-        // The Jetty factory now holds the SSLContext; release this consumer's one-shot interest.
-        handle.dispose();
-        return client;
+
+        Consumer<SSLContext> onLoadOrReload = newContext -> {
+            if (client.isStarted()) {
+                try {
+                    client.reload(f -> ((SslContextFactory.Client) f).setSslContext(newContext));
+                } catch (Exception e) {
+                    log.warn().attr("purpose", purpose).exception(e)
+                            .log("Failed to reload Jetty client SslContextFactory; keeping the running context");
+                }
+            } else {
+                // Initial load (or a reload before the client started): set directly before start.
+                client.setSslContext(newContext);
+            }
+        };
+
+        TlsHandle<SSLContext> subscription = factory.createInstance(purpose, SSLContext.class, onLoadOrReload)
+                .join()
+                .orElseThrow(() -> new IllegalStateException(
+                        "TLS factory supplied no SSLContext for purpose " + purpose));
+        return new ReloadableClientTls(client, subscription);
     }
 
     private static void applyServerConfig(SslContextFactory.Server sslContextFactory, String sslProviderString,
-                                          boolean requireTrustedClientCertOnConnect,
+                                          boolean requireTrustedClientCertOnConnect, boolean allowInsecureConnection,
                                           Set<String> ciphers, Set<String> protocols) {
         if (ciphers != null && !ciphers.isEmpty()) {
             sslContextFactory.setIncludeCipherSuites(ciphers.toArray(new String[0]));
@@ -145,8 +177,20 @@ public final class JettyTlsFactory {
             sslContextFactory.setNeedClientAuth(true);
             sslContextFactory.setTrustAll(false);
         } else {
+            // PIP-478 (F2): optional client auth requests but does not require a client cert. An untrusted
+            // client cert is accepted at the handshake only when tlsAllowInsecureConnection=true, aligning the
+            // web listener with the Netty binary listener's D3 semantics and diverging from the pre-5.0 Jetty
+            // path, which trusted any presented client cert whenever client auth was optional (see PIP-478
+            // Security Considerations).
+            //
+            // The actual enforcement is the trust managers baked into the SSLContext the framework hands to
+            // Jetty via setSslContext (built from the WEB TlsPolicy's allowInsecureConnection: CA-validating
+            // when secure, insecure-trust-all when insecure). Jetty's own setTrustAll only takes effect when
+            // Jetty builds the SSLContext itself, so it is inert on this setSslContext path; we still scope it
+            // to the insecure flag so the two never disagree (defence in depth) rather than leaving the
+            // inherited unconditional setTrustAll(true).
             sslContextFactory.setWantClientAuth(true);
-            sslContextFactory.setTrustAll(true);
+            sslContextFactory.setTrustAll(allowInsecureConnection);
         }
         // https://jetty.org/docs/jetty/12.1/operations-guide/protocols/index.html#ssl-sni
         // Set to false for backwards compatibility with Jetty 9.x

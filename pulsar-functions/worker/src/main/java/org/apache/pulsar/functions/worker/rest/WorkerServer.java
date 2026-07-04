@@ -338,7 +338,8 @@ public class WorkerServer {
         TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
         this.reloadableServerTls = JettyTlsFactory.createReloadingServerFactory(this.tlsFactory, TlsPurpose.WEB,
                 config.getTlsProvider(), config.isTlsRequireTrustedClientCertOnConnect(),
-                config.getWebServiceTlsCiphers(), config.getWebServiceTlsProtocols());
+                config.isTlsAllowInsecureConnection(), config.getWebServiceTlsCiphers(),
+                config.getWebServiceTlsProtocols());
         return this.reloadableServerTls.sslContextFactory();
     }
 
