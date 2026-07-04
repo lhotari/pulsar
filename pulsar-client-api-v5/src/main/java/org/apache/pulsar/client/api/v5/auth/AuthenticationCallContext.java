@@ -47,10 +47,12 @@ public interface AuthenticationCallContext {
      * state without collision; impls typically store one object of their own type (e.g. their SASL
      * conversation state).
      *
-     * <p>The slot's lifetime equals the authentication exchange: for the binary protocol, the lifetime
-     * of one {@code ClientCnx} setup (including all {@code CommandAuthChallenge} /
-     * {@code CommandAuthResponse} rounds). Concurrent authentications to different brokers get their own
-     * context with their own slots, so multiple in-flight handshakes don't collide.
+     * <p>The slot's lifetime equals one authentication <em>exchange</em>: for the binary protocol, one
+     * connection attempt and all of its ordinary {@code CommandAuthChallenge} / {@code CommandAuthResponse}
+     * challenge rounds. A broker {@code REFRESH_AUTH_DATA} sentinel does not continue this exchange —
+     * {@code ClientCnx} begins a <em>new</em> exchange with a fresh context and a fresh slot — so
+     * conversation state does not survive a refresh. Concurrent authentications to different brokers get
+     * their own context with their own slots, so multiple in-flight handshakes don't collide.
      *
      * @param clazz the state object's key class
      * @param <T>   the state object type
