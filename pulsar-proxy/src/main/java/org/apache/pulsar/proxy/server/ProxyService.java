@@ -69,6 +69,8 @@ import org.apache.pulsar.broker.topiclistlimit.TopicListMemoryLimiter;
 import org.apache.pulsar.broker.topiclistlimit.TopicListSizeResultCache;
 import org.apache.pulsar.broker.web.plugin.servlet.AdditionalServlets;
 import org.apache.pulsar.client.api.Authentication;
+import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
+import org.apache.pulsar.client.impl.tls.ClientTlsFactorySupport;
 import org.apache.pulsar.common.allocator.PulsarByteBufAllocator;
 import org.apache.pulsar.common.configuration.PulsarConfigurationLoader;
 import org.apache.pulsar.common.semaphore.AsyncDualMemoryLimiterImpl;
@@ -137,6 +139,12 @@ public class ProxyService implements Closeable {
     private PulsarTlsFactory brokerClientTlsFactory;
     private TlsHandle<SslContext> brokerClientTlsSubscription;
     private volatile SslContext brokerClientSslContext;
+    // PIP-478: the shared client TLS factory serving the CLIENT_DEFAULT purpose for the proxy's binary
+    // lookup ConnectionPool (ProxyConnection stashes it on each self-built ClientConfigurationData). The
+    // proxy->broker lookup transport is a normal Pulsar client, whose PulsarChannelInitializer requests
+    // CLIENT_DEFAULT — the BROKER_CLIENT-purpose brokerClientTlsFactory above cannot serve it, so this is a
+    // second factory built from the same broker-client tls* material. Closed with the ProxyService.
+    private PulsarTlsFactory lookupClientTlsFactory;
 
     static final Gauge ACTIVE_CONNECTIONS = Gauge
             .build("pulsar_proxy_active_connections", "Number of connections currently active in the proxy").create()
@@ -348,6 +356,17 @@ public class ProxyService implements Closeable {
                     .get()
                     .orElseThrow(() -> new IllegalStateException(
                             "TLS factory supplied no Netty SslContext for purpose " + TlsPurpose.BROKER_CLIENT));
+
+            // PIP-478: the proxy's binary lookup ConnectionPool uses a normal Pulsar client transport, whose
+            // PulsarChannelInitializer requests a CLIENT_DEFAULT SslContext from the factory stashed on its
+            // ClientConfigurationData. ProxyConnection builds that config per connection but does not run the
+            // PulsarClientImpl setup that resolves the client factory, so build one shared CLIENT_DEFAULT
+            // factory here (from the same broker-client tls* material, initialized off the event loop) and let
+            // ProxyConnection stash it on each config. Built from a representative config; the factory itself is
+            // still null at this point, so resolveClientTlsFactory takes the default (non-adopted) path.
+            ClientConfigurationData lookupClientConf = ProxyConnection.createClientConfiguration(this);
+            this.lookupClientTlsFactory = ClientTlsFactorySupport.resolveClientTlsFactory(
+                    lookupClientConf, statsExecutor, statsExecutor, openTelemetry.getOpenTelemetry());
         }
 
         createMetricsServlet();
@@ -479,6 +498,10 @@ public class ProxyService implements Closeable {
             this.brokerClientTlsFactory.close();
             this.brokerClientTlsFactory = null;
         }
+        if (this.lookupClientTlsFactory != null) {
+            this.lookupClientTlsFactory.close();
+            this.lookupClientTlsFactory = null;
+        }
 
         if (this.sslContextRefresher != null) {
             this.sslContextRefresher.shutdownNow();
@@ -577,6 +600,17 @@ public class ProxyService implements Closeable {
      */
     public SslContext getBrokerClientSslContext() {
         return brokerClientSslContext;
+    }
+
+    /**
+     * The shared CLIENT_DEFAULT TLS factory for the proxy's binary lookup ConnectionPool (PIP-478).
+     * {@code null} when TLS with the broker is disabled, and transiently {@code null} while it is being
+     * built at startup (the factory is resolved from a representative {@code ClientConfigurationData}).
+     *
+     * @return the lookup client TLS factory, or {@code null}
+     */
+    public PulsarTlsFactory getLookupClientTlsFactory() {
+        return lookupClientTlsFactory;
     }
 
     public AuthenticationService getAuthenticationService() {
