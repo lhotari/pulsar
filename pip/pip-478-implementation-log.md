@@ -336,7 +336,27 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
    routing + unwrap + v4 mapping; both drivers delegate (−270 lines of duplication; the
    rules now have one home). All gates green incl. the OAuth2 refresh gate unmodified and
    SaslAuthenticateTest 4/4.
-21. Launched two Opus 4.8 assessment agents (read-only):
+21. **CI #231 GREEN through the 3a fixup** (41 pass / 1 CodeQL-skip @ `619a1d12cd8`) — the
+   hardened async-auth carve-out survived the full matrix.
+22. **Stage 3c complete** (stage3c-builder, Opus, commits `4bc35123305`, `0cd5a7b6042`,
+   `45ad0a7d035`): framework AHC-backed PulsarHttpClient on shared client resources
+   (subscribing SslContext per purpose + 5-min connectionTtl; honest caveat: AHC has no
+   public idle-pool flush, so rotation is TTL/idle-timeout-bounded — in-code doc); OAuth2 off
+   its private clients (Motivation #3 closed for the framework path; TokenClient/
+   MetadataResolver now take PulsarHttpClient); BOTH TLS folds — server-side BROKER_CLIENT
+   AuthProvidedMaterialSource (auth-cert-wins, rotation-aware; wired proxy-side incl.
+   AdminProxyHandler/DirectProxyHandler; broker-side capability+test only) and the generic
+   v4 hasDataForTls() builder probe. All gates green incl. AuthedAdminProxyHandlerTest on
+   BOTH paths (original file gained only a no-op protected hook — behavior-preserving;
+   accepted over duplicating the class) and the full oauth2 suite + TokenOauth2 gate
+   unmodified. **Flip blocker fixed and proven locally.**
+   Two carried items: (a) STAGE-4 PREREQUISITE — v4 OAuth2 plugin-carried IdP TLS params
+   must fold into a CLIENT_OAUTH2/minted purpose policy before the deprecated legacy
+   private-client fallback can be removed (today plugin-carried material → legacy fallback
+   by design; v5-path CLIENT_OAUTH2 policy rides the framework client); (b) the broker's own
+   outbound BROKER_CLIENT client (replication) still needs new-SPI wiring so the broker-side
+   fold gains a real consumer.
+23. Launched two Opus 4.8 assessment agents (read-only):
    - **impl-gap-assessor** — classify the old impl branch diff against the current design:
      matches-current / implements-superseded / reusable-integration-scaffolding; deliver a
      reuse map per module.
