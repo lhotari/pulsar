@@ -543,3 +543,76 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
     the 4a handoff: (a) broker outbound **admin** clients (AsyncHttpConnector path, not the
     createClientImpl funnel) onto the new SPI; (b) OTel roots for proxy/websocket/worker TLS
     metrics; (c) brokerClientTlsFactoryConfig params delivery to custom factories.
+
+28. **Stage 4b remainder complete** (stage4b-remainder, Opus, 3 commits) — the three items
+    from entry 27's remainder list, closing the pre-4c gap. Each is its own commit; all
+    locally green. The flip is live, so default-config server suites exercise the NEW path;
+    nothing here regressed a default-path suite (verified below).
+    - **Item 1 — admin (`AsyncHttpConnector`) onto the new SPI, commit `22818309907`
+      `[feat][admin]`.** For an https admin URL, `AsyncHttpConnector` now resolves the new-SPI
+      factory via `ClientTlsFactorySupport.resolveClientTlsFactory` — adopting a factory
+      attached through the 3b `tlsFactory` seam (the broker's admin-client attach) or the
+      client-side flip selection; `null` on the legacy path, where the reflective
+      `PulsarSslFactory` block is kept **verbatim**. On the new path it subscribes once to the
+      `CLIENT_DEFAULT` `SslContext` and backs the AsyncHttpClient `SslEngineFactory` with the
+      latest (rotated) context — the exact `HttpClient`/`FrameworkHttpClientFactory` pattern
+      (hostname verification / trust / ciphers baked into the factory context, so the AHC
+      endpoint-id / insecure-trust flags are not applied). The connector owns the factory + a
+      single-thread rotation executor, closing both in `close()`. **PulsarAdminBuilder seam
+      used:** the broker reaches the admin builder's internal `ClientConfigurationData`
+      through `PulsarAdminBuilderImpl.getConf()` (a public Lombok `@Getter`) and attaches a
+      per-client factory in `PulsarService.applyBrokerClientTlsFactoryToAdmin(PulsarAdminBuilder)`,
+      called from `getCreateAdminClientBuilder` and `BrokerService.getClusterPulsarAdmin`
+      (gated on `brokerClientTlsFactoryClassName` + an https URL, mirroring 4a's
+      `maybeApplyBrokerClientTlsFactory`). `opentelemetry-api` added `compileOnly` to
+      `pulsar-client-admin` (init context carries a root; real root supplied at runtime).
+      Gate: new `BrokerAdminClientTlsFactoryTest` — the broker's own admin client rides the
+      new SPI (`getAsyncHttpConnector().getTlsFactory() != null`) and a real create/get-cluster
+      round-trip completes over the new-path handshake (HTTP 200). Regression: `AsyncHttpConnectorTest`
+      + `AsyncHttpConnectorSocks5Test`, `BrokerAdminClientTlsAuthTest` (legacy default), and
+      `ReplicatorTlsFactoryTest` unmodified green; `:pulsar-client-admin-original:build` FULL green.
+    - **Item 2 — OTel roots for proxy/worker TLS metrics, commit `f4b7075dab9`
+      `[feat][misc]`.** `PulsarProxyOpenTelemetry` / `PulsarWorkerOpenTelemetry` expose the
+      OpenTelemetry root (`getOpenTelemetry()`) — the only new surface. **OTel outcome per
+      component:** *proxy* — PROXY (`ServiceChannelInitializer`) and BROKER_CLIENT
+      (`ProxyService`) feed `proxyService.getOpenTelemetry().getOpenTelemetry()`; WEB
+      (`WebServer`) gains an overloaded 3-arg constructor fed by `ProxyServiceStarter` (2-arg
+      callers keep noop); the admin proxy (`AdminProxyHandler`) gains a 4-arg constructor fed
+      by the same starter (3-arg kept for tests) — **all four proxy TLS factories now emit**.
+      *functions-worker* — `WorkerServer` feeds the `PulsarWorkerService` root into the WEB
+      init context (noop when unavailable) — **emits**. *websocket* — the standalone WebSocket
+      proxy has **no OpenTelemetry infrastructure** on its classpath (no `OpenTelemetryService`),
+      so the init context **stays noop, documented in `ProxyServer`** (the broker's own listeners
+      emit when WebSocket runs embedded). Gate: new `ProxyTlsFactoryMetricsTest` — the proxy's
+      default PROXY factory records `pulsar.tls.reload{purpose=proxy,result=success}` = 1 and
+      advances the last_reload_success gauge through an in-memory-reader root, and
+      `PulsarProxyOpenTelemetry.getOpenTelemetry()` is not the no-op. `:pulsar-proxy`
+      compileJava + `ProxyServiceTlsStarterTest` (default/new path) green;
+      `:pulsar-functions-worker` compileTestJava green.
+    - **Item 3 — `brokerClientTlsFactoryConfig` params delivery, commit (this one)
+      `[feat][broker]`.** A new transient `ClientConfigurationData.tlsFactoryParams` seam
+      carries a custom factory's params to `TlsFactoryInitContext.params()`:
+      `ClientTlsFactorySupport.initContext` now reads it (empty map when unset; the default
+      file-based factory ignores params). The broker parses `brokerClientTlsFactoryConfig` the
+      same way the server-side `tlsFactoryConfig` is parsed (`TlsFactorySupport.parseFactoryConfig`)
+      and sets it on the config at **both** 4a/1 attach points (`maybeApplyBrokerClientTlsFactory`
+      for the binary funnel and `applyBrokerClientTlsFactoryToAdmin` for the admin path), so the
+      admin path (item 1, which shares `resolveClientTlsFactory`) gets params for free. Gate: new
+      `ClientTlsFactoryParamsDeliveryTest` — a params-capturing fake `PulsarTlsFactory` receives
+      the delivered `{issuerUrl, region}` through the init context, and an unset config yields an
+      empty (never-null) map.
+    - **Cross-cutting gates green** (both items 1 and 3 touch shared `ClientTlsFactorySupport` /
+      `PulsarService`): `ClientCnxAsyncAuthTest`, `V5TlsProducerConsumerTest`,
+      `OAuth2IdpTlsFrameworkClientTest` + `OAuth2IdpTlsFoldTest` (the OAuth2 tests exercise the
+      changed `resolveClientTlsFactory`/`initContext`), and `BrokerAdminClientTlsFactoryTest`
+      (re-run after the item-3 `PulsarService` change) all green; spotless + checkstyle clean
+      across touched modules. No default-path regression observed — the flip stays green.
+    - **Stage-4c go/no-go: GO.** The three pre-4c prerequisites (admin on the new SPI; OTel roots
+      wired where infra exists; custom-factory params delivered) are done, so 4c can now remove
+      the PIP-337 `PulsarSslFactory` path wholesale (the legacy blocks in `AsyncHttpConnector` /
+      `HttpClient` / the server `*ChannelInitializer`s, the `sslFactoryPlugin` config family, and
+      the deprecated OAuth2 private `AsyncHttpClient` fallback) without leaving a component on a
+      dead path. Residual 4c notes: (a) the built-in SASL plugin's private JAX-RS admin-warmup
+      transport (entry 24 handoff) is orthogonal to TLS and still pending; (b) the WebSocket
+      standalone TLS metrics stay noop by design until/unless that module gains OTel infra —
+      not a 4c blocker.

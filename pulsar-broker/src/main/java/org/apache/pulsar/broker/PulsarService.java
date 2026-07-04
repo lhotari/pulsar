@@ -132,6 +132,7 @@ import org.apache.pulsar.broker.stats.prometheus.PulsarPrometheusMetricsServlet;
 import org.apache.pulsar.broker.storage.BookkeeperManagedLedgerStorageClass;
 import org.apache.pulsar.broker.storage.ManagedLedgerStorage;
 import org.apache.pulsar.broker.storage.ManagedLedgerStorageClass;
+import org.apache.pulsar.broker.tls.TlsFactorySupport;
 import org.apache.pulsar.broker.transaction.buffer.TransactionBufferProvider;
 import org.apache.pulsar.broker.transaction.buffer.impl.TransactionBufferClientImpl;
 import org.apache.pulsar.broker.transaction.coordinator.v5.TransactionCoordinatorV5;
@@ -1856,6 +1857,10 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             return;
         }
         conf.setTlsFactory(ClientTlsFactorySupport.brokerClientTlsFactory(conf, factoryClassName));
+        // PIP-478 stage 4b: deliver brokerClientTlsFactoryConfig to a custom factory via the init context
+        // params (parsed the same way as the server-side tlsFactoryConfig).
+        conf.setTlsFactoryParams(TlsFactorySupport.parseFactoryConfig(
+                getConfiguration().getBrokerClientTlsFactoryConfig()));
     }
 
     /**
@@ -1888,6 +1893,10 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             return;
         }
         conf.setTlsFactory(ClientTlsFactorySupport.brokerClientTlsFactory(conf, factoryClassName));
+        // PIP-478 stage 4b: deliver brokerClientTlsFactoryConfig to a custom factory via the init context
+        // params (parsed the same way as the server-side tlsFactoryConfig).
+        conf.setTlsFactoryParams(TlsFactorySupport.parseFactoryConfig(
+                getConfiguration().getBrokerClientTlsFactoryConfig()));
     }
 
     public synchronized PulsarClient getClient() throws PulsarServerException {

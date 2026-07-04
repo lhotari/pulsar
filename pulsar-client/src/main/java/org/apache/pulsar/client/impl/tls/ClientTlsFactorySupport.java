@@ -180,7 +180,7 @@ public final class ClientTlsFactorySupport {
             }
             factory = new FileBasedTlsFactory(composePolicies(conf), settings(conf));
         }
-        initializeBlocking(factory, initContext(scheduler, blockingExecutor, openTelemetry));
+        initializeBlocking(factory, initContext(conf, scheduler, blockingExecutor, openTelemetry));
         // Fail-fast probe only on the v5-builder path (R6 ruling).
         if (v5BuilderPath) {
             probe(factory, TlsPurpose.CLIENT_DEFAULT);
@@ -324,13 +324,17 @@ public final class ClientTlsFactorySupport {
         }
     }
 
-    private static TlsFactoryInitContext initContext(ScheduledExecutorService scheduler,
-            Executor blockingExecutor, OpenTelemetry openTelemetry) {
+    private static TlsFactoryInitContext initContext(ClientConfigurationData conf,
+            ScheduledExecutorService scheduler, Executor blockingExecutor, OpenTelemetry openTelemetry) {
         OpenTelemetry ot = openTelemetry == null ? OpenTelemetry.noop() : openTelemetry;
+        // PIP-478 stage 4b: deliver the broker-supplied factory params (from brokerClientTlsFactoryConfig) to
+        // a custom factory; empty for the default file-based factory, which ignores them.
+        Map<String, String> params = conf.getTlsFactoryParams() == null
+                ? Map.of() : Map.copyOf(conf.getTlsFactoryParams());
         return new TlsFactoryInitContext() {
             @Override
             public Map<String, String> params() {
-                return Map.of();
+                return params;
             }
 
             @Override

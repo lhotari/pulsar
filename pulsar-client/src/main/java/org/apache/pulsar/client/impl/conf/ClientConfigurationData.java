@@ -229,6 +229,12 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     private transient Map<TlsPurpose, TlsPolicy> tlsPolicyMap;
     @JsonIgnore
     private transient PulsarTlsFactory tlsFactory;
+    // PIP-478 stage 4b: factory-specific parameters delivered to a custom (non-default) TLS factory named by
+    // brokerClientTlsFactoryClassName via TlsFactoryInitContext.params(). Set by the broker (parsed from
+    // brokerClientTlsFactoryConfig the same way the server-side tlsFactoryConfig is parsed); empty/unset for
+    // the default file-based factory, which ignores params.
+    @JsonIgnore
+    private transient Map<String, String> tlsFactoryParams;
 
     @ApiModelProperty(
             name = "concurrentLookupRequest",
