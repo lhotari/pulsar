@@ -389,8 +389,6 @@ public abstract class LegacyV4AuthenticationAdapter implements Authentication {
      */
     static final class LegacyV4TlsAdapter extends TlsAuthentication {
 
-        private static final Logger LOG = LoggerFactory.getLogger(LegacyV4TlsAdapter.class);
-
         private final org.apache.pulsar.client.api.Authentication v4;
 
         LegacyV4TlsAdapter(org.apache.pulsar.client.api.Authentication v4) {
@@ -401,28 +399,6 @@ public abstract class LegacyV4AuthenticationAdapter implements Authentication {
         @Override
         public void configure(Map<String, String> authParams) {
             v4.configure(authParams);
-        }
-
-        /**
-         * Extract the v4 {@link AuthenticationDataProvider} that carries the TLS certificate and
-         * private-key material, so the client builder can fold it into the client's TLS configuration
-         * (the {@code FileBasedTlsFactory} purpose&rarr;policy map) when wiring the transport.
-         *
-         * <p>TODO PIP-478 stage 3: the returned material must be merged into the client's TLS
-         * configuration before the default {@code FileBasedTlsFactory} is constructed. This hook only
-         * exposes the material; the actual registration is wired in the client-side migration stage and
-         * is not required for this module to compile.
-         *
-         * @return the v4 TLS data provider, or {@code null} if it cannot be obtained
-         */
-        @SuppressWarnings("deprecation")
-        org.apache.pulsar.client.api.AuthenticationDataProvider extractTlsMaterial() {
-            try {
-                return v4.getAuthData();
-            } catch (org.apache.pulsar.client.api.PulsarClientException e) {
-                LOG.debug("Could not extract TLS material from v4 plugin {}", v4.getClass().getName(), e);
-                return null;
-            }
         }
     }
 }

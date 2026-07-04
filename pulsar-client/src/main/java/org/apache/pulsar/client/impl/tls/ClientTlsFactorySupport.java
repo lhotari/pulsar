@@ -45,6 +45,8 @@ import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.tls.impl.FileBasedTlsFactory;
 import org.apache.pulsar.common.tls.impl.FileBasedTlsFactorySettings;
+import org.apache.pulsar.common.tls.impl.TlsContextAcquisition;
+import org.apache.pulsar.common.tls.impl.TlsSynthesisSpec;
 
 /**
  * Client-side counterpart of the server's {@code TlsFactorySupport} (which lives in
@@ -173,7 +175,8 @@ public final class ClientTlsFactorySupport {
         initializeBlocking(factory, initContext(conf, scheduler, blockingExecutor, openTelemetry));
         // Fail-fast probe only on the v5-builder path (R6 ruling).
         if (v5BuilderPath) {
-            probe(factory, TlsPurpose.CLIENT_DEFAULT);
+            probe(factory, TlsPurpose.CLIENT_DEFAULT,
+                    TlsSynthesisSpec.client(conf.isTlsHostnameVerificationEnable()));
         }
         return factory;
     }
@@ -321,14 +324,18 @@ public final class ClientTlsFactorySupport {
 
     /**
      * Fail-fast probe: build one instance of the purpose and dispose it, surfacing a configuration error
-     * (e.g. a missing cert file) as an actionable {@link IllegalArgumentException}.
+     * (e.g. a missing cert file) as an actionable {@link IllegalArgumentException}. Acquisition goes through
+     * {@link TlsContextAcquisition}, so a custom factory that supplies only the JDK {@code SSLContext}
+     * fallback probes successfully via the framework-synthesized Netty context.
      *
-     * @param factory the initialized factory
-     * @param purpose the purpose to probe
+     * @param factory   the initialized factory
+     * @param purpose   the purpose to probe
+     * @param synthesis the settings baked into a synthesized Netty context on the fallback path
      */
-    public static void probe(PulsarTlsFactory factory, TlsPurpose purpose) {
+    public static void probe(PulsarTlsFactory factory, TlsPurpose purpose, TlsSynthesisSpec synthesis) {
         try {
-            Optional<TlsHandle<SslContext>> handle = factory.createInstance(purpose, SslContext.class).get();
+            Optional<TlsHandle<SslContext>> handle =
+                    TlsContextAcquisition.acquireNettyContext(factory, purpose, synthesis).get();
             if (handle.isEmpty()) {
                 throw new IllegalStateException("Client TLS factory " + factory.getClass().getName()
                         + " supplied no Netty SslContext for purpose " + purpose);

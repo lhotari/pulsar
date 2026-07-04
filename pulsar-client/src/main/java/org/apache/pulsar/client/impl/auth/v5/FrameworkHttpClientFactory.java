@@ -40,6 +40,8 @@ import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
+import org.apache.pulsar.common.tls.impl.TlsContextAcquisition;
+import org.apache.pulsar.common.tls.impl.TlsSynthesisSpec;
 import org.asynchttpclient.AsyncHttpClient;
 import org.asynchttpclient.AsyncHttpClientConfig;
 import org.asynchttpclient.DefaultAsyncHttpClient;
@@ -187,8 +189,8 @@ public final class FrameworkHttpClientFactory implements PulsarHttpClientFactory
             // New PIP-478 path: subscribe to the purpose's Netty SslContext and build each engine from the
             // most recently delivered (possibly rotated) context.
             VolatileContext holder = new VolatileContext();
-            TlsHandle<SslContext> subscription = factory
-                    .createInstance(config.tlsPurpose(), SslContext.class, ctx -> holder.context = ctx)
+            TlsHandle<SslContext> subscription = TlsContextAcquisition.acquireNettyContext(factory,
+                    config.tlsPurpose(), clientSynthesisSpec(config), ctx -> holder.context = ctx)
                     .join()
                     .orElseThrow(() -> new IllegalStateException(
                             "Client TLS factory supplied no Netty SslContext for purpose " + config.tlsPurpose()));
@@ -210,6 +212,18 @@ public final class FrameworkHttpClientFactory implements PulsarHttpClientFactory
             builder.setDisableHttpsEndpointIdentificationAlgorithm(!conf.isTlsHostnameVerificationEnable());
         }
         return null;
+    }
+
+    /**
+     * The synthesis spec used when a custom factory supplies only the JDK {@code SSLContext} for the
+     * instance's purpose. Cluster traffic ({@link TlsPurpose#CLIENT_DEFAULT}) carries the client's
+     * {@code tlsHostnameVerificationEnable} flag, mirroring the legacy path; other trust domains (the OAuth2
+     * IdP) verify hostnames — the AsyncHttpClient default and the v5 {@code TlsPolicy} secure default.
+     */
+    private TlsSynthesisSpec clientSynthesisSpec(PulsarHttpClientConfig config) {
+        boolean enableHostnameVerification = !TlsPurpose.CLIENT_DEFAULT.equals(config.tlsPurpose())
+                || conf.isTlsHostnameVerificationEnable();
+        return TlsSynthesisSpec.client(enableHostnameVerification);
     }
 
     private void configureSocks5(DefaultAsyncHttpClientConfig.Builder builder) {

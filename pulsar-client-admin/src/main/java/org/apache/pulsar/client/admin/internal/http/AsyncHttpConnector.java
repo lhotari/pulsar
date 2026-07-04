@@ -77,6 +77,8 @@ import org.apache.pulsar.client.util.ExecutorProvider;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
+import org.apache.pulsar.common.tls.impl.TlsContextAcquisition;
+import org.apache.pulsar.common.tls.impl.TlsSynthesisSpec;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.netty.DnsResolverUtil;
 import org.apache.pulsar.common.util.netty.EventLoopUtil;
@@ -201,7 +203,7 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
         configureAsyncHttpClientConfig(conf, connectTimeoutMs,
                 readTimeoutMs, requestTimeoutMs, confBuilder, sharedResources);
         if (conf.getServiceUrl().startsWith("https://")) {
-            configureAsyncHttpClientWithTlsFactory(confBuilder, resolveNewTlsFactory(conf));
+            configureAsyncHttpClientWithTlsFactory(confBuilder, resolveNewTlsFactory(conf), conf);
         }
         AsyncHttpClientConfig asyncHttpClientConfig = confBuilder.build();
         return asyncHttpClientConfig;
@@ -286,12 +288,17 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
      * delivered (possibly rotated) context; hostname verification, insecure trust, ciphers and protocols are
      * baked into the factory-built context per the {@code TlsPolicy}, so the AsyncHttpClient
      * endpoint-identification / insecure-trust-manager flags are not applied on this path.
+     *
+     * <p>Acquisition goes through {@link TlsContextAcquisition} so a custom factory that supplies only the
+     * JDK {@code SSLContext} is served a framework-synthesized Netty context carrying the client's
+     * hostname-verification setting.
      */
     @SneakyThrows
     private void configureAsyncHttpClientWithTlsFactory(DefaultAsyncHttpClientConfig.Builder confBuilder,
-                                                        PulsarTlsFactory factory) {
-        this.tlsFactorySubscription = factory
-                .createInstance(TlsPurpose.CLIENT_DEFAULT, SslContext.class, ctx -> this.tlsFactorySslContext = ctx)
+                                                        PulsarTlsFactory factory, ClientConfigurationData conf) {
+        this.tlsFactorySubscription = TlsContextAcquisition.acquireNettyContext(factory, TlsPurpose.CLIENT_DEFAULT,
+                        TlsSynthesisSpec.client(conf.isTlsHostnameVerificationEnable()),
+                        ctx -> this.tlsFactorySslContext = ctx)
                 .get()
                 .orElseThrow(() -> new IllegalStateException(
                         "Admin TLS factory supplied no Netty SslContext for purpose " + TlsPurpose.CLIENT_DEFAULT));

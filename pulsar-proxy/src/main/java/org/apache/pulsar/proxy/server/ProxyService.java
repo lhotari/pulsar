@@ -76,6 +76,8 @@ import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
+import org.apache.pulsar.common.tls.impl.TlsContextAcquisition;
+import org.apache.pulsar.common.tls.impl.TlsSynthesisSpec;
 import org.apache.pulsar.common.util.netty.DnsResolverUtil;
 import org.apache.pulsar.common.util.netty.EventLoopUtil;
 import org.apache.pulsar.metadata.api.MetadataStoreException;
@@ -339,8 +341,9 @@ public class ProxyService implements Closeable {
                     TlsFactorySupport.parseFactoryConfig(proxyConfig.getBrokerClientTlsFactoryConfig()),
                     statsExecutor, statsExecutor, openTelemetry.getOpenTelemetry());
             TlsFactorySupport.initializeBlocking(this.brokerClientTlsFactory, initContext);
-            this.brokerClientTlsSubscription = this.brokerClientTlsFactory
-                    .createInstance(TlsPurpose.BROKER_CLIENT, SslContext.class,
+            this.brokerClientTlsSubscription = TlsContextAcquisition.acquireNettyContext(
+                            this.brokerClientTlsFactory, TlsPurpose.BROKER_CLIENT,
+                            TlsSynthesisSpec.client(proxyConfig.isTlsHostnameVerificationEnabled()),
                             ctx -> this.brokerClientSslContext = ctx)
                     .get()
                     .orElseThrow(() -> new IllegalStateException(

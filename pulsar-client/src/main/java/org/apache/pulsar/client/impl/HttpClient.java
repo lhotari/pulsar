@@ -57,6 +57,8 @@ import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
+import org.apache.pulsar.common.tls.impl.TlsContextAcquisition;
+import org.apache.pulsar.common.tls.impl.TlsSynthesisSpec;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.asynchttpclient.AsyncHttpClient;
 import org.asynchttpclient.AsyncHttpClientConfig;
@@ -151,11 +153,16 @@ public class HttpClient implements Closeable {
      * a volatile snapshot is used here. Hostname verification, insecure trust, ciphers and protocols are
      * baked into the factory-built context per the client {@code TlsPolicy}, so the AsyncHttpClient
      * endpoint-identification / insecure-trust-manager flags are not applied.
+     *
+     * <p>Acquisition goes through {@link TlsContextAcquisition} so a custom factory that supplies only the
+     * JDK {@code SSLContext} is served a framework-synthesized Netty context carrying the client's
+     * hostname-verification setting.
      */
     private void setupHttpsWithTlsFactory(PulsarTlsFactory factory,
             DefaultAsyncHttpClientConfig.Builder confBuilder) throws Exception {
-        this.tlsSubscription = factory
-                .createInstance(TlsPurpose.CLIENT_DEFAULT, SslContext.class, ctx -> this.clientSslContext = ctx)
+        this.tlsSubscription = TlsContextAcquisition.acquireNettyContext(factory, TlsPurpose.CLIENT_DEFAULT,
+                        TlsSynthesisSpec.client(clientConf.isTlsHostnameVerificationEnable()),
+                        ctx -> this.clientSslContext = ctx)
                 .get()
                 .orElseThrow(() -> new IllegalStateException(
                         "Client TLS factory supplied no Netty SslContext for purpose "

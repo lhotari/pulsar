@@ -33,6 +33,8 @@ import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
+import org.apache.pulsar.common.tls.impl.TlsContextAcquisition;
+import org.apache.pulsar.common.tls.impl.TlsSynthesisSpec;
 
 /**
  * Initialize service channel handlers.
@@ -79,8 +81,9 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
                 TlsFactorySupport.parseFactoryConfig(serviceConfig.getTlsFactoryConfig()),
                 scheduler, scheduler, proxyService.getOpenTelemetry().getOpenTelemetry());
         TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
-        this.tlsSubscription = this.tlsFactory
-                .createInstance(TlsPurpose.PROXY, SslContext.class, ctx -> this.tlsServerContext = ctx)
+        this.tlsSubscription = TlsContextAcquisition.acquireNettyContext(this.tlsFactory, TlsPurpose.PROXY,
+                        TlsSynthesisSpec.server(serviceConfig.isTlsRequireTrustedClientCertOnConnect()),
+                        ctx -> this.tlsServerContext = ctx)
                 .get()
                 .orElseThrow(() -> new IllegalStateException(
                         "TLS factory supplied no Netty SslContext for purpose " + TlsPurpose.PROXY));

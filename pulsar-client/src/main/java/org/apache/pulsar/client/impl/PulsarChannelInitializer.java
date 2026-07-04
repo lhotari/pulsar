@@ -41,6 +41,8 @@ import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsEndpoint;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
+import org.apache.pulsar.common.tls.impl.TlsContextAcquisition;
+import org.apache.pulsar.common.tls.impl.TlsSynthesisSpec;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.netty.NettyFutureUtil;
 
@@ -61,6 +63,9 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     // whenever TLS is enabled. The per-connection SslContext is built off the event loop by the factory
     // (see initTls), which owns rotation, so there is no per-host refresh task.
     private final PulsarTlsFactory clientTlsFactory;
+    // PIP-478: the hostname-verification setting baked into a framework-synthesized Netty context when a
+    // custom factory supplies only the JDK SSLContext fallback for CLIENT_DEFAULT.
+    private final TlsSynthesisSpec tlsSynthesisSpec;
 
     public PulsarChannelInitializer(ClientConfigurationData conf, Supplier<ClientCnx> clientCnxSupplier,
                                     ScheduledExecutorService scheduledExecutorService) throws Exception {
@@ -74,6 +79,7 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         this.conf = conf.clone();
         // The resolved client TLS factory (PIP-478) rides on the (shallow-cloned) conf.
         this.clientTlsFactory = tlsEnabled ? conf.getTlsFactory() : null;
+        this.tlsSynthesisSpec = TlsSynthesisSpec.client(conf.isTlsHostnameVerificationEnable());
     }
 
     @Override
@@ -129,9 +135,8 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
      * synchronous, instead uses the subscribing form (see {@code HttpClient}).
      */
     private CompletableFuture<Channel> initTlsWithFactory(Channel ch, InetSocketAddress sniHost) {
-        return clientTlsFactory
-                .createInstance(TlsPurpose.CLIENT_DEFAULT,
-                        new TlsEndpoint(sniHost.getHostName(), sniHost.getPort()), SslContext.class)
+        return TlsContextAcquisition.acquireNettyContext(clientTlsFactory, TlsPurpose.CLIENT_DEFAULT,
+                        new TlsEndpoint(sniHost.getHostName(), sniHost.getPort()), tlsSynthesisSpec)
                 .thenCompose(optHandle -> {
                     CompletableFuture<Channel> future = new CompletableFuture<>();
                     ch.eventLoop().execute(() -> {

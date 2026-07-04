@@ -135,6 +135,29 @@ public final class TlsContexts {
                 ApplicationProtocolConfig.DISABLED, clientAuth, null, false);
     }
 
+    /**
+     * Synthesize a <em>client</em> Netty {@link SslContext} from a JDK {@link SSLContext}, baking HTTPS
+     * hostname verification into the produced engines when {@code enableHostnameVerification} is set. Used
+     * by the framework when a custom factory returns {@code empty()} for the Netty class on a client purpose
+     * but supplies the JDK {@code SSLContext} fallback.
+     *
+     * <p>Hostname verification cannot be encoded in the JDK {@code SSLContext} itself — it is an engine-level
+     * {@link javax.net.ssl.SSLParameters} setting — so when enabled the JDK-backed context is wrapped so
+     * every {@code SSLEngine} it creates carries {@code endpointIdentificationAlgorithm = "HTTPS"}. This
+     * mirrors the native path, where {@link #buildNettyClientContext} bakes the algorithm into the context
+     * via {@code SslContextBuilder.endpointIdentificationAlgorithm(...)}; consumers rely on the context to
+     * carry verification and never re-apply it per connection.
+     *
+     * @param sslContext                 the JDK context to wrap
+     * @param enableHostnameVerification whether the client policy enables hostname verification
+     * @return a Netty client context backed by the JDK context, verifying hostnames when requested
+     */
+    public static SslContext synthesizeNettyClientFromJdk(SSLContext sslContext,
+                                                          boolean enableHostnameVerification) {
+        SslContext clientContext = synthesizeNettyFromJdk(sslContext, true, false);
+        return enableHostnameVerification ? new HostnameVerifyingSslContext(clientContext) : clientContext;
+    }
+
     private static void applyClientTrust(SslContextBuilder builder, TlsMaterial material, TlsPolicy policy) {
         if (policy.allowInsecureConnection()) {
             builder.trustManager(InsecureTrustManagerFactory.INSTANCE);
