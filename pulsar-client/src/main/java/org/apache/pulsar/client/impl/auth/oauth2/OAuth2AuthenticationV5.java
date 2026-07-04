@@ -23,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.function.Supplier;
 import org.apache.pulsar.client.api.v5.auth.AuthenticationCallContext;
 import org.apache.pulsar.client.api.v5.auth.AuthenticationInitContext;
@@ -30,6 +31,7 @@ import org.apache.pulsar.client.api.v5.auth.BinaryAuthData;
 import org.apache.pulsar.client.api.v5.auth.HttpAuthCallContext;
 import org.apache.pulsar.client.api.v5.auth.HttpAuthHeaders;
 import org.apache.pulsar.client.api.v5.auth.SinglePassAuthentication;
+import org.apache.pulsar.client.impl.auth.v5.V5AuthContexts;
 
 /**
  * v5-native OAuth 2.0 authentication (PIP-478). A single-pass, short-lived bearer credential served over
@@ -61,6 +63,11 @@ public class OAuth2AuthenticationV5 implements SinglePassAuthentication, Seriali
 
     private final Supplier<String> accessTokenSupplier;
 
+    // Late-bound at initializeAsync(...): the client's bounded blocking executor, onto which the
+    // (network-blocking) access-token fetch is off-loaded so it never runs on the Netty event loop
+    // (PIP-478 stage 3b). Null when used outside a client, in which case the fetch runs inline.
+    private transient volatile Executor blockingExecutor;
+
     /**
      * @param accessTokenSupplier supplies the current (cached/refreshed) access token on each call
      */
@@ -75,21 +82,24 @@ public class OAuth2AuthenticationV5 implements SinglePassAuthentication, Seriali
 
     @Override
     public CompletableFuture<Void> initializeAsync(AuthenticationInitContext ctx) {
+        this.blockingExecutor = ctx.blockingExecutor();
         return CompletableFuture.completedFuture(null);
     }
 
     @Override
     public CompletableFuture<BinaryAuthData> getAuthDataAsync(AuthenticationCallContext ctx) {
-        return CompletableFuture.completedFuture(
-                new BinaryAuthData(accessToken().getBytes(StandardCharsets.UTF_8)));
+        return V5AuthContexts.supplyBlocking(blockingExecutor,
+                () -> new BinaryAuthData(accessToken().getBytes(StandardCharsets.UTF_8)));
     }
 
     @Override
     public CompletableFuture<HttpAuthHeaders> getHttpHeadersAsync(HttpAuthCallContext ctx) {
-        Map<String, String> headers = new LinkedHashMap<>();
-        headers.put(PULSAR_AUTH_METHOD_NAME, AUTH_METHOD_NAME);
-        headers.put(HTTP_HEADER_NAME, "Bearer " + accessToken());
-        return CompletableFuture.completedFuture(HttpAuthHeaders.of(headers));
+        return V5AuthContexts.supplyBlocking(blockingExecutor, () -> {
+            Map<String, String> headers = new LinkedHashMap<>();
+            headers.put(PULSAR_AUTH_METHOD_NAME, AUTH_METHOD_NAME);
+            headers.put(HTTP_HEADER_NAME, "Bearer " + accessToken());
+            return HttpAuthHeaders.of(headers);
+        });
     }
 
     @Override

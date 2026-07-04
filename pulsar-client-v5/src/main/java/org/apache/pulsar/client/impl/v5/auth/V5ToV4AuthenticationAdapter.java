@@ -31,8 +31,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ScheduledExecutorService;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
@@ -42,7 +40,8 @@ import org.apache.pulsar.client.api.v5.auth.AuthenticationCallContext;
 import org.apache.pulsar.client.api.v5.auth.AuthenticationInitContext;
 import org.apache.pulsar.client.api.v5.auth.BinaryAuthChallengeHandler;
 import org.apache.pulsar.client.api.v5.auth.BinaryAuthDataProvider;
-import org.apache.pulsar.client.api.v5.http.PulsarHttpClientFactory;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
 import org.apache.pulsar.common.api.AuthData;
 
 /**
@@ -68,41 +67,34 @@ import org.apache.pulsar.common.api.AuthData;
 // Implements the deprecated v4 Authentication SPI by design (configure(Map)).
 @SuppressWarnings("deprecation")
 public class V5ToV4AuthenticationAdapter
-        implements org.apache.pulsar.client.api.Authentication, AsyncAuthenticationDriver {
+        implements org.apache.pulsar.client.api.Authentication, AsyncAuthenticationDriver,
+        ClientAuthenticationServicesAware {
 
     private static final long serialVersionUID = 1L;
 
     private final transient Authentication v5;
-    private final transient ScheduledExecutorService scheduler;
-    private final transient Executor blockingExecutor;
-    private final transient OpenTelemetry openTelemetry;
-    private final transient String clientInstanceId;
     private final transient Map<String, String> params;
-    private final transient Clock clock;
-    private final transient PulsarHttpClientFactory httpClientFactory;
+    // Late-bound by the client via bindClientAuthenticationServices(...) before start() (PIP-478 stage 3b);
+    // null until then (e.g. when the adapter is exercised outside a client), yielding an init context with
+    // no framework services.
+    private transient volatile ClientAuthenticationServices services;
 
     /**
-     * Create an adapter that exposes a v5 authentication plugin through the v4 interface.
+     * Create an adapter that exposes a v5 authentication plugin through the v4 interface. The framework
+     * services the plugin's init context reports are late-bound by the client through
+     * {@link #bindClientAuthenticationServices} before {@link #start()}.
      *
      * @param v5 the v5 authentication plugin to expose
-     * @param scheduler the scheduler passed to the plugin's init context (may be {@code null} in stage 1)
-     * @param blockingExecutor the blocking executor passed to the plugin's init context (may be
-     *        {@code null} in stage 1)
-     * @param httpClientFactory the HTTP client factory (may be {@code null} in stage 1)
-     * @param clientInstanceId a stable identifier for the owning client instance
      * @param params the authentication parameters
      */
-    public V5ToV4AuthenticationAdapter(Authentication v5, ScheduledExecutorService scheduler,
-            Executor blockingExecutor, PulsarHttpClientFactory httpClientFactory, String clientInstanceId,
-            Map<String, String> params) {
+    public V5ToV4AuthenticationAdapter(Authentication v5, Map<String, String> params) {
         this.v5 = v5;
-        this.scheduler = scheduler;
-        this.blockingExecutor = blockingExecutor;
-        this.httpClientFactory = httpClientFactory;
-        this.clientInstanceId = clientInstanceId;
         this.params = params == null ? Map.of() : Map.copyOf(params);
-        this.clock = Clock.systemUTC();
-        this.openTelemetry = OpenTelemetry.noop();
+    }
+
+    @Override
+    public void bindClientAuthenticationServices(ClientAuthenticationServices services) {
+        this.services = services;
     }
 
     @Override
@@ -117,8 +109,13 @@ public class V5ToV4AuthenticationAdapter
 
     @Override
     public void start() throws PulsarClientException {
-        AuthenticationInitContext initContext = new SimpleAuthInitContext(httpClientFactory, scheduler,
-                blockingExecutor, clock, openTelemetry, clientInstanceId, params);
+        ClientAuthenticationServices bound = this.services;
+        AuthenticationInitContext initContext = bound == null
+                ? new SimpleAuthInitContext(null, null, null, Clock.systemUTC(), OpenTelemetry.noop(), null, params)
+                : new SimpleAuthInitContext(bound.httpClientFactory(), bound.scheduler(), bound.blockingExecutor(),
+                        bound.clock() == null ? Clock.systemUTC() : bound.clock(),
+                        bound.openTelemetry() == null ? OpenTelemetry.noop() : bound.openTelemetry(),
+                        bound.clientInstanceId(), params);
         try {
             v5.initializeAsync(initContext).get();
         } catch (InterruptedException e) {

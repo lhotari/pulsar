@@ -28,6 +28,8 @@ import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
 import org.apache.pulsar.client.impl.auth.v5.BasicAuthenticationV5;
 import org.apache.pulsar.client.impl.auth.v5.V5BinaryAuthenticationDriver;
 
@@ -39,10 +41,13 @@ import org.apache.pulsar.client.impl.auth.v5.V5BinaryAuthenticationDriver;
  * the credential over the non-blocking binary path via the v5-native {@link BasicAuthenticationV5}.
  */
 public class AuthenticationBasic
-        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver {
+        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver,
+        ClientAuthenticationServicesAware {
     static final String AUTH_METHOD_NAME = "basic";
     private String userId;
     private String password;
+    // PIP-478 stage 3b: the client's framework services, late-bound before start(); null until then.
+    private transient volatile ClientAuthenticationServices authServices;
 
     @Override
     public void close() throws IOException {
@@ -83,9 +88,14 @@ public class AuthenticationBasic
     }
 
     @Override
+    public void bindClientAuthenticationServices(ClientAuthenticationServices services) {
+        this.authServices = services;
+    }
+
+    @Override
     public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
         // PIP-478: drive the v5-native basic body on the async binary path.
-        return new V5BinaryAuthenticationDriver(new BasicAuthenticationV5(userId, password))
+        return new V5BinaryAuthenticationDriver(new BasicAuthenticationV5(userId, password), authServices)
                 .newAuthenticationExchange(brokerHostName);
     }
 

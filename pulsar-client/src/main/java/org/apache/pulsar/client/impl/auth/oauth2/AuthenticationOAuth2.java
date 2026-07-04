@@ -40,6 +40,8 @@ import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenEndpointAuthMethod;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenResult;
@@ -75,7 +77,8 @@ import org.apache.pulsar.common.util.Backoff;
  */
 @CustomLog
 public class AuthenticationOAuth2
-        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver {
+        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver,
+        ClientAuthenticationServicesAware {
 
     public static final String CONFIG_PARAM_TYPE = "type";
     public static final String CONFIG_PARAM_TOKEN_ENDPOINT_AUTH_METHOD = "tokenEndpointAuthMethod";
@@ -110,6 +113,9 @@ public class AuthenticationOAuth2
     // Only ever updated on the single scheduler thread. Do not need to be volatile.
     private transient Backoff backoff;
     private transient ScheduledFuture<?> nextRefreshAttempt;
+
+    // PIP-478 stage 3b: the client's framework services, late-bound before start(); null until then.
+    private transient volatile ClientAuthenticationServices authServices;
 
     // No args constructor used when creating class with reflection
     public AuthenticationOAuth2() {
@@ -263,12 +269,18 @@ public class AuthenticationOAuth2
     }
 
     @Override
+    public void bindClientAuthenticationServices(ClientAuthenticationServices services) {
+        this.authServices = services;
+    }
+
+    @Override
     public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
         // PIP-478: drive the v5-native OAuth2 body on the async binary path. The heavy flow — token
         // acquisition, caching and early refresh — stays on this shim; the body reads the current access
         // token through getAuthData(), so a broker-pushed REFRESH re-fetches an expired token here exactly
-        // as the synchronous path does.
-        return new V5BinaryAuthenticationDriver(new OAuth2AuthenticationV5(this::currentAccessToken))
+        // as the synchronous path does. The bound blocking executor off-loads that (network-blocking)
+        // fetch so it never runs on the Netty event loop (stage 3b).
+        return new V5BinaryAuthenticationDriver(new OAuth2AuthenticationV5(this::currentAccessToken), authServices)
                 .newAuthenticationExchange(brokerHostName);
     }
 

@@ -79,12 +79,14 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
      * back onto the v4 client verbatim, preserving legacy behaviour — including
      * {@code AuthenticationTls}'s builder-level TLS material configuration — until the full client-side
      * migration lands. A genuinely v5-native plugin is exposed through
-     * {@link V5ToV4AuthenticationAdapter}. TODO PIP-478 stage 3: wire the real client executors / HTTP
-     * client factory (and the TLS override hook for bridged {@code AuthenticationTls}) here.
+     * {@link V5ToV4AuthenticationAdapter}, whose framework services are late-bound by the
+     * {@link PulsarClientImpl} once it exists (PIP-478 stage 3b): the adapter implements
+     * {@code ClientAuthenticationServicesAware}, so the client binds real executors / HTTP client factory /
+     * client instance id into it before {@code start()}.
      */
     private static org.apache.pulsar.client.api.Authentication toV4Authentication(Authentication v5) {
         return LegacyV4AuthenticationAdapter.unwrapV4(v5)
-                .orElseGet(() -> new V5ToV4AuthenticationAdapter(v5, null, null, null, null, Map.of()));
+                .orElseGet(() -> new V5ToV4AuthenticationAdapter(v5, Map.of()));
     }
 
     @Override

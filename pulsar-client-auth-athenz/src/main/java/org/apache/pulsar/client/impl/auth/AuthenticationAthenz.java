@@ -54,6 +54,8 @@ import org.apache.pulsar.client.api.PulsarClientException.GettingAuthenticationD
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
 import org.apache.pulsar.client.api.url.URL;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
 import org.apache.pulsar.client.impl.auth.v5.AthenzAuthenticationV5;
 import org.apache.pulsar.client.impl.auth.v5.V5BinaryAuthenticationDriver;
@@ -67,11 +69,15 @@ import org.apache.pulsar.client.impl.auth.v5.V5BinaryAuthenticationDriver;
  * {@link AthenzAuthenticationV5}. The ZTS role-token cache stays on this shim.
  */
 public class AuthenticationAthenz
-        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver {
+        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver,
+        ClientAuthenticationServicesAware {
 
     private static final long serialVersionUID = 1L;
 
     private static final String APPLICATION_X_PEM_FILE = "application/x-pem-file";
+
+    // PIP-478 stage 3b: the client's framework services, late-bound before start(); null until then.
+    private transient volatile ClientAuthenticationServices authServices;
 
     private transient KeyRefresher keyRefresher = null;
     private transient ZTSClient ztsClient = null;
@@ -149,12 +155,18 @@ public class AuthenticationAthenz
     }
 
     @Override
+    public void bindClientAuthenticationServices(ClientAuthenticationServices services) {
+        this.authServices = services;
+    }
+
+    @Override
     public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
         // PIP-478: drive the v5-native Athenz body on the async binary path. The ZTS role-token cache stays
         // on this shim; the body reads the current role token through getAuthData(), so a broker-pushed
-        // REFRESH re-acquires an expired token here exactly as the synchronous path does.
-        return new V5BinaryAuthenticationDriver(new AthenzAuthenticationV5(new ShimRoleTokenProvider(this)))
-                .newAuthenticationExchange(brokerHostName);
+        // REFRESH re-acquires an expired token here exactly as the synchronous path does. The bound blocking
+        // executor off-loads that (ZTS-blocking) fetch so it never runs on the Netty event loop (stage 3b).
+        return new V5BinaryAuthenticationDriver(new AthenzAuthenticationV5(new ShimRoleTokenProvider(this)),
+                authServices).newAuthenticationExchange(brokerHostName);
     }
 
     @SuppressWarnings("deprecation")

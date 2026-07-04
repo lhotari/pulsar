@@ -60,6 +60,8 @@ import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
 import org.apache.pulsar.client.impl.auth.PulsarSaslClient.ClientCallbackHandler;
 import org.apache.pulsar.client.impl.auth.v5.SaslAuthenticationV5;
@@ -76,7 +78,8 @@ import org.apache.pulsar.common.sasl.JAASCredentialsContainer;
  */
 @CustomLog
 public class AuthenticationSasl
-        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver {
+        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver,
+        ClientAuthenticationServicesAware {
     private static final long serialVersionUID = 1L;
     // this is a static object that shares amongst client.
     private static JAASCredentialsContainer jaasCredentialsContainer;
@@ -85,6 +88,8 @@ public class AuthenticationSasl
     private Map<String, String> configuration;
     private String loginContextName;
     private String serverType = null;
+    // PIP-478 stage 3b: the client's framework services, late-bound before start(); null until then.
+    private transient volatile ClientAuthenticationServices authServices;
 
     public AuthenticationSasl() {
     }
@@ -108,12 +113,17 @@ public class AuthenticationSasl
     }
 
     @Override
+    public void bindClientAuthenticationServices(ClientAuthenticationServices services) {
+        this.authServices = services;
+    }
+
+    @Override
     public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
         // PIP-478: drive the v5-native SASL body on the async binary path. Each connection attempt gets a
         // fresh exchange whose call-context state slot holds the per-broker PulsarSaslClient across the
         // multi-round handshake; the SASL-over-HTTP loop stays on this shim (stage 3d).
-        return new V5BinaryAuthenticationDriver(new SaslAuthenticationV5(new ShimSaslProviderFactory(this)))
-                .newAuthenticationExchange(brokerHostName);
+        return new V5BinaryAuthenticationDriver(new SaslAuthenticationV5(new ShimSaslProviderFactory(this)),
+                authServices).newAuthenticationExchange(brokerHostName);
     }
 
     private static final class ShimSaslProviderFactory implements SaslAuthenticationV5.SaslProviderFactory {
