@@ -1072,3 +1072,92 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
         the high-value non-daemon-executor leaks (`AsyncHttpConnector`, `StandaloneOAuth2`) and the
         broker binary initializer are fixed. The three web/worker ctors follow the same
         try/finally-cleanup pattern if picked up later.
+
+36. **TlsPolicy v4-parity + TLS defaults (user-flagged P1 + review B3/B1/A-L1, FIX-2)**
+    (2026-07-04, local commits on `lh-pip-478-impl-v2`, no push). Four commits; each closes the
+    listed finding. Re-based against the FIX-1 HEAD (`a3f0f5552d2`), which had reshaped
+    `FileBasedTlsFactory`/`TlsMaterialSource`/`TlsContexts`.
+
+    - **Commit A — `[fix][misc] GATE: TlsPolicy separate key/trust store types (P1)`.** The only
+      real v4-parity gap. `TlsPolicy` carried one `storeType()` applied to the keystore, the key
+      cert chain, AND the truststore; v4 has separate `tlsKeyStoreType` / `tlsTrustStoreType`
+      (both default JKS). A mixed setup (PKCS12 keystore + JKS truststore, or a BCFKS/FIPS mix)
+      loaded the truststore with the wrong type and broke at handshake. Since `TlsPolicy` is
+      unreleased there is no compat constraint: `storeType` → `keyStoreType` + `trustStoreType`
+      across fields/accessors/builder/`equals`/`hashCode`/`toString` (password masking kept). The
+      5-arg `keyStore(...)` factory keeps its single `storeType` arg but now sets BOTH types (the
+      common case); split types go through the builder. `TlsMaterialSource` routes the truststore
+      load through `trustStoreType()` and the key/chain loads through `keyStoreType()`.
+      `ClientTlsFactorySupport.clientDefaultPolicy` drops the `keyStorePath!=null` heuristic and
+      maps both conf types directly. Six server compose sites map both types and drop their
+      `firstNonBlank` helpers: `DefaultBrokerTlsFactory` (server + brokerClient), `ProxyTlsFactories`
+      (server + brokerClient), functions `WorkerServer`, websocket `ProxyServer`.
+      `PulsarClientBuilderV5.keyStoreBuilder` now preserves `base.trustStoreType()` when folding an
+      `AuthenticationKeyStoreTls` (previously the key store type would clobber it). **Test**:
+      mixed-type regression at the `TlsMaterialSource` level (PKCS12 keystore + JKS truststore both
+      load; invalid-type discrimination — a bad `trustStoreType`/`keyStoreType` fails the respective
+      load — proves each store is parsed with its OWN type, which the pre-fix single type could not)
+      and at `clientDefaultPolicy` (`ClientDefaultPolicyStoreTypeTest`: the two types map
+      independently, not collapsed). Note: on this JDK `keystore.type.compat=true` masks a
+      JKS-as-PKCS12 cross-read, so the regression is made deterministic via the invalid-type path
+      rather than relying on a cross-read `IOException`. **Only parity gap found** — the rest of the
+      v4 TLS surface already maps (sslProvider stays factory-level, per the earlier P2 DEFER).
+
+    - **Commit B — `[fix][misc] preserve default TLS protocol set {TLSv1.3, TLSv1.2} (B3)`.** The
+      removed `DefaultPulsarSslFactory` forced `{TLSv1.3, TLSv1.2}` at engine build when
+      `tlsProtocols` was empty; the PIP-478 path only set protocols when the policy configured them,
+      so an unconfigured deployment silently deferred to the JVM/provider default on upgrade. Single
+      well-named constant `TlsContexts.DEFAULT_ENABLED_PROTOCOLS`, applied when the effective
+      protocol list is empty at: the native Netty client+server build (`applyCiphersAndProtocols`),
+      the JDK/synthesis overlays (`composeClientOverlay` + `synthesizeNettyServerFromJdk`, which now
+      always wrap to carry the pinned protocols), and both Jetty include-protocols paths (server
+      `applyServerConfig` + client factory). A factory-supplied `SSLParameters` companion still wins.
+      **Test**: native-path default (`FileBasedTlsFactoryTest`), synthesis client/server defaults
+      (`SslParametersSynthesisTest`), Jetty server/client defaults (`JettyTlsFactoryTest`). Verified
+      the old Jetty web path also used the JVM default (no historical `{1.3,1.2}` force), so this
+      makes web consistent with the binary path at ~zero practical risk on modern JDKs (their default
+      is already `{1.3,1.2}`).
+
+    - **Commit C — `[fix][broker] per-cluster custom TLS factory fail-loud (B1/H2)`.**
+      `BrokerService.getReplicationClient` / `getClusterPulsarAdmin` only LOGGED when a per-cluster
+      `ClusterData.brokerClientSslFactoryPlugin` named a CUSTOM PIP-337 factory, then built file TLS
+      — so a per-cluster KMS/HSM factory silently downgraded to file-based TLS on 5.0 upgrade
+      (wrong-identity or failed replication/admin). Escalates ruling R6:
+      `warnIfRemovedClusterSslFactoryPluginConfigured` → `failIfRemovedCustomClusterSslFactoryPlugin
+      Configured` throws `IllegalStateException` with an actionable migration message (same
+      `TlsFactorySupport.isLegacyCustom` literal-FQCN logic as the broker-level fail-loud sites); a
+      blank or removed-default FQCN is not custom and is still tolerated for metadata compat.
+      **Test** (`ReplicatorTlsFactoryTest`): a custom value fails both client and admin creation with
+      the migration hint; a removed-default FQCN is tolerated and the client builds.
+
+    - **Commit D — `[fix][misc] TlsPolicy.build() validates format consistency (A-L1)`.** `build()`
+      silently accepted keystore fields on a PEM policy (and PEM file fields on a keystore policy);
+      it now throws `IllegalArgumentException` naming the offending cross-format field (a builder may
+      throw synchronously — not a future-returning API). Mixed store TYPES stay valid within KEYSTORE
+      format. **Test** (`TlsPolicyValidationTest`): rejection both ways; consistent PEM / keystore /
+      flag-only policies still build. Verified the full `org.apache.pulsar.common.tls.impl.*` suite
+      builds nothing that the validation rejects.
+
+    - **PIP updated** (in the relevant commits): the `TlsPolicy` listing (`storeType()` →
+      `keyStoreType()`/`trustStoreType()`, factory javadoc), the v4-mapping note (separate store
+      types preserved), one sentence on the `{TLSv1.3, TLSv1.2}` default in Security Considerations,
+      and the removal-impact `ClusterData` row + geo-replication note (custom-factory fail-loud).
+
+    - **Verify (all local, worktree `async-auth-interface`, `dangerouslyDisableSandbox` for
+      Gradle wrapper).** `spotlessApply` clean; full compile green (main + test) for `:pulsar-common`
+      `:pulsar-common-api` `:pulsar-broker-common` `:pulsar-client-original`
+      `:pulsar-client-admin-original` `:pulsar-client-v5` `:pulsar-proxy`
+      `:pulsar-functions:pulsar-functions-worker` `:pulsar-websocket` `:pulsar-broker`. Gate suites,
+      all **0 failures / 0 errors**: `TlsPolicyValidationTest` **3/3**, `ClientDefaultPolicyStoreType
+      Test` **2/2**, `TlsMaterialSourceTest` **7/7** (+3 mixed-type), `FileBasedTlsFactoryTest`
+      green (+1 default-protocols), `SslParametersSynthesisTest` **12/12** (+3 default-protocols),
+      `JettyTlsFactoryTest` green (+1 default-protocols), `DefaultBrokerTlsFactoryTest` **3/3**,
+      `PulsarClientBuilderV5Test` green, `KeyStoreTlsProducerConsumerTestWithAuthTest` **7/7** (proves
+      the keystore rename end-to-end), `TlsProducerConsumerTest` **10/10**, `V5TlsProducerConsumerTest`
+      **2/2**, `ProxyTlsTest` **2/2**, `ReplicatorTlsTest` **1/1** (legacy path unaffected by the
+      protocol default), `ReplicatorTlsFactoryTest` **4** (1 retry-artifact skip, incl. the new
+      fail-loud test), `ConfigValidationTest` **7/7**.
+
+    - **Deferred (reported, not done in this pass):** **P2** sslProvider JCE-provider-name delta
+      (niche; one-sentence PIP note belongs in the doc/PIP pass FIX-5). No other v4 parity gap found
+      beyond `storeType`.
