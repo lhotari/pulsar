@@ -323,7 +323,20 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
    = subscribing form. New V5TlsProducerConsumerTest 2/2 (incl. the fold); legacy TLS suites
    unmodified green; all 3a gates intact. Remaining for 3c: real AHC HTTP factory (stub
    seam), generic third-party hasDataForTls() probe, server-side BROKER_CLIENT fold.
-20. Launched two Opus 4.8 assessment agents (read-only):
+20. **Stage-3a fixup complete** (stage3a-fixer, Opus, commits `e4ed1f02c80`, `bef9f3b4cdd`):
+   P1a connect failures now fail connectionFuture with the mapped v4 type before close (all
+   three branches); P1b sentinel = REFRESH only (audit: the live bug was the INIT/null
+   over-match — empty bytes never matched the old predicate; fix covers all); P2
+   generation+liveness guards (event-loop-only counters; REFRESH supersedes in-flight round,
+   non-refresh challenge during a pending round dropped at DEBUG — sound because the broker
+   never pipelines challenges and SASL rounds can't overlap the initial handshake); P3
+   concurrency tests (ClientCnxAsyncAuthTest 2→7: thread affinity, stale-completion,
+   close-before-completion, write failure, mapped-type surfacing). **Consolidation done**:
+   shared `BinaryAuthenticationExchange` in pulsar-client-original owns the normative
+   routing + unwrap + v4 mapping; both drivers delegate (−270 lines of duplication; the
+   rules now have one home). All gates green incl. the OAuth2 refresh gate unmodified and
+   SaslAuthenticateTest 4/4.
+21. Launched two Opus 4.8 assessment agents (read-only):
    - **impl-gap-assessor** — classify the old impl branch diff against the current design:
      matches-current / implements-superseded / reusable-integration-scaffolding; deliver a
      reuse map per module.
