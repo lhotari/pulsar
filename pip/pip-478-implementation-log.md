@@ -1417,3 +1417,33 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
       `ProxyKeyStoreTlsTransportTest` **1/1** was run to confirm the R1 lookup-pool fix. Touched modules
       compile: `:pulsar-common`, `:pulsar-broker-common`, `:pulsar-proxy`, `:pulsar-broker` (which pulls
       `:pulsar-websocket` + the `:pulsar-functions` worker).
+
+41. **Multi-model review cycle COMPLETE (8 reviewers → 7 fix workstreams → verified).** An 8-lens
+    review board (5 Fable: api-design, concurrency, security, goals, TlsPolicy-parity; 3 Codex:
+    lifecycle/rotation, backward-compat, test-coverage) delivered the verdict that the mission's core
+    goal is achieved — all 5 Motivations materially delivered with thread-level evidence, the ClientCnx
+    async carve-out **verified production-ready** (concurrency lens could not construct a failing
+    interleaving), security ship-ready. Every finding was edge-hardening, triaged against the original
+    goals (documented-intentional items — PIP-337 removal, the Jetty trust-scoping security fix, ruled
+    CLI removals — rejected-as-defect, not "fixed"). Fixes landed as FIX-1..6 + the test batch (commits
+    `2165753bc7b`..`4e300e58c7f`):
+    - FIX-1 [GATE]: the one serious defect — an OpenSSL TLS-rotation use-after-free (release-before-
+      publish + unpinned volatile borrows; CI never exercised the OpenSSL regime) — fixed both sides
+      (deferred-release + per-use `withPinnedContext`) with a new OpenSSL-provider rotation test.
+      **Codex re-reviewed the exact diff: zero findings, fix sound.**
+    - FIX-2: TlsPolicy `storeType`→separate `keyStoreType`/`trustStoreType` (v4-parity regression),
+      `{TLSv1.3,TLSv1.2}` default preservation, per-cluster custom-factory fail-loud.
+    - FIX-3: the two API-freeze blockers (v5-native reflective config path = In-Scope #2 gap; REFRESH
+      contract unified) + freeze-forever items (TlsPurpose equals over (role,name), uniform `bytes()`)
+      + 2 missing metrics; self-review caught a combined-TLS+credential mTLS-drop bug.
+    - FIX-6 (user-requested): dissolved the `SecurityUtility` grab-bag into `PemReader`/`JcaProviders`/
+      `JdkSslContexts`; deleted the obsolete `KeyManagerProxy`/`TrustManagerProxy` delegate-swap helpers
+      (rebuild-not-mutate rotation makes them dead) + `SSLContextValidatorEngine`.
+    - FIX-4: security-negative + e2e tests (forced untrusted-cert rejection Netty+Jetty, proxy e2e
+      fallback synthesis, SSLParameters live handshakes, ws/worker HTTPS) — **no defects, no weakened
+      assertions.**
+    - FIX-5: doc/PIP/javadoc polish; M-F6 (proxy→broker credential offload) documented as a v4-parity
+      known-gap (deferred, not a regression); corrected the review's wrong A-L4 assumption.
+    Deferred non-blocking follow-ups (logged): proxy binary-lookup leg honoring a custom
+    `brokerClientTlsFactoryClassName`; the M-F6 proxy credential-offload gap. Remaining before
+    apache-facing: master rebase + post-rebase CI + human review.
