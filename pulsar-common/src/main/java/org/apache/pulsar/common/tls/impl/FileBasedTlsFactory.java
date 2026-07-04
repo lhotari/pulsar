@@ -76,6 +76,7 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
     private final FileBasedTlsFactorySettings settings;
 
     private volatile TlsFactoryInitContext initContext;
+    private volatile TlsReloadMetrics metrics;
     private volatile RegisteredSource systemDefaultSource;
     private volatile ScheduledFuture<?> pollFuture;
     private volatile boolean closed;
@@ -152,6 +153,7 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
     public CompletableFuture<Void> initialize(TlsFactoryInitContext context) {
         try {
             this.initContext = Objects.requireNonNull(context, "context must not be null");
+            this.metrics = TlsReloadMetrics.create(context.openTelemetry(), context.clock());
             int interval = settings.refreshIntervalSeconds();
             if (interval > 0 && context.scheduler() != null) {
                 this.pollFuture = context.scheduler().scheduleWithFixedDelay(
@@ -187,8 +189,7 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         return runAsync(() -> {
             RegisteredSource source = resolve(purpose);
             synchronized (source) {
-                TlsMaterial material = source.currentMaterial();
-                T instance = source.acquireInstance(instanceClass, material, settings);
+                T instance = loadInitialInstance(source, instanceClass);
                 Subscription<T> subscription = new Subscription<>(instanceClass, onLoadOrReload);
                 // Initial delivery happens-before the returned future completes (same thread, ordered).
                 subscription.deliver(instance);
@@ -205,12 +206,36 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         return runAsync(() -> {
             RegisteredSource source = resolve(purpose);
             synchronized (source) {
-                TlsMaterial material = source.currentMaterial();
-                T instance = source.acquireInstance(instanceClass, material, settings);
+                T instance = loadInitialInstance(source, instanceClass);
                 retain(instance);
                 return Optional.of((TlsHandle<T>) new OneShotHandle<>(instance));
             }
         });
+    }
+
+    /**
+     * Load (or reuse the cached) instance of {@code instanceClass} for the resolved source, recording a
+     * {@code pulsar.tls.reload} attempt for the source's purpose. A resolution failure upstream (an
+     * unconfigured server purpose) is a startup configuration error and is not counted here — only actual
+     * material loads are. Must be called while holding the source monitor.
+     */
+    private <T> T loadInitialInstance(RegisteredSource source, Class<T> instanceClass) throws Exception {
+        try {
+            TlsMaterial material = source.currentMaterial();
+            T instance = source.acquireInstance(instanceClass, material, settings);
+            recordLoad(source.purpose, true);
+            return instance;
+        } catch (Exception e) {
+            recordLoad(source.purpose, false);
+            throw e;
+        }
+    }
+
+    private void recordLoad(TlsPurpose purpose, boolean success) {
+        TlsReloadMetrics m = this.metrics;
+        if (m != null) {
+            m.recordLoad(purpose, success);
+        }
     }
 
     @Override
@@ -226,6 +251,10 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         RegisteredSource systemDefault = this.systemDefaultSource;
         if (systemDefault != null) {
             systemDefault.releaseAll();
+        }
+        TlsReloadMetrics m = this.metrics;
+        if (m != null) {
+            m.close();
         }
     }
 
@@ -273,7 +302,7 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         }
         try {
             for (RegisteredSource source : registry.values()) {
-                source.poll(settings);
+                source.poll(settings, metrics);
             }
         } catch (Throwable t) {
             log.warn().exception(t).log("Unexpected error during TLS material poll");
@@ -373,7 +402,7 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
             throw new IllegalArgumentException("Unsupported instance class " + instanceClass);
         }
 
-        synchronized void poll(FileBasedTlsFactorySettings settings) {
+        synchronized void poll(FileBasedTlsFactorySettings settings, TlsReloadMetrics metrics) {
             if (source == null || subscriptions.isEmpty()) {
                 return;
             }
@@ -382,21 +411,33 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
                 outcome = source.refresh();
             } catch (Exception e) {
                 // Keep-last-good: leave every subscription on its current instance and retry next change.
+                recordLoad(metrics, false);
                 log.warn().attr("purpose", purpose).exception(e)
                         .log("Failed to reload TLS material; keeping the last-good instance");
                 return;
             }
+            // A poll that finds no change is not a reload — do not count it, so the reload counter and the
+            // last-success gauge reflect real (re)load events only.
             if (!outcome.changed()) {
                 return;
             }
+            boolean allRebuilt = true;
             for (Subscription<?> subscription : subscriptions) {
                 try {
                     Object rebuilt = acquireInstance(subscription.instanceClass, outcome.material(), settings);
                     subscription.deliverErased(rebuilt);
                 } catch (Exception e) {
+                    allRebuilt = false;
                     log.warn().attr("purpose", purpose).attr("class", subscription.instanceClass.getName())
                             .exception(e).log("Failed to rebuild rotated TLS instance; keeping the last-good one");
                 }
+            }
+            recordLoad(metrics, allRebuilt);
+        }
+
+        private void recordLoad(TlsReloadMetrics metrics, boolean success) {
+            if (metrics != null) {
+                metrics.recordLoad(purpose, success);
             }
         }
 

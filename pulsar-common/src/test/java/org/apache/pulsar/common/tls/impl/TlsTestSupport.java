@@ -44,6 +44,11 @@ final class TlsTestSupport {
     }
 
     static TlsFactoryInitContext initContext(ScheduledExecutorService scheduler, Executor blockingExecutor) {
+        return initContext(scheduler, blockingExecutor, OpenTelemetry.noop());
+    }
+
+    static TlsFactoryInitContext initContext(ScheduledExecutorService scheduler, Executor blockingExecutor,
+            OpenTelemetry openTelemetry) {
         return new TlsFactoryInitContext() {
             @Override
             public Map<String, String> params() {
@@ -67,7 +72,7 @@ final class TlsTestSupport {
 
             @Override
             public OpenTelemetry openTelemetry() {
-                return OpenTelemetry.noop();
+                return openTelemetry;
             }
         };
     }
