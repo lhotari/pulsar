@@ -325,6 +325,51 @@ public class FileBasedTlsFactoryTest {
     }
 
     @Test
+    public void oneShotServesLastGoodWhenReloadFails() throws Exception {
+        // PIP-478 F4: a one-shot acquisition during a non-atomic rotation window (cert briefly unreadable)
+        // must serve the last-good cached context rather than failing, mirroring the subscription poll's
+        // keep-last-good semantics.
+        TlsPolicy policy = copyServerCertsToTemp(BROKER_CERT, BROKER_KEY);
+        FileBasedTlsFactory factory = factory(Map.of(TlsPurpose.BROKER, policy),
+                FileBasedTlsFactorySettings.defaults());
+
+        TlsHandle<SslContext> firstHandle =
+                factory.createInstance(TlsPurpose.BROKER, SslContext.class).join().get();
+        SslContext first = firstHandle.get();
+        assertThat(first).isNotNull();
+
+        // Corrupt the cert file so a fresh load fails, and advance mtime so the source attempts a reload.
+        Files.writeString(tempDir.resolve("cert.pem"), "-----BEGIN CERTIFICATE-----\nnot a cert\n");
+        Files.setLastModifiedTime(tempDir.resolve("cert.pem"),
+                FileTime.fromMillis(System.currentTimeMillis() + 5000));
+
+        Optional<TlsHandle<SslContext>> retry =
+                factory.createInstance(TlsPurpose.BROKER, SslContext.class).join();
+        assertThat(retry).as("keep-last-good instead of failing the acquisition").isPresent();
+        assertThat(retry.get().get()).as("served the last-good context").isSameAs(first);
+
+        retry.get().dispose();
+        firstHandle.dispose();
+        factory.close();
+    }
+
+    @Test
+    public void oneShotFailsWhenNoLastGoodExists() throws Exception {
+        // With no prior successful load there is nothing to fall back on: the acquisition fails (fail-fast).
+        Files.copy(Paths.get(RSA_CA), tempDir.resolve("ca.pem"), StandardCopyOption.REPLACE_EXISTING);
+        Files.writeString(tempDir.resolve("cert.pem"), "-----BEGIN CERTIFICATE-----\nnot a cert\n");
+        Files.copy(Paths.get(BROKER_KEY), tempDir.resolve("key.pem"), StandardCopyOption.REPLACE_EXISTING);
+        TlsPolicy policy = TlsPolicy.pem(tempDir.resolve("ca.pem").toString(),
+                tempDir.resolve("cert.pem").toString(), tempDir.resolve("key.pem").toString());
+        FileBasedTlsFactory factory = factory(Map.of(TlsPurpose.BROKER, policy),
+                FileBasedTlsFactorySettings.defaults());
+
+        assertThatThrownBy(() -> factory.createInstance(TlsPurpose.BROKER, SslContext.class).join())
+                .hasCauseInstanceOf(Exception.class);
+        factory.close();
+    }
+
+    @Test
     public void subscriberCallbackExceptionDoesNotKillSubscription() throws Exception {
         TlsPolicy policy = copyServerCertsToTemp(BROKER_CERT, BROKER_KEY);
         FileBasedTlsFactory factory = factory(Map.of(TlsPurpose.BROKER, policy),

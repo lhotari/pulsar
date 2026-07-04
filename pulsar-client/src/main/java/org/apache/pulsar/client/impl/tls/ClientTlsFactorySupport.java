@@ -219,15 +219,27 @@ public final class ClientTlsFactorySupport {
                         "Could not instantiate brokerClientTlsFactoryClassName '" + className + "'", e);
             }
         }
-        // Broker-client (server startup / replication client creation): the eager authHasTlsMaterial probe
-        // runs off the event loop, registering a supplier only for a genuine TLS-auth plugin.
+        // Broker-client (server startup / replication client creation): register the broker-client TLS fold
+        // when the plugin carries TLS material.
         TlsPolicy policy = clientDefaultPolicy(conf);
         Map<TlsPurpose, Supplier<AuthenticationDataProvider>> authSuppliers = Map.of();
         Authentication auth = conf.getAuthentication();
-        if (auth != null && authHasTlsMaterial(auth)) {
+        if (auth != null && shouldFoldBrokerClientAuthTls(auth)) {
             authSuppliers = Map.of(TlsPurpose.CLIENT_DEFAULT, FileBasedTlsFactory.authMaterialSupplier(auth));
         }
         return new FileBasedTlsFactory(Map.of(TlsPurpose.CLIENT_DEFAULT, policy), settings(conf), authSuppliers);
+    }
+
+    /**
+     * Whether to register the broker-client {@code BROKER_CLIENT} TLS fold for this plugin (L3/S-F3). The
+     * built-in TLS-auth plugins are matched by TYPE ({@code AuthenticationTls} / {@code AuthenticationKeyStoreTls})
+     * so a transient read failure at factory build — the key file briefly missing while it is being rotated —
+     * does not permanently skip the fold and disable rotation; {@code AuthProvidedMaterialSource} keeps the
+     * last-good material and retries per poll. For an unknown custom plugin fall back to the material probe,
+     * preserving support for third-party plugins that supply TLS material without extending the built-in types.
+     */
+    private static boolean shouldFoldBrokerClientAuthTls(Authentication auth) {
+        return isTlsAuthPlugin(auth) || authHasTlsMaterial(auth);
     }
 
     /**

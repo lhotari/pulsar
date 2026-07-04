@@ -230,6 +230,17 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
             return instance;
         } catch (Exception e) {
             recordLoad(source.purpose, false);
+            // Keep-last-good (PIP-478 F4): a one-shot (or initial subscribing) acquisition during a
+            // non-atomic rotation window — e.g. the cert file briefly unreadable while it is being replaced —
+            // must not fail when a prior load already built a context of this class. Serve that last-good
+            // instance and WARN; the reload-failure metric was recorded above. Fail only when there is no
+            // last-good to fall back on (a genuine startup misconfiguration, per the fail-fast contract).
+            T cached = source.cachedInstance(instanceClass);
+            if (cached != null) {
+                log.warn().attr("purpose", source.purpose).exception(e)
+                        .log("Failed to load TLS material; serving the last-good instance");
+                return cached;
+            }
             throw e;
         }
     }
@@ -362,6 +373,9 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         private TlsMaterial nettyMaterial;
         private SSLContext jdkContext;
         private TlsMaterial jdkMaterial;
+        // Set when a rotation's rebuild/delivery to some subscriber failed, so the next poll re-attempts the
+        // rebuild even if the source now reports changed=false (PIP-478 L1 reload-wedge guard).
+        private boolean pendingRedeliver;
 
         RegisteredSource(TlsPurpose purpose, TlsPolicy policy, MaterialSource source) {
             this.purpose = purpose;
@@ -405,6 +419,20 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
             throw new IllegalArgumentException("Unsupported instance class " + instanceClass);
         }
 
+        /**
+         * The last-good cached context of the requested class, or {@code null} if none has been built yet.
+         * Used by the keep-last-good one-shot path (F4) when a fresh load fails mid-rotation.
+         */
+        synchronized <T> T cachedInstance(Class<T> instanceClass) {
+            if (instanceClass == SslContext.class && nettyContext != null) {
+                return instanceClass.cast(nettyContext);
+            }
+            if (instanceClass == SSLContext.class && jdkContext != null) {
+                return instanceClass.cast(jdkContext);
+            }
+            return null;
+        }
+
         synchronized void poll(FileBasedTlsFactorySettings settings, TlsReloadMetrics metrics) {
             if (source == null || subscriptions.isEmpty()) {
                 return;
@@ -420,8 +448,12 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
                 return;
             }
             // A poll that finds no change is not a reload — do not count it, so the reload counter and the
-            // last-success gauge reflect real (re)load events only.
-            if (!outcome.changed()) {
+            // last-success gauge reflect real (re)load events only. But if a prior rotation's rebuild/delivery
+            // to some subscriber failed (pendingRedeliver), retry it even when the source now reports
+            // changed=false: otherwise, once the source commits the new baseline, every later poll sees
+            // changed=false and that subscriber stays wedged on the old instance until the next file change
+            // (L1). The retry rebuilds against the current last-good material.
+            if (!outcome.changed() && !pendingRedeliver) {
                 return;
             }
             boolean allRebuilt = true;
@@ -435,6 +467,8 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
                             .exception(e).log("Failed to rebuild rotated TLS instance; keeping the last-good one");
                 }
             }
+            // Re-attempt on the next poll until every subscriber has the rotated instance (L1).
+            pendingRedeliver = !allRebuilt;
             recordLoad(metrics, allRebuilt);
         }
 
