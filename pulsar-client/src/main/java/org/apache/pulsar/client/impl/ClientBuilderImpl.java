@@ -42,7 +42,6 @@ import org.apache.pulsar.client.impl.auth.AuthenticationDisabled;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.conf.ConfigurationDataUtils;
 import org.apache.pulsar.common.tls.InetAddressUtils;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
 
 public class ClientBuilderImpl implements ClientBuilder {
     private static final long serialVersionUID = 1L;
@@ -483,11 +482,7 @@ public class ClientBuilderImpl implements ClientBuilder {
 
     @Override
     public ClientBuilder sslFactoryPlugin(String sslFactoryPlugin) {
-        if (StringUtils.isBlank(sslFactoryPlugin)) {
-            conf.setSslFactoryPlugin(DefaultPulsarSslFactory.class.getName());
-        } else {
-            conf.setSslFactoryPlugin(sslFactoryPlugin);
-        }
+        conf.setSslFactoryPlugin(StringUtils.isBlank(sslFactoryPlugin) ? "" : sslFactoryPlugin);
         return this;
     }
 

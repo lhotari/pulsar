@@ -48,7 +48,6 @@ import org.apache.pulsar.client.util.Secret;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
 
 
 /**
@@ -211,7 +210,7 @@ public class ClientConfigurationData implements Serializable, Cloneable {
             name = "sslFactoryPlugin",
             value = "SSL Factory Plugin class to provide SSLEngine and SSLContext objects. The default "
                     + " class used is DefaultPulsarSslFactory.")
-    private String sslFactoryPlugin = DefaultPulsarSslFactory.class.getName();
+    private String sslFactoryPlugin = "";
 
     @ApiModelProperty(
             name = "sslFactoryPluginParams",

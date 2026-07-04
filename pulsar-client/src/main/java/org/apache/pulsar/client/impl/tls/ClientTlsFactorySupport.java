@@ -45,7 +45,6 @@ import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.tls.impl.FileBasedTlsFactory;
 import org.apache.pulsar.common.tls.impl.FileBasedTlsFactorySettings;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
 
 /**
  * Client-side counterpart of the server's {@code TlsFactorySupport} (which lives in
@@ -74,6 +73,14 @@ public final class ClientTlsFactorySupport {
     /** Reserved factory-class value selecting the built-in file-based factory (mirrors the server side). */
     private static final String DEFAULT_FACTORY = "default";
 
+    /**
+     * FQCN of the removed PIP-337 default SSL factory. Matched as a string literal (the class itself is
+     * removed in PIP-478 stage 4c) so a blank {@code sslFactoryPlugin} value OR this literal is treated as
+     * "the default" — any other non-blank value names a custom PIP-337 plugin.
+     */
+    static final String REMOVED_DEFAULT_SSL_FACTORY_CLASS_NAME =
+            "org.apache.pulsar.common.util.DefaultPulsarSslFactory";
+
     private ClientTlsFactorySupport() {
     }
 
@@ -83,7 +90,7 @@ public final class ClientTlsFactorySupport {
      */
     public static boolean isLegacyCustom(String sslFactoryPlugin) {
         return StringUtils.isNotBlank(sslFactoryPlugin)
-                && !DefaultPulsarSslFactory.class.getName().equals(sslFactoryPlugin.trim());
+                && !REMOVED_DEFAULT_SSL_FACTORY_CLASS_NAME.equals(sslFactoryPlugin.trim());
     }
 
     /**

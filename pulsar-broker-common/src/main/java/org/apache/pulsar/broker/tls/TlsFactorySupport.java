@@ -35,7 +35,6 @@ import lombok.CustomLog;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 
 /**
@@ -73,6 +72,14 @@ public final class TlsFactorySupport {
      * reflectively-instantiated custom factory.
      */
     public static final String DEFAULT_FACTORY = "default";
+
+    /**
+     * FQCN of the removed PIP-337 default SSL factory. Matched as a string literal (the class itself is
+     * removed in PIP-478 stage 4c) so a blank {@code sslFactoryPlugin} value OR this literal is treated as
+     * "the default" — any other non-blank value names a custom PIP-337 plugin.
+     */
+    static final String REMOVED_DEFAULT_SSL_FACTORY_CLASS_NAME =
+            "org.apache.pulsar.common.util.DefaultPulsarSslFactory";
 
     private static final Map<String, Boolean> LEGACY_WARNED = new ConcurrentHashMap<>();
 
@@ -123,7 +130,7 @@ public final class TlsFactorySupport {
      */
     public static boolean isLegacyCustom(String legacyPluginClassName) {
         return StringUtils.isNotBlank(legacyPluginClassName)
-                && !DefaultPulsarSslFactory.class.getName().equals(legacyPluginClassName.trim());
+                && !REMOVED_DEFAULT_SSL_FACTORY_CLASS_NAME.equals(legacyPluginClassName.trim());
     }
 
     /**
