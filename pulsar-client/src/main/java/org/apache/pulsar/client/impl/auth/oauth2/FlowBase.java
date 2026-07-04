@@ -34,11 +34,16 @@ import lombok.CustomLog;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.PulsarVersion;
 import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.api.v5.http.PulsarHttpClient;
+import org.apache.pulsar.client.api.v5.http.PulsarHttpClientConfig;
+import org.apache.pulsar.client.api.v5.http.PulsarHttpClientFactory;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.DefaultMetadataResolver;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.Metadata;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.MetadataResolver;
+import org.apache.pulsar.client.impl.auth.v5.FrameworkHttpClient;
 import org.apache.pulsar.client.util.ExecutorProvider;
 import org.apache.pulsar.client.util.PulsarHttpAsyncSslEngineFactory;
+import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.util.PulsarSslConfiguration;
 import org.apache.pulsar.common.util.PulsarSslFactory;
 import org.asynchttpclient.AsyncHttpClient;
@@ -78,7 +83,11 @@ abstract class FlowBase implements Flow {
     protected transient PulsarSslFactory sslFactory;
     protected transient ScheduledExecutorService sslRefreshScheduler;
     protected transient Metadata metadata;
-    private transient AsyncHttpClient httpClient;
+    // PIP-478 stage 3c: the framework HTTP client factory, late-bound by AuthenticationOAuth2 from the
+    // client's ClientAuthenticationServices before initialize(); null when the plugin runs outside a
+    // v5-bound client (plain v4 usage), which selects the deprecated legacy private client below.
+    private transient PulsarHttpClientFactory httpClientFactory;
+    private transient PulsarHttpClient pulsarHttpClient;
 
     protected FlowBase(URL issuerUrl, Duration connectTimeout, Duration readTimeout, String trustCertsFilePath,
                        String certFile, String keyFile, Duration autoCertRefreshDuration,
@@ -92,7 +101,20 @@ abstract class FlowBase implements Flow {
         this.autoCertRefreshSeconds = getParameterDurationToSeconds(CONFIG_PARAM_AUTO_CERT_REFRESH_DURATION,
                 autoCertRefreshDuration, DEFAULT_AUTO_CERT_REFRESH_DURATION);
         this.wellKnownMetadataPath = wellKnownMetadataPath;
-        getHttpClient();
+        // PIP-478 stage 3c: no longer build the HTTP client eagerly here. The flow is constructed during
+        // configure() — before the client's framework services (the shared HTTP client factory) are bound —
+        // so the client is created lazily on first use (initialize()), once the factory is available.
+    }
+
+    /**
+     * Late-bind the framework HTTP client factory (PIP-478 stage 3c). Called by
+     * {@code AuthenticationOAuth2.bindClientAuthenticationServices(...)} before {@code initialize()}, so the
+     * lazily-built client is the framework-managed one that shares the owning client's resources.
+     *
+     * @param httpClientFactory the framework factory, or {@code null} to keep the legacy private client
+     */
+    void bindHttpClientFactory(PulsarHttpClientFactory httpClientFactory) {
+        this.httpClientFactory = httpClientFactory;
     }
 
     private AsyncHttpClient defaultHttpClient(Duration readTimeout, Duration connectTimeout,
@@ -143,12 +165,42 @@ abstract class FlowBase implements Flow {
         return new DefaultAsyncHttpClient(confBuilder.build());
     }
 
-    protected synchronized AsyncHttpClient getHttpClient() {
-        if (httpClient == null) {
-            httpClient = defaultHttpClient(readTimeout, connectTimeout, trustCertsFilePath, certFile, keyFile);
-            scheduleSslContextRefreshIfEnabled(autoCertRefreshSeconds);
+    protected synchronized PulsarHttpClient getHttpClient() {
+        if (pulsarHttpClient == null) {
+            if (httpClientFactory != null && !hasOwnTlsMaterial()) {
+                // PIP-478 stage 3c: a framework-managed HTTP client that shares the owning PulsarClient's
+                // event loop / timer / DNS resolver. Used when this plugin runs inside a v5-bound client and
+                // carries no OAuth2-specific IdP TLS material, which the purpose-driven config cannot convey.
+                pulsarHttpClient = httpClientFactory.newHttpClient(oauth2ClientConfig());
+            } else {
+                // Deprecated legacy fallback (until PIP-478 stage 4): a private AsyncHttpClient with its own
+                // event loop and OAuth2-configured TLS, wrapped as a PulsarHttpClient. Preserves plain-v4
+                // usage (no bound services) and OAuth2 IdP mTLS / custom trust, which the framework's
+                // purpose-driven client cannot yet carry.
+                AsyncHttpClient legacyClient =
+                        defaultHttpClient(readTimeout, connectTimeout, trustCertsFilePath, certFile, keyFile);
+                scheduleSslContextRefreshIfEnabled(autoCertRefreshSeconds);
+                pulsarHttpClient = new FrameworkHttpClient(legacyClient, oauth2ClientConfig(), null, null, null);
+            }
         }
-        return httpClient;
+        return pulsarHttpClient;
+    }
+
+    /** @return whether this flow was configured with its own OAuth2 IdP TLS material (trust / cert / key). */
+    private boolean hasOwnTlsMaterial() {
+        return StringUtils.isNotBlank(trustCertsFilePath) || StringUtils.isNotBlank(certFile)
+                || StringUtils.isNotBlank(keyFile);
+    }
+
+    private PulsarHttpClientConfig oauth2ClientConfig() {
+        Duration connect = getParameterDuration(CONFIG_PARAM_CONNECT_TIMEOUT, connectTimeout, DEFAULT_CONNECT_TIMEOUT);
+        Duration read = getParameterDuration(CONFIG_PARAM_READ_TIMEOUT, readTimeout, DEFAULT_READ_TIMEOUT);
+        return PulsarHttpClientConfig.builder(TlsPurpose.CLIENT_OAUTH2)
+                .connectTimeout(connect)
+                .readTimeout(read)
+                .requestTimeout(read)
+                .userAgent(String.format("Pulsar-Java-v%s", PulsarVersion.getVersion()))
+                .build();
     }
 
     private void scheduleSslContextRefreshIfEnabled(long refreshSeconds) {
@@ -246,8 +298,10 @@ abstract class FlowBase implements Flow {
         if (sslRefreshScheduler != null) {
             sslRefreshScheduler.shutdownNow();
         }
-        if (httpClient != null) {
-            httpClient.close();
+        if (pulsarHttpClient != null) {
+            // Idempotent: closes the legacy private AsyncHttpClient, or releases the framework client (which
+            // the framework factory also closes on client shutdown).
+            pulsarHttpClient.close();
         }
         if (sslFactory != null) {
             sslFactory.close();

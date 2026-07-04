@@ -24,6 +24,12 @@ plugins {
 
 dependencies {
     api(project(":pulsar-client-api"))
+    // PIP-478: the built-in credential-fetching v4 auth plugins (Token/Basic/OAuth2) drive v5-native
+    // implementations of the org.apache.pulsar.client.api.v5.auth SPI on the async binary path, so the v5
+    // auth API (Tier 0, no internal deps) is on the compile/runtime path. NOTE: this folds the v5 auth API
+    // into pulsar-client-shaded / -all, which PIP-478 flagged as a follow-up; accepted here as an
+    // intentional deviation pending the stage-4 module split.
+    api(project(":pulsar-client-api-v5"))
     implementation(project(":pulsar-common")) {
         exclude(group = "io.prometheus", module = "simpleclient_caffeine")
     }

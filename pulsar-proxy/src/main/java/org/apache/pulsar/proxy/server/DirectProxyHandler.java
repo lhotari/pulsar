@@ -39,6 +39,7 @@ import io.netty.handler.codec.haproxy.HAProxyMessage;
 import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
 import io.netty.handler.codec.haproxy.HAProxyProxiedProtocol;
 import io.netty.handler.flush.FlushConsolidationHandler;
+import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.CharsetUtil;
@@ -121,8 +122,12 @@ public class DirectProxyHandler {
             inboundChannel.close();
             return;
         }
+        // PIP-478: when the new SPI is selected for broker-client TLS, ProxyService holds a shared, rotating
+        // SslContext for the BROKER_CLIENT purpose; use it directly (no legacy per-host PulsarSslFactory).
+        final SslContext brokerClientSslContext = tlsEnabledWithBroker ? service.getBrokerClientSslContext() : null;
         PulsarSslFactory sslFactory =
-                tlsEnabledWithBroker ? pulsarSslFactoryMap.computeIfAbsent(remoteHost, (hostname) -> {
+                (tlsEnabledWithBroker && brokerClientSslContext == null)
+                        ? pulsarSslFactoryMap.computeIfAbsent(remoteHost, (hostname) -> {
                     AuthenticationDataProvider authData = null;
 
                     if (!isEmpty(service.getConfiguration().getBrokerClientAuthenticationPlugin())) {
@@ -172,9 +177,17 @@ public class DirectProxyHandler {
                 if (tlsEnabledWithBroker) {
                     String host = targetBrokerAddress.getHostString();
                     int port = targetBrokerAddress.getPort();
-                    SslHandler handler = new SslHandler(sslFactory.createClientSslEngine(ch.alloc(), host, port));
-                    if (tlsHostnameVerificationEnabled) {
-                        SecurityUtility.configureSSLHandler(handler);
+                    final SslHandler handler;
+                    if (brokerClientSslContext != null) {
+                        // PIP-478: build the handler from the shared client SslContext. Hostname verification
+                        // is baked into the context at build time (per the client TlsPolicy), so it is not
+                        // re-applied here; host/port drive SNI and the verification target.
+                        handler = brokerClientSslContext.newHandler(ch.alloc(), host, port);
+                    } else {
+                        handler = new SslHandler(sslFactory.createClientSslEngine(ch.alloc(), host, port));
+                        if (tlsHostnameVerificationEnabled) {
+                            SecurityUtility.configureSSLHandler(handler);
+                        }
                     }
                     ch.pipeline().addLast(TLS_HANDLER, handler);
                 }

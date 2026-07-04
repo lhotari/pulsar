@@ -58,8 +58,14 @@ import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
 import org.apache.pulsar.client.impl.auth.PulsarSaslClient.ClientCallbackHandler;
+import org.apache.pulsar.client.impl.auth.v5.SaslAuthenticationV5;
+import org.apache.pulsar.client.impl.auth.v5.V5BinaryAuthenticationDriver;
 import org.apache.pulsar.common.api.AuthData;
 import org.apache.pulsar.common.sasl.JAASCredentialsContainer;
 
@@ -71,7 +77,9 @@ import org.apache.pulsar.common.sasl.JAASCredentialsContainer;
  *   for Kerberos a krb5.conf, which is set by `-Djava.security.krb5.conf=/dir/krb5.conf`
  */
 @CustomLog
-public class AuthenticationSasl implements Authentication, EncodedAuthenticationParameterSupport {
+public class AuthenticationSasl
+        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver,
+        ClientAuthenticationServicesAware {
     private static final long serialVersionUID = 1L;
     // this is a static object that shares amongst client.
     private static JAASCredentialsContainer jaasCredentialsContainer;
@@ -80,6 +88,8 @@ public class AuthenticationSasl implements Authentication, EncodedAuthentication
     private Map<String, String> configuration;
     private String loginContextName;
     private String serverType = null;
+    // PIP-478 stage 3b: the client's framework services, late-bound before start(); null until then.
+    private transient volatile ClientAuthenticationServices authServices;
 
     public AuthenticationSasl() {
     }
@@ -99,6 +109,34 @@ public class AuthenticationSasl implements Authentication, EncodedAuthentication
         } catch (Throwable t) {
             log.error().exception(t).log("Failed create sasl client");
             throw new PulsarClientException(t);
+        }
+    }
+
+    @Override
+    public void bindClientAuthenticationServices(ClientAuthenticationServices services) {
+        this.authServices = services;
+    }
+
+    @Override
+    public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
+        // PIP-478: drive the v5-native SASL body on the async binary path. Each connection attempt gets a
+        // fresh exchange whose call-context state slot holds the per-broker PulsarSaslClient across the
+        // multi-round handshake; the SASL-over-HTTP loop stays on this shim (stage 3d).
+        return new V5BinaryAuthenticationDriver(new SaslAuthenticationV5(new ShimSaslProviderFactory(this)),
+                authServices).newAuthenticationExchange(brokerHostName);
+    }
+
+    private static final class ShimSaslProviderFactory implements SaslAuthenticationV5.SaslProviderFactory {
+        private static final long serialVersionUID = 1L;
+        private final AuthenticationSasl shim;
+
+        ShimSaslProviderFactory(AuthenticationSasl shim) {
+            this.shim = shim;
+        }
+
+        @Override
+        public AuthenticationDataProvider create(String brokerHost) throws Exception {
+            return shim.getAuthData(brokerHost);
         }
     }
 

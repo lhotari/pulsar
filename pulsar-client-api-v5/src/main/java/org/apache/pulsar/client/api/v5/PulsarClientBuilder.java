@@ -23,8 +23,10 @@ import java.time.Duration;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.config.ConnectionPolicy;
 import org.apache.pulsar.client.api.v5.config.MemorySize;
-import org.apache.pulsar.client.api.v5.config.TlsPolicy;
 import org.apache.pulsar.client.api.v5.config.TransactionPolicy;
+import org.apache.pulsar.common.tls.PulsarTlsFactory;
+import org.apache.pulsar.common.tls.TlsPolicy;
+import org.apache.pulsar.common.tls.TlsPurpose;
 
 /**
  * Builder for configuring and creating a {@link PulsarClient}.
@@ -100,15 +102,40 @@ public interface PulsarClientBuilder {
     PulsarClientBuilder transactionPolicy(TransactionPolicy policy);
 
     /**
-     * Configure TLS for the client connection.
+     * Configure TLS for the client connection (PIP-478), using the neutral
+     * {@link org.apache.pulsar.common.tls.TlsPolicy} value shared by the client builder and the
+     * server components. The policy is bound to the default client purposes.
      *
      * @param policy the TLS policy to apply to broker connections
      * @return this builder instance for chaining
-     * @see TlsPolicy#of(String)
-     * @see TlsPolicy#ofMutualTls(String, String, String)
-     * @see TlsPolicy#ofInsecure()
+     * @see TlsPolicy#pem(String, String, String)
+     * @see TlsPolicy#keyStore(String, String, String, String, String)
+     * @see TlsPolicy#insecure()
      */
     PulsarClientBuilder tlsPolicy(TlsPolicy policy);
+
+    /**
+     * Configure TLS for a specific {@link TlsPurpose} (PIP-478). Most users call
+     * {@link #tlsPolicy(TlsPolicy)}, which binds the policy to {@link TlsPurpose#CLIENT_DEFAULT}; this
+     * overload additionally lets a user configure a distinct trust domain — for example
+     * {@link TlsPurpose#CLIENT_OAUTH2} for the identity provider — with its own material.
+     *
+     * @param purpose the client TLS purpose the policy applies to
+     * @param policy  the TLS policy to apply
+     * @return this builder instance for chaining
+     */
+    PulsarClientBuilder tlsPolicy(TlsPurpose purpose, TlsPolicy policy);
+
+    /**
+     * Provide a custom {@link PulsarTlsFactory} implementation (PIP-478), for advanced deployments that
+     * source TLS material from something other than files (a KMS, an HSM-backed key manager, a
+     * per-destination workload identity). The supplied factory is <em>adopted</em>: the client
+     * initializes it and closes it when the client closes.
+     *
+     * @param factory the TLS factory to adopt
+     * @return this builder instance for chaining
+     */
+    PulsarClientBuilder tlsFactory(PulsarTlsFactory factory);
 
     /**
      * Provide a custom {@link OpenTelemetry} instance for metrics and tracing.

@@ -16,4 +16,9 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.common.tls;
+
+/**
+ * Stable-internal client API types observed by the framework but not intended for application
+ * implementation. See {@link org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver}.
+ */
+package org.apache.pulsar.client.api.internal;
