@@ -42,9 +42,12 @@ import org.apache.pulsar.common.util.tls.JdkSslContexts;
  * for the default {@code FileBasedTlsFactory}, and synthesizes the richer objects from a JDK
  * {@code SSLContext} for the framework fallback (PIP-478).
  *
- * <p>Reuses {@link JdkSslContexts} for the JDK {@code SSLContext} build. The Netty contexts are
- * assembled here (rather than through the file-path helpers) because two
- * per-context settings must be baked at build time from in-memory material:
+ * <p>This class owns TLS context assembly end-to-end, composing the focused low-level primitives rather
+ * than a general-purpose helper: it consumes already-parsed in-memory {@link TlsMaterial} (PEM and keystore
+ * parsing lives in the material sources), builds the JDK {@code SSLContext} through {@link JdkSslContexts},
+ * and assembles the Netty {@link SslContext} objects inline through {@link SslContextBuilder}. The Netty
+ * contexts are built here rather than delegated because two per-context settings must be baked at build time
+ * from the in-memory material:
  * <ul>
  *   <li><b>Client hostname verification</b> — set via
  *       {@link SslContextBuilder#endpointIdentificationAlgorithm(String)} to {@code "HTTPS"} when the
