@@ -36,6 +36,8 @@ import java.util.function.Supplier;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
+import org.apache.pulsar.client.impl.auth.AuthenticationKeyStoreTls;
+import org.apache.pulsar.client.impl.auth.AuthenticationTls;
 import org.apache.pulsar.client.impl.auth.oauth2.AuthenticationOAuth2;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
@@ -232,26 +234,50 @@ public final class ClientTlsFactorySupport {
      * The auth-cert-wins {@code authMaterialSupplier} fold for the application/admin client's
      * {@link TlsPurpose#CLIENT_DEFAULT}: a plugin-supplied client identity (e.g. {@code AuthenticationTls} /
      * {@code AuthenticationKeyStoreTls}) reaches the transport on the new path. Unlike the broker-client
-     * path this registers the supplier <em>unconditionally</em> (no eager probe), so client construction
-     * never calls {@code getAuthData()}; {@code AuthProvidedMaterialSource} applies auth-cert-wins only when
-     * the plugin actually carries TLS material, evaluated lazily at context build/reload.
+     * path there is no eager probe — the supplier is evaluated lazily at context build/reload, so client
+     * construction never calls {@code getAuthData()}. The fold is registered when the identity must come from
+     * the plugin (no {@code tls*} key material configured) or when a TLS-auth plugin is present alongside
+     * {@code tls*} files (auth-cert-wins); a non-TLS plugin is not consulted when {@code tls*} files supply
+     * the identity, so its {@code getAuthData()} stays untouched. {@code AuthProvidedMaterialSource} applies
+     * auth-cert-wins only when the plugin actually carries TLS material.
      */
     private static Map<TlsPurpose, Supplier<AuthenticationDataProvider>> clientDefaultAuthMaterialSuppliers(
             ClientConfigurationData conf) {
         Authentication auth = conf.getAuthentication();
-        if (auth == null || hasConfiguredClientKeyMaterial(conf)) {
-            // The client identity comes from its tls* cert/key (or keystore) files, so the auth plugin is not
-            // consulted for TLS material — its getAuthData() is not called for a TLS purpose (e.g. a non-TLS
-            // plugin, per TlsProducerConsumerTest.testTlsWithFakeAuthentication).
+        if (auth == null) {
             return Map.of();
         }
+        if (hasConfiguredClientKeyMaterial(conf) && !isTlsAuthPlugin(auth)) {
+            // The client already has its own tls* cert/key (or keystore) identity, and the auth plugin is not
+            // a TLS-auth plugin, so it is not consulted for TLS material — its getAuthData() is not called
+            // (e.g. a non-TLS plugin, per TlsProducerConsumerTest.testTlsWithFakeAuthentication, which asserts
+            // getAuthData() is never called). A genuine TLS-auth plugin, however, still overrides the tls*
+            // files (auth-cert-wins, the removed PIP-337 behavior) — see below.
+            return Map.of();
+        }
+        // Register the fold when the identity must come from the auth plugin (no tls* key material) OR when a
+        // TLS-auth plugin (AuthenticationTls / AuthenticationKeyStoreTls) is present alongside tls* files: the
+        // plugin certificate wins over the tls* files (auth-cert-wins), restoring the removed PIP-337
+        // precedence so a broker/proxy whose broker-client identity comes from an AuthenticationTls plugin
+        // presents that certificate rather than its configured brokerClient* cert files (issue: the internal
+        // broker-client otherwise presented a server-only-EKU cert and was rejected for TLS client auth).
+        // The supplier is evaluated lazily at CLIENT_DEFAULT build/reload (off the event loop), so client
+        // construction never eagerly calls getAuthData().
         Supplier<AuthenticationDataProvider> supplier = FileBasedTlsFactory.authMaterialSupplier(auth);
-        // No tls* key material configured, so the identity (if any) must come from a TLS-auth plugin
-        // (AuthenticationTls / AuthenticationKeyStoreTls). Evaluated lazily at CLIENT_DEFAULT build/reload
-        // (off the event loop), so client construction never eagerly calls getAuthData(). A plugin that
-        // cannot supply TLS key material — a token plugin, or an OAuth2 plugin whose getAuthData() acquires a
-        // token (and fails when the plugin is not bound to a client) — yields nothing to fold instead of
-        // failing the build; AuthProvidedMaterialSource ignores a null / non-TLS result.
+        if (isTlsAuthPlugin(auth)) {
+            // A TLS-auth plugin owns the client identity, so register the supplier directly (no swallow): a
+            // transient read failure — e.g. the key file briefly missing while it is being rotated, per
+            // AdminApiTlsAuthTest.testCertRefreshForPulsarAdmin — must propagate so AuthProvidedMaterialSource
+            // keeps the last-good certificate. Swallowing it to null would instead fold nothing and downgrade
+            // the identity to "no client certificate", which strands a pooled admin/HTTP connection that
+            // completed a handshake presenting no cert (rejected 401 and, being non-5xx, kept alive and
+            // reused) so the rotated certificate would never take effect.
+            return Map.of(TlsPurpose.CLIENT_DEFAULT, supplier);
+        }
+        // A non-TLS plugin (token / OAuth2) has no client certificate to fold; when it is registered here it is
+        // because no tls* key material is configured. Swallow a lookup failure to null so client build does not
+        // fail (e.g. an OAuth2 plugin whose getAuthData() acquires a token and fails when the plugin is not
+        // bound to a client); AuthProvidedMaterialSource then keeps the empty base material.
         return Map.of(TlsPurpose.CLIENT_DEFAULT, () -> {
             try {
                 return supplier.get();
@@ -259,6 +285,17 @@ public final class ClientTlsFactorySupport {
                 return null;
             }
         });
+    }
+
+    /**
+     * Whether an authentication plugin is one of the built-in TLS-auth plugins that carry a client
+     * certificate identity ({@link AuthenticationTls} / {@link AuthenticationKeyStoreTls}). Such a plugin's
+     * certificate overrides the configured {@code tls*} key material (auth-cert-wins); any other plugin is
+     * consulted for TLS material only when no {@code tls*} key material is configured, so its
+     * {@code getAuthData()} is not called when the client already has its own certificate files.
+     */
+    private static boolean isTlsAuthPlugin(Authentication auth) {
+        return auth instanceof AuthenticationTls || auth instanceof AuthenticationKeyStoreTls;
     }
 
     private static boolean hasConfiguredClientKeyMaterial(ClientConfigurationData conf) {

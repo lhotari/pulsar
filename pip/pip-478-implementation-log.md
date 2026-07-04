@@ -770,3 +770,74 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
       `AdminApiTlsAuthTest.testCertRefreshForPulsarAdmin` — the admin `AuthenticationTls` cert-refresh does not
       take effect on the new SPI path (auth-fold material rotation not observed). Both are stage-4c gaps
       orthogonal to F1/F2/F3 and should be tracked separately.
+
+31. **Post-removal CI regression fixes (four stage-4c regressions)** — the last build work of the mission, on
+    `lh-pip-478-impl-v2` (local commits only). Trailer `Assisted-by: Claude Code (Opus 4.8)`. Each regression
+    was re-reproduced on the current HEAD (`cb7237ed50a`, i.e. **after** the entry-30 F1 fixup) before fixing;
+    the F1 acquisition refactor did move regression #2's surface, exactly as the work order flagged.
+    - **P0 `[fix][proxy]` — proxy binary-lookup TLS null factory (deterministic NPE).** Since 4c deleted the
+      lazy per-host `PulsarSslFactory` fallback, `ProxyConnection.createClientConfiguration` built a
+      `tlsEnabledWithBroker` client config with the `tls*` fields set but **no** `PulsarTlsFactory`, and passed
+      it straight to `new ConnectionPool(...)`; the client `PulsarChannelInitializer` then NPE'd on a null
+      `CLIENT_DEFAULT` factory. Fix: `ProxyService` builds one shared `CLIENT_DEFAULT`-serving factory at
+      startup via `ClientTlsFactorySupport.resolveClientTlsFactory(<representative config>, statsExecutor,
+      statsExecutor, otel)` — off the event loop, from the same broker-client `tls*` material — exposed via
+      `getLookupClientTlsFactory()` and closed with the service; `createClientConfiguration` (now also a static
+      form, reused to derive the representative config) stashes it on every per-connection config. The existing
+      `brokerClientTlsFactory` serves `BROKER_CLIENT` (DirectProxyHandler) and cannot serve the lookup pool's
+      `CLIENT_DEFAULT` request, so this is a deliberate second factory. Gate:
+      `ProxyAuthenticatedProducerConsumerTest.testTlsSyncProducerAndConsumer` (1/1); the entry-30
+      `ProxyKeyStoreTlsTransportTest.testProducer` keystore sibling is covered by the same fix (`:pulsar-proxy`
+      full build). The `ClientTlsTest` integration scenario is on the same path — CI validates it.
+    - **P1 `[fix][client]` — broker-internal client presented a server-EKU cert (auth-cert-wins broken).** The
+      queue framed this as native hostname-verification; the reproduced mechanism is different (the F1 fixup had
+      shifted it). `AuthenticationTlsHostnameVerificationTest.testTlsSyncProducerAndConsumerCorrectBrokerHost`
+      failed with "Connection already closed" because the broker's internal system-topic (`__change_events`)
+      client — configured (by the base `MockedPulsarServiceBaseTest`) with both `brokerClientCertificateFilePath`
+      (broker.cert, **serverAuth-EKU only**) and an `AuthenticationTls` plugin (admin.cert, clientAuth-EKU) —
+      presented the server-EKU cert for TLS client auth and was rejected ("Extended key usage does not permit
+      use for TLS client authentication"), failing topic-policy load and tearing the app subscribe down (the app
+      client itself, admin.cert via auth with no `tls*` files, connected fine). Root cause:
+      `ClientTlsFactorySupport.clientDefaultAuthMaterialSuppliers` skipped the auth fold whenever any `tls*` key
+      material was configured, inverting the removed-PIP-337 "auth-cert-wins" precedence. That gate existed only
+      to keep `TlsProducerConsumerTest.testTlsWithFakeAuthentication` from calling `getAuthData()` on a **non-TLS**
+      fake plugin. Fix: gate on the plugin **type**, not the mere presence of `tls*` files — a genuine TLS-auth
+      plugin (`AuthenticationTls`/`AuthenticationKeyStoreTls`) always overrides the `tls*` files
+      (auth-cert-wins); a non-TLS plugin is still not consulted when `tls*` files supply the identity, so its
+      `getAuthData()` stays untouched. Gate: full `AuthenticationTlsHostnameVerificationTest` (4/4 — negative
+      sibling still fails-as-required) and `testTlsWithFakeAuthentication` still green.
+    - **P1/P2 `[fix][client]` — admin `AuthenticationTls` cert-rotation not picked up.**
+      `AdminApiTlsAuthTest.testCertRefreshForPulsarAdmin` (deterministic, not a flake — failed in isolation and
+      under the class's TestNG retry) swaps the admin key file mid-test. The 1 s material poll re-reads fine, but
+      during the test's brief delete window `AuthenticationTls.getAuthData()` throws `NoSuchFileException`, and
+      the `clientDefaultAuthMaterialSuppliers` supplier **swallowed it to `null`** — so `AuthProvidedMaterialSource`
+      treated it as "no auth material", overlaid the (empty, for the admin) base material, and **delivered a
+      no-client-cert context** instead of keeping the last-good one. The admin then opened a connection that
+      handshook presenting no cert (broker `401 Authentication required`); being non-5xx it was kept alive and
+      **reused for every retry** (same client port in the logs), so the later restored cert never took effect.
+      Fix: for a TLS-auth plugin register the supplier **directly** (no `null` swallow) so a transient read
+      failure propagates and `AuthProvidedMaterialSource` keeps the last-good cert; the mismatched-key connection
+      then fails the handshake (never pooled) and, once the good key is delivered, a fresh connection
+      authenticates. The `null`-swallow is retained only for non-TLS plugins (token/OAuth2), where a lookup
+      failure legitimately means "nothing to fold, don't fail the build". Gate: full `AdminApiTlsAuthTest`
+      (20/20).
+    - **Log-honesty note (the missed ninth call-site).** The 4c call-site sweep for the deleted lazy-factory
+      fallback missed `ProxyConnection.createClientConfiguration`: it hand-rolls a `ClientConfigurationData`
+      outside `PulsarClientImpl` (where the client factory is normally resolved via `setupClientTlsFactory`), so
+      it was not on the `maybeApplyBrokerClientTlsFactory` / `setupClientTlsFactory` entry-point list. Entry 30
+      had in fact already surfaced this exact gap as a "pre-existing failure"
+      (`ProxyKeyStoreTlsTransportTest.testProducer`), now fixed. Lesson for future sweeps: a sweep keyed on the
+      framework's TLS-factory entry points misses components that build a `ClientConfigurationData` by hand.
+    - **Verify:** `spotlessApply` + `checkstyleMain` clean (`pulsar-client-original`, `pulsar-proxy`). Gates:
+      `ProxyAuthenticatedProducerConsumerTest.testTlsSyncProducerAndConsumer` (1/1),
+      `AuthenticationTlsHostnameVerificationTest` (4/4), `AdminApiTlsAuthTest` (20/20). Cross-gates all green:
+      `TlsProducerConsumerTest` (10), `TlsFactoryProducerConsumerTest` (2), `ReplicatorTlsFactoryTest` (2),
+      `V5TlsProducerConsumerTest` (2), `ClientCnxAsyncAuthTest` (7), `ProxyTlsTest` (2),
+      `AuthedAdminProxyHandlerTest` + `NewTlsPath` (2 + 2). Full builds: `:pulsar-broker:compileTestJava` green,
+      `:pulsar-client-original:build` green, `:pulsar-proxy:build` green **except** one **local-environment**
+      failure — `ProxyEnableHAProxyProtocolTest.setup` got `HTTP 407 Proxy Authentication Required` because the
+      admin `AsyncHttpConnector` honours JVM proxy properties (`setUseProxyProperties(true)`) and this dev machine
+      has an authenticating `HTTP_PROXY` set; it is a plaintext (non-TLS) test that never touches the changed
+      code path, and it passes when re-run with the proxy env vars cleared. `ProxyKeyStoreTlsTransportTest` (the
+      keystore P0 sibling entry 30 flagged) passes (1/1) inside the full `:pulsar-proxy` build. Nothing left
+      before the branch is CI-ready.
