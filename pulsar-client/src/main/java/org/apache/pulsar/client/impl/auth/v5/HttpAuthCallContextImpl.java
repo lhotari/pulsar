@@ -19,7 +19,6 @@
 package org.apache.pulsar.client.impl.auth.v5;
 
 import java.net.URI;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.pulsar.client.api.v5.auth.HttpAuthCallContext;
@@ -82,13 +81,5 @@ final class HttpAuthCallContextImpl implements HttpAuthCallContext {
         } else {
             stateSlot.put(clazz, value);
         }
-    }
-
-    /**
-     * @return a case-insensitive view of the current server challenge headers (empty map when none)
-     */
-    Map<String, String> serverChallengeMap() {
-        HttpAuthHeaders headers = serverChallengeHeaders;
-        return headers == null ? Map.of() : headers.asMap();
     }
 }
