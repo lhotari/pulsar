@@ -84,7 +84,7 @@ public final class BinaryAuthenticationExchange implements AuthenticationExchang
                                 + "BinaryAuthDataProvider; the Pulsar binary transport requires it (PIP-478)"));
             }
             return provider.get().getAuthDataAsync(callContext)
-                    .thenApply(d -> AuthData.of(d == null ? new byte[0] : d.authData()))
+                    .thenApply(d -> AuthData.of(d == null ? new byte[0] : d.bytes()))
                     .exceptionally(t -> {
                         throw new CompletionException(toV4Exception(unwrap(t)));
                     });
@@ -112,7 +112,7 @@ public final class BinaryAuthenticationExchange implements AuthenticationExchang
             }
             return handler.get()
                     .respondToChallengeAsync(callContext, new AuthChallenge(challengeOrRefresh.getBytes()))
-                    .thenApply(r -> AuthData.of(r == null ? new byte[0] : r.responseBytes()))
+                    .thenApply(r -> AuthData.of(r == null ? new byte[0] : r.bytes()))
                     .exceptionally(t -> {
                         throw new CompletionException(toV4Exception(unwrap(t)));
                     });

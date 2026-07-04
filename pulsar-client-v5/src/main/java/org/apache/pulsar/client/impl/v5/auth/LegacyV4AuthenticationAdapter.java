@@ -375,7 +375,7 @@ public abstract class LegacyV4AuthenticationAdapter implements Authentication {
                     d = v4.getAuthData(callContext.brokerHost());
                     callContext.setStateObject(AuthenticationDataProvider.class, d);
                 }
-                AuthData response = d.authenticate(AuthData.of(challenge.challenge()));
+                AuthData response = d.authenticate(AuthData.of(challenge.bytes()));
                 return new ChallengeResponse(response == null ? null : response.getBytes());
             });
         }

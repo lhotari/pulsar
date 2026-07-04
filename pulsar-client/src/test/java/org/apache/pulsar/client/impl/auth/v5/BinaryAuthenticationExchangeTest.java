@@ -122,7 +122,7 @@ public class BinaryAuthenticationExchangeTest {
         public CompletableFuture<ChallengeResponse> respondToChallengeAsync(AuthenticationCallContext ctx,
                 AuthChallenge authChallenge) {
             challengeCalls++;
-            String answer = "response-to:" + new String(authChallenge.challenge(), UTF_8);
+            String answer = "response-to:" + new String(authChallenge.bytes(), UTF_8);
             return CompletableFuture.completedFuture(new ChallengeResponse(answer.getBytes(UTF_8)));
         }
     }

@@ -124,7 +124,7 @@ public class SaslAuthenticationV5 implements Authentication, BinaryAuthDataProvi
                 provider = providerFactory.create(ctx.brokerHost());
                 ctx.setStateObject(AuthenticationDataProvider.class, provider);
             }
-            AuthData response = provider.authenticate(AuthData.of(authChallenge.challenge()));
+            AuthData response = provider.authenticate(AuthData.of(authChallenge.bytes()));
             return CompletableFuture.completedFuture(new ChallengeResponse(response.getBytes()));
         } catch (Throwable t) {
             return CompletableFuture.failedFuture(t);
