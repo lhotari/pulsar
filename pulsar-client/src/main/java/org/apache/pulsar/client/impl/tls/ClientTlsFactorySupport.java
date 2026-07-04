@@ -36,6 +36,7 @@ import java.util.function.Supplier;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
+import org.apache.pulsar.client.impl.auth.oauth2.AuthenticationOAuth2;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
@@ -260,7 +261,20 @@ public final class ClientTlsFactorySupport {
         // Always ensure CLIENT_DEFAULT resolves — derive it from the conf fields if the v5 builder did
         // not supply one explicitly.
         policies.putIfAbsent(TlsPurpose.CLIENT_DEFAULT, clientDefaultPolicy(conf));
+        // PIP-478 stage 4a: fold an OAuth2 plugin's own IdP TLS material (trustCerts / cert / key params,
+        // issue #24944) into CLIENT_OAUTH2, so the framework HTTP client serves IdP mTLS / custom trust on
+        // the new path instead of the deprecated private client. Only when the plugin carries IdP TLS
+        // material; otherwise CLIENT_OAUTH2 keeps resolving to the system default (its empty fallback). The
+        // plugin is reachable here because conf.getAuthentication() is set before this runs (v5 build /
+        // client construction).
+        foldOAuth2IdpPolicy(conf, policies);
         return policies;
+    }
+
+    private static void foldOAuth2IdpPolicy(ClientConfigurationData conf, Map<TlsPurpose, TlsPolicy> policies) {
+        if (conf.getAuthentication() instanceof AuthenticationOAuth2 oauth2) {
+            oauth2.idpTlsPolicy().ifPresent(policy -> policies.putIfAbsent(TlsPurpose.CLIENT_OAUTH2, policy));
+        }
     }
 
     private static FileBasedTlsFactorySettings settings(ClientConfigurationData conf) {

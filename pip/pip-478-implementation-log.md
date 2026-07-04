@@ -443,6 +443,82 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
      warmup for admin is moved onto a shared client). The exchange-scoped role token means no cross-request
      role-token cache (extra KDC round-trips vs v4); revisit only if a perf gate needs it.
 
+### 2026-07-04
+
+25. **Stage 4a complete** (stage4a-builder, Opus, 3 commits) — the three prerequisites that must land
+   before the PIP-337 removal (stage 4c). Each is its own commit; all locally green.
+   - **Item 3 — TLS reload metrics (task #13), commit `3b786973c91` `[feat][misc]`.** `FileBasedTlsFactory`
+     now emits the PIP Metrics-section instruments via `TlsFactoryInitContext.openTelemetry()`: new
+     `TlsReloadMetrics` builds `pulsar.tls.reload` (counter `{purpose, result=success|failure}`) and
+     `pulsar.tls.last_reload_success` (gauge, unix seconds, `{purpose}`) off the injected OpenTelemetry
+     root (scope `org.apache.pulsar.tls`); a noop root yields no-op instruments so recording is always
+     safe. Semantics chosen deliberately: an attempt is counted per **actual** (re)load — the initial
+     load of a purpose, and each rotation where the on-disk material changed and was rebuilt; a steady
+     poll that finds no change is **not** counted, so the counter reflects real (re)load events and the
+     gauge stops advancing exactly when rotation silently fails **or** silently stops happening (the
+     Monitoring-section signal). **Metrics wiring coverage per component**: broker (binary via
+     `PulsarChannelInitializer`, web via `WebService`) and the client (via `ClientTlsFactorySupport`) already
+     pass a **real** OpenTelemetry into the factory init context, so the instruments are live there with no
+     new plumbing; proxy / websocket / functions-worker still pass `OpenTelemetry.noop()` (no OTel-root
+     accessor reachable without new plumbing — `PulsarProxyOpenTelemetry`/`PulsarWorkerOpenTelemetry` expose
+     only a `Meter`) — documented, left for a follow-up. `opentelemetry-api` added `compileOnly` to
+     `pulsar-common` (matching `pulsar-common-api`; the real root is always supplied at runtime by the owning
+     component). Unit test with an in-memory OTel SDK reader (4/4): initial success + gauge, initial failure
+     + no gauge, rotation reload, failed rotation. `FileBasedTlsFactoryTest` and the other TLS-impl tests
+     unmodified green.
+   - **Item 1 — broker outbound BROKER_CLIENT onto the new SPI, commit `f56764903ad` `[feat][broker]`.**
+     `PulsarService.createClientImpl` (the single funnel for the broker's own outbound `PulsarClient`
+     instances — local + per-cluster replication) attaches a per-client `PulsarTlsFactory` to the
+     `ClientConfigurationData` via the 3b `tlsFactory` seam when `brokerClientTlsFactoryClassName` is set
+     (D8 opt-in; off by default → legacy PIP-337 path unchanged) and the outbound connection is TLS. New
+     `ClientTlsFactorySupport.brokerClientTlsFactory` composes `CLIENT_DEFAULT` (the purpose the outbound
+     transport requests) from the config's `tls*` fields and folds the broker-client `Authentication` TLS
+     material via the **3c `authMaterialSupplier`** (auth-cert-wins) — giving that capability its first real
+     consumer, so an `AuthenticationTls` broker-client identity reaches the transport on the new path.
+     **Per-cluster wiring outcome: done, without minting `broker-client.<cluster>` purposes** — each outbound
+     client owns a factory built from its own `conf`, whose `tls*` fields already carry the per-cluster
+     `ClusterData.brokerClientTls*` material (mapped by `BrokerService.configTlsSettings`); the minted-purpose
+     shape would only matter for a shared factory, which we deliberately don't use (per-client ownership keeps
+     lifecycle/close correct). A non-default class name is instantiated reflectively (self-sources material;
+     `brokerClientTlsFactoryConfig` params not yet plumbed to the client init context — noted). Gate:
+     `ReplicatorTlsFactoryTest` — replication clients ride the new SPI (`conf.getTlsFactory() != null`) **and**
+     messages replicate broker-to-broker across three TLS clusters over the new-path handshake (2/2);
+     `ReplicatorTlsTest` unmodified green on the legacy default. Debugging note banked: setting the
+     `ServiceConfiguration` `brokerClientTlsEnabled` flag (as `ReplicatorTlsTest` does) perturbs the remote
+     `getClusterPulsarAdmin` HTTP path (216× PKIX on `__change_events` + the test topic) **independently of
+     PIP-478** — confirmed by reproducing with the factory gate off; the gate test therefore keys off
+     `ClusterData` TLS only and does not set that flag.
+   - **Item 2 — OAuth2 plugin-carried IdP TLS → CLIENT_OAUTH2 fold, commit (this one) `[feat][client]`.**
+     **OAuth2 fold design**: the plugin's IdP TLS parameters (`trustCertsFilePath` / `tlsCertFile` /
+     `tlsKeyFile`, issue #24944) are exposed as an `Optional<TlsPolicy>` (`FlowBase.idpTlsPolicy` →
+     `AuthenticationOAuth2.idpTlsPolicy`) and folded into **`CLIENT_OAUTH2`** by
+     `ClientTlsFactorySupport.composePolicies` — the single compose home that runs for both the v5-builder
+     `tlsPolicy` path and the v4 flip path (no `pulsar-client-v5` change needed). The fold is naturally
+     opt-in-respecting: `composePolicies` only runs when the client is already on the new TLS path, so a
+     legacy/plain-v4 client is untouched. `FrameworkHttpClientFactory.configureTls` already resolves
+     `config.tlsPurpose()` = `CLIENT_OAUTH2`, so the framework `PulsarHttpClient` now serves the IdP
+     mTLS/custom-trust that previously forced the deprecated private client. `FlowBase`'s discriminator
+     **narrows** to "no TLS factory available": framework client when `httpClientFactory != null` and either
+     no own IdP material **or** a TLS factory is present (`FrameworkHttpClientFactory.hasTlsFactory()`); the
+     deprecated private client stays reachable only on the legacy path (no factory) — removed in 4c. Gates:
+     `OAuth2IdpTlsFoldTest` (fold parsing, 4/4), `OAuth2IdpTlsFrameworkClientTest` (WireMock HTTPS + custom CA:
+     the framework client trusts the IdP **only** because the plugin's `trustCertsFilePath` was folded into
+     `CLIENT_OAUTH2`; without the fold the same request is PKIX-rejected — 2/2; `pulsar.test-certs-conventions`
+     added to `pulsar-client` for the shared CA certs). Full oauth2 suite + `TokenOauth2AuthenticatedProducer
+     ConsumerTest` (2/2) + `CredentialOffloadTest` (3/3) unmodified green.
+   - **Cross-cutting gates green**: `ClientCnxAsyncAuthTest`, `V5TlsProducerConsumerTest`, `SaslAuthenticateTest`
+     (both items touch shared `ClientTlsFactorySupport`), `:pulsar-client-original` jar +
+     `:pulsar-client-v5`/`:pulsar-client-admin-original` compile, `:pulsar-common` build; spotless + checkstyle
+     clean across touched modules.
+   - **Stage-4b/4c handoff**: (a) admin (`PulsarAdmin`) outbound HTTP still rides the legacy path — its
+     `AsyncHttpConnector` is a separate connector from the `createClientImpl` funnel, so the broker's
+     `getClusterPulsarAdmin` / `getCreateAdminClientBuilder` are **not** yet on the new SPI (stage 4b). (b) The
+     deprecated OAuth2 private `AsyncHttpClient` fallback in `FlowBase.getHttpClient` is now unreachable when a
+     TLS factory exists, but stays for the legacy/plain-v4 path — **stage 4c removes it** together with the
+     PIP-337 factory. (c) proxy/websocket/functions-worker TLS metrics stay noop until an OTel-root accessor is
+     plumbed. (d) a non-default `brokerClientTlsFactoryClassName` custom class works but its
+     `brokerClientTlsFactoryConfig` params aren't yet delivered to the client init context.
+
 ## Watch items (implementation risks flagged during design)
 
 - `DefaultBrokerTlsFactory` is specced "configured from ServiceConfiguration" but lives in

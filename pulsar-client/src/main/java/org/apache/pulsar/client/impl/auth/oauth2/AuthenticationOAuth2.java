@@ -24,6 +24,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -46,6 +47,8 @@ import org.apache.pulsar.client.impl.AuthenticationUtil;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenEndpointAuthMethod;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenResult;
 import org.apache.pulsar.client.impl.auth.v5.V5BinaryAuthenticationDriver;
+import org.apache.pulsar.common.tls.TlsPolicy;
+import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.util.Backoff;
 
 /**
@@ -266,6 +269,20 @@ public class AuthenticationOAuth2
             this.authenticate();
         }
         return this.cachedToken.getAuthData();
+    }
+
+    /**
+     * The IdP TLS material the configured flow carries, folded into a {@link TlsPurpose#CLIENT_OAUTH2}
+     * {@link TlsPolicy} so the framework HTTP client can serve IdP mTLS / custom trust on the new PIP-478 TLS
+     * path (stage 4a). Read at client-build / TLS-compose time (the flow is created during
+     * {@link #configure}, before the client is constructed). Empty when no flow is configured or it carries
+     * no IdP TLS material.
+     *
+     * @return the CLIENT_OAUTH2 policy, or empty
+     */
+    public Optional<TlsPolicy> idpTlsPolicy() {
+        Flow currentFlow = this.flow;
+        return currentFlow instanceof FlowBase flowBase ? flowBase.idpTlsPolicy() : Optional.empty();
     }
 
     @Override

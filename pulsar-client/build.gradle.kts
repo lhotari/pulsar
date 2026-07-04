@@ -19,6 +19,10 @@
 
 plugins {
     id("pulsar.public-java-library-conventions")
+    // PIP-478 stage 4a: the OAuth2 IdP-TLS fold test stands up a WireMock HTTPS IdP with the shared CA test
+    // certs (tests/certificate-authority), proving plugin-carried trustCerts reach the IdP via the framework
+    // HTTP client.
+    id("pulsar.test-certs-conventions")
     alias(libs.plugins.protobuf)
 }
 

@@ -26,6 +26,7 @@ import java.net.URL;
 import java.time.Duration;
 import java.time.format.DateTimeParseException;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -41,8 +42,10 @@ import org.apache.pulsar.client.impl.auth.oauth2.protocol.DefaultMetadataResolve
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.Metadata;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.MetadataResolver;
 import org.apache.pulsar.client.impl.auth.v5.FrameworkHttpClient;
+import org.apache.pulsar.client.impl.auth.v5.FrameworkHttpClientFactory;
 import org.apache.pulsar.client.util.ExecutorProvider;
 import org.apache.pulsar.client.util.PulsarHttpAsyncSslEngineFactory;
+import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.util.PulsarSslConfiguration;
 import org.apache.pulsar.common.util.PulsarSslFactory;
@@ -167,16 +170,18 @@ abstract class FlowBase implements Flow {
 
     protected synchronized PulsarHttpClient getHttpClient() {
         if (pulsarHttpClient == null) {
-            if (httpClientFactory != null && !hasOwnTlsMaterial()) {
-                // PIP-478 stage 3c: a framework-managed HTTP client that shares the owning PulsarClient's
+            if (httpClientFactory != null && (!hasOwnTlsMaterial() || frameworkClientServesIdpTls())) {
+                // PIP-478 stage 3c/4a: a framework-managed HTTP client that shares the owning PulsarClient's
                 // event loop / timer / DNS resolver. Used when this plugin runs inside a v5-bound client and
-                // carries no OAuth2-specific IdP TLS material, which the purpose-driven config cannot convey.
+                // either carries no IdP TLS material, or does but the client is on the new PIP-478 TLS path,
+                // where this flow's IdP material has been folded into the CLIENT_OAUTH2 policy the framework
+                // client serves (see AuthenticationOAuth2.idpTlsPolicy / ClientTlsFactorySupport).
                 pulsarHttpClient = httpClientFactory.newHttpClient(oauth2ClientConfig());
             } else {
-                // Deprecated legacy fallback (until PIP-478 stage 4): a private AsyncHttpClient with its own
-                // event loop and OAuth2-configured TLS, wrapped as a PulsarHttpClient. Preserves plain-v4
-                // usage (no bound services) and OAuth2 IdP mTLS / custom trust, which the framework's
-                // purpose-driven client cannot yet carry.
+                // Deprecated legacy fallback (removed in PIP-478 stage 4c): a private AsyncHttpClient with its
+                // own event loop and OAuth2-configured TLS, wrapped as a PulsarHttpClient. Now reached only
+                // when no TLS factory is available to carry this flow's IdP mTLS / custom trust — a plain v4
+                // client (no bound services), or a v5 client on the legacy TLS path.
                 AsyncHttpClient legacyClient =
                         defaultHttpClient(readTimeout, connectTimeout, trustCertsFilePath, certFile, keyFile);
                 scheduleSslContextRefreshIfEnabled(autoCertRefreshSeconds);
@@ -190,6 +195,40 @@ abstract class FlowBase implements Flow {
     private boolean hasOwnTlsMaterial() {
         return StringUtils.isNotBlank(trustCertsFilePath) || StringUtils.isNotBlank(certFile)
                 || StringUtils.isNotBlank(keyFile);
+    }
+
+    /**
+     * Whether the bound framework HTTP client can serve this flow's own IdP TLS material. True only on the
+     * new PIP-478 TLS path, where the client's TLS factory carries the {@link TlsPurpose#CLIENT_OAUTH2}
+     * policy folded from this flow's IdP material (stage 4a). On the legacy path (no factory) the framework
+     * client cannot carry custom trust, so a flow with its own IdP material keeps the deprecated private
+     * client (removed in stage 4c).
+     */
+    private boolean frameworkClientServesIdpTls() {
+        return httpClientFactory instanceof FrameworkHttpClientFactory factory && factory.hasTlsFactory();
+    }
+
+    /**
+     * The IdP TLS material this flow carries (the {@code trustCertsFilePath} / {@code tlsCertFile} /
+     * {@code tlsKeyFile} parameters), folded into a {@link TlsPurpose#CLIENT_OAUTH2} {@link TlsPolicy} so the
+     * framework HTTP client can serve IdP mTLS / custom trust on the new PIP-478 TLS path (stage 4a, issue
+     * #24944). Empty when the flow carries no IdP TLS material — the OAuth2 call then resolves to the system
+     * default trust store (CLIENT_OAUTH2's empty fallback).
+     *
+     * @return the CLIENT_OAUTH2 policy composed from this flow's IdP material, or empty
+     */
+    Optional<TlsPolicy> idpTlsPolicy() {
+        if (!hasOwnTlsMaterial()) {
+            return Optional.empty();
+        }
+        TlsPolicy.Builder builder = TlsPolicy.builder().format(TlsPolicy.Format.PEM);
+        if (StringUtils.isNotBlank(trustCertsFilePath)) {
+            builder.trustCertsFilePath(trustCertsFilePath);
+        }
+        if (StringUtils.isNotBlank(certFile) && StringUtils.isNotBlank(keyFile)) {
+            builder.certificateFilePath(certFile).keyFilePath(keyFile);
+        }
+        return Optional.of(builder.build());
     }
 
     private PulsarHttpClientConfig oauth2ClientConfig() {
