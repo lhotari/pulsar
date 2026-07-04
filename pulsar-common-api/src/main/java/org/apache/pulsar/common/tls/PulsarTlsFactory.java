@@ -43,9 +43,33 @@ import java.util.function.Consumer;
  *   <li>{@code javax.net.ssl.SSLContext} — the universal fallback the framework synthesizes the
  *       richer objects from; required for a purpose only <em>unless</em> the factory natively supplies
  *       every richer class that purpose consumes.</li>
+ *   <li>{@code javax.net.ssl.SSLParameters} — the optional engine-policy companion to the
+ *       {@code SSLContext} fallback, consulted <em>only</em> on the synthesis path. It carries the
+ *       engine-level baseline a bare {@code SSLContext} cannot express (enabled protocols and cipher
+ *       suites, client-auth mode, endpoint identification, algorithm constraints) — the JDK API has no
+ *       setter for a context's default parameters. {@code empty()} means the consumer's own configuration
+ *       applies, as before. Requires zero non-JDK dependencies.</li>
  * </ul>
  * As long as a factory supplies at least the JDK {@code SSLContext} for a purpose, the framework can
  * derive the Netty and Jetty objects from it.
+ *
+ * <p><b>{@code SSLParameters} merge order (synthesis path).</b> When the framework synthesizes the Netty /
+ * Jetty objects from the {@code SSLContext} fallback, it also requests
+ * {@code createInstance(purpose, SSLParameters.class)} and merges deterministically:
+ * <ol>
+ *   <li>the factory's {@code SSLParameters} (non-null members only) form the engine baseline;</li>
+ *   <li>{@code endpointIdentificationAlgorithm} — the factory's value wins when set, otherwise the
+ *       consumer's hostname-verification configuration applies {@code "HTTPS"} on client purposes;</li>
+ *   <li>SNI server names are always set per connection from the target endpoint, overriding any factory
+ *       baseline (a factory should not pin SNI);</li>
+ *   <li>on server purposes a factory-supplied {@code SSLParameters} is authoritative for
+ *       {@code needClientAuth}/{@code wantClientAuth}, otherwise the consumer's client-auth flag maps as
+ *       usual.</li>
+ * </ol>
+ * On subscriptions the parameters are re-requested with each {@code SSLContext} delivery, so engine policy
+ * may rotate with material. The synthesized Jetty factory consults only the protocols, cipher suites, and
+ * client-auth members (Jetty exposes no setters for the finer members); the full member set applies on the
+ * Netty synthesis path.
  *
  * <p><b>{@code Optional.empty()} means exactly one thing:</b> the factory does not support the
  * requested {@code (purpose, class)} combination. It is NOT a purpose-resolution signal — how a

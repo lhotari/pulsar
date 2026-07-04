@@ -62,14 +62,27 @@ public final class BinaryAuthenticationExchange implements AuthenticationExchang
 
     private final Authentication v5;
     private final AuthenticationCallContext callContext;
+    private final AuthMetrics metrics;
 
     /**
      * @param v5          the v5-native authentication body to drive over the binary transport
      * @param callContext the per-connection call context (and its state slot) this exchange owns
      */
     public BinaryAuthenticationExchange(Authentication v5, AuthenticationCallContext callContext) {
+        this(v5, callContext, AuthMetrics.NOOP);
+    }
+
+    /**
+     * @param v5          the v5-native authentication body to drive over the binary transport
+     * @param callContext the per-connection call context (and its state slot) this exchange owns
+     * @param metrics     the client-auth metrics (credential-acquisition latency + failures); {@code null}
+     *                    maps to {@link AuthMetrics#NOOP}
+     */
+    public BinaryAuthenticationExchange(Authentication v5, AuthenticationCallContext callContext,
+            AuthMetrics metrics) {
         this.v5 = v5;
         this.callContext = callContext;
+        this.metrics = metrics == null ? AuthMetrics.NOOP : metrics;
     }
 
     @Override
@@ -83,11 +96,14 @@ public final class BinaryAuthenticationExchange implements AuthenticationExchang
                         "v5 authentication body " + v5.getClass().getName() + " does not expose "
                                 + "BinaryAuthDataProvider; the Pulsar binary transport requires it (PIP-478)"));
             }
-            return provider.get().getAuthDataAsync(callContext)
+            BinaryAuthDataProvider binaryProvider = provider.get();
+            CompletableFuture<AuthData> credential = binaryProvider.getAuthDataAsync(callContext)
                     .thenApply(d -> AuthData.of(d == null ? new byte[0] : d.bytes()))
                     .exceptionally(t -> {
                         throw new CompletionException(toV4Exception(unwrap(t)));
                     });
+            // Metrics (PIP-478): time the credential acquisition and count failures by error class.
+            return metrics.timeCredential(credential, binaryProvider.authMethodName());
         } catch (Throwable t) {
             return CompletableFuture.failedFuture(toV4Exception(unwrap(t)));
         }

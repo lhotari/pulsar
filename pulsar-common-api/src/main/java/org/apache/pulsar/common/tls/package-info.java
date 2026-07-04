@@ -23,9 +23,13 @@
  * <p>A {@link org.apache.pulsar.common.tls.PulsarTlsFactory} answers requests for fully configured TLS
  * objects ({@code io.netty.handler.ssl.SslContext}, Jetty's {@code SslContextFactory.Server}, or
  * {@code javax.net.ssl.SSLContext}) per {@link org.apache.pulsar.common.tls.TlsPurpose}, delivering
- * rebuilt instances through reload callbacks on rotation. How the factory sources key material and
- * builds the objects is entirely factory-internal — nothing material-shaped appears in the SPI and key
- * material never crosses a Pulsar API. The single user-facing configuration value is
+ * rebuilt instances through reload callbacks on rotation. A factory that supplies only the
+ * {@code SSLContext} fallback may additionally supply a {@code javax.net.ssl.SSLParameters} companion —
+ * the optional engine-policy baseline (protocols, cipher suites, client-auth mode, endpoint
+ * identification) consulted on the synthesis path with a deterministic merge order documented on
+ * {@link org.apache.pulsar.common.tls.PulsarTlsFactory}. How the factory sources key material and builds
+ * the objects is entirely factory-internal — nothing material-shaped appears in the SPI and key material
+ * never crosses a Pulsar API. The single user-facing configuration value is
  * {@link org.apache.pulsar.common.tls.TlsPolicy}.
  *
  * <p>This package is hosted in the neutral, dependency-light {@code pulsar-common-api} module so both

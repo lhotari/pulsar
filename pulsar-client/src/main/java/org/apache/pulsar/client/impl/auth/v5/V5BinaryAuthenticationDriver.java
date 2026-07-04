@@ -42,6 +42,7 @@ public final class V5BinaryAuthenticationDriver implements AsyncAuthenticationDr
     private final String clientInstanceId;
     private final Map<String, String> params;
     private final ClientAuthenticationServices services;
+    private final AuthMetrics authMetrics;
     private volatile boolean initialized;
 
     /**
@@ -73,12 +74,14 @@ public final class V5BinaryAuthenticationDriver implements AsyncAuthenticationDr
         this.services = services;
         this.clientInstanceId = clientInstanceId;
         this.params = params == null ? Map.of() : params;
+        this.authMetrics = AuthMetrics.create(services == null ? null : services.openTelemetry());
     }
 
     @Override
     public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
         ensureInitialized();
-        return new BinaryAuthenticationExchange(v5, V5AuthContexts.binaryCallContext(brokerHostName, 0));
+        return new BinaryAuthenticationExchange(v5, V5AuthContexts.binaryCallContext(brokerHostName, 0),
+                authMetrics);
     }
 
     private void ensureInitialized() {

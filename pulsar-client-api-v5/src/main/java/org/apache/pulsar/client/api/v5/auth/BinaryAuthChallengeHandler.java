@@ -23,6 +23,11 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Capability: multi-round challenge/response (SASL-style and custom protocols) for the Pulsar binary
  * protocol (PIP-478).
+ *
+ * <p>The broker's {@code REFRESH_AUTH_DATA} refresh sentinel is <em>never</em> delivered here (binary
+ * routing rule 2): a refresh re-produces the current credential through
+ * {@link BinaryAuthDataProvider} on a fresh exchange, so this handler only ever sees a genuine challenge
+ * payload — a real round of the challenge conversation.
  */
 public interface BinaryAuthChallengeHandler {
 

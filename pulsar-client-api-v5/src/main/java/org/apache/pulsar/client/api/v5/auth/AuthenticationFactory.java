@@ -55,7 +55,17 @@ public final class AuthenticationFactory {
     }
 
     /**
-     * Create TLS mutual authentication.
+     * Create TLS mutual authentication from a PEM client certificate and private key.
+     *
+     * <p><b>Interaction with {@code tlsPolicy(...)} (PIP-478).</b> When the v5 client also configures a
+     * {@code tlsPolicy(...)}, this plugin's client certificate and key are <em>folded</em> into the
+     * {@code CLIENT_DEFAULT} TLS policy at build time — on the new path the transport reads its material
+     * from the client TLS factory, not from the auth plugin. The fold is per-field and <b>plugin-wins</b>:
+     * the certificate and key from this plugin override any configured on the policy, while the policy's
+     * trust material and flags (hostname verification, protocols, ciphers) are preserved. Without a
+     * {@code tlsPolicy(...)} the legacy behaviour applies — the plugin supplies the transport material
+     * directly. Only PEM file paths are accepted here (a keystore identity is configured through
+     * {@code tlsPolicy(...)}).
      *
      * @param certFilePath the path to the client certificate file (PEM format)
      * @param keyFilePath  the path to the client private key file (PEM format)
