@@ -530,3 +530,16 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
   keep the module dependency-light.
 - Old impl branch may contain fixes for CI regressions (its last commit says so) — check
   what broke there before repeating it.
+
+26. **Post-fold flip CI GREEN — 41/41** (PR #232, flip rebased onto full stage-3c): the whole
+    CI matrix passes with the new TLS SPI as the *default* server path; both classified
+    failures dissolved with the 3c fold, the unrelated flake did not recur. D8's evidence
+    gate satisfied.
+
+27. **Stage 4b (flip) executed**: the validated flip cherry-picked onto v2 as `e5394319f44`
+    (message updated to record the D8 validation trail). The new TLS SPI is now the DEFAULT
+    on the main implementation branch; the legacy path remains selectable via a custom
+    `sslFactoryPlugin` until stage 4c applies the dispositions. Remaining before 4c, from
+    the 4a handoff: (a) broker outbound **admin** clients (AsyncHttpConnector path, not the
+    createClientImpl funnel) onto the new SPI; (b) OTel roots for proxy/websocket/worker TLS
+    metrics; (c) brokerClientTlsFactoryConfig params delivery to custom factories.
