@@ -31,7 +31,6 @@ import java.util.stream.Collectors;
 import javax.servlet.Servlet;
 import javax.servlet.ServletException;
 import lombok.CustomLog;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.tls.TlsFactorySupport;
 import org.apache.pulsar.broker.web.JettyRequestLogFactory;
@@ -261,7 +260,8 @@ public class ProxyServer {
                 .ciphers(toList(config.getWebServiceTlsCiphers()));
         if (config.isTlsEnabledWithKeyStore()) {
             policyBuilder.format(TlsPolicy.Format.KEYSTORE)
-                    .storeType(firstNonBlank(config.getTlsKeyStoreType(), config.getTlsTrustStoreType()))
+                    .keyStoreType(config.getTlsKeyStoreType())
+                    .trustStoreType(config.getTlsTrustStoreType())
                     .keyStorePath(config.getTlsKeyStore())
                     .keyStorePassword(config.getTlsKeyStorePassword())
                     .trustStorePath(config.getTlsTrustStore())
@@ -287,9 +287,5 @@ public class ProxyServer {
 
     private static List<String> toList(Set<String> values) {
         return values == null ? List.of() : List.copyOf(values);
-    }
-
-    private static String firstNonBlank(String primary, String fallback) {
-        return StringUtils.isNotBlank(primary) ? primary : fallback;
     }
 }

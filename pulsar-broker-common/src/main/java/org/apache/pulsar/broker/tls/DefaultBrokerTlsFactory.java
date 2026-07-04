@@ -124,7 +124,8 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
                 .ciphers(toList(conf.getTlsCiphers()));
         if (conf.isTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
-                    .storeType(firstNonBlank(conf.getTlsKeyStoreType(), conf.getTlsTrustStoreType()))
+                    .keyStoreType(conf.getTlsKeyStoreType())
+                    .trustStoreType(conf.getTlsTrustStoreType())
                     .keyStorePath(conf.getTlsKeyStore())
                     .keyStorePassword(conf.getTlsKeyStorePassword())
                     .trustStorePath(conf.getTlsTrustStore())
@@ -147,8 +148,8 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
                 .ciphers(toList(conf.getBrokerClientTlsCiphers()));
         if (conf.isBrokerClientTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
-                    .storeType(firstNonBlank(conf.getBrokerClientTlsKeyStoreType(),
-                            conf.getBrokerClientTlsTrustStoreType()))
+                    .keyStoreType(conf.getBrokerClientTlsKeyStoreType())
+                    .trustStoreType(conf.getBrokerClientTlsTrustStoreType())
                     .keyStorePath(conf.getBrokerClientTlsKeyStore())
                     .keyStorePassword(conf.getBrokerClientTlsKeyStorePassword())
                     .trustStorePath(conf.getBrokerClientTlsTrustStore())
@@ -172,9 +173,5 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
 
     private static List<String> toList(Set<String> values) {
         return values == null ? List.of() : List.copyOf(values);
-    }
-
-    private static String firstNonBlank(String primary, String fallback) {
-        return StringUtils.isNotBlank(primary) ? primary : fallback;
     }
 }

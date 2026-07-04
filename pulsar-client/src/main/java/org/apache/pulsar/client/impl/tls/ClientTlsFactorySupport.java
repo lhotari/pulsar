@@ -125,16 +125,15 @@ public final class ClientTlsFactorySupport {
                 .protocols(toList(conf.getTlsProtocols()))
                 .ciphers(toList(conf.getTlsCiphers()));
         if (conf.isUseKeyStoreTls()) {
-            // TlsPolicy carries a single store type; prefer the keystore type when a keystore is set,
-            // otherwise fall back to the truststore type (they are usually identical).
-            String storeType = conf.getTlsKeyStorePath() != null
-                    ? conf.getTlsKeyStoreType() : conf.getTlsTrustStoreType();
+            // Map the keystore and truststore types independently (v4 parity): a mixed setup such as a PKCS12
+            // keystore with a JKS truststore must load each store with its own type.
             b.format(TlsPolicy.Format.KEYSTORE)
                     .trustStorePath(conf.getTlsTrustStorePath())
                     .trustStorePassword(conf.getTlsTrustStorePassword())
                     .keyStorePath(conf.getTlsKeyStorePath())
                     .keyStorePassword(conf.getTlsKeyStorePassword())
-                    .storeType(storeType);
+                    .keyStoreType(conf.getTlsKeyStoreType())
+                    .trustStoreType(conf.getTlsTrustStoreType());
         } else {
             b.format(TlsPolicy.Format.PEM)
                     .trustCertsFilePath(conf.getTlsTrustCertsFilePath())

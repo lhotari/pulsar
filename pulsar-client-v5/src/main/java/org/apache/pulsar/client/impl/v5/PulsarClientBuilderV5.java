@@ -207,7 +207,7 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
             mergeClientDefault(base -> keyStoreBuilder(base)
                     .keyStorePath(ks.getKeyStorePath())
                     .keyStorePassword(ks.getKeyStorePassword())
-                    .storeType(ks.getKeyStoreType())
+                    .keyStoreType(ks.getKeyStoreType())
                     .build());
         } else if (v4 != null) {
             foldGenericV4TlsMaterial(v4);
@@ -247,7 +247,7 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
             mergeClientDefault(base -> keyStoreBuilder(base)
                     .keyStorePath(ks.getKeyStorePath())
                     .keyStorePassword(ks.getKeyStorePassword())
-                    .storeType(ks.getKeyStoreType())
+                    .keyStoreType(ks.getKeyStoreType())
                     .build());
         } else {
             LOG.warn("Bridged v4 authentication plugin {} reports TLS material (hasDataForTls()) but exposes "
@@ -280,7 +280,12 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
     private static TlsPolicy.Builder keyStoreBuilder(TlsPolicy base) {
         TlsPolicy.Builder b = copyFlags(base).format(TlsPolicy.Format.KEYSTORE);
         if (base != null && base.format() == TlsPolicy.Format.KEYSTORE) {
-            b.trustStorePath(base.trustStorePath()).trustStorePassword(base.trustStorePassword());
+            // Preserve the base truststore (path, password, and TYPE): folding the auth plugin's keystore must
+            // not clobber the truststore type configured via tlsPolicy(...) — the keystore and truststore may
+            // use different types (e.g. a PKCS12 keystore with a JKS truststore).
+            b.trustStorePath(base.trustStorePath())
+                    .trustStorePassword(base.trustStorePassword())
+                    .trustStoreType(base.trustStoreType());
         }
         return b;
     }

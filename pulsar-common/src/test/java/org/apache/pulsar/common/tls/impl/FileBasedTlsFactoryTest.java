@@ -600,7 +600,7 @@ public class FileBasedTlsFactoryTest {
     public void serverKeystoreContextBuildsWithCiphers() {
         FileBasedTlsFactory factory = factory(
                 Map.of(TlsPurpose.BROKER, TlsPolicy.builder()
-                        .format(TlsPolicy.Format.KEYSTORE).storeType("JKS")
+                        .format(TlsPolicy.Format.KEYSTORE).keyStoreType("JKS").trustStoreType("JKS")
                         .trustStorePath(TRUSTSTORE).trustStorePassword(STORE_PW)
                         .keyStorePath(KEYSTORE).keyStorePassword(STORE_PW)
                         .ciphers(MATRIX_CIPHERS).build()),
@@ -616,7 +616,7 @@ public class FileBasedTlsFactoryTest {
     public void clientKeystoreContextBuildsWithCiphers() {
         FileBasedTlsFactory factory = factory(
                 Map.of(TlsPurpose.CLIENT_DEFAULT, TlsPolicy.builder()
-                        .format(TlsPolicy.Format.KEYSTORE).storeType("JKS")
+                        .format(TlsPolicy.Format.KEYSTORE).keyStoreType("JKS").trustStoreType("JKS")
                         .trustStorePath(TRUSTSTORE).trustStorePassword(STORE_PW)
                         .ciphers(MATRIX_CIPHERS).build()),
                 FileBasedTlsFactorySettings.defaults());

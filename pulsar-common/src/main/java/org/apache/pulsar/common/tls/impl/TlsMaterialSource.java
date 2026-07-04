@@ -110,7 +110,7 @@ final class TlsMaterialSource implements MaterialSource {
 
     private List<X509Certificate> loadTrustCerts() throws Exception {
         if (StringUtils.isNotBlank(policy.trustStorePath())) {
-            return TlsKeyStoreLoader.extractTrustCerts(TlsKeyStoreLoader.loadKeyStore(policy.storeType(),
+            return TlsKeyStoreLoader.extractTrustCerts(TlsKeyStoreLoader.loadKeyStore(policy.trustStoreType(),
                     policy.trustStorePath(), policy.trustStorePassword()));
         }
         if (StringUtils.isNotBlank(policy.trustCertsFilePath())) {
@@ -122,7 +122,7 @@ final class TlsMaterialSource implements MaterialSource {
 
     private PrivateKey loadPrivateKey() throws Exception {
         if (StringUtils.isNotBlank(policy.keyStorePath())) {
-            return TlsKeyStoreLoader.extractPrivateKey(TlsKeyStoreLoader.loadKeyStore(policy.storeType(),
+            return TlsKeyStoreLoader.extractPrivateKey(TlsKeyStoreLoader.loadKeyStore(policy.keyStoreType(),
                     policy.keyStorePath(), policy.keyStorePassword()), policy.keyStorePassword());
         }
         if (StringUtils.isNotBlank(policy.keyFilePath())) {
@@ -133,7 +133,7 @@ final class TlsMaterialSource implements MaterialSource {
 
     private List<X509Certificate> loadCertificateChain() throws Exception {
         if (StringUtils.isNotBlank(policy.keyStorePath())) {
-            return TlsKeyStoreLoader.extractCertificateChain(TlsKeyStoreLoader.loadKeyStore(policy.storeType(),
+            return TlsKeyStoreLoader.extractCertificateChain(TlsKeyStoreLoader.loadKeyStore(policy.keyStoreType(),
                     policy.keyStorePath(), policy.keyStorePassword()));
         }
         if (StringUtils.isNotBlank(policy.certificateFilePath())) {
