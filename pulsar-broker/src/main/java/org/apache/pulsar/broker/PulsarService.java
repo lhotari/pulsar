@@ -157,6 +157,7 @@ import org.apache.pulsar.client.impl.DnsResolverGroupImpl;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.conf.ConfigurationDataUtils;
+import org.apache.pulsar.client.impl.tls.ClientTlsFactorySupport;
 import org.apache.pulsar.client.internal.PropertiesUtils;
 import org.apache.pulsar.client.util.ExecutorProvider;
 import org.apache.pulsar.client.util.ScheduledExecutorProvider;
@@ -1813,8 +1814,12 @@ public class PulsarService implements AutoCloseable, ShutdownService {
     public PulsarClientImpl createClientImpl(ClientConfigurationData conf,
                                              Consumer<PulsarClientImpl.PulsarClientImplBuilder> customizer)
             throws PulsarClientException {
+        ClientConfigurationData clientConf = conf != null ? conf : createClientConfigurationData();
+        // PIP-478 stage 4a: route the broker's own outbound clients (replication + cluster-internal lookup)
+        // onto the new TLS SPI (BROKER_CLIENT) when opted in via brokerClientTlsFactoryClassName.
+        maybeApplyBrokerClientTlsFactory(clientConf);
         PulsarClientImpl.PulsarClientImplBuilder pulsarClientImplBuilder = PulsarClientImpl.builder()
-                .conf(conf != null ? conf : createClientConfigurationData())
+                .conf(clientConf)
                 .eventLoopGroup(ioEventLoopGroup)
                 .timer(brokerClientSharedTimer)
                 .internalExecutorProvider(brokerClientSharedInternalExecutorProvider)
@@ -1826,6 +1831,30 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             customizer.accept(pulsarClientImplBuilder);
         }
         return pulsarClientImplBuilder.build();
+    }
+
+    /**
+     * Route the broker's own outbound Pulsar client (geo-replication and cluster-internal lookup) onto the
+     * new PIP-478 TLS SPI for the {@code BROKER_CLIENT} purpose (stage 4a), gated on the
+     * {@code brokerClientTlsFactoryClassName} opt-in (decision D8). The broker-client material — per-cluster
+     * {@code ClusterData.brokerClientTls*} first, else the broker's {@code brokerClient*}
+     * {@code ServiceConfiguration} — is already mapped onto the config's {@code tls*} fields by the caller
+     * ({@code createClientConfigurationData} / {@code BrokerService.configTlsSettings}), so this only attaches
+     * a per-client {@link org.apache.pulsar.common.tls.PulsarTlsFactory} composed from those fields (folding
+     * the broker-client {@code Authentication} TLS material). Leaves the config on the legacy PIP-337 path
+     * when the gate is off, or when the outbound client is not TLS, or when it is already on the new path.
+     *
+     * @param conf the outbound client configuration (mutated to carry the TLS factory when opted in)
+     */
+    private void maybeApplyBrokerClientTlsFactory(ClientConfigurationData conf) {
+        String factoryClassName = getConfiguration().getBrokerClientTlsFactoryClassName();
+        if (!isNotBlank(factoryClassName)) {
+            return;
+        }
+        if (conf.getTlsFactory() != null || conf.getTlsPolicyMap() != null || !conf.isUseTls()) {
+            return;
+        }
+        conf.setTlsFactory(ClientTlsFactorySupport.brokerClientTlsFactory(conf, factoryClassName));
     }
 
     public synchronized PulsarClient getClient() throws PulsarServerException {

@@ -32,7 +32,10 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.Supplier;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.pulsar.client.api.Authentication;
+import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
@@ -66,6 +69,9 @@ public final class ClientTlsFactorySupport {
 
     /** System property that switches on the new PIP-478 TLS path for a plain v4 client (flip experiment). */
     public static final String USE_NEW_TLS_FACTORY_PROPERTY = "pulsar.client.tls.useNewTlsFactory";
+
+    /** Reserved factory-class value selecting the built-in file-based factory (mirrors the server side). */
+    private static final String DEFAULT_FACTORY = "default";
 
     private ClientTlsFactorySupport() {
     }
@@ -179,6 +185,71 @@ public final class ClientTlsFactorySupport {
             probe(factory, TlsPurpose.CLIENT_DEFAULT);
         }
         return factory;
+    }
+
+    /**
+     * Build the (uninitialized) broker-client {@link PulsarTlsFactory} for a server component's own outbound
+     * Pulsar client — geo-replication and cluster-internal lookup connections (the {@code BROKER_CLIENT}
+     * purpose, PIP-478 stage 4a). The broker-client material is already mapped onto the config's
+     * {@code tls*} fields (per-cluster {@code ClusterData.brokerClientTls*} first, else the broker's
+     * {@code brokerClient*} {@code ServiceConfiguration}), so this composes {@link TlsPurpose#CLIENT_DEFAULT}
+     * — the purpose the outbound transport requests — from those fields, additionally folding the
+     * component's broker-client {@code Authentication} TLS material via the 3c
+     * {@link FileBasedTlsFactory#authMaterialSupplier authMaterialSupplier} (auth-cert-wins) so an
+     * {@code AuthenticationTls} broker-client identity reaches the transport on the new path.
+     *
+     * <p>The caller stores the result on {@code conf} via {@code setTlsFactory}; the owning
+     * {@code PulsarClientImpl} adopts, initializes (with its shared scheduler / executor / OpenTelemetry) and
+     * closes it — one factory per outbound client, so per-cluster material is served without minting
+     * per-cluster purposes. A non-default {@code factoryClassName} names a custom {@link PulsarTlsFactory},
+     * instantiated reflectively (it self-sources material; the config/auth composition below does not apply,
+     * and {@code brokerClientTlsFactoryConfig} params are not yet plumbed to the client init context).
+     *
+     * @param conf            the outbound client configuration (its {@code tls*} fields hold the broker-client
+     *                        material; {@code getAuthentication()} the broker-client authentication)
+     * @param factoryClassName the {@code brokerClientTlsFactoryClassName} value ({@code default}/blank selects
+     *                        the built-in file-based factory)
+     * @return an uninitialized {@link PulsarTlsFactory}
+     */
+    public static PulsarTlsFactory brokerClientTlsFactory(ClientConfigurationData conf, String factoryClassName) {
+        String className = factoryClassName == null ? "" : factoryClassName.trim();
+        if (!className.isEmpty()
+                && !DEFAULT_FACTORY.equalsIgnoreCase(className)
+                && !FileBasedTlsFactory.class.getName().equals(className)) {
+            try {
+                return (PulsarTlsFactory) Class.forName(className).getConstructor().newInstance();
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalArgumentException(
+                        "Could not instantiate brokerClientTlsFactoryClassName '" + className + "'", e);
+            }
+        }
+        TlsPolicy policy = clientDefaultPolicy(conf);
+        Map<TlsPurpose, Supplier<AuthenticationDataProvider>> authSuppliers = Map.of();
+        Authentication auth = conf.getAuthentication();
+        if (auth != null && authHasTlsMaterial(auth)) {
+            authSuppliers = Map.of(TlsPurpose.CLIENT_DEFAULT, FileBasedTlsFactory.authMaterialSupplier(auth));
+        }
+        return new FileBasedTlsFactory(Map.of(TlsPurpose.CLIENT_DEFAULT, policy), settings(conf), authSuppliers);
+    }
+
+    /**
+     * Probe whether an authentication plugin carries TLS key material, so the broker-client fold registers
+     * an {@code authMaterialSupplier} only for a genuine TLS-auth plugin (e.g. {@code AuthenticationTls}) and
+     * not for a token/none plugin whose per-poll {@code getAuthData()} would be wasted work. Runs once at
+     * factory-build time on the caller thread (broker startup / replication client creation), never on an
+     * event loop.
+     *
+     * @param auth the broker-client authentication (never {@code null})
+     * @return whether it exposes TLS material
+     */
+    @SuppressWarnings("deprecation")
+    private static boolean authHasTlsMaterial(Authentication auth) {
+        try {
+            AuthenticationDataProvider data = auth.getAuthData();
+            return data != null && data.hasDataForTls();
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static Map<TlsPurpose, TlsPolicy> composePolicies(ClientConfigurationData conf) {
