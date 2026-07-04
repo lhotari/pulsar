@@ -165,8 +165,7 @@ public final class PulsarClientProviderV5 implements PulsarClientProvider {
     public Authentication createAuthentication(String className, String params)
             throws PulsarClientException {
         try {
-            return LegacyV4AuthenticationAdapter.wrap(
-                    org.apache.pulsar.client.api.AuthenticationFactory.create(className, params));
+            return V5AuthenticationLoader.create(className, params);
         } catch (org.apache.pulsar.client.api.PulsarClientException e) {
             throw new PulsarClientException(e.getMessage(), e);
         }
@@ -176,8 +175,7 @@ public final class PulsarClientProviderV5 implements PulsarClientProvider {
     public Authentication createAuthentication(String className, Map<String, String> params)
             throws PulsarClientException {
         try {
-            return LegacyV4AuthenticationAdapter.wrap(
-                    org.apache.pulsar.client.api.AuthenticationFactory.create(className, params));
+            return V5AuthenticationLoader.create(className, params);
         } catch (org.apache.pulsar.client.api.PulsarClientException e) {
             throw new PulsarClientException(e.getMessage(), e);
         }

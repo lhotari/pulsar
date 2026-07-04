@@ -104,8 +104,19 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
     @Override
     public PulsarClientBuilder authentication(String authPluginClassName, String authParamsString)
             throws PulsarClientException {
+        // Preserve the serializable string form (authPluginClassName + authParams) AND eagerly build the
+        // plugin, mirroring the v4 ClientBuilderImpl. The build is v5-aware (PIP-478 In-Scope #2): a
+        // v5-native plugin deployed by class name is instantiated + configured and exposed through the
+        // V5ToV4AuthenticationAdapter, instead of being blind-cast to the v4 Authentication SPI (which
+        // threw ClassCastException). A legacy v4 class keeps the existing v4 path.
         conf.setAuthPluginClassName(authPluginClassName);
         conf.setAuthParams(authParamsString);
+        try {
+            conf.setAuthentication(toV4Authentication(V5AuthenticationLoader.create(authPluginClassName,
+                    authParamsString)));
+        } catch (org.apache.pulsar.client.api.PulsarClientException e) {
+            throw new PulsarClientException(e.getMessage(), e);
+        }
         return this;
     }
 
