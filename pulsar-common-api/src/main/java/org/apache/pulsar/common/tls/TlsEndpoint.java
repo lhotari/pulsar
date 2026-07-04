@@ -17,3 +17,19 @@
  * under the License.
  */
 package org.apache.pulsar.common.tls;
+
+/**
+ * The destination of an outbound connection, passed to a {@link PulsarTlsFactory} as a per-request
+ * hint (PIP-478).
+ *
+ * <p>Client-side consumers pass the target host and port when they know it, so a factory that serves
+ * per-destination material (multi-cluster deployments, per-target workload identities) may specialize
+ * on it. Factories are free to ignore it — the default file-based factory does. The endpoint does NOT
+ * replace hostname verification or SNI: those are applied at engine creation from the same peer
+ * address by whichever component builds the {@code SSLEngine}.
+ *
+ * @param host the destination host
+ * @param port the destination port
+ */
+public record TlsEndpoint(String host, int port) {
+}

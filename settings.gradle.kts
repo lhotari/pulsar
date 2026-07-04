@@ -75,6 +75,8 @@ include("bouncy-castle:bcfips")
 include("pulsar-config-validation")
 include("pulsar-client-api")
 include("pulsar-client-api-v5")
+// Neutral, dependency-light SPI module hosting the PIP-478 TLS and HTTP client SPIs
+include("pulsar-common-api")
 
 // Tier 1
 include("pulsar-client-admin-api")
