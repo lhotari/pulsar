@@ -19,9 +19,11 @@
 package org.apache.pulsar.client.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.EventLoopGroup;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.ssl.SslContext;
 import io.netty.resolver.NameResolver;
 import io.netty.util.Timer;
 import java.io.Closeable;
@@ -49,6 +51,9 @@ import org.apache.pulsar.client.api.Socks5ProxyScope;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.util.ExecutorProvider;
 import org.apache.pulsar.client.util.PulsarHttpAsyncSslEngineFactory;
+import org.apache.pulsar.common.tls.PulsarTlsFactory;
+import org.apache.pulsar.common.tls.TlsHandle;
+import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.common.util.PulsarSslConfiguration;
 import org.apache.pulsar.common.util.PulsarSslFactory;
@@ -80,6 +85,10 @@ public class HttpClient implements Closeable {
     protected final ClientConfigurationData clientConf;
     protected ScheduledExecutorService executorService;
     protected PulsarSslFactory sslFactory;
+    // PIP-478 stage 3b (new TLS path): a subscription to the CLIENT_DEFAULT SslContext whose callback
+    // updates the volatile below on rotation; the AsyncHttpClient SslEngineFactory builds engines from it.
+    private TlsHandle<SslContext> tlsSubscription;
+    private volatile SslContext clientSslContext;
 
     protected HttpClient(ClientConfigurationData conf, EventLoopGroup eventLoopGroup, Timer timer,
                          NameResolver<InetAddress> nameResolver)
@@ -119,29 +128,11 @@ public class HttpClient implements Closeable {
 
         if ("https".equals(serviceNameResolver.getServiceUri().getServiceName())) {
             try {
-                // Set client key and certificate if available
-                this.executorService = Executors
-                        .newSingleThreadScheduledExecutor(new ExecutorProvider
-                                .ExtendedThreadFactory("httpclient-ssl-refresh"));
-                PulsarSslConfiguration sslConfiguration =
-                        buildSslConfiguration(conf, serviceNameResolver.resolveHostUri().getHost());
-                this.sslFactory = (PulsarSslFactory) Class.forName(conf.getSslFactoryPlugin())
-                        .getConstructor().newInstance();
-                this.sslFactory.initialize(sslConfiguration);
-                this.sslFactory.createInternalSslContext();
-                if (conf.getAutoCertRefreshSeconds() > 0) {
-                    this.executorService.scheduleWithFixedDelay(this::refreshSslContext,
-                            conf.getAutoCertRefreshSeconds(),
-                            conf.getAutoCertRefreshSeconds(), TimeUnit.SECONDS);
+                if (conf.getTlsFactory() != null) {
+                    setupHttpsWithTlsFactory(conf.getTlsFactory(), confBuilder);
+                } else {
+                    setupHttpsLegacy(conf, confBuilder);
                 }
-                String hostname = conf.isTlsHostnameVerificationEnable() ? null : serviceNameResolver
-                        .resolveHostUri().getHost();
-                SslEngineFactory sslEngineFactory = new PulsarHttpAsyncSslEngineFactory(this.sslFactory, hostname);
-                confBuilder.setSslEngineFactory(sslEngineFactory);
-
-
-                confBuilder.setUseInsecureTrustManager(conf.isTlsAllowInsecureConnection());
-                confBuilder.setDisableHttpsEndpointIdentificationAlgorithm(!conf.isTlsHostnameVerificationEnable());
             } catch (Exception e) {
                 throw new PulsarClientException.InvalidConfigurationException(e);
             }
@@ -153,6 +144,64 @@ public class HttpClient implements Closeable {
         httpClient = new DefaultAsyncHttpClient(config);
 
         log.debug().attr("url", conf.getServiceUrl()).log("Using HTTP url");
+    }
+
+    /**
+     * Legacy PIP-337 HTTPS TLS setup: a reflectively-instantiated {@link PulsarSslFactory} with a
+     * scheduled refresh, adapted to AsyncHttpClient via {@link PulsarHttpAsyncSslEngineFactory}.
+     */
+    private void setupHttpsLegacy(ClientConfigurationData conf, DefaultAsyncHttpClientConfig.Builder confBuilder)
+            throws Exception {
+        // Set client key and certificate if available
+        this.executorService = Executors
+                .newSingleThreadScheduledExecutor(new ExecutorProvider
+                        .ExtendedThreadFactory("httpclient-ssl-refresh"));
+        PulsarSslConfiguration sslConfiguration =
+                buildSslConfiguration(conf, serviceNameResolver.resolveHostUri().getHost());
+        this.sslFactory = (PulsarSslFactory) Class.forName(conf.getSslFactoryPlugin())
+                .getConstructor().newInstance();
+        this.sslFactory.initialize(sslConfiguration);
+        this.sslFactory.createInternalSslContext();
+        if (conf.getAutoCertRefreshSeconds() > 0) {
+            this.executorService.scheduleWithFixedDelay(this::refreshSslContext,
+                    conf.getAutoCertRefreshSeconds(),
+                    conf.getAutoCertRefreshSeconds(), TimeUnit.SECONDS);
+        }
+        String hostname = conf.isTlsHostnameVerificationEnable() ? null : serviceNameResolver
+                .resolveHostUri().getHost();
+        SslEngineFactory sslEngineFactory = new PulsarHttpAsyncSslEngineFactory(this.sslFactory, hostname);
+        confBuilder.setSslEngineFactory(sslEngineFactory);
+
+        confBuilder.setUseInsecureTrustManager(conf.isTlsAllowInsecureConnection());
+        confBuilder.setDisableHttpsEndpointIdentificationAlgorithm(!conf.isTlsHostnameVerificationEnable());
+    }
+
+    /**
+     * New PIP-478 HTTPS TLS setup (stage 3b): subscribe once to the {@link TlsPurpose#CLIENT_DEFAULT}
+     * Netty {@code SslContext} — the callback updates a volatile on rotation — and back AsyncHttpClient's
+     * {@link SslEngineFactory} with it. The AsyncHttpClient {@code SslEngineFactory} is invoked
+     * synchronously per connection, so (unlike the binary path's one-shot form) a live subscription plus
+     * a volatile snapshot is used here. Hostname verification, insecure trust, ciphers and protocols are
+     * baked into the factory-built context per the client {@code TlsPolicy}, so the AsyncHttpClient
+     * endpoint-identification / insecure-trust-manager flags are not applied.
+     */
+    private void setupHttpsWithTlsFactory(PulsarTlsFactory factory,
+            DefaultAsyncHttpClientConfig.Builder confBuilder) throws Exception {
+        this.tlsSubscription = factory
+                .createInstance(TlsPurpose.CLIENT_DEFAULT, SslContext.class, ctx -> this.clientSslContext = ctx)
+                .get()
+                .orElseThrow(() -> new IllegalStateException(
+                        "Client TLS factory supplied no Netty SslContext for purpose "
+                                + TlsPurpose.CLIENT_DEFAULT));
+        confBuilder.setSslEngineFactory(new SslEngineFactory() {
+            @Override
+            public javax.net.ssl.SSLEngine newSslEngine(AsyncHttpClientConfig config, String peerHost,
+                    int peerPort) {
+                // Build the engine from the current (possibly rotated) factory-owned context. Client mode,
+                // SNI and baked-in hostname verification all come from the Netty context.
+                return clientSslContext.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort);
+            }
+        });
     }
 
     String getServiceUrl() {
@@ -172,6 +221,11 @@ public class HttpClient implements Closeable {
         httpClient.close();
         if (executorService != null) {
             executorService.shutdownNow();
+        }
+        // PIP-478 stage 3b: release the CLIENT_DEFAULT TLS subscription (the factory itself is owned and
+        // closed by PulsarClientImpl).
+        if (tlsSubscription != null) {
+            tlsSubscription.dispose();
         }
     }
 

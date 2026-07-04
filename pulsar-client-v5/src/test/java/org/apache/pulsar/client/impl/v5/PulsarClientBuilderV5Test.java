@@ -18,12 +18,15 @@
  */
 package org.apache.pulsar.client.impl.v5;
 
+import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 import org.apache.pulsar.client.api.v5.PulsarClient;
 import org.apache.pulsar.client.api.v5.PulsarClientBuilder;
+import org.apache.pulsar.client.api.v5.PulsarClientException;
 import org.apache.pulsar.client.api.v5.config.ConnectionPolicy;
+import org.apache.pulsar.common.tls.TlsPolicy;
 import org.testng.annotations.Test;
 
 /**
@@ -93,6 +96,39 @@ public class PulsarClientBuilderV5Test {
         IllegalArgumentException e = assertThrowsIAE(() -> builder.connectionPolicy(badProxy));
         assertTrue(e.getMessage().contains("proxyServiceUrl"),
                 "error must name the offending field: " + e.getMessage());
+    }
+
+    /**
+     * PIP-478 stage 3b: on the v5-builder TLS path a bad {@link TlsPolicy} (here a non-existent trust
+     * cert file) fails the client build fast — at {@code build()} time, before any connection is
+     * attempted — with an actionable error, rather than surfacing later as an opaque handshake failure.
+     */
+    @Test
+    public void testTlsPolicyBadPathFailsClientBuild() {
+        String badPath = "/nonexistent/pip478/ca-does-not-exist.pem";
+        PulsarClientException e = null;
+        try {
+            PulsarClient.builder()
+                    .serviceUrl("pulsar+ssl://localhost:6651")
+                    .tlsPolicy(TlsPolicy.pem(badPath, null, null))
+                    .build();
+            fail("expected the client build to fail fast on the bad TLS policy");
+        } catch (PulsarClientException ex) {
+            e = ex;
+        }
+        assertNotNull(e, "a bad TLS policy must fail the client build");
+        assertTrue(allMessages(e).toLowerCase().contains("tls"),
+                "the failure must be actionable and mention TLS: " + allMessages(e));
+    }
+
+    private static String allMessages(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        for (Throwable c = t; c != null && c != c.getCause(); c = c.getCause()) {
+            if (c.getMessage() != null) {
+                sb.append(c.getMessage()).append(" | ");
+            }
+        }
+        return sb.toString();
     }
 
     private static IllegalArgumentException assertThrowsIAE(Runnable r) {

@@ -90,6 +90,7 @@ import org.apache.pulsar.client.impl.schema.AutoConsumeSchema;
 import org.apache.pulsar.client.impl.schema.AutoProduceBytesSchema;
 import org.apache.pulsar.client.impl.schema.generic.GenericAvroSchema;
 import org.apache.pulsar.client.impl.schema.generic.MultiVersionSchemaInfoProvider;
+import org.apache.pulsar.client.impl.tls.ClientTlsFactorySupport;
 import org.apache.pulsar.client.impl.transaction.TransactionBuilderImpl;
 import org.apache.pulsar.client.impl.transaction.TransactionCoordinatorClientImpl;
 import org.apache.pulsar.client.util.ExecutorProvider;
@@ -254,6 +255,9 @@ public class PulsarClientImpl implements PulsarClient {
             // services. The scheduled executor provider is created above precisely so this can run here.
             bindAuthenticationServices(conf.getAuthentication());
             conf.getAuthentication().start();
+            // PIP-478 stage 3b: resolve the client-side TLS SPI factory (new path) before the connection
+            // pool and HTTP lookup are created — both read conf.getTlsFactory() to branch onto it.
+            setupClientTlsFactory();
             if (connectionPool != null) {
                 connectionPoolReference = connectionPool;
                 dnsResolverGroupLocalInstance = null;
@@ -354,6 +358,29 @@ public class PulsarClientImpl implements PulsarClient {
                     conf.getOpenTelemetry() != null ? conf.getOpenTelemetry() : OpenTelemetry.noop(),
                     clientInstanceId);
             aware.bindClientAuthenticationServices(services);
+        }
+    }
+
+    /**
+     * Resolve the client-side TLS SPI factory for the new PIP-478 path (PIP-478 stage 3b) and stash it on
+     * the configuration so the connection pool ({@code PulsarChannelInitializer}) and the HTTP lookup
+     * ({@code HttpClient}) build engines from it. Leaves {@code conf.getTlsFactory()} null on the legacy
+     * PIP-337 path, where those components keep using the {@code PulsarSslFactory}. On the v5-builder path
+     * a fail-fast probe of {@code CLIENT_DEFAULT} runs, so a bad configuration fails the client build.
+     *
+     * @throws PulsarClientException if the TLS factory cannot be built / initialized / probed
+     */
+    private void setupClientTlsFactory() throws PulsarClientException {
+        if (!conf.isUseTls()) {
+            return;
+        }
+        try {
+            ScheduledExecutorService executor = (ScheduledExecutorService) scheduledExecutorProvider.getExecutor();
+            var factory = ClientTlsFactorySupport.resolveClientTlsFactory(conf, executor, executor,
+                    conf.getOpenTelemetry() != null ? conf.getOpenTelemetry() : OpenTelemetry.noop());
+            conf.setTlsFactory(factory);
+        } catch (Exception e) {
+            throw new PulsarClientException.InvalidConfigurationException(e);
         }
     }
 
@@ -1190,6 +1217,15 @@ public class PulsarClientImpl implements PulsarClient {
             // PIP-478 stage 3b: release the auth blocking executor if one was created.
             if (blockingAuthExecutor != null) {
                 blockingAuthExecutor.shutdownNow();
+            }
+            // PIP-478 stage 3b: close the client-owned (or adopted) TLS factory on the new path.
+            if (conf != null && conf.getTlsFactory() != null) {
+                try {
+                    conf.getTlsFactory().close();
+                } catch (Throwable t) {
+                    log.warn().exception(t).log("Failed to close TLS factory");
+                    throwable = t;
+                }
             }
             if (throwable != null) {
                 throw throwable;

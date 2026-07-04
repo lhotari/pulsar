@@ -20,7 +20,9 @@ package org.apache.pulsar.client.impl.v5;
 
 import io.opentelemetry.api.OpenTelemetry;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import org.apache.pulsar.client.api.KeyStoreParams;
 import org.apache.pulsar.client.api.v5.PulsarClient;
 import org.apache.pulsar.client.api.v5.PulsarClientBuilder;
 import org.apache.pulsar.client.api.v5.PulsarClientException;
@@ -29,10 +31,14 @@ import org.apache.pulsar.client.api.v5.config.ConnectionPolicy;
 import org.apache.pulsar.client.api.v5.config.MemorySize;
 import org.apache.pulsar.client.api.v5.config.TransactionPolicy;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
+import org.apache.pulsar.client.impl.auth.AuthenticationKeyStoreTls;
+import org.apache.pulsar.client.impl.auth.AuthenticationTls;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.v5.auth.LegacyV4AuthenticationAdapter;
 import org.apache.pulsar.client.impl.v5.auth.V5ToV4AuthenticationAdapter;
+import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsPolicy;
+import org.apache.pulsar.common.tls.TlsPurpose;
 
 /**
  * V5 implementation of PulsarClientBuilder.
@@ -51,6 +57,7 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
     @Override
     public PulsarClient build() throws PulsarClientException {
         try {
+            foldBridgedV4TlsMaterial();
             var v4Client = new PulsarClientImpl(conf);
             return new PulsarClientV5(v4Client, description, transactionTimeout);
         } catch (org.apache.pulsar.client.api.PulsarClientException e) {
@@ -134,11 +141,103 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
 
     @Override
     public PulsarClientBuilder tlsPolicy(TlsPolicy policy) {
-        // Stage-1 stub: accept the new common-api TlsPolicy and enable TLS. Mapping the policy onto the
-        // default FileBasedTlsFactory (purpose->policy map, ciphers/protocols, hostname verification,
-        // insecure mode) is TODO PIP-478 stage 3, when the client-side TLS SPI wiring lands.
+        return tlsPolicy(TlsPurpose.CLIENT_DEFAULT, policy);
+    }
+
+    @Override
+    public PulsarClientBuilder tlsPolicy(TlsPurpose purpose, TlsPolicy policy) {
+        if (purpose == null || policy == null) {
+            throw new IllegalArgumentException("tlsPolicy purpose and policy must not be null");
+        }
         conf.setUseTls(true);
+        Map<TlsPurpose, TlsPolicy> map = conf.getTlsPolicyMap();
+        if (map == null) {
+            map = new LinkedHashMap<>();
+            conf.setTlsPolicyMap(map);
+        }
+        map.put(purpose, policy);
         return this;
+    }
+
+    @Override
+    public PulsarClientBuilder tlsFactory(PulsarTlsFactory factory) {
+        if (factory == null) {
+            throw new IllegalArgumentException("tlsFactory must not be null");
+        }
+        conf.setUseTls(true);
+        conf.setTlsFactory(factory);
+        return this;
+    }
+
+    /**
+     * Fold a bridged v4 {@code AuthenticationTls} / {@code AuthenticationKeyStoreTls}'s mTLS material into
+     * the {@link TlsPurpose#CLIENT_DEFAULT} policy when the new PIP-478 TLS path is active (PIP-478 stage
+     * 3b). This lets a v5 user configure the trust store via {@link #tlsPolicy(TlsPolicy)} and the client
+     * identity via {@code authentication(AuthenticationFactory.tls(cert, key))} — the transport reads its
+     * material from the client TLS factory (not the auth plugin) on the new path, so the auth plugin's
+     * certificate/key must be folded in here. Only applies when the v5 builder configured a
+     * {@code tlsPolicy(...)}; a plain legacy client (no {@code tlsPolicy}) keeps the v4 behaviour where the
+     * auth plugin supplies the transport material directly.
+     *
+     * <p>The GENERIC third-party {@code hasDataForTls()} probe (folding an arbitrary v4 plugin's material)
+     * is deferred to stage 3c, since it needs the blocking-executor plumbing to run the v4 call off the
+     * caller thread.
+     */
+    private void foldBridgedV4TlsMaterial() {
+        if (conf.getTlsPolicyMap() == null) {
+            return;
+        }
+        org.apache.pulsar.client.api.Authentication v4 = conf.getAuthentication();
+        if (v4 instanceof AuthenticationTls tls
+                && tls.getCertFilePath() != null && tls.getKeyFilePath() != null) {
+            mergeClientDefault(base -> pemBuilder(base)
+                    .certificateFilePath(tls.getCertFilePath())
+                    .keyFilePath(tls.getKeyFilePath())
+                    .build());
+        } else if (v4 instanceof AuthenticationKeyStoreTls keyStoreTls
+                && keyStoreTls.getKeyStoreParams() != null) {
+            KeyStoreParams ks = keyStoreTls.getKeyStoreParams();
+            mergeClientDefault(base -> keyStoreBuilder(base)
+                    .keyStorePath(ks.getKeyStorePath())
+                    .keyStorePassword(ks.getKeyStorePassword())
+                    .storeType(ks.getKeyStoreType())
+                    .build());
+        }
+    }
+
+    private void mergeClientDefault(java.util.function.Function<TlsPolicy, TlsPolicy> merge) {
+        Map<TlsPurpose, TlsPolicy> map = conf.getTlsPolicyMap();
+        TlsPolicy base = map.get(TlsPurpose.CLIENT_DEFAULT);
+        map.put(TlsPurpose.CLIENT_DEFAULT, merge.apply(base));
+    }
+
+    /** Copy the trust material and flags of {@code base} (if any) into a PEM-format builder. */
+    private static TlsPolicy.Builder pemBuilder(TlsPolicy base) {
+        TlsPolicy.Builder b = copyFlags(base).format(TlsPolicy.Format.PEM);
+        if (base != null && base.format() == TlsPolicy.Format.PEM) {
+            b.trustCertsFilePath(base.trustCertsFilePath());
+        }
+        return b;
+    }
+
+    /** Copy the trust material and flags of {@code base} (if any) into a keystore-format builder. */
+    private static TlsPolicy.Builder keyStoreBuilder(TlsPolicy base) {
+        TlsPolicy.Builder b = copyFlags(base).format(TlsPolicy.Format.KEYSTORE);
+        if (base != null && base.format() == TlsPolicy.Format.KEYSTORE) {
+            b.trustStorePath(base.trustStorePath()).trustStorePassword(base.trustStorePassword());
+        }
+        return b;
+    }
+
+    private static TlsPolicy.Builder copyFlags(TlsPolicy base) {
+        TlsPolicy.Builder b = TlsPolicy.builder();
+        if (base != null) {
+            b.allowInsecureConnection(base.allowInsecureConnection())
+                    .enableHostnameVerification(base.enableHostnameVerification())
+                    .protocols(base.protocols())
+                    .ciphers(base.ciphers());
+        }
+        return b;
     }
 
     @Override

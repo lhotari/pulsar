@@ -24,6 +24,7 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.flush.FlushConsolidationHandler;
 import io.netty.handler.proxy.Socks5ProxyHandler;
+import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 import java.net.InetSocketAddress;
 import java.util.Map;
@@ -40,6 +41,10 @@ import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.common.protocol.ByteBufPair;
 import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.FrameDecoderUtil;
+import org.apache.pulsar.common.tls.PulsarTlsFactory;
+import org.apache.pulsar.common.tls.TlsEndpoint;
+import org.apache.pulsar.common.tls.TlsHandle;
+import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.PulsarSslConfiguration;
 import org.apache.pulsar.common.util.PulsarSslFactory;
@@ -61,6 +66,10 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     private final Socks5ProxyScope socks5ProxyScope;
     private final ClientConfigurationData conf;
     private final Map<String, PulsarSslFactory> pulsarSslFactoryMap;
+    // PIP-478 stage 3b: the client-side TLS SPI factory. Non-null selects the new PIP-478 path, where the
+    // per-connection SslContext is built off the event loop by the factory (see initTls); null keeps the
+    // legacy PIP-337 per-host PulsarSslFactory map above.
+    private final PulsarTlsFactory clientTlsFactory;
 
     private static final long TLS_CERTIFICATE_CACHE_MILLIS = TimeUnit.MINUTES.toMillis(1);
 
@@ -75,7 +84,10 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         this.socks5ProxyPassword = conf.getSocks5ProxyPassword();
         this.socks5ProxyScope = conf.getSocks5ProxyScope();
         this.conf = conf.clone();
-        if (tlsEnabled) {
+        // The resolved client TLS factory (PIP-478 stage 3b) rides on the (shallow-cloned) conf.
+        this.clientTlsFactory = tlsEnabled ? conf.getTlsFactory() : null;
+        if (tlsEnabled && clientTlsFactory == null) {
+            // Legacy PIP-337 path: per-host PulsarSslFactory map with a scheduled refresh.
             this.pulsarSslFactoryMap = new ConcurrentHashMap<>();
             if (scheduledExecutorService != null && conf.getAutoCertRefreshSeconds() > 0) {
                 scheduledExecutorService.scheduleWithFixedDelay(() -> this.refreshSslContext(conf),
@@ -84,6 +96,7 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
                         TimeUnit.SECONDS);
             }
         } else {
+            // New PIP-478 path (factory owns rotation) or TLS disabled: no legacy per-host map.
             this.pulsarSslFactoryMap = null;
         }
     }
@@ -117,6 +130,9 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         }
         if (!tlsEnabled) {
             return FutureUtil.failedFuture(new IllegalStateException("TLS is not enabled in client configuration"));
+        }
+        if (clientTlsFactory != null) {
+            return initTlsWithFactory(ch, sniHost);
         }
         CompletableFuture<Channel> initTlsFuture = new CompletableFuture<>();
         ch.eventLoop().execute(() -> {
@@ -153,6 +169,50 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         });
 
         return initTlsFuture;
+    }
+
+    /**
+     * New PIP-478 TLS path (stage 3b): build the connection's {@code SslContext} through the client TLS
+     * SPI factory using the one-shot form with the destination endpoint as a hint. The build runs on the
+     * factory's blocking executor (off the Netty event loop), so — unlike the legacy path, which builds
+     * the context inline in {@code computeIfAbsent} on the event loop — nothing blocks the event loop.
+     * The synchronous per-connection work is only the pipeline mutation, hopped back onto the event loop.
+     *
+     * <p>Hostname verification is baked into the factory-built context (per the client {@code TlsPolicy}),
+     * so {@code SecurityUtility.configureSSLHandler} is NOT re-applied here; the SNI host/port drive both
+     * the SNI header and the verification target. The one-shot handle retains the factory-owned context
+     * for the connection's lifetime and is disposed when the channel closes.
+     *
+     * <p>Design note (folds into the PIP): the PIP's one-shot-per-connection guidance is followed here
+     * (rather than the server-style subscription DirectProxyHandler used) because the client's
+     * {@code initTls} is already asynchronous — it returns a {@code CompletableFuture} composed into the
+     * connect chain before the TCP connect — so the async {@code createInstance} fits naturally and lets
+     * the endpoint hint through. The HTTP lookup path, whose AsyncHttpClient {@code SslEngineFactory} is
+     * synchronous, instead uses the subscribing form (see {@code HttpClient}).
+     */
+    private CompletableFuture<Channel> initTlsWithFactory(Channel ch, InetSocketAddress sniHost) {
+        return clientTlsFactory
+                .createInstance(TlsPurpose.CLIENT_DEFAULT,
+                        new TlsEndpoint(sniHost.getHostName(), sniHost.getPort()), SslContext.class)
+                .thenCompose(optHandle -> {
+                    CompletableFuture<Channel> future = new CompletableFuture<>();
+                    ch.eventLoop().execute(() -> {
+                        try {
+                            TlsHandle<SslContext> handle = optHandle.orElseThrow(() -> new IllegalStateException(
+                                    "Client TLS factory supplied no Netty SslContext for purpose "
+                                            + TlsPurpose.CLIENT_DEFAULT));
+                            SslHandler handler = handle.get()
+                                    .newHandler(ch.alloc(), sniHost.getHostName(), sniHost.getPort());
+                            ch.pipeline().addFirst(TLS_HANDLER, handler);
+                            // Release the retained one-shot context when this connection closes.
+                            ch.closeFuture().addListener(closeFuture -> handle.dispose());
+                            future.complete(ch);
+                        } catch (Throwable t) {
+                            future.completeExceptionally(t);
+                        }
+                    });
+                    return future;
+                });
     }
 
     CompletableFuture<Channel> initSocks5IfConfig(Channel ch) {
