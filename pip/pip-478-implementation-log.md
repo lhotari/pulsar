@@ -1447,3 +1447,19 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
     Deferred non-blocking follow-ups (logged): proxy binary-lookup leg honoring a custom
     `brokerClientTlsFactoryClassName`; the M-F6 proxy credential-offload gap. Remaining before
     apache-facing: master rebase + post-rebase CI + human review.
+
+42. **CI note (2026-07-04): Personal-CI Preconditions gate blocked by a GitHub diff-endpoint error.**
+    After the review-fix push, the Pulsar CI `Preconditions` job (which fetches the PR's changed-files
+    list from the GitHub API for path-based test selection) began failing with
+    `Server Error: Sorry, this diff is temporarily unavailable due to heavy server load.
+    {"resource":"PullRequest","field":"diff","code":"not_available"}` — a GitHub-side failure to compute
+    PR #231's diff, not a code/test failure (the same branch passed 41/41 at c9749a16afc; every fix
+    workstream was locally verified compile + targeted gates green + codex-cleared for FIX-1). Mitigations:
+    advanced the CI base branch `pulsar-pip478-ci-base` from the original merge-base `1fa9e3532b4` to
+    `c9749a16afc` (PR diff 249→130 files) and opened a fresh PR (#233, head=tip, base=c9749a16afc) so the
+    changed-files computation isn't burdened by PR #231's long update history. CONFIRMED sustained
+    GitHub outage: the fresh PR #233 failed Preconditions with the identical error, so it is server-side,
+    not PR #231's history (#233 closed). The full-matrix Personal-CI pass on the review-fix delta is
+    therefore a "retry when GitHub's diff endpoint recovers" item; the code itself is complete, 8-model
+    reviewed, hardened across FIX-1..6 + test batch, FIX-1 codex-cleared, and every workstream
+    locally verified (compile + targeted gates green) on top of the 41/41-green c9749a16afc base.
