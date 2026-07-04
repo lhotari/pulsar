@@ -179,6 +179,10 @@ public class HttpClient implements Closeable {
                         ctx -> ctx.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort));
             }
         });
+        // Bound how long an established pooled HTTPS connection keeps pre-rotation material (L2/H4): new
+        // connections pick up rotation via the SslEngineFactory above, but a pooled connection would otherwise
+        // hold pre-rotation trust/cert indefinitely. Aligns with FrameworkHttpClientFactory.
+        confBuilder.setConnectionTtl(TlsContextAcquisition.httpTlsRotationConnectionTtlMillis());
     }
 
     String getServiceUrl() {

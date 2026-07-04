@@ -312,6 +312,10 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
                         ctx -> ctx.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort));
             }
         });
+        // Bound how long an established pooled HTTPS connection keeps pre-rotation material (L2/H4): new
+        // connections pick up rotation via the SslEngineFactory above, but a pooled connection would otherwise
+        // hold pre-rotation trust/cert indefinitely. Aligns with FrameworkHttpClientFactory.
+        confBuilder.setConnectionTtl(TlsContextAcquisition.httpTlsRotationConnectionTtlMillis());
     }
 
     /**
@@ -321,6 +325,15 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
     @VisibleForTesting
     public PulsarTlsFactory getTlsFactory() {
         return tlsFactory;
+    }
+
+    /**
+     * @return the AsyncHttpClient connection-TTL (millis) bounding how long a pooled HTTPS connection keeps
+     *         pre-rotation TLS material on the new factory path (0 when unset, i.e. the legacy/plaintext path)
+     */
+    @VisibleForTesting
+    public int getConnectionTtlMs() {
+        return httpClient.getConfig().getConnectionTtl();
     }
 
     @Override

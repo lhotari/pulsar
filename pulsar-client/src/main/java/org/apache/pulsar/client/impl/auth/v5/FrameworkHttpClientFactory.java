@@ -87,13 +87,6 @@ import org.asynchttpclient.proxy.ProxyType;
 @CustomLog
 public final class FrameworkHttpClientFactory implements PulsarHttpClientFactory, AutoCloseable {
 
-    /**
-     * Bounds how long an established pooled connection can keep using pre-rotation TLS material on the new
-     * path (PIP-478's "effective within the TTL bound"). Five minutes trades prompt rotation against
-     * connection churn for the low-volume auth endpoints this factory serves.
-     */
-    private static final int TLS_ROTATION_CONNECTION_TTL_MS = 5 * 60 * 1000;
-
     private final Supplier<EventLoopGroup> eventLoopGroup;
     private final Supplier<Timer> timer;
     private final Supplier<NameResolver<InetAddress>> nameResolver;
@@ -204,8 +197,8 @@ public final class FrameworkHttpClientFactory implements PulsarHttpClientFactory
                             ctx -> ctx.newEngine(ByteBufAllocator.DEFAULT, peerHost, peerPort));
                 }
             });
-            // Bound how long pre-rotation material survives on established pooled connections.
-            builder.setConnectionTtl(TLS_ROTATION_CONNECTION_TTL_MS);
+            // Bound how long pre-rotation material survives on established pooled connections (L2/H4).
+            builder.setConnectionTtl(TlsContextAcquisition.httpTlsRotationConnectionTtlMillis());
             return subscription;
         }
         // Legacy path: only cluster (CLIENT_DEFAULT) traffic maps the client's tls* behavioural flags; a
