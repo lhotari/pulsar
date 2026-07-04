@@ -94,13 +94,22 @@ class AdminProxyHandler extends ProxyServlet {
     private PulsarSslFactory pulsarSslFactory;
     // PIP-478 path (used when selected instead of the legacy PulsarSslFactory).
     private PulsarTlsFactory brokerClientTlsFactory;
+    // PIP-478: the OpenTelemetry root threaded into the BROKER_CLIENT-purpose TlsFactoryInitContext so
+    // pulsar.tls.reload emits; OpenTelemetry.noop() when unset.
+    private final OpenTelemetry openTelemetry;
     private ScheduledExecutorService sslContextRefresher;
 
     AdminProxyHandler(ProxyConfiguration config, BrokerDiscoveryProvider discoveryProvider,
                       Authentication proxyClientAuthentication) {
+        this(config, discoveryProvider, proxyClientAuthentication, OpenTelemetry.noop());
+    }
+
+    AdminProxyHandler(ProxyConfiguration config, BrokerDiscoveryProvider discoveryProvider,
+                      Authentication proxyClientAuthentication, OpenTelemetry openTelemetry) {
         this.config = config;
         this.discoveryProvider = discoveryProvider;
         this.proxyClientAuthentication = proxyClientAuthentication;
+        this.openTelemetry = openTelemetry;
         this.brokerWebServiceUrl = config.isTlsEnabledWithBroker() ? config.getBrokerWebServiceURLTLS()
                 : config.getBrokerWebServiceURL();
         this.functionWorkerWebServiceUrl = config.isTlsEnabledWithBroker() ? config.getFunctionWorkerWebServiceURLTLS()
@@ -130,7 +139,7 @@ class AdminProxyHandler extends ProxyServlet {
                     null, () -> ProxyTlsFactories.brokerClientFactory(config, proxyClientAuthentication));
             TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
                     TlsFactorySupport.parseFactoryConfig(config.getBrokerClientTlsFactoryConfig()),
-                    sslContextRefresher, sslContextRefresher, OpenTelemetry.noop());
+                    sslContextRefresher, sslContextRefresher, openTelemetry);
             TlsFactorySupport.initializeBlocking(factory, initContext);
             return factory;
         } catch (Exception e) {

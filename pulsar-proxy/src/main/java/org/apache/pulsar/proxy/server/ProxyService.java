@@ -36,7 +36,6 @@ import io.netty.resolver.dns.DnsAddressResolverGroup;
 import io.netty.resolver.dns.DnsNameResolverBuilder;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import io.netty.util.concurrent.Future;
-import io.opentelemetry.api.OpenTelemetry;
 import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.Counter;
 import io.prometheus.client.Gauge;
@@ -341,7 +340,7 @@ public class ProxyService implements Closeable {
                     () -> ProxyTlsFactories.brokerClientFactory(proxyConfig, proxyClientAuthentication));
             TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
                     TlsFactorySupport.parseFactoryConfig(proxyConfig.getBrokerClientTlsFactoryConfig()),
-                    statsExecutor, statsExecutor, OpenTelemetry.noop());
+                    statsExecutor, statsExecutor, openTelemetry.getOpenTelemetry());
             TlsFactorySupport.initializeBlocking(this.brokerClientTlsFactory, initContext);
             this.brokerClientTlsSubscription = this.brokerClientTlsFactory
                     .createInstance(TlsPurpose.BROKER_CLIENT, SslContext.class,

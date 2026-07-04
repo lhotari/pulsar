@@ -48,6 +48,7 @@ import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
 import org.apache.pulsar.common.util.PulsarSslConfiguration;
 import org.apache.pulsar.common.util.PulsarSslFactory;
 import org.apache.pulsar.functions.worker.PulsarWorkerOpenTelemetry;
+import org.apache.pulsar.functions.worker.PulsarWorkerService;
 import org.apache.pulsar.functions.worker.WorkerConfig;
 import org.apache.pulsar.functions.worker.WorkerService;
 import org.apache.pulsar.functions.worker.rest.api.v2.WorkerApiV2Resource;
@@ -350,6 +351,16 @@ public class WorkerServer {
                 config.getWebServiceTlsCiphers(), config.getWebServiceTlsProtocols());
     }
 
+    // PIP-478: the OpenTelemetry root for the WEB-purpose TlsFactoryInitContext, so pulsar.tls.reload emits
+    // for the worker web listener; OpenTelemetry.noop() when no PulsarWorkerService OTel handle is available.
+    private OpenTelemetry workerOpenTelemetry() {
+        if (workerService instanceof PulsarWorkerService pulsarWorkerService
+                && pulsarWorkerService.getOpenTelemetry() != null) {
+            return pulsarWorkerService.getOpenTelemetry().getOpenTelemetry();
+        }
+        return OpenTelemetry.noop();
+    }
+
     // PIP-478: build the PulsarTlsFactory for the WEB purpose and drive a vanilla Jetty
     // SslContextFactory.Server via the SSLContext subscription (no cert refresh task).
     private SslContextFactory.Server createTlsFactoryWebServer(WorkerConfig config) throws Exception {
@@ -357,7 +368,7 @@ public class WorkerServer {
                 () -> buildDefaultWebTlsFactory(config));
         TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
                 TlsFactorySupport.parseFactoryConfig(config.getTlsFactoryConfig()),
-                scheduledExecutorService, scheduledExecutorService);
+                scheduledExecutorService, scheduledExecutorService, workerOpenTelemetry());
         TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
         this.reloadableServerTls = JettyTlsFactory.createReloadingServerFactory(this.tlsFactory, TlsPurpose.WEB,
                 config.getTlsProvider(), config.isTlsRequireTrustedClientCertOnConnect(),

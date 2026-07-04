@@ -116,7 +116,17 @@ public class WebServer {
 
     private final FilterInitializer filterInitializer;
 
+    // PIP-478: the OpenTelemetry root threaded into the WEB-purpose TlsFactoryInitContext (so
+    // pulsar.tls.reload emits for the proxy web listener); OpenTelemetry.noop() when unset.
+    private final OpenTelemetry openTelemetry;
+
     public WebServer(ProxyConfiguration config, AuthenticationService authenticationService) {
+        this(config, authenticationService, OpenTelemetry.noop());
+    }
+
+    public WebServer(ProxyConfiguration config, AuthenticationService authenticationService,
+                     OpenTelemetry openTelemetry) {
+        this.openTelemetry = openTelemetry;
         this.webServiceExecutor = new WebExecutorThreadPool(config.getHttpNumThreads(), "pulsar-external-web",
                 config.getHttpServerThreadPoolQueueSize());
         this.server = new Server(webServiceExecutor);
@@ -473,7 +483,7 @@ public class WebServer {
                         config.getWebServiceTlsCiphers(), config.getWebServiceTlsProtocols()));
         TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
                 TlsFactorySupport.parseFactoryConfig(config.getTlsFactoryConfig()),
-                sslRefreshScheduledExecutor, sslRefreshScheduledExecutor, OpenTelemetry.noop());
+                sslRefreshScheduledExecutor, sslRefreshScheduledExecutor, openTelemetry);
         TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
         this.reloadableServerTls = JettyTlsFactory.createReloadingServerFactory(this.tlsFactory, TlsPurpose.WEB,
                 config.getTlsProvider(), config.isTlsRequireTrustedClientCertOnConnect(),

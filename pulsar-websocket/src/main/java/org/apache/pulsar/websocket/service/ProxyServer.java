@@ -296,6 +296,11 @@ public class ProxyServer {
     private SslContextFactory.Server createTlsFactoryWebServer(WebSocketProxyConfiguration config) throws Exception {
         this.tlsFactory = TlsFactorySupport.createFactory(config.getTlsFactoryClassName(), null,
                 () -> buildDefaultWebTlsFactory(config));
+        // PIP-478: the standalone WebSocket proxy has no OpenTelemetry infrastructure (no
+        // OpenTelemetryService / metrics root on its classpath), so the TLS-reload instruments stay no-ops
+        // here — unlike the proxy / functions-worker, which now thread their real OpenTelemetry root. (When
+        // the WebSocket service runs embedded in a broker, the broker's own listeners already emit the
+        // metrics.)
         TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
                 TlsFactorySupport.parseFactoryConfig(config.getTlsFactoryConfig()),
                 scheduledExecutorService, scheduledExecutorService);

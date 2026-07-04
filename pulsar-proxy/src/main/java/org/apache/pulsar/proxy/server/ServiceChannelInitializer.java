@@ -24,7 +24,6 @@ import io.netty.handler.flush.FlushConsolidationHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
-import io.opentelemetry.api.OpenTelemetry;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import lombok.CustomLog;
@@ -102,7 +101,7 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
                         serviceConfig.getTlsCiphers(), serviceConfig.getTlsProtocols()));
         TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
                 TlsFactorySupport.parseFactoryConfig(serviceConfig.getTlsFactoryConfig()),
-                scheduler, scheduler, OpenTelemetry.noop());
+                scheduler, scheduler, proxyService.getOpenTelemetry().getOpenTelemetry());
         TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
         this.tlsSubscription = this.tlsFactory
                 .createInstance(TlsPurpose.PROXY, SslContext.class, ctx -> this.tlsServerContext = ctx)
