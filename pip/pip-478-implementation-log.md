@@ -1360,3 +1360,60 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
       "**Confined removal.** … `SecurityUtility` … remains" line in `pip-478.md` is now stale relative to
       FIX-6 (which deleted `SecurityUtility`); it is unchanged context, not a FIX-5 edit, so left untouched
       here — a candidate for a later PIP-Removal-section reconciliation.
+||||||| fdaeb412df2
+40. **Security-negative + e2e test batch (multi-model review "don't-trust-green-CI", T1/T2/T4/T5)**
+    (2026-07-04, local commits on `lh-pip-478-impl-v2` via an isolated worktree, no push). Four additive
+    test groups closing the coverage gaps a green CI does *not* prove — the codex test-coverage aspect's
+    top items. Each group committed separately. No product code changed; one stale test-coverage note
+    corrected. **No shipping defect surfaced** — the two security-critical negatives (T1 secure-reject, T4
+    needClientAuth-reject) both fail the handshake as required, and the proxy lookup-pool null-factory NPE
+    the old note warned of is already fixed on this branch.
+
+    - **T1 — `[improve][test] PIP-478 T1: forced-untrusted-cert Netty mTLS rejection negative`.** The
+      existing `FileBasedTlsFactoryTest` secure/insecure client-cert pair only proved the client silently
+      *withholds* its cross-CA cert (the server advertises only its trusted CA), never that a *presented*
+      untrusted cert is rejected. Added a real negative on the Netty engine mirroring the Jetty forced test:
+      a `ForcingKeyManager` makes the client actually present the untrusted (EC, cross-CA) certificate.
+      `forcedUntrustedClientCertRejectedBySecureServer` (secure server, real trust manager,
+      `requireTrustedClientCert=true` → handshake `SSLException`) +
+      `forcedUntrustedClientCertAcceptedAndCapturedByInsecureServer` (insecure server → accepted and
+      captured, the D3 behavior). TLSv1.2 pinned so the rejection surfaces synchronously in the in-memory
+      handshake pump. `FileBasedTlsFactoryTest` **37/37** (was 35).
+
+    - **T4 — `[improve][test] PIP-478 T4: SSLParameters companion LIVE-handshake enforcement`.** Existing
+      companion coverage asserted getters (Jetty) / the low-level synthesize helper (Netty). Added live
+      handshakes flowing a companion through the full factory → `TlsContextAcquisition` path on BOTH
+      engines: Netty (`SslParametersSynthesisTest` +2 — protocol restriction and `needClientAuth` via
+      `acquireNettyContext`) and Jetty (`JettyTlsFactoryTest` +1 — a live `CompanionFactory`-driven server
+      rejects a no-cert client and a TLSv1.3-only client, accepts a trusted-cert TLSv1.2 client).
+      `SslParametersSynthesisTest` **14/14** (was 12); `JettyTlsFactoryTest` **7/7** (was 6).
+
+    - **T2 — `[improve][test] PIP-478 T2: proxy e2e SSLContext-fallback synthesis on the data path`.**
+      `SslContextFallbackSynthesisTest` had skipped the client→proxy→broker produce/consume data path,
+      citing a proxy lookup-pool null-factory NPE. That NPE was already fixed on this branch (commit
+      `51929992e84`, R1, resolves the binary-lookup pool's `CLIENT_DEFAULT` factory), so the note was
+      stale. Added the e2e: a v5 client with the SSLContext-only factory produces/consumes through the TLS
+      proxy; every synthesized leg (client transport, proxy PROXY listener, proxy `BROKER_CLIENT` via
+      `DirectProxyHandler`) is exercised and the refused-Netty counter advances. The stale coverage note is
+      corrected — the proxy binary-*lookup* leg uses a default file-based context by design (it does not
+      honor the custom `brokerClientTlsFactoryClassName`; a deliberate `ProxyService.start` choice), which
+      does not affect the synthesis proven on the client and proxy-data legs.
+      `SslContextFallbackSynthesisTest` **4/4** (was 3).
+
+    - **T5 — `[improve][test] PIP-478 T5: websocket + functions-worker WEB TLS via tlsFactoryClassName`.**
+      No test had selected a custom factory via `tlsFactoryClassName` for these modules. Added a shared
+      counting fixture `CountingWebTlsFactory` (counts *every* `createInstance`, so the JDK-`SSLContext` WEB
+      path registers — unlike `SslContextOnlyTlsFactory`, which counts only refused Netty requests) and two
+      broker-free e2e tests, placed in `pulsar-broker/src/test` (the module that carries the test-cert
+      convention and depends on both ws + worker): `WebSocketProxyTlsFactoryTest` (standalone `ProxyServer`,
+      HTTPS `GET /status.html` → 200 "OK") and `WorkerServerTlsFactoryTest` (standalone `WorkerServer` with
+      a mocked `WorkerService`, HTTPS `GET /version` → 200). Each asserts the custom-factory counter
+      advanced, proving the WEB purpose is served through the new SPI end-to-end. **1/1** each.
+
+    - **Verify (all local, isolated worktree, `dangerouslyDisableSandbox` for the Gradle wrapper).** spotless
+      clean. Targeted `--tests` runs, all **0 failures / 0 errors**: `FileBasedTlsFactoryTest` **37/37**,
+      `SslParametersSynthesisTest` **14/14**, `JettyTlsFactoryTest` **7/7**, `SslContextFallbackSynthesisTest`
+      **4/4**, `WebSocketProxyTlsFactoryTest` **1/1**, `WorkerServerTlsFactoryTest` **1/1**; the pre-existing
+      `ProxyKeyStoreTlsTransportTest` **1/1** was run to confirm the R1 lookup-pool fix. Touched modules
+      compile: `:pulsar-common`, `:pulsar-broker-common`, `:pulsar-proxy`, `:pulsar-broker` (which pulls
+      `:pulsar-websocket` + the `:pulsar-functions` worker).

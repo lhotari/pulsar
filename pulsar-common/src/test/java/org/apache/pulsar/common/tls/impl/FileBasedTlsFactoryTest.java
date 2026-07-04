@@ -30,11 +30,16 @@ import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
+import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
+import java.security.KeyStore;
+import java.security.Principal;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -45,15 +50,19 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLPeerUnverifiedException;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509ExtendedKeyManager;
 import org.apache.commons.io.FileUtils;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
+import org.apache.pulsar.common.util.tls.PemReader;
 import org.awaitility.Awaitility;
 import org.testng.SkipException;
 import org.testng.annotations.AfterMethod;
@@ -267,6 +276,49 @@ public class FileBasedTlsFactoryTest {
                 .isInstanceOf(SSLPeerUnverifiedException.class);
         server.close();
         client.close();
+    }
+
+    // ---- T1: forced-untrusted-cert Netty rejection (a real negative, not mere non-capture). ----
+    // The two tests above depend on the client's default JSSE key manager silently WITHHOLDING its cross-CA
+    // certificate when the server advertises only its own trusted CA — so they never prove the server would
+    // reject a cert that is actually presented. These force the client to present the untrusted (EC, cross-CA)
+    // certificate via a ForcingKeyManager and assert the server-side decision directly: a secure server (real
+    // trust manager) REJECTS the handshake, an insecure server (InsecureTrustManagerFactory) accepts it and
+    // captures the cert (the D3 behavior TLS authentication relies on). Mirrors JettyTlsFactoryTest's
+    // optionalClientAuthScopesTrustAllToInsecureFlag on the Netty engine.
+
+    @Test
+    public void forcedUntrustedClientCertRejectedBySecureServer() throws Exception {
+        FileBasedTlsFactory server = factory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.builder()
+                        .trustCertsFilePath(RSA_CA).certificateFilePath(BROKER_CERT).keyFilePath(BROKER_KEY)
+                        .allowInsecureConnection(false).build()),
+                FileBasedTlsFactorySettings.builder().requireTrustedClientCert(true).build());
+
+        SSLEngine serverEngine = tls12(serverEngine(server));
+        SSLEngine clientEngine = tls12(forcingUntrustedClientEngine());
+        // The forced EC certificate is actually sent; the secure server's real (RSA) trust manager rejects it
+        // and aborts the handshake — the security-critical negative.
+        assertThatThrownBy(() -> handshake(clientEngine, serverEngine))
+                .as("secure server rejects the forced untrusted client certificate")
+                .isInstanceOf(SSLException.class);
+        server.close();
+    }
+
+    @Test
+    public void forcedUntrustedClientCertAcceptedAndCapturedByInsecureServer() throws Exception {
+        FileBasedTlsFactory server = factory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.builder()
+                        .trustCertsFilePath(RSA_CA).certificateFilePath(BROKER_CERT).keyFilePath(BROKER_KEY)
+                        .allowInsecureConnection(true).build()),
+                FileBasedTlsFactorySettings.builder().requireTrustedClientCert(false).build());
+
+        SSLEngine serverEngine = tls12(serverEngine(server));
+        SSLEngine clientEngine = tls12(forcingUntrustedClientEngine());
+        handshake(clientEngine, serverEngine);
+        assertThat(serverEngine.getSession().getPeerCertificates())
+                .as("insecure server captured the forced untrusted client certificate").isNotEmpty();
+        server.close();
     }
 
     @Test
@@ -669,6 +721,82 @@ public class FileBasedTlsFactoryTest {
         SSLEngine engine = ctx.newEngine(ByteBufAllocator.DEFAULT);
         engine.setUseClientMode(true);
         return engine;
+    }
+
+    // Pin TLSv1.2 so an untrusted-cert rejection surfaces synchronously within the in-memory handshake pump
+    // rather than as a TLS 1.3 post-handshake alert (client auth completes symmetrically within the handshake).
+    private static SSLEngine tls12(SSLEngine engine) {
+        engine.setEnabledProtocols(new String[] {"TLSv1.2"});
+        return engine;
+    }
+
+    // A JDK client engine whose key manager is FORCED to present the untrusted (EC, cross-CA) certificate
+    // regardless of the server's advertised acceptable-CA list, so the certificate is actually sent (and can
+    // therefore be rejected) rather than silently withheld by the default JSSE key manager. Trusts the RSA CA
+    // so the client accepts the server certificate.
+    private static SSLEngine forcingUntrustedClientEngine() throws Exception {
+        X509Certificate[] chain = PemReader.loadCertificatesFromPemFile(EC_CLIENT_CERT);
+        PrivateKey key = PemReader.loadPrivateKeyFromPemFile(EC_CLIENT_KEY);
+        KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        trustStore.load(null, null);
+        X509Certificate[] ca = PemReader.loadCertificatesFromPemFile(RSA_CA);
+        for (int i = 0; i < ca.length; i++) {
+            trustStore.setCertificateEntry("ca-" + i, ca[i]);
+        }
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance("PKIX");
+        tmf.init(trustStore);
+        SSLContext context = SSLContext.getInstance("TLS");
+        context.init(new KeyManager[] {new ForcingKeyManager(chain, key)}, tmf.getTrustManagers(), null);
+        SSLEngine engine = context.createSSLEngine();
+        engine.setUseClientMode(true);
+        return engine;
+    }
+
+    /** A key manager that always presents a fixed certificate chain, ignoring the server's CA hints. */
+    private static final class ForcingKeyManager extends X509ExtendedKeyManager {
+        private static final String ALIAS = "client";
+        private final X509Certificate[] chain;
+        private final PrivateKey key;
+
+        ForcingKeyManager(X509Certificate[] chain, PrivateKey key) {
+            this.chain = chain;
+            this.key = key;
+        }
+
+        @Override
+        public String[] getClientAliases(String keyType, Principal[] issuers) {
+            return new String[] {ALIAS};
+        }
+
+        @Override
+        public String chooseClientAlias(String[] keyType, Principal[] issuers, Socket socket) {
+            return ALIAS;
+        }
+
+        @Override
+        public String chooseEngineClientAlias(String[] keyType, Principal[] issuers, SSLEngine engine) {
+            return ALIAS;
+        }
+
+        @Override
+        public String[] getServerAliases(String keyType, Principal[] issuers) {
+            return null;
+        }
+
+        @Override
+        public String chooseServerAlias(String keyType, Principal[] issuers, Socket socket) {
+            return null;
+        }
+
+        @Override
+        public X509Certificate[] getCertificateChain(String alias) {
+            return chain;
+        }
+
+        @Override
+        public PrivateKey getPrivateKey(String alias) {
+            return key;
+        }
     }
 
     private TlsPolicy copyServerCertsToTemp(String certSrc, String keySrc) throws Exception {

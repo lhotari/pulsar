@@ -248,6 +248,63 @@ public class SslParametersSynthesisTest {
         handle.dispose();
     }
 
+    // ---- T4: LIVE handshakes driven through the full factory -> acquisition path (not the low-level
+    // synthesize helper, and not just getters): the factory-supplied companion actually decides a real
+    // handshake outcome after flowing through TlsContextAcquisition.acquireNettyContext. ----
+
+    @Test
+    public void acquiredCompanionProtocolRestrictionEnforcedAtHandshake() throws Exception {
+        // A companion pinning TLSv1.2 on contexts obtained through the acquisition path completes a matching
+        // TLSv1.2 handshake and rejects a TLSv1.3-only peer.
+        TlsHandle<SslContext> server = acquireServer(serverJdkContext(), protocols("TLSv1.2"));
+        TlsHandle<SslContext> okClient = acquireClient(clientJdkContextTrustOnly(), protocols("TLSv1.2"));
+        handshake(okClient.get().newEngine(ByteBufAllocator.DEFAULT),
+                server.get().newEngine(ByteBufAllocator.DEFAULT));
+
+        TlsHandle<SslContext> badClient = acquireClient(clientJdkContextTrustOnly(), protocols("TLSv1.3"));
+        assertThatThrownBy(() -> handshake(badClient.get().newEngine(ByteBufAllocator.DEFAULT),
+                server.get().newEngine(ByteBufAllocator.DEFAULT)))
+                .as("a TLSv1.3-only client cannot handshake with the companion-pinned TLSv1.2 server")
+                .isInstanceOf(SSLException.class);
+
+        server.dispose();
+        okClient.dispose();
+        badClient.dispose();
+    }
+
+    @Test
+    public void acquiredCompanionNeedClientAuthEnforcedAtHandshake() throws Exception {
+        // The consumer requests only OPTIONAL client auth (server(false)); the companion's needClientAuth is
+        // authoritative through the acquisition path — a client presenting a trusted certificate completes the
+        // handshake, a client presenting none is rejected.
+        TlsHandle<SslContext> server = acquireServer(serverJdkContext(), needClientAuthTls12());
+        TlsHandle<SslContext> clientWithCert = acquireClient(clientJdkContextWithCert(), protocols("TLSv1.2"));
+        handshake(clientWithCert.get().newEngine(ByteBufAllocator.DEFAULT),
+                server.get().newEngine(ByteBufAllocator.DEFAULT));
+
+        TlsHandle<SslContext> clientNoCert = acquireClient(clientJdkContextTrustOnly(), protocols("TLSv1.2"));
+        assertThatThrownBy(() -> handshake(clientNoCert.get().newEngine(ByteBufAllocator.DEFAULT),
+                server.get().newEngine(ByteBufAllocator.DEFAULT)))
+                .as("the companion's needClientAuth rejects a client presenting no certificate")
+                .isInstanceOf(SSLException.class);
+
+        server.dispose();
+        clientWithCert.dispose();
+        clientNoCert.dispose();
+    }
+
+    private static TlsHandle<SslContext> acquireServer(SSLContext jdkContext, SSLParameters companion)
+            throws Exception {
+        return TlsContextAcquisition.acquireNettyContext(new CompanionFactory(jdkContext, companion),
+                TlsPurpose.BROKER, TlsSynthesisSpec.server(false)).join().orElseThrow();
+    }
+
+    private static TlsHandle<SslContext> acquireClient(SSLContext jdkContext, SSLParameters companion)
+            throws Exception {
+        return TlsContextAcquisition.acquireNettyContext(new CompanionFactory(jdkContext, companion),
+                TlsPurpose.CLIENT_DEFAULT, TlsSynthesisSpec.client(false)).join().orElseThrow();
+    }
+
     private static SSLParameters protocols(String... protocols) {
         SSLParameters params = new SSLParameters();
         params.setProtocols(protocols);
