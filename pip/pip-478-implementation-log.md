@@ -616,3 +616,78 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
       transport (entry 24 handoff) is orthogonal to TLS and still pending; (b) the WebSocket
       standalone TLS metrics stay noop by design until/unless that module gains OTel infra —
       not a 4c blocker.
+
+29. **Stage 4c (PIP-337 removal sweep) executed** (stage4c-builder, Opus, 6 commits on
+    `lh-pip-478-impl-v2`, all local, per the scout checklist + orchestrator rulings R1–R8). The
+    PIP-337 `PulsarSslFactory` path is now fully removed; the `PulsarTlsFactory` SPI is the only TLS
+    path everywhere. Commits, in compile-safe order (each compiles + passes its chunk gates):
+    - **`[improve][misc]` decouple defaults** — every default that named the removed
+      `DefaultPulsarSslFactory` FQCN goes to `""`/null (ServiceConfiguration×2, ProxyConfiguration×2,
+      ClientConfigurationData, ClientBuilderImpl blank-fill, ClusterDataImpl builder); both
+      `isLegacyCustom` predicates match the removed FQCN as a string literal (R2). Behaviour
+      unchanged; just severs the compile-time class dependency.
+    - **`[improve][broker]` server collapse** — `TlsFactorySupport.selectPath`/`TlsPath`/
+      `LEGACY_WARNED` deleted; all 8 server call sites (broker PulsarChannelInitializer + WebService,
+      proxy ServiceChannelInitializer + WebServer + AdminProxyHandler + ProxyService↔DirectProxyHandler,
+      functions-worker WorkerServer, websocket ProxyServer) simplified to new-path-only. `isLegacyCustom`
+      survives as the fail-loud trigger (R3). `TlsFactorySupportTest` migrated (R8-adjacent: its
+      selection cases → an `isLegacyCustom` case, needed here for the module test to compile).
+    - **`[improve][client]` client collapse + R4 binding** — `ClientTlsFactorySupport.useNewTlsPath`
+      and its `pulsar.client.tls.useNewTlsFactory` flip property deleted; `resolveClientTlsFactory`
+      always builds a factory; HttpClient / client PulsarChannelInitializer / AsyncHttpConnector /
+      FlowBase lose their reflective `PulsarSslFactory` arms. **R4:** verified that `PulsarAdminImpl`
+      did **not** bind `ClientAuthenticationServices` (only `PulsarClientImpl` did) — admin-only OAuth2
+      previously rode the deleted private client — so the 3b binding was **extended to PulsarAdminImpl**
+      (mirrors PulsarClientImpl; HTTP-only, so AsyncHttpClient self-provisions its event loop). FlowBase's
+      genuinely-unbound path throws the actionable `IllegalStateException` (R4).
+    - **`[feat][misc]` dispositions** — fail-loud at PulsarService.start / ProxyServiceStarter /
+      ClientBuilder.build / PulsarAdminBuilder.build (R1); ClusterData per-cluster plugin
+      retained-but-ignored with a once-per-cluster WARN in BrokerService and the plugin params stripped
+      from `configTlsSettings`/`configAdminTlsSettings` + all 4 call sites, plus the stale forwardings in
+      PulsarService/NamespaceService/CompactorTool unwired (R6); testclient CLI options removed;
+      CmdClusters options kept-but-deprecated (R5); `@Deprecated` + migration javadoc on the retained v4
+      builder methods and config fields; Lombok-propagated getter-deprecation localized with
+      `@SuppressWarnings` on the enforcement paths.
+    - **`[fix][client]` auth-identity fold** — a regression the collapse *exposed* (not introduced by
+      design): `resolveClientTlsFactory` never folded the auth plugin's own TLS identity
+      (AuthenticationTls / AuthenticationKeyStoreTls), which on the base was served by the now-removed
+      per-host/legacy path. Fixed by folding the plugin material into CLIENT_DEFAULT (auth-cert-wins)
+      **only when the client configures no tls\* key/keystore of its own**, via a supplier evaluated
+      lazily by AuthProvidedMaterialSource (no eager `getAuthData()` at construction; a token/OAuth2
+      plugin yields nothing rather than failing). This was the trickiest part — three iterations to
+      satisfy all of: keystore-TLS-auth clients/admins present their cert (KeyStoreTls…WithAuthTest,
+      AdminApiKeyStoreTlsAuthTest), no eager auth at build (ClientInitializationTest), fake/non-TLS auth
+      untouched (TlsProducerConsumerTest.testTlsWithFakeAuthentication), OAuth2 folds intact.
+    - **`[improve][misc]` deletions + test migration** — deleted `PulsarSslFactory`,
+      `DefaultPulsarSslFactory`, `PulsarSslConfiguration`, `KeyStoreSSLContext`, `JettySslContextFactory`,
+      `PulsarHttpAsyncSslEngineFactory` and the 4 tests coupled to them; `SslContextTest`'s
+      SslProvider×cipher×keystore/PEM matrix ported onto `FileBasedTlsFactory` (OpenSSL still rejects the
+      JDK-named ciphers) and the old file deleted (R8); `FileModifiedTimeUpdaterTest` lost only its
+      legacy method (R8); `OAuth2MockHttpClient` deleted (its 3 callers only exercise config parsing);
+      `AdminApiKeyStoreTlsAuthTest` rebuilt on the JDK KeyStore/SSLContext APIs; new
+      `AdminOnlyOAuth2AuthTest` (R4 gate, WireMock IdP); stale `{@code}`/conf comments reworded.
+      `SSLContextValidatorEngine` left in place (now test-orphaned — a follow-on cleanup outside this PIP,
+      R7).
+    - **R4 verification outcome:** PulsarAdminImpl needed the binding (it did **not** bind before); the
+      extension makes admin-only OAuth2 acquire its token over the framework client, proven green by the
+      new `AdminOnlyOAuth2AuthTest` and the unchanged `TokenOauth2AuthenticatedProducerConsumerTest`.
+    - **Gates (targeted `--tests`, all green):** full builds `:pulsar-common` `:pulsar-broker-common`
+      `:pulsar-client-original` `:pulsar-client-admin-original` `:pulsar-client-v5`; compileJava+
+      compileTestJava for broker/proxy/websocket/functions-worker/testclient/client-tools; checkstyle on
+      all touched modules; ConfigValidationTest; FileBasedTlsFactoryTest (incl. the R8 port) +
+      FileModifiedTimeUpdaterTest; the oauth2 unit suite + OAuth2IdpTlsFrameworkClientTest +
+      OAuth2IdpTlsFoldTest + ClientInitializationTest; TlsProducerConsumerTest, V5TlsProducerConsumerTest,
+      ReplicatorTlsFactoryTest, ClientCnxAsyncAuthTest, AdminApiKeyStoreTlsAuthTest,
+      KeyStoreTlsProducerConsumerTestWithAuthTest, TokenOauth2AuthenticatedProducerConsumerTest,
+      AdminOnlyOAuth2AuthTest; AuthedAdminProxyHandlerTest (+NewTlsPath variant), ProxyTlsTest. One
+      **pre-existing flake** observed and dismissed: `AsyncHttpConnectorTest.testShouldStopRetriesWhenTimeoutOccurs`
+      (a 500 ms http retry-timeout test, no TLS, unrelated to this change) failed once under concurrent
+      build load and passed in isolation.
+    - **Checklist deviations / drift:** (a) `TlsFactorySupportTest` migration and the OAuth2MockHttpClient
+      retarget were pulled forward from the "delete last" commit into their owning collapse commits where
+      module test-compile required it (compile-safe ordering). (b) `useNewTlsPath` +
+      `USE_NEW_TLS_FACTORY_PROPERTY` were **deleted** (no external callers) rather than pinned always-true —
+      cleaner than the checklist's "→ always new". (c) The client auth-identity fold (the `[fix]` commit)
+      was **not** in the checklist; it is a real regression the collapse exposed and required a scoped,
+      lazy solution. (d) PIP `pip-478.md` untouched (the R1/R5 edits remain the orchestrator's, per the
+      caution). No line-ref drift found — the checklist anchors matched `edf08889c8e`.
