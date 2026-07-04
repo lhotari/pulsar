@@ -29,6 +29,7 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import javax.net.ssl.SSLContext;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -41,6 +42,7 @@ import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.util.ExecutorProvider;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
+import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.jetty.tls.JettyTlsFactory;
 import org.apache.pulsar.policies.data.loadbalancer.ServiceLookupData;
@@ -87,6 +89,10 @@ class AdminProxyHandler extends ProxyServlet {
     private final String functionWorkerWebServiceUrl;
     // PIP-478 broker-client TLS SPI factory (the only path since PIP-337 removal, stage 4c).
     private PulsarTlsFactory brokerClientTlsFactory;
+    // PIP-478 (F3): the BROKER_CLIENT SSLContext subscription driving the Jetty HttpClient's reloading
+    // SslContextFactory.Client, so rotated broker-client material reaches new admin connections. Disposed
+    // in destroy().
+    private TlsHandle<SSLContext> brokerClientTlsSubscription;
     // PIP-478: the OpenTelemetry root threaded into the BROKER_CLIENT-purpose TlsFactoryInitContext so
     // pulsar.tls.reload emits; OpenTelemetry.noop() when unset.
     private final OpenTelemetry openTelemetry;
@@ -115,7 +121,8 @@ class AdminProxyHandler extends ProxyServlet {
     }
 
     // PIP-478: build+initialize the broker-client PulsarTlsFactory (BROKER_CLIENT purpose). The factory owns
-    // rotation internally; newHttpClient() builds a plain SslContextFactory.Client from a one-shot snapshot.
+    // rotation internally; newHttpClient() builds a self-reloading SslContextFactory.Client that swaps the
+    // context on rotation (F3), so a long-lived admin HttpClient picks up rotated broker-client material.
     private PulsarTlsFactory createBrokerClientTlsFactory() {
         try {
             PulsarTlsFactory factory = TlsFactorySupport.createFactory(config.getBrokerClientTlsFactoryClassName(),
@@ -245,11 +252,15 @@ class AdminProxyHandler extends ProxyServlet {
         try {
             if (config.isTlsEnabledWithBroker()) {
                 try {
-                    // PIP-478: plain (non-subclassed) client factory from a one-shot BROKER_CLIENT
-                    // SSLContext snapshot.
-                    SslContextFactory.Client contextFactory = JettyTlsFactory.createClientFactory(
+                    // PIP-478 (F3): a self-reloading (non-subclassed) client factory subscribed to the
+                    // BROKER_CLIENT SSLContext, so rotated broker-client material reaches new connections.
+                    JettyTlsFactory.ReloadableClientTls reloadable = JettyTlsFactory.createReloadingClientFactory(
                             this.brokerClientTlsFactory, TlsPurpose.BROKER_CLIENT,
                             config.getBrokerClientSslProvider());
+                    // Replace any prior subscription (newHttpClient may be invoked more than once).
+                    disposeBrokerClientTlsSubscription();
+                    this.brokerClientTlsSubscription = reloadable.subscription();
+                    SslContextFactory.Client contextFactory = reloadable.sslContextFactory();
                     if (!config.isTlsHostnameVerificationEnabled()) {
                         contextFactory.setEndpointIdentificationAlgorithm(null);
                     }
@@ -346,13 +357,23 @@ class AdminProxyHandler extends ProxyServlet {
     @Override
     public void destroy() {
         super.destroy();
-        // PIP-478: close the broker-client TLS factory if the new path was used.
+        // PIP-478 (F3): dispose the BROKER_CLIENT SSLContext subscription driving the reloading Jetty
+        // client factory, then close the broker-client TLS factory if the new path was used.
+        disposeBrokerClientTlsSubscription();
         if (this.brokerClientTlsFactory != null) {
             this.brokerClientTlsFactory.close();
             this.brokerClientTlsFactory = null;
         }
         if (this.sslContextRefresher != null) {
             this.sslContextRefresher.shutdownNow();
+        }
+    }
+
+    private void disposeBrokerClientTlsSubscription() {
+        TlsHandle<SSLContext> subscription = this.brokerClientTlsSubscription;
+        if (subscription != null) {
+            this.brokerClientTlsSubscription = null;
+            subscription.dispose();
         }
     }
 }

@@ -691,3 +691,82 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
       was **not** in the checklist; it is a real regression the collapse exposed and required a scoped,
       lazy solution. (d) PIP `pip-478.md` untouched (the R1/R5 edits remain the orchestrator's, per the
       caution). No line-ref drift found — the checklist anchors matched `edf08889c8e`.
+
+30. **Closing cross-model review fixup (F1/F2/F3/F5)** — the ship-blockers from the final review, 3 commits
+    on `lh-pip-478-impl-v2` (all local). Trailer `Assisted-by: Claude Code (Opus 4.8)`.
+    - **F1 `[fix][misc]` — wire the `SSLContext`-fallback synthesis.** The PIP's tier-3 story (framework asks
+      the factory for the Netty `SslContext`; on `empty()` it requests `javax.net.ssl.SSLContext` for the same
+      purpose and synthesizes) was **never wired** — every binary/HTTP consumer requested `SslContext.class`
+      directly and failed on `empty()`. Added one shared acquisition point in `pulsar-common`
+      (`TlsContextAcquisition.acquireNettyContext`, three forms: one-shot, one-shot+endpoint, subscribing) that
+      tries `SslContext` → on `empty()` tries `SSLContext` (same form; subscriptions re-wrap each delivery) →
+      synthesizes with the role from `purpose.role()`, else the existing empty/failure. Routed **all** listed
+      consumers through it: broker `PulsarChannelInitializer`, proxy `ServiceChannelInitializer` + `ProxyService`
+      (BROKER_CLIENT), client `HttpClient` + `PulsarChannelInitializer` + `FrameworkHttpClientFactory` +
+      `AsyncHttpConnector`, and the `ClientTlsFactorySupport` fail-fast probe.
+      - **Synthesized-client hostname verification (the flagged design question) — resolved faithfully, no
+        compromise.** A JDK `SSLContext` cannot carry `endpointIdentificationAlgorithm` (engine-level, not a
+        context property), and the client consumers rely on the context to carry verification (they do **not**
+        re-apply `SecurityUtility.configureSSLHandler`). The synthesized fallback is **always** JDK-backed
+        (`JdkSslContext` over the factory's `SSLContext`), and PIP-478 Detailed Design (Well-Known Classes,
+        "client-side hostname verification") states the JDK backend permits a clean per-`SSLEngine` override.
+        So `TlsContexts.synthesizeNettyClientFromJdk(ctx, enableHostnameVerification)` wraps the JDK context in
+        `HostnameVerifyingSslContext` (a delegating `SslContext` whose `newEngine(...)` sets
+        `endpointIdentificationAlgorithm="HTTPS"` on every engine) when verification is on — the faithful
+        equivalent of the native path's `SslContextBuilder.endpointIdentificationAlgorithm("HTTPS")`. The flag
+        is threaded from each consumer's own config (`TlsSynthesisSpec.client(tlsHostnameVerificationEnable)`;
+        proxy→broker uses `tlsHostnameVerificationEnabled`) because the framework can't read a custom factory's
+        internal policy. Server purposes thread `TlsSynthesisSpec.server(tlsRequireTrustedClientCertOnConnect)`.
+      - **F5 folded in:** deleted the dead `LegacyV4TlsAdapter.extractTlsMaterial()` + its stale "stage 3" TODO
+        (nothing called it — `unwrapV4` reads `tlsAdapter.v4` directly) and the now-orphaned nested `LOG` field.
+      - **Gate:** new `SslContextFallbackSynthesisTest` (pulsar-proxy) with `SslContextOnlyTlsFactory` (a factory
+        that returns `empty()` for `SslContext` and supplies only `SSLContext`, delegating load to a
+        `FileBasedTlsFactory`; counts refused Netty requests to prove synthesis fired). Verifies broker binary
+        listener + client binary (direct v5 over `pulsar+ssl`), broker admin client (`AsyncHttpConnector`, the
+        same client-HTTP synthesis path `HttpClient` uses), and the proxy's BROKER_CLIENT synthesized context
+        (`getBrokerClientSslContext()` — usable client context) + PROXY synthesis at startup. 3/3 green.
+    - **F2 `[fix][broker]` — Jetty optional-client-cert trust scoping.** `applyServerConfig` set
+      `setTrustAll(true)` unconditionally under optional auth; changed to `setTrustAll(allowInsecureConnection)`,
+      threaded from each web caller's `tlsAllowInsecureConnection` (broker `WebService`, proxy `WebServer`,
+      websocket `ProxyServer`, functions `WorkerServer`). **IMPORTANT nuance discovered (flagged below):** on
+      the framework's `setSslContext` path Jetty's `setTrustAll` is **inert** — Jetty's `load()` honours
+      `trustAll` only when it builds the `SSLContext` itself (`_setContext == null`). The trust scoping is
+      **actually enforced by the WEB `SSLContext`'s trust managers**, which `DefaultBrokerTlsFactory` already
+      builds from `tlsAllowInsecureConnection` (CA-validating when secure, `InsecureTrustManagerFactory` when
+      insecure). So the change removes the misleading unconditional `setTrustAll(true)` and aligns the flag for
+      defence-in-depth; it does not itself alter runtime behaviour (the desired semantics were already correct
+      via the `SSLContext`). Comment in `applyServerConfig` documents this.
+      - **Gate:** new `JettyTlsFactoryTest.optionalClientAuthScopesTrustAllToInsecureFlag` — a real Jetty HTTPS
+        server + a forcing `X509ExtendedKeyManager` that presents the cert regardless of the server's CA hints,
+        over TLSv1.2 (synchronous client-auth rejection). Untrusted client cert **rejected** when the WEB policy
+        is secure, **accepted** when insecure; trusted cert accepted in both. Existing web TLS-auth suites pass
+        unchanged (none relied on lax behaviour — there was none in the new path): `AdminApiTlsAuthTest` (5/6;
+        see pre-existing failure below), `BrokerAdminClientTlsAuthTest`, `AdminApiKeyStoreTlsAuthTest`,
+        `AuthedAdminProxyHandlerTest` (+`NewTlsPath`).
+    - **F3 `[fix][proxy]` — `AdminProxyHandler` reloading broker-client.** `newHttpClient()` snapshotted a
+      one-shot `SSLContext` that never rotated. Added `JettyTlsFactory.createReloadingClientFactory` +
+      `ReloadableClientTls` (mirrors the server `createReloadingServerFactory`: subscribe to `SSLContext`,
+      `setSslContext` before start, `reload(...)` on later deliveries); `AdminProxyHandler` now holds the
+      subscription and disposes it in `destroy()` (replacing any prior on repeated `newHttpClient()`). The
+      `!tlsHostnameVerificationEnabled` → `setEndpointIdentificationAlgorithm(null)` is preserved.
+      - **Gate:** new `JettyTlsFactoryTest.reloadingClientFactoryPresentsRotatedClientCertOnNewConnections` —
+        rotate the client identity (admin→user1 cert, both clientAuth-EKU) while the factory stays alive; a
+        client-auth-requiring server observes the rotated serial on new connections. `AuthedAdminProxyHandlerTest`
+        (+`NewTlsPath`) exercise the real proxy→broker admin path and pass.
+    - **Verify:** `spotlessApply` + `checkstyle` clean on all touched modules; full builds
+      `:pulsar-common` `:pulsar-broker-common` `:pulsar-client-original` `:pulsar-client-admin-original`
+      `:pulsar-client-v5` (one **pre-existing flake** dismissed: `AsyncHttpConnectorTest.testShouldStopRetries…`,
+      a 500 ms no-TLS retry-timeout test — fails under concurrent build load, passes in isolation, as noted in
+      entry 29); targeted gates per finding + `TlsFactoryProducerConsumerTest`, `V5TlsProducerConsumerTest`,
+      `ReplicatorTlsFactoryTest`, `ProxyTlsTest`, `ProxyTlsFactoryTest`, `BrokerAdminClientTlsFactoryTest` all
+      green.
+    - **Two PRE-EXISTING failures found (NOT caused by this fixup; reproduce on clean `bdac317` HEAD via
+      `git stash`), flagged for the orchestrator:** (a) `ProxyKeyStoreTlsTransportTest.testProducer` — the
+      proxy's lookup `ConnectionPool` never resolves a client TLS factory for its broker-facing config
+      (`ProxyConnection.createClientConfiguration` sets `tls*` fields but no factory; nothing plays the broker's
+      `maybeApplyBrokerClientTlsFactory` role for the proxy), so `tlsEnabledWithBroker=true` produce/consume
+      fails with a null-factory NPE in the endpoint `createInstance`. This is why F1's proxy coverage asserts the
+      BROKER_CLIENT synthesized context rather than end-to-end produce-through-proxy. (b)
+      `AdminApiTlsAuthTest.testCertRefreshForPulsarAdmin` — the admin `AuthenticationTls` cert-refresh does not
+      take effect on the new SPI path (auth-fold material rotation not observed). Both are stage-4c gaps
+      orthogonal to F1/F2/F3 and should be tracked separately.
