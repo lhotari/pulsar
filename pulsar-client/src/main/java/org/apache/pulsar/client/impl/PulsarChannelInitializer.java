@@ -24,26 +24,26 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.flush.FlushConsolidationHandler;
 import io.netty.handler.proxy.Socks5ProxyHandler;
+import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 import java.net.InetSocketAddress;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import lombok.CustomLog;
 import lombok.Getter;
-import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.Socks5ProxyScope;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.common.protocol.ByteBufPair;
 import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.FrameDecoderUtil;
+import org.apache.pulsar.common.tls.PulsarTlsFactory;
+import org.apache.pulsar.common.tls.TlsEndpoint;
+import org.apache.pulsar.common.tls.TlsHandle;
+import org.apache.pulsar.common.tls.TlsPurpose;
+import org.apache.pulsar.common.tls.impl.TlsContextAcquisition;
+import org.apache.pulsar.common.tls.impl.TlsSynthesisSpec;
 import org.apache.pulsar.common.util.FutureUtil;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
-import org.apache.pulsar.common.util.SecurityUtility;
 import org.apache.pulsar.common.util.netty.NettyFutureUtil;
 
 @CustomLog
@@ -54,38 +54,32 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     private final Supplier<ClientCnx> clientCnxSupplier;
     @Getter
     private final boolean tlsEnabled;
-    private final boolean tlsHostnameVerificationEnabled;
     private final InetSocketAddress socks5ProxyAddress;
     private final String socks5ProxyUsername;
     private final String socks5ProxyPassword;
     private final Socks5ProxyScope socks5ProxyScope;
     private final ClientConfigurationData conf;
-    private final Map<String, PulsarSslFactory> pulsarSslFactoryMap;
-
-    private static final long TLS_CERTIFICATE_CACHE_MILLIS = TimeUnit.MINUTES.toMillis(1);
+    // PIP-478 client TLS SPI factory (the only client TLS path since the PIP-337 removal); non-null
+    // whenever TLS is enabled. The per-connection SslContext is built off the event loop by the factory
+    // (see initTls), which owns rotation, so there is no per-host refresh task.
+    private final PulsarTlsFactory clientTlsFactory;
+    // PIP-478: the hostname-verification setting baked into a framework-synthesized Netty context when a
+    // custom factory supplies only the JDK SSLContext fallback for CLIENT_DEFAULT.
+    private final TlsSynthesisSpec tlsSynthesisSpec;
 
     public PulsarChannelInitializer(ClientConfigurationData conf, Supplier<ClientCnx> clientCnxSupplier,
                                     ScheduledExecutorService scheduledExecutorService) throws Exception {
         super();
         this.clientCnxSupplier = clientCnxSupplier;
         this.tlsEnabled = conf.isUseTls();
-        this.tlsHostnameVerificationEnabled = conf.isTlsHostnameVerificationEnable();
         this.socks5ProxyAddress = conf.getSocks5ProxyAddress();
         this.socks5ProxyUsername = conf.getSocks5ProxyUsername();
         this.socks5ProxyPassword = conf.getSocks5ProxyPassword();
         this.socks5ProxyScope = conf.getSocks5ProxyScope();
         this.conf = conf.clone();
-        if (tlsEnabled) {
-            this.pulsarSslFactoryMap = new ConcurrentHashMap<>();
-            if (scheduledExecutorService != null && conf.getAutoCertRefreshSeconds() > 0) {
-                scheduledExecutorService.scheduleWithFixedDelay(() -> this.refreshSslContext(conf),
-                        conf.getAutoCertRefreshSeconds(),
-                        conf.getAutoCertRefreshSeconds(),
-                        TimeUnit.SECONDS);
-            }
-        } else {
-            this.pulsarSslFactoryMap = null;
-        }
+        // The resolved client TLS factory (PIP-478) rides on the (shallow-cloned) conf.
+        this.clientTlsFactory = tlsEnabled ? conf.getTlsFactory() : null;
+        this.tlsSynthesisSpec = TlsSynthesisSpec.client(conf.isTlsHostnameVerificationEnable());
     }
 
     @Override
@@ -118,41 +112,58 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         if (!tlsEnabled) {
             return FutureUtil.failedFuture(new IllegalStateException("TLS is not enabled in client configuration"));
         }
-        CompletableFuture<Channel> initTlsFuture = new CompletableFuture<>();
-        ch.eventLoop().execute(() -> {
-            try {
-                PulsarSslFactory pulsarSslFactory = pulsarSslFactoryMap.computeIfAbsent(sniHost.getHostName(), key -> {
-                    try {
-                        PulsarSslFactory factory = (PulsarSslFactory) Class.forName(conf.getSslFactoryPlugin())
-                                .getConstructor().newInstance();
-                        PulsarSslConfiguration sslConfiguration = buildSslConfiguration(conf, key);
-                        factory.initialize(sslConfiguration);
-                        factory.createInternalSslContext();
-                        return factory;
-                    } catch (Exception e) {
-                        log.error().exception(e).log("Unable to initialize and create the ssl context");
-                        initTlsFuture.completeExceptionally(e);
-                        return null;
-                    }
+        return initTlsWithFactory(ch, sniHost);
+    }
+
+    /**
+     * New PIP-478 TLS path: build the connection's {@code SslContext} through the client TLS
+     * SPI factory using the one-shot form with the destination endpoint as a hint. The build runs on the
+     * factory's blocking executor (off the Netty event loop), so — unlike the legacy path, which builds
+     * the context inline in {@code computeIfAbsent} on the event loop — nothing blocks the event loop.
+     * The synchronous per-connection work is only the pipeline mutation, hopped back onto the event loop.
+     *
+     * <p>Hostname verification is baked into the factory-built context (per the client {@code TlsPolicy}),
+     * so no per-connection endpoint-identification override is re-applied here; the SNI host/port drive both
+     * the SNI header and the verification target. The one-shot handle retains the factory-owned context
+     * for the connection's lifetime and is disposed when the channel closes.
+     *
+     * <p>Design note (folds into the PIP): the PIP's one-shot-per-connection guidance is followed here
+     * (rather than the server-style subscription DirectProxyHandler used) because the client's
+     * {@code initTls} is already asynchronous — it returns a {@code CompletableFuture} composed into the
+     * connect chain before the TCP connect — so the async {@code createInstance} fits naturally and lets
+     * the endpoint hint through. The HTTP lookup path, whose AsyncHttpClient {@code SslEngineFactory} is
+     * synchronous, instead uses the subscribing form (see {@code HttpClient}).
+     */
+    private CompletableFuture<Channel> initTlsWithFactory(Channel ch, InetSocketAddress sniHost) {
+        return TlsContextAcquisition.acquireNettyContext(clientTlsFactory, TlsPurpose.CLIENT_DEFAULT,
+                        new TlsEndpoint(sniHost.getHostName(), sniHost.getPort()), tlsSynthesisSpec)
+                .thenCompose(optHandle -> {
+                    CompletableFuture<Channel> future = new CompletableFuture<>();
+                    ch.eventLoop().execute(() -> {
+                        TlsHandle<SslContext> handle = null;
+                        try {
+                            handle = optHandle.orElseThrow(() -> new IllegalStateException(
+                                    "Client TLS factory supplied no Netty SslContext for purpose "
+                                            + TlsPurpose.CLIENT_DEFAULT));
+                            SslHandler handler = handle.get()
+                                    .newHandler(ch.alloc(), sniHost.getHostName(), sniHost.getPort());
+                            ch.pipeline().addFirst(TLS_HANDLER, handler);
+                            // Release the retained one-shot context when this connection closes.
+                            TlsHandle<SslContext> acquired = handle;
+                            ch.closeFuture().addListener(closeFuture -> acquired.dispose());
+                            future.complete(ch);
+                        } catch (Throwable t) {
+                            // Dispose the retained one-shot context if we acquired it but failed before wiring
+                            // the close-future disposal above, else it leaks its Netty ref (F9). Reaching here
+                            // means the close-future listener was not registered, so there is no double dispose.
+                            if (handle != null) {
+                                handle.dispose();
+                            }
+                            future.completeExceptionally(t);
+                        }
+                    });
+                    return future;
                 });
-                if (pulsarSslFactory == null) {
-                    return;
-                }
-                SslHandler handler = new SslHandler(pulsarSslFactory
-                        .createClientSslEngine(ch.alloc(), sniHost.getHostName(), sniHost.getPort()));
-
-                if (tlsHostnameVerificationEnabled) {
-                    SecurityUtility.configureSSLHandler(handler);
-                }
-
-                ch.pipeline().addFirst(TLS_HANDLER, handler);
-                initTlsFuture.complete(ch);
-            } catch (Throwable t) {
-                initTlsFuture.completeExceptionally(t);
-            }
-        });
-
-        return initTlsFuture;
     }
 
     CompletableFuture<Channel> initSocks5IfConfig(Channel ch) {
@@ -208,52 +219,6 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
 
             return ch;
         }));
-    }
-
-protected PulsarSslConfiguration buildSslConfiguration(ClientConfigurationData config,
-                                                       String host)
-            throws PulsarClientException {
-        return PulsarSslConfiguration.builder()
-                .tlsProvider(config.getSslProvider())
-                .tlsKeyStoreType(config.getTlsKeyStoreType())
-                .tlsKeyStorePath(config.getTlsKeyStorePath())
-                .tlsKeyStorePassword(config.getTlsKeyStorePassword())
-                .tlsTrustStoreType(config.getTlsTrustStoreType())
-                .tlsTrustStorePath(config.getTlsTrustStorePath())
-                .tlsTrustStorePassword(config.getTlsTrustStorePassword())
-                .tlsCiphers(config.getTlsCiphers())
-                .tlsProtocols(config.getTlsProtocols())
-                .tlsTrustCertsFilePath(config.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(config.getTlsCertificateFilePath())
-                .tlsKeyFilePath(config.getTlsKeyFilePath())
-                .allowInsecureConnection(config.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(false)
-                .tlsEnabledWithKeystore(config.isUseKeyStoreTls())
-                .tlsCustomParams(config.getSslFactoryPluginParams())
-                .authData(config.getAuthentication().getAuthData(host))
-                .serverMode(false)
-                .build();
-    }
-
-    protected void refreshSslContext(ClientConfigurationData conf) {
-        pulsarSslFactoryMap.forEach((key, pulsarSslFactory) -> {
-            try {
-                try {
-                    if (conf.isUseKeyStoreTls()) {
-                        pulsarSslFactory.getInternalSslContext();
-                    } else {
-                        pulsarSslFactory.getInternalNettySslContext();
-                    }
-                } catch (Exception e) {
-                    log.error().exception(e).log("SSL Context is not initialized");
-                    PulsarSslConfiguration sslConfiguration = buildSslConfiguration(conf, key);
-                    pulsarSslFactory.initialize(sslConfiguration);
-                }
-                pulsarSslFactory.update();
-            } catch (Exception e) {
-                log.error().exception(e).log("Failed to refresh SSL context");
-            }
-        });
     }
 
 }

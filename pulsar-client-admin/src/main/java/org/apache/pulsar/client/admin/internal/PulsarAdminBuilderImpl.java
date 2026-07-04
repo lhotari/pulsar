@@ -35,6 +35,7 @@ import org.apache.pulsar.client.api.Socks5ProxyScope;
 import org.apache.pulsar.client.impl.PulsarClientSharedResourcesImpl;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.conf.ConfigurationDataUtils;
+import org.apache.pulsar.client.impl.tls.ClientTlsFactorySupport;
 
 public class PulsarAdminBuilderImpl implements PulsarAdminBuilder {
 
@@ -46,7 +47,14 @@ public class PulsarAdminBuilderImpl implements PulsarAdminBuilder {
     private transient PulsarClientSharedResourcesImpl sharedResources;
 
     @Override
+    @SuppressWarnings("deprecation")
     public PulsarAdmin build() throws PulsarClientException {
+        // PIP-478: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default value
+        // loudly rather than silently ignore a security-relevant setting.
+        if (ClientTlsFactorySupport.isLegacyCustom(conf.getSslFactoryPlugin())) {
+            throw new IllegalArgumentException("The PIP-337 sslFactoryPlugin is removed in Pulsar 5.0 "
+                    + "(PIP-478); migrate the custom factory to a PulsarTlsFactory and clear sslFactoryPlugin.");
+        }
         return new PulsarAdminImpl(conf.getServiceUrl(), conf,
                 clientBuilderClassLoader, acceptGzipCompression, sharedResources);
     }
@@ -224,6 +232,7 @@ public class PulsarAdminBuilderImpl implements PulsarAdminBuilder {
     }
 
     @Override
+    @Deprecated
     public PulsarAdminBuilder sslFactoryPlugin(String sslFactoryPlugin) {
         if (StringUtils.isNotBlank(sslFactoryPlugin)) {
             conf.setSslFactoryPlugin(sslFactoryPlugin);
@@ -232,6 +241,7 @@ public class PulsarAdminBuilderImpl implements PulsarAdminBuilder {
     }
 
     @Override
+    @Deprecated
     public PulsarAdminBuilder sslFactoryPluginParams(String sslFactoryPluginParams) {
         conf.setSslFactoryPluginParams(sslFactoryPluginParams);
         return this;
