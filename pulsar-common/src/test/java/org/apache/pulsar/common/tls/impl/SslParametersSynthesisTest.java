@@ -35,7 +35,8 @@ import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
-import org.apache.pulsar.common.util.SecurityUtility;
+import org.apache.pulsar.common.util.tls.JdkSslContexts;
+import org.apache.pulsar.common.util.tls.PemReader;
 import org.testng.annotations.Test;
 
 /**
@@ -55,15 +56,15 @@ public class SslParametersSynthesisTest {
     private static final String CLIENT_KEY = resource("certificate-authority/client-keys/admin.key-pk8.pem");
 
     private static SSLContext serverJdkContext() throws Exception {
-        return SecurityUtility.createSslContext(false, CA, SERVER_CERT, SERVER_KEY, null);
+        return JdkSslContexts.createSslContext(false, CA, SERVER_CERT, SERVER_KEY, null);
     }
 
     private static SSLContext clientJdkContextWithCert() throws Exception {
-        return SecurityUtility.createSslContext(false, CA, CLIENT_CERT, CLIENT_KEY, null);
+        return JdkSslContexts.createSslContext(false, CA, CLIENT_CERT, CLIENT_KEY, null);
     }
 
     private static SSLContext clientJdkContextTrustOnly() throws Exception {
-        return SecurityUtility.createSslContext(false, SecurityUtility.loadCertificatesFromPemFile(CA), null);
+        return JdkSslContexts.createSslContext(false, PemReader.loadCertificatesFromPemFile(CA), null);
     }
 
     // ---- (a) protocol restriction from the factory companion ----

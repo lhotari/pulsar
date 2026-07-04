@@ -29,7 +29,7 @@ import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.tls.impl.TlsContexts;
-import org.apache.pulsar.common.util.SecurityUtility;
+import org.apache.pulsar.common.util.tls.JcaProviders;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 
 /**
@@ -61,7 +61,7 @@ public final class JettyTlsFactory {
 
     static {
         // DO NOT EDIT - Load Conscrypt provider
-        if (SecurityUtility.CONSCRYPT_PROVIDER != null) {
+        if (JcaProviders.CONSCRYPT_PROVIDER != null) {
         }
     }
 

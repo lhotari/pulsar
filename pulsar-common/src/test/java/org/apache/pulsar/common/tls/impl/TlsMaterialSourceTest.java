@@ -32,7 +32,7 @@ import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import org.apache.commons.io.FileUtils;
 import org.apache.pulsar.common.tls.TlsPolicy;
-import org.apache.pulsar.common.util.SecurityUtility;
+import org.apache.pulsar.common.util.tls.PemReader;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -190,8 +190,8 @@ public class TlsMaterialSourceTest {
     }
 
     private Path writePkcs12KeyStore() throws Exception {
-        PrivateKey key = SecurityUtility.loadPrivateKeyFromPemFile(BROKER_KEY);
-        X509Certificate[] chain = SecurityUtility.loadCertificatesFromPemFile(BROKER_CERT);
+        PrivateKey key = PemReader.loadPrivateKeyFromPemFile(BROKER_KEY);
+        X509Certificate[] chain = PemReader.loadCertificatesFromPemFile(BROKER_CERT);
         KeyStore ks = KeyStore.getInstance("PKCS12");
         ks.load(null, null);
         ks.setKeyEntry("key", key, STORE_PW, chain);
@@ -203,7 +203,7 @@ public class TlsMaterialSourceTest {
     }
 
     private Path writeJksTrustStore() throws Exception {
-        X509Certificate[] cas = SecurityUtility.loadCertificatesFromPemFile(CA);
+        X509Certificate[] cas = PemReader.loadCertificatesFromPemFile(CA);
         KeyStore ks = KeyStore.getInstance("JKS");
         ks.load(null, null);
         for (int i = 0; i < cas.length; i++) {

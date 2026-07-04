@@ -63,7 +63,8 @@ import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.tls.impl.FileBasedTlsFactory;
 import org.apache.pulsar.common.tls.impl.FileBasedTlsFactorySettings;
-import org.apache.pulsar.common.util.SecurityUtility;
+import org.apache.pulsar.common.util.tls.JdkSslContexts;
+import org.apache.pulsar.common.util.tls.PemReader;
 import org.awaitility.Awaitility;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
@@ -125,8 +126,8 @@ public class JettyTlsFactoryTest {
         server.setConnectors(new ServerConnector[] {connector});
         server.start();
         try {
-            SSLContext clientContext = SecurityUtility.createSslContext(false,
-                    SecurityUtility.loadCertificatesFromPemFile(CA), null, null);
+            SSLContext clientContext = JdkSslContexts.createSslContext(false,
+                    PemReader.loadCertificatesFromPemFile(CA), null, null);
             int port = connector.getLocalPort();
 
             BigInteger initialSerial = serverCertSerial(clientContext, port);
@@ -202,7 +203,7 @@ public class JettyTlsFactoryTest {
     // Handshake the reloading client factory's current context against a client-auth-requiring server and
     // return the serial of the client certificate the server observed.
     private BigInteger presentedClientCertSerial(SslContextFactory.Client clientFactory) throws Exception {
-        SSLContext serverContext = SecurityUtility.createSslContext(false, CA, BROKER_CERT, BROKER_KEY, null);
+        SSLContext serverContext = JdkSslContexts.createSslContext(false, CA, BROKER_CERT, BROKER_KEY, null);
         try (SSLServerSocket serverSocket =
                      (SSLServerSocket) serverContext.getServerSocketFactory().createServerSocket(0)) {
             serverSocket.setNeedClientAuth(true);
@@ -467,11 +468,11 @@ public class JettyTlsFactoryTest {
     }
 
     private static SSLContext forcingClientContext(String clientCert, String clientKey) throws Exception {
-        X509Certificate[] chain = SecurityUtility.loadCertificatesFromPemFile(clientCert);
-        PrivateKey key = SecurityUtility.loadPrivateKeyFromPemFile(clientKey);
+        X509Certificate[] chain = PemReader.loadCertificatesFromPemFile(clientCert);
+        PrivateKey key = PemReader.loadPrivateKeyFromPemFile(clientKey);
         KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
         trustStore.load(null, null);
-        X509Certificate[] ca = SecurityUtility.loadCertificatesFromPemFile(CA);
+        X509Certificate[] ca = PemReader.loadCertificatesFromPemFile(CA);
         for (int i = 0; i < ca.length; i++) {
             trustStore.setCertificateEntry("ca-" + i, ca[i]);
         }
@@ -540,7 +541,7 @@ public class JettyTlsFactoryTest {
     }
 
     private static BigInteger certSerial(String pemPath) throws Exception {
-        return SecurityUtility.loadCertificatesFromPemFile(pemPath)[0].getSerialNumber();
+        return PemReader.loadCertificatesFromPemFile(pemPath)[0].getSerialNumber();
     }
 
     private TlsFactoryInitContext initContext() {

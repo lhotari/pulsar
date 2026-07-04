@@ -29,7 +29,7 @@ import java.util.function.Supplier;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.KeyStoreParams;
-import org.apache.pulsar.common.util.SecurityUtility;
+import org.apache.pulsar.common.util.tls.PemReader;
 
 /**
  * A {@link MaterialSource} that folds a server component's broker-client {@code Authentication} TLS
@@ -110,7 +110,7 @@ final class AuthProvidedMaterialSource implements MaterialSource {
         }
         String certFilePath = authData.getTlsCertificateFilePath();
         if (StringUtils.isNotBlank(certFilePath)) {
-            X509Certificate[] certs = SecurityUtility.loadCertificatesFromPemFile(certFilePath);
+            X509Certificate[] certs = PemReader.loadCertificatesFromPemFile(certFilePath);
             return certs == null ? null : List.of(certs);
         }
         KeyStoreParams params = authData.getTlsKeyStoreParams();
@@ -127,7 +127,7 @@ final class AuthProvidedMaterialSource implements MaterialSource {
         }
         String keyFilePath = authData.getTlsPrivateKeyFilePath();
         if (StringUtils.isNotBlank(keyFilePath)) {
-            return SecurityUtility.loadPrivateKeyFromPemFile(keyFilePath);
+            return PemReader.loadPrivateKeyFromPemFile(keyFilePath);
         }
         KeyStoreParams params = authData.getTlsKeyStoreParams();
         if (params != null && StringUtils.isNotBlank(params.getKeyStorePath())) {
@@ -139,7 +139,7 @@ final class AuthProvidedMaterialSource implements MaterialSource {
     private static List<X509Certificate> resolveTrustFromAuth(AuthenticationDataProvider authData) throws Exception {
         try (InputStream trustStoreStream = authData.getTlsTrustStoreStream()) {
             if (trustStoreStream != null) {
-                X509Certificate[] certs = SecurityUtility.loadCertificatesFromPemStream(trustStoreStream);
+                X509Certificate[] certs = PemReader.loadCertificatesFromPemStream(trustStoreStream);
                 return certs == null ? List.of() : List.of(certs);
             }
         }

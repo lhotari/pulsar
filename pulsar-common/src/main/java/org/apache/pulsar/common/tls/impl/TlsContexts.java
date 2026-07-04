@@ -35,15 +35,15 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import lombok.CustomLog;
 import org.apache.pulsar.common.tls.TlsPolicy;
-import org.apache.pulsar.common.util.SecurityUtility;
+import org.apache.pulsar.common.util.tls.JdkSslContexts;
 
 /**
  * Builds the well-known TLS instance classes from loaded {@link TlsMaterial} and a {@link TlsPolicy}
  * for the default {@code FileBasedTlsFactory}, and synthesizes the richer objects from a JDK
  * {@code SSLContext} for the framework fallback (PIP-478).
  *
- * <p>Reuses {@link SecurityUtility} for the JDK {@code SSLContext} build. The Netty contexts are
- * assembled here (rather than through {@code SecurityUtility}'s file-path helpers) because two
+ * <p>Reuses {@link JdkSslContexts} for the JDK {@code SSLContext} build. The Netty contexts are
+ * assembled here (rather than through the file-path helpers) because two
  * per-context settings must be baked at build time from in-memory material:
  * <ul>
  *   <li><b>Client hostname verification</b> — set via
@@ -143,7 +143,7 @@ public final class TlsContexts {
     static SSLContext buildJdkContext(TlsMaterial material, TlsPolicy policy) throws Exception {
         warnInsecureModeOnce(policy);
         Certificate[] keyCertChain = material.keyCertChainArray();
-        return SecurityUtility.createSslContext(policy.allowInsecureConnection(), material.trustCertsArray(),
+        return JdkSslContexts.createSslContext(policy.allowInsecureConnection(), material.trustCertsArray(),
                 keyCertChain, material.privateKey());
     }
 
