@@ -69,9 +69,12 @@ abstract class FlowBase implements Flow {
 
     protected transient Metadata metadata;
     // PIP-478 stage 3c: the framework HTTP client factory, late-bound by AuthenticationOAuth2 from the owning
-    // PulsarClient/PulsarAdmin's ClientAuthenticationServices before initialize(); null only when the plugin
-    // runs standalone (outside any client/admin), which is unsupported since PIP-478 (see getHttpClient).
+    // PulsarClient/PulsarAdmin's ClientAuthenticationServices before initialize(); null when the plugin runs
+    // standalone (outside any client/admin), in which case getHttpClient() self-provisions one (see below).
     private transient PulsarHttpClientFactory httpClientFactory;
+    // The self-provisioned factory for standalone use (outside any client/admin), built lazily and owned by
+    // this flow; null unless getHttpClient() falls back to it. See StandaloneOAuth2HttpClientFactory.
+    private transient StandaloneOAuth2HttpClientFactory standaloneHttpClientFactory;
     private transient PulsarHttpClient pulsarHttpClient;
 
     protected FlowBase(URL issuerUrl, Duration connectTimeout, Duration readTimeout, String trustCertsFilePath,
@@ -104,19 +107,34 @@ abstract class FlowBase implements Flow {
 
     protected synchronized PulsarHttpClient getHttpClient() {
         if (pulsarHttpClient == null) {
-            if (httpClientFactory == null) {
-                // PIP-478 stage 4c: the deprecated private OAuth2 AsyncHttpClient is removed. A flow only runs
-                // inside a PulsarClient/PulsarAdmin, both of which bind the framework HTTP client factory; a
-                // standalone plugin (outside any client/admin) has no framework services to acquire tokens.
-                throw new IllegalStateException("OAuth2 requires the authentication to be initialized by a "
-                        + "PulsarClient/PulsarAdmin; standalone use is unsupported since PIP-478");
-            }
-            // A framework-managed HTTP client sharing the owning client's event loop / timer / DNS resolver.
-            // When this flow carries its own IdP TLS material it is folded into the CLIENT_OAUTH2 policy the
-            // framework client serves (see AuthenticationOAuth2.idpTlsPolicy / ClientTlsFactorySupport).
-            pulsarHttpClient = httpClientFactory.newHttpClient(oauth2ClientConfig());
+            // Normally a framework-managed HTTP client sharing the owning PulsarClient/PulsarAdmin's event loop
+            // / timer / DNS resolver (bound via bindHttpClientFactory). When this flow carries its own IdP TLS
+            // material it is folded into the CLIENT_OAUTH2 policy the framework client serves (see
+            // AuthenticationOAuth2.idpTlsPolicy / ClientTlsFactorySupport).
+            pulsarHttpClient = resolveHttpClientFactory().newHttpClient(oauth2ClientConfig());
         }
         return pulsarHttpClient;
+    }
+
+    /**
+     * The HTTP client factory used to acquire OAuth2 tokens: the framework factory bound by the owning
+     * {@code PulsarClient}/{@code PulsarAdmin} on the normal path, or a self-provisioned standalone factory
+     * when this flow runs outside any client/admin. The proxy, the broker's broker-client and the CLI tools
+     * create {@code AuthenticationOAuth2} directly (via {@code AuthenticationFactory.create(...).start()}) and
+     * never bind a factory; before PIP-478 stage 4c removed the private OAuth2 {@code AsyncHttpClient}
+     * {@code FlowBase} built its own HTTP client here, so this preserves that backward-compatible standalone
+     * support on the new SPI ({@link StandaloneOAuth2HttpClientFactory}).
+     */
+    private PulsarHttpClientFactory resolveHttpClientFactory() {
+        if (httpClientFactory != null) {
+            return httpClientFactory;
+        }
+        if (standaloneHttpClientFactory == null) {
+            standaloneHttpClientFactory = new StandaloneOAuth2HttpClientFactory(idpTlsPolicy(),
+                    (int) autoCertRefreshSeconds,
+                    "standalone-oauth2-" + Integer.toHexString(System.identityHashCode(this)));
+        }
+        return standaloneHttpClientFactory;
     }
 
     /** @return whether this flow was configured with its own OAuth2 IdP TLS material (trust / cert / key). */
@@ -228,6 +246,11 @@ abstract class FlowBase implements Flow {
             // Idempotent: releases the framework client (which the framework factory also closes on client
             // shutdown).
             pulsarHttpClient.close();
+        }
+        if (standaloneHttpClientFactory != null) {
+            // Only set when this flow self-provisioned a standalone factory (no owning client/admin); releases
+            // its framework client, IdP TLS factory and rotation scheduler.
+            standaloneHttpClientFactory.close();
         }
     }
 }

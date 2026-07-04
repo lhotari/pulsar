@@ -841,3 +841,77 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
       code path, and it passes when re-run with the proxy env vars cleared. `ProxyKeyStoreTlsTransportTest` (the
       keystore P0 sibling entry 30 flagged) passes (1/1) inside the full `:pulsar-proxy` build. Nothing left
       before the branch is CI-ready.
+
+32. **Post-removal CI regression fix (fifth stage-4c regression) — standalone OAuth2 broker-client.** CI run
+    28703128714 / job 85124702262 (fork PR #231, branch `lh-pip-478-impl-v2`) failed
+    `ProxyTlsWithAuthTest > setup`. Trailer `Assisted-by: Claude Code (Opus 4.8)`. Local commits only.
+    - **Predecessor crash / recovery.** A first agent diagnosed this and built the fix below but crashed
+      mid-work (API error), leaving the change **uncommitted** in the worktree (`FlowBase.java` modified +
+      new `StandaloneOAuth2HttpClientFactory` and its test + a draft of this entry). A second agent stashed
+      the partial work (`stash@{0}` = `ad6cf9dc5ec`), **re-reproduced the failure on the clean baseline**
+      (confirming the CI stack), independently reviewed the design against the requirements (kept it — see
+      below), restored the work, and re-ran every gate itself (the predecessor's speculative "Verify" claims
+      were replaced with the second agent's actually-observed results).
+    - **CI stack (setup FAILED):** `IllegalStateException: OAuth2 requires the authentication to be initialized
+      by a PulsarClient/PulsarAdmin; standalone use is unsupported since PIP-478` at
+      `FlowBase.getHttpClient(FlowBase.java:111)` ← `createMetadataResolver(:190)` ← `initialize(:182)` ←
+      `ClientCredentialsFlow.initialize(:146)` ← `AuthenticationOAuth2.start(:251)` ←
+      `ProxyTlsWithAuthTest.setup(:82)`. The line numbers match **stage 4c (`86a59df845f`)** exactly.
+    - **Root cause = the stage-4c R4 guard, not R1/F3/F1 (the queued suspects were a red herring — the failure
+      is in `proxyClientAuthentication.start()` at test line 82, *before* `ProxyService` is even
+      constructed).** Stage 4c removed the private OAuth2 `AsyncHttpClient` and made
+      `FlowBase.getHttpClient()` **throw** whenever no framework HTTP client factory was bound (R4:
+      "genuinely-unbound path throws"). That rests on the assumption that OAuth2 only ever runs inside a
+      `PulsarClient`/`PulsarAdmin` — **false**: the proxy (`ProxyServiceStarter` L280-284, production),
+      the broker broker-client and the CLI all create `AuthenticationOAuth2` via
+      `AuthenticationFactory.create(plugin, params).start()` **standalone** and never bind a factory. So this
+      is a **real production regression** in the proxy's OAuth2 broker-client auth (and any direct
+      `Authentication.start()` user), breaking the `Authentication` public-API contract that has supported
+      standalone `start()` + `getAuthData()` for years. `ProxyTlsWithAuthTest` was green at stage 3c (which
+      still had the private-client fallback) and was not re-run after 4c, so the regression slipped the
+      cross-gate. (Athenz was checked and is unaffected: it builds its own `ZTSClient` off its own
+      `SSLContext`, not the framework factory, so it has no sibling guard.)
+    - **Fix `[fix][client]` — restore standalone support on the new SPI, do not weaken the test.** New
+      package-private `StandaloneOAuth2HttpClientFactory` (pulsar-client `…auth.oauth2`) wraps a
+      `FrameworkHttpClientFactory` with null event-loop/timer/resolver suppliers (HTTP-only, AsyncHttpClient
+      self-provisions — mirroring `PulsarAdminImpl.bindAuthenticationServices`) and, **only** when the flow
+      carries its own IdP TLS material, a standalone `FileBasedTlsFactory` serving it on `CLIENT_OAUTH2` with
+      rotation (owns a single-thread scheduler, mirroring `AsyncHttpConnector.resolveNewTlsFactory`); with no
+      IdP material the framework client uses the platform default trust store (v4 behaviour for a
+      system-trusted IdP). `FlowBase.getHttpClient()` no longer throws — a new `resolveHttpClientFactory()`
+      returns the bound framework factory when present, else lazily builds and owns the standalone one (closed
+      in `FlowBase.close()`). This restores exactly the pre-4c standalone capability (incl. issue #24944 IdP
+      trust/mTLS) through the new SPI, so the proxy/broker/CLI paths work again without any change to their
+      call sites or the test.
+    - **New gate:** `StandaloneOAuth2HttpClientFactoryTest` (pulsar-client) — a WireMock IdP (both HTTP and
+      HTTPS/test-CA): (a) plain-HTTP IdP with no IdP TLS material → 200; (b) test-CA HTTPS IdP with the flow's
+      `trustCertsFilePath` → 200 (standalone IdP trust fold); (c) test-CA HTTPS IdP with **no** trust material
+      → handshake rejected (system default trust), proving the flow's material carries the CA. 3/3. The prior
+      oauth2 unit suite (`AuthenticationOAuth2Test` etc.) mocks `Flow`, so it never exercised the real
+      `getHttpClient` — which is why the 4c guard passed the unit suite.
+    - **Verify (second agent, all local, worktree `async-auth-interface`, per-class JUnit XML 0 failures / 0
+      errors unless noted).** Baseline first: with the partial work stashed, `ProxyTlsWithAuthTest` reproduced
+      the exact CI `IllegalStateException` at `FlowBase.java:111` (root cause confirmed), then the work was
+      restored. `spotlessApply` made no changes (files already conformed); `checkstyleMain` + `checkstyleTest`
+      clean on `:pulsar-client-original`.
+      - **Target:** `ProxyTlsWithAuthTest` **1/1** (was the failing gate) — green in isolation *and* inside the
+        full `:pulsar-proxy:build`.
+      - **New gate:** `StandaloneOAuth2HttpClientFactoryTest` **3/3**.
+      - **Full oauth2 client unit suite:** `AuthenticationOAuth2Test` (29), `AuthenticationFactoryOAuth2Test`
+        (5), `AuthenticationOAuth2StandardAuthzServerTest` (1), `TlsClientAuthFlowTest` (1),
+        `TokenClientTest` (4); `OAuth2IdpTlsFoldTest` (4); `OAuth2IdpTlsFrameworkClientTest` (2);
+        `CredentialOffloadTest` (3).
+      - **R4 gate + untouched-plugin gate (`:pulsar-broker`):** `AdminOnlyOAuth2AuthTest` **1/1**;
+        `TokenOauth2AuthenticatedProducerConsumerTest` **2/2** (unmodified).
+      - **Proxy TLS gate suites:** `ProxyTlsTest` (2), `ProxyMutualTlsTest` (3), `AuthedAdminProxyHandlerTest`
+        (2), `AuthedAdminProxyHandlerNewTlsPathTest` (2), `ProxyAuthenticatedProducerConsumerTest` (1).
+      - **Full builds:** `:pulsar-client-original:build` green; `:pulsar-proxy:build` green (56 test classes,
+        all 0 failures / 0 errors). Both were re-run once each after a **transient local Gradle
+        test-executor infra flake** — `:pulsar-client-original` first hit a `NoClassDefFoundError:
+        ClientBuilderImpl` in `BuildersTest.clientBuilderTest` (unrelated to oauth2; passed in isolation and
+        on the clean re-run), and `:pulsar-proxy` first died with `NoSuchFileException:
+        …/test-results/test/binary/in-progress-results-generic.bin` **after** `ProxyTlsWithAuthTest` had
+        already passed (no OOM/`hs_err`, 64% RAM free) — both cleared on a plain re-run. The stale-`compileJava`
+        build-cache hazard the predecessor's draft worried about **did not reproduce**: the fixed
+        `pulsar-client-original` recompiled on its changed source and `ProxyTlsWithAuthTest` passed inside the
+        full proxy build.
