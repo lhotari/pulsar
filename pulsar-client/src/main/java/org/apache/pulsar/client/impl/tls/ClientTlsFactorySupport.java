@@ -48,27 +48,19 @@ import org.apache.pulsar.common.tls.impl.FileBasedTlsFactorySettings;
 
 /**
  * Client-side counterpart of the server's {@code TlsFactorySupport} (which lives in
- * {@code pulsar-broker-common}, off the client classpath): the selection rule, the
+ * {@code pulsar-broker-common}, off the client classpath): the
  * {@code ClientConfigurationData}&rarr;{@link TlsPolicy} composition, the {@code sslProvider}&rarr;Netty
- * engine mapping, and the default {@link FileBasedTlsFactory} construction the v4 client's transport
- * uses on the new PIP-478 TLS path (PIP-478 stage 3b).
- *
- * <p><b>Path selection (opt-in, per decision D8).</b> The new PIP-478 path is active only when the v5
- * builder configured it — a {@code tlsPolicy(...)} map or an adopted {@code tlsFactory(...)} — or when
- * the flip experiment is switched on via the {@code pulsar.client.tls.useNewTlsFactory} system property.
- * A custom (non-default) {@code sslFactoryPlugin} always keeps the legacy PIP-337 path (unchanged; the
- * deprecation fail-loud is stage 4). Otherwise the default is legacy; the flip branch flips that default.
+ * engine mapping, and the default {@link FileBasedTlsFactory} construction the v4 client's transport uses.
+ * Since the PIP-337 {@code PulsarSslFactory} removal (stage 4c) this is the only client TLS path: a TLS
+ * client always builds a {@link PulsarTlsFactory} (an adopted v5 {@code tlsFactory(...)} or the built-in
+ * file-based default composed from the {@code tls*} fields).
  *
  * <p><b>Fail-fast probing (per the R6 ruling).</b> Eager probing of the statically-needed client purpose
  * ({@link TlsPurpose#CLIENT_DEFAULT}) is a <em>v5-builder-path</em> behaviour only: it runs when the v5
- * builder configured TLS, so a bad path fails the client build with an actionable error. On the
- * flip-experiment path the v4 config stays lazily loaded, so unmodified v4 tests that lazily tolerated a
- * bad TLS field are not broken.
+ * builder configured TLS, so a bad path fails the client build with an actionable error. A plain v4 client's
+ * config stays lazily loaded, so unmodified v4 tests that lazily tolerated a bad TLS field are not broken.
  */
 public final class ClientTlsFactorySupport {
-
-    /** System property that switches on the new PIP-478 TLS path for a plain v4 client (flip experiment). */
-    public static final String USE_NEW_TLS_FACTORY_PROPERTY = "pulsar.client.tls.useNewTlsFactory";
 
     /** Reserved factory-class value selecting the built-in file-based factory (mirrors the server side). */
     private static final String DEFAULT_FACTORY = "default";
@@ -85,29 +77,16 @@ public final class ClientTlsFactorySupport {
     }
 
     /**
+     * Whether a {@code sslFactoryPlugin} value names a removed PIP-337 custom factory — a non-blank value
+     * that is not the removed default's FQCN. The PIP-337 path no longer exists (stage 4c), so
+     * {@code ClientBuilder.build()} fails loudly when this returns {@code true}.
+     *
      * @param sslFactoryPlugin the configured {@code sslFactoryPlugin} class name
-     * @return whether a custom (non-default) PIP-337 SSL factory plugin is configured
+     * @return whether it names a (removed) custom PIP-337 SSL factory plugin
      */
     public static boolean isLegacyCustom(String sslFactoryPlugin) {
         return StringUtils.isNotBlank(sslFactoryPlugin)
                 && !REMOVED_DEFAULT_SSL_FACTORY_CLASS_NAME.equals(sslFactoryPlugin.trim());
-    }
-
-    /**
-     * @param conf the client configuration
-     * @return whether the new PIP-478 TLS path should be used (else the legacy PIP-337 path)
-     */
-    public static boolean useNewTlsPath(ClientConfigurationData conf) {
-        // The v5 builder explicitly configured the new path.
-        if (conf.getTlsFactory() != null || conf.getTlsPolicyMap() != null) {
-            return true;
-        }
-        // A custom PIP-337 plugin keeps the legacy path (unchanged for stage 3).
-        if (isLegacyCustom(conf.getSslFactoryPlugin())) {
-            return false;
-        }
-        // Default: legacy. The flip experiment (and the eventual default flip) switches this.
-        return Boolean.getBoolean(USE_NEW_TLS_FACTORY_PROPERTY);
     }
 
     /**
@@ -162,14 +141,15 @@ public final class ClientTlsFactorySupport {
     }
 
     /**
-     * Resolve the effective client TLS factory, initialized and (on the v5-builder path) probed. Returns
-     * {@code null} on the legacy path, in which case the caller keeps the PIP-337 {@code PulsarSslFactory}.
+     * Resolve the effective client TLS factory, initialized and (on the v5-builder path) probed. Since the
+     * PIP-337 removal (stage 4c) this always returns a non-null factory: an adopted v5 {@code tlsFactory}, or
+     * the built-in file-based factory composed from the {@code tls*} fields.
      *
      * @param conf             the client configuration
      * @param scheduler        the framework scheduler (for material rotation polling)
      * @param blockingExecutor the framework executor for blocking material loading
      * @param openTelemetry    the telemetry root
-     * @return the initialized factory, or {@code null} for the legacy path
+     * @return the initialized factory (never {@code null})
      * @throws Exception if the factory cannot be built / initialized, or (v5-builder path) the fail-fast
      *         probe of {@link TlsPurpose#CLIENT_DEFAULT} fails
      */
@@ -182,9 +162,6 @@ public final class ClientTlsFactorySupport {
             // The v5 builder adopted a custom factory; the client owns and closes it.
             factory = conf.getTlsFactory();
         } else {
-            if (!useNewTlsPath(conf)) {
-                return null;
-            }
             factory = new FileBasedTlsFactory(composePolicies(conf), settings(conf));
         }
         initializeBlocking(factory, initContext(conf, scheduler, blockingExecutor, openTelemetry));

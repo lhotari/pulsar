@@ -52,7 +52,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 import javax.net.ssl.SSLEngine;
@@ -69,20 +68,16 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.Validate;
 import org.apache.pulsar.PulsarVersion;
 import org.apache.pulsar.client.admin.internal.PulsarAdminImpl;
-import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.impl.PulsarClientSharedResourcesImpl;
 import org.apache.pulsar.client.impl.PulsarServiceNameResolver;
 import org.apache.pulsar.client.impl.ServiceNameResolver;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.tls.ClientTlsFactorySupport;
 import org.apache.pulsar.client.util.ExecutorProvider;
-import org.apache.pulsar.client.util.PulsarHttpAsyncSslEngineFactory;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.util.FutureUtil;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
 import org.apache.pulsar.common.util.netty.DnsResolverUtil;
 import org.apache.pulsar.common.util.netty.EventLoopUtil;
 import org.asynchttpclient.AsyncCompletionHandlerBase;
@@ -122,14 +117,12 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
     private final ServiceNameResolver serviceNameResolver;
     private final ScheduledExecutorService delayer = Executors.newScheduledThreadPool(1,
             new DefaultThreadFactory("delayer"));
-    private ScheduledExecutorService sslRefresher;
     private final boolean acceptGzipCompression;
     @Getter
     private final NameResolver<InetAddress> nameResolver;
     private final EventLoopGroup eventLoopGroup;
     private final boolean createdEventLoopGroup;
     private final Map<String, ConcurrencyReducer<Response>> concurrencyReducers = new ConcurrentHashMap<>();
-    private PulsarSslFactory sslFactory;
     // PIP-478 stage 4b (new TLS path): the resolved PulsarTlsFactory (this connector owns and closes it),
     // a live subscription to the CLIENT_DEFAULT SslContext whose callback refreshes the volatile below on
     // rotation, and the single-thread executor that drives the factory's material rotation / blocking loads.
@@ -208,12 +201,7 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
         configureAsyncHttpClientConfig(conf, connectTimeoutMs,
                 readTimeoutMs, requestTimeoutMs, confBuilder, sharedResources);
         if (conf.getServiceUrl().startsWith("https://")) {
-            PulsarTlsFactory factory = resolveNewTlsFactory(conf);
-            if (factory != null) {
-                configureAsyncHttpClientWithTlsFactory(confBuilder, factory);
-            } else {
-                configureAsyncHttpClientSslEngineFactory(conf, autoCertRefreshTimeSeconds, confBuilder);
-            }
+            configureAsyncHttpClientWithTlsFactory(confBuilder, resolveNewTlsFactory(conf));
         }
         AsyncHttpClientConfig asyncHttpClientConfig = confBuilder.build();
         return asyncHttpClientConfig;
@@ -270,45 +258,15 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
         return new DefaultAsyncHttpClient(asyncHttpClientConfig);
     }
 
-    @SneakyThrows
-    private void configureAsyncHttpClientSslEngineFactory(ClientConfigurationData conf, int autoCertRefreshTimeSeconds,
-                                                          DefaultAsyncHttpClientConfig.Builder confBuilder)
-            throws GeneralSecurityException, IOException {
-        // Set client key and certificate if available
-        sslRefresher = Executors.newScheduledThreadPool(1,
-                new DefaultThreadFactory("pulsar-admin-ssl-refresher"));
-        PulsarSslConfiguration sslConfiguration = buildSslConfiguration(conf, serviceNameResolver
-                .resolveHostUri().getHost());
-        this.sslFactory = (PulsarSslFactory) Class.forName(conf.getSslFactoryPlugin())
-                .getConstructor().newInstance();
-        this.sslFactory.initialize(sslConfiguration);
-        this.sslFactory.createInternalSslContext();
-        if (conf.getAutoCertRefreshSeconds() > 0) {
-            this.sslRefresher.scheduleWithFixedDelay(this::refreshSslContext, conf.getAutoCertRefreshSeconds(),
-                    conf.getAutoCertRefreshSeconds(), TimeUnit.SECONDS);
-        }
-        String hostname = conf.isTlsHostnameVerificationEnable() ? null : serviceNameResolver
-                .resolveHostUri().getHost();
-        SslEngineFactory sslEngineFactory = new PulsarHttpAsyncSslEngineFactory(sslFactory, hostname);
-        confBuilder.setSslEngineFactory(sslEngineFactory);
-        confBuilder.setUseInsecureTrustManager(conf.isTlsAllowInsecureConnection());
-        confBuilder.setDisableHttpsEndpointIdentificationAlgorithm(!conf.isTlsHostnameVerificationEnable());
-    }
-
     /**
-     * Resolve the new-SPI TLS factory when the admin configuration is on the new PIP-478 TLS path (stage 4b):
+     * Resolve the new-SPI TLS factory for an https admin URL (the only path since PIP-337 removal, stage 4c):
      * a {@link PulsarTlsFactory} adopted through the 3b {@code tlsFactory} seam (the broker's admin-client
-     * attach — see {@code PulsarService.getCreateAdminClientBuilder}), or the client-side flip selection.
-     * Returns {@code null} on the legacy PIP-337 path, where the reflective {@link PulsarSslFactory}
-     * ({@link #configureAsyncHttpClientSslEngineFactory}) is kept unchanged. The connector owns the resolved
-     * factory (and its rotation executor) and closes both in {@link #close()}.
+     * attach — see {@code PulsarService.getCreateAdminClientBuilder}), or the built-in file-based factory
+     * composed from the {@code tls*} fields. The connector owns the resolved factory (and its rotation
+     * executor) and closes both in {@link #close()}.
      */
     @SneakyThrows
     private PulsarTlsFactory resolveNewTlsFactory(ClientConfigurationData conf) {
-        // Fast path: stay on the legacy setup without creating an executor when the new path is not selected.
-        if (conf.getTlsFactory() == null && !ClientTlsFactorySupport.useNewTlsPath(conf)) {
-            return null;
-        }
         // The factory needs a framework scheduler for material-rotation polling and an executor for blocking
         // material loading; the admin connector owns a small single-thread scheduled executor for both (there
         // is no shared client scheduler here, unlike the PulsarClientImpl funnel).
@@ -316,11 +274,6 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
                 new DefaultThreadFactory("pulsar-admin-tls-factory"));
         PulsarTlsFactory factory = ClientTlsFactorySupport.resolveClientTlsFactory(conf, tlsFactoryExecutor,
                 tlsFactoryExecutor, conf.getOpenTelemetry());
-        if (factory == null) {
-            // The pre-check said new-path, but resolution fell back to legacy; drop the unused executor.
-            this.tlsFactoryExecutor.shutdownNow();
-            this.tlsFactoryExecutor = null;
-        }
         this.tlsFactory = factory;
         return factory;
     }
@@ -704,11 +657,8 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
         try {
             httpClient.close();
             delayer.shutdownNow();
-            if (sslRefresher != null) {
-                sslRefresher.shutdownNow();
-            }
             // PIP-478 stage 4b (new TLS path): release the CLIENT_DEFAULT subscription, close the factory and
-            // stop its rotation executor (all no-ops on the legacy path).
+            // stop its rotation executor (all no-ops when the admin URL is not https).
             if (tlsFactorySubscription != null) {
                 tlsFactorySubscription.dispose();
             }
@@ -723,39 +673,6 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
             }
         } catch (IOException e) {
             log.warn().exception(e).log("Failed to close http client");
-        }
-    }
-
-    protected PulsarSslConfiguration buildSslConfiguration(ClientConfigurationData conf, String host)
-            throws PulsarClientException {
-        return PulsarSslConfiguration.builder()
-                .tlsProvider(conf.getSslProvider())
-                .tlsKeyStoreType(conf.getTlsKeyStoreType())
-                .tlsKeyStorePath(conf.getTlsKeyStorePath())
-                .tlsKeyStorePassword(conf.getTlsKeyStorePassword())
-                .tlsTrustStoreType(conf.getTlsTrustStoreType())
-                .tlsTrustStorePath(conf.getTlsTrustStorePath())
-                .tlsTrustStorePassword(conf.getTlsTrustStorePassword())
-                .tlsCiphers(conf.getTlsCiphers())
-                .tlsProtocols(conf.getTlsProtocols())
-                .tlsTrustCertsFilePath(conf.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(conf.getTlsCertificateFilePath())
-                .tlsKeyFilePath(conf.getTlsKeyFilePath())
-                .allowInsecureConnection(conf.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(false)
-                .tlsEnabledWithKeystore(conf.isUseKeyStoreTls())
-                .authData(conf.getAuthentication().getAuthData(host))
-                .tlsCustomParams(conf.getSslFactoryPluginParams())
-                .serverMode(false)
-                .isHttps(true)
-                .build();
-    }
-
-    protected void refreshSslContext() {
-        try {
-            this.sslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
         }
     }
 

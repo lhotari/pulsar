@@ -41,9 +41,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import lombok.CustomLog;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.PulsarVersion;
@@ -57,14 +54,10 @@ import org.apache.pulsar.client.impl.auth.v5.AsyncHttpAuthenticationProvider;
 import org.apache.pulsar.client.impl.auth.v5.HttpAuthenticationDriver;
 import org.apache.pulsar.client.impl.auth.v5.HttpChallengeTransport;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
-import org.apache.pulsar.client.util.ExecutorProvider;
-import org.apache.pulsar.client.util.PulsarHttpAsyncSslEngineFactory;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
 import org.asynchttpclient.AsyncHttpClient;
 import org.asynchttpclient.AsyncHttpClientConfig;
 import org.asynchttpclient.BoundRequestBuilder;
@@ -91,8 +84,6 @@ public class HttpClient implements Closeable {
     private final NameResolver<InetAddress> nameResolver;
     protected final Authentication authentication;
     protected final ClientConfigurationData clientConf;
-    protected ScheduledExecutorService executorService;
-    protected PulsarSslFactory sslFactory;
     // PIP-478 stage 3b (new TLS path): a subscription to the CLIENT_DEFAULT SslContext whose callback
     // updates the volatile below on rotation; the AsyncHttpClient SslEngineFactory builds engines from it.
     private TlsHandle<SslContext> tlsSubscription;
@@ -136,11 +127,9 @@ public class HttpClient implements Closeable {
 
         if ("https".equals(serviceNameResolver.getServiceUri().getServiceName())) {
             try {
-                if (conf.getTlsFactory() != null) {
-                    setupHttpsWithTlsFactory(conf.getTlsFactory(), confBuilder);
-                } else {
-                    setupHttpsLegacy(conf, confBuilder);
-                }
+                // PIP-478: an https client always has isUseTls() forced true, so PulsarClientImpl has already
+                // resolved the CLIENT_DEFAULT TLS factory onto conf (the only path since PIP-337 removal).
+                setupHttpsWithTlsFactory(conf.getTlsFactory(), confBuilder);
             } catch (Exception e) {
                 throw new PulsarClientException.InvalidConfigurationException(e);
             }
@@ -152,36 +141,6 @@ public class HttpClient implements Closeable {
         httpClient = new DefaultAsyncHttpClient(config);
 
         log.debug().attr("url", conf.getServiceUrl()).log("Using HTTP url");
-    }
-
-    /**
-     * Legacy PIP-337 HTTPS TLS setup: a reflectively-instantiated {@link PulsarSslFactory} with a
-     * scheduled refresh, adapted to AsyncHttpClient via {@link PulsarHttpAsyncSslEngineFactory}.
-     */
-    private void setupHttpsLegacy(ClientConfigurationData conf, DefaultAsyncHttpClientConfig.Builder confBuilder)
-            throws Exception {
-        // Set client key and certificate if available
-        this.executorService = Executors
-                .newSingleThreadScheduledExecutor(new ExecutorProvider
-                        .ExtendedThreadFactory("httpclient-ssl-refresh"));
-        PulsarSslConfiguration sslConfiguration =
-                buildSslConfiguration(conf, serviceNameResolver.resolveHostUri().getHost());
-        this.sslFactory = (PulsarSslFactory) Class.forName(conf.getSslFactoryPlugin())
-                .getConstructor().newInstance();
-        this.sslFactory.initialize(sslConfiguration);
-        this.sslFactory.createInternalSslContext();
-        if (conf.getAutoCertRefreshSeconds() > 0) {
-            this.executorService.scheduleWithFixedDelay(this::refreshSslContext,
-                    conf.getAutoCertRefreshSeconds(),
-                    conf.getAutoCertRefreshSeconds(), TimeUnit.SECONDS);
-        }
-        String hostname = conf.isTlsHostnameVerificationEnable() ? null : serviceNameResolver
-                .resolveHostUri().getHost();
-        SslEngineFactory sslEngineFactory = new PulsarHttpAsyncSslEngineFactory(this.sslFactory, hostname);
-        confBuilder.setSslEngineFactory(sslEngineFactory);
-
-        confBuilder.setUseInsecureTrustManager(conf.isTlsAllowInsecureConnection());
-        confBuilder.setDisableHttpsEndpointIdentificationAlgorithm(!conf.isTlsHostnameVerificationEnable());
     }
 
     /**
@@ -227,9 +186,6 @@ public class HttpClient implements Closeable {
     @Override
     public void close() throws IOException {
         httpClient.close();
-        if (executorService != null) {
-            executorService.shutdownNow();
-        }
         // PIP-478 stage 3b: release the CLIENT_DEFAULT TLS subscription (the factory itself is owned and
         // closed by PulsarClientImpl).
         if (tlsSubscription != null) {
@@ -481,39 +437,6 @@ public class HttpClient implements Closeable {
                 || statusCode == HttpURLConnection.HTTP_SEE_OTHER    // 303
                 || statusCode == 307                                 // Temporary Redirect
                 || statusCode == 308;                                // Permanent Redirect
-    }
-
-    protected PulsarSslConfiguration buildSslConfiguration(ClientConfigurationData config, String host)
-            throws PulsarClientException {
-        return PulsarSslConfiguration.builder()
-                .tlsProvider(config.getSslProvider())
-                .tlsKeyStoreType(config.getTlsKeyStoreType())
-                .tlsKeyStorePath(config.getTlsKeyStorePath())
-                .tlsKeyStorePassword(config.getTlsKeyStorePassword())
-                .tlsTrustStoreType(config.getTlsTrustStoreType())
-                .tlsTrustStorePath(config.getTlsTrustStorePath())
-                .tlsTrustStorePassword(config.getTlsTrustStorePassword())
-                .tlsCiphers(config.getTlsCiphers())
-                .tlsProtocols(config.getTlsProtocols())
-                .tlsTrustCertsFilePath(config.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(config.getTlsCertificateFilePath())
-                .tlsKeyFilePath(config.getTlsKeyFilePath())
-                .allowInsecureConnection(config.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(false)
-                .tlsEnabledWithKeystore(config.isUseKeyStoreTls())
-                .tlsCustomParams(config.getSslFactoryPluginParams())
-                .authData(config.getAuthentication().getAuthData(host))
-                .serverMode(false)
-                .isHttps(true)
-                .build();
-    }
-
-    protected void refreshSslContext() {
-        try {
-            this.sslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
-        }
     }
 
     /**
