@@ -299,7 +299,31 @@ Old branch `lh-pip-478-impl` (`a8fe04814fe` + CI fixes) is a complete, CI-green 
    3b handoff: late-bind real client services into v5 bodies' init (true off-event-loop
    offload for OAuth2/Athenz lands there); consolidate V5BinaryAuthenticationDriver /
    V4Exchange duplication in 3b/3c; SASL HTTP loop untouched for 3d.
-17. Launched two Opus 4.8 assessment agents (read-only):
+17. **Flip CI #232 classified** (flip-ci-investigator): 3 failures = 2× ONE root cause (the
+   known AuthenticationTls→BROKER_CLIENT fold gap: AuthedAdminProxyHandlerTest 401 +
+   integration ClientTlsTest.testAdmin[4] 502 wrong-identity) + 1 TLS-independent flake
+   (TopicPoliciesTest 422). **No unknown new-path defects.** Flip viable once the fold lands
+   (3c scope, banked in stage3-dossier-index with call sites + old-branch mine source
+   `AuthenticationDataTlsMaterialSource`). PIP updated: BROKER_CLIENT fold documented.
+18. **codex review of the 3a carve-out**: 2×P1 (connect-failure loses mapped v4 exception
+   type; empty-challenge misrouted as sentinel — would reset SASL conversations) + P2
+   (generation/close guards for stale exchange completions) + P3 (concurrency test gaps).
+   isDone-race cleared. All queued in scratchpad stage3a-fixup-queue.md; fixer next in the
+   writer queue.
+19. **Stage 3b complete** (stage3b-builder, Opus, commits `a4949330749`, `f01d4edeb30`):
+   R2 late-binding solved via v5.internal ClientAuthenticationServices(+Aware) —
+   PulsarClientImpl binds real scheduler/bounded-blocking-executor/clientInstanceId (+3c stub
+   HTTP factory) before auth start; OAuth2/Athenz credential I/O now provably off the event
+   loop (new CredentialOffloadTest 3/3). Client TLS onto the new SPI, opt-in per D8
+   (ClientTlsFactorySupport: v5 tlsPolicy/tlsFactory or system property → new path; custom
+   sslFactoryPlugin → legacy; default → legacy until flip). v5 builder tlsPolicy/tlsFactory
+   + built-in AuthenticationTls/KeyStoreTls fold + probe-on-v5-path (R6 ruling). Design
+   outcome folded into the PIP: binary transport = async one-shot with TlsEndpoint (initTls
+   is already async); synchronous integration points (AHC SslEngineFactory; proxy data path)
+   = subscribing form. New V5TlsProducerConsumerTest 2/2 (incl. the fold); legacy TLS suites
+   unmodified green; all 3a gates intact. Remaining for 3c: real AHC HTTP factory (stub
+   seam), generic third-party hasDataForTls() probe, server-side BROKER_CLIENT fold.
+20. Launched two Opus 4.8 assessment agents (read-only):
    - **impl-gap-assessor** — classify the old impl branch diff against the current design:
      matches-current / implements-superseded / reusable-integration-scaffolding; deliver a
      reuse map per module.
