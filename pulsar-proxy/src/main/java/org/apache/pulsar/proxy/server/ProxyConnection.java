@@ -878,6 +878,25 @@ public class ProxyConnection extends PulsarHandler {
     }
 
     ClientConfigurationData createClientConfiguration() {
+        return createClientConfiguration(service);
+    }
+
+    /**
+     * Build the deterministic broker-client {@link ClientConfigurationData} the proxy uses for its outbound
+     * (proxy&rarr;broker) lookup and direct connections. The result depends only on the {@link ProxyService}
+     * configuration (identical for every connection), so {@link ProxyService} also calls it once at startup to
+     * derive the representative config for building the shared lookup client TLS factory.
+     *
+     * <p>PIP-478: when TLS with the broker is enabled the resolved lookup client TLS factory
+     * ({@link ProxyService#getLookupClientTlsFactory()}) is stashed on the config so the lookup
+     * {@code ConnectionPool}'s client transport can build its per-connection {@code SslContext} for the
+     * {@code CLIENT_DEFAULT} purpose. This method self-builds the config outside
+     * {@code PulsarClientImpl} (which is where the client factory is normally resolved), so the factory must
+     * be stashed here explicitly; otherwise the proxy binary lookup path hits a null-factory NPE. The factory
+     * is {@code null} while it is itself being built at startup, which is harmless: that representative config
+     * is only read for its {@code tls*} fields.
+     */
+    static ClientConfigurationData createClientConfiguration(ProxyService service) {
         ClientConfigurationData initialConf = new ClientConfigurationData();
         ProxyConfiguration proxyConfig = service.getConfiguration();
         initialConf.setServiceUrl(
@@ -892,7 +911,7 @@ public class ProxyConnection extends PulsarHandler {
                 .filterAndMapProperties(proxyConfig.getProperties(), "brokerClient_");
         ClientConfigurationData clientConf = ConfigurationDataUtils
                 .loadData(overrides, initialConf, ClientConfigurationData.class);
-        clientConf.setAuthentication(this.getClientAuthentication());
+        clientConf.setAuthentication(service.getProxyClientAuthenticationPlugin());
         if (proxyConfig.isTlsEnabledWithBroker()) {
             clientConf.setUseTls(true);
             clientConf.setTlsHostnameVerificationEnable(proxyConfig.isTlsHostnameVerificationEnabled());
@@ -910,6 +929,7 @@ public class ProxyConnection extends PulsarHandler {
                 clientConf.setTlsCertificateFilePath(proxyConfig.getBrokerClientCertificateFilePath());
             }
             clientConf.setTlsAllowInsecureConnection(proxyConfig.isTlsAllowInsecureConnection());
+            clientConf.setTlsFactory(service.getLookupClientTlsFactory());
         }
         return clientConf;
     }

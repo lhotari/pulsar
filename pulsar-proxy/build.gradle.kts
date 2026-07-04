@@ -81,4 +81,7 @@ dependencies {
     testImplementation(libs.jjwt.impl)
     testImplementation(libs.okhttp3)
     testImplementation(libs.testcontainers)
+    // PIP-478: assert the proxy's TLS factory emits pulsar.tls.reload through the wired OpenTelemetry root.
+    testImplementation(libs.opentelemetry.sdk)
+    testImplementation(libs.opentelemetry.sdk.testing)
 }
