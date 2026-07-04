@@ -27,7 +27,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import javax.servlet.Servlet;
 import javax.servlet.ServletException;
@@ -46,10 +45,6 @@ import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.tls.TlsPurpose;
 import org.apache.pulsar.common.tls.impl.FileBasedTlsFactory;
 import org.apache.pulsar.common.tls.impl.FileBasedTlsFactorySettings;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
-import org.apache.pulsar.jetty.tls.JettySslContextFactory;
 import org.apache.pulsar.jetty.tls.JettyTlsFactory;
 import org.eclipse.jetty.ee8.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee8.servlet.ServletHolder;
@@ -82,10 +77,8 @@ public class ProxyServer {
 
     private ServerConnector connector;
     private ServerConnector connectorTls;
-    // Legacy (previously hard-coded DefaultPulsarSslFactory) path.
-    private PulsarSslFactory sslFactory;
     private ScheduledExecutorService scheduledExecutorService;
-    // PIP-478 path (used when tlsFactoryClassName selects it).
+    // PIP-478 TLS SPI factory (the only server TLS path since PIP-337 removal, stage 4c).
     private PulsarTlsFactory tlsFactory;
     private JettyTlsFactory.ReloadableServerTls reloadableServerTls;
 
@@ -124,14 +117,9 @@ public class ProxyServer {
                 this.scheduledExecutorService = Executors
                         .newSingleThreadScheduledExecutor(new ExecutorProvider
                                 .ExtendedThreadFactory("proxy-websocket-ssl-refresh"));
-                // PIP-478: the websocket proxy gains TLS-factory pluggability for the first time. Setting
-                // tlsFactoryClassName selects the new PulsarTlsFactory path; otherwise the built-in
-                // (previously hard-coded) DefaultPulsarSslFactory path is kept unchanged.
-                SslContextFactory.Server sslCtxFactory =
-                        TlsFactorySupport.selectPath(null, config.getTlsFactoryClassName())
-                                == TlsFactorySupport.TlsPath.NEW
-                                ? createTlsFactoryWebServer(config)
-                                : createLegacySslContextFactory(config);
+                // PIP-478: the websocket proxy web listener uses the PulsarTlsFactory SPI (the built-in
+                // file-based factory by default, or a custom tlsFactoryClassName).
+                SslContextFactory.Server sslCtxFactory = createTlsFactoryWebServer(config);
                 List<ConnectionFactory> connectionFactories = new ArrayList<>();
                 if (config.isWebServiceHaProxyProtocolEnabled()) {
                     connectionFactories.add(new ProxyConnectionFactory());
@@ -243,52 +231,6 @@ public class ProxyServer {
         } else {
             return Optional.empty();
         }
-    }
-
-    protected PulsarSslConfiguration buildSslConfiguration(WebSocketProxyConfiguration config) {
-        return PulsarSslConfiguration.builder()
-                .tlsKeyStoreType(config.getTlsKeyStoreType())
-                .tlsKeyStorePath(config.getTlsKeyStore())
-                .tlsKeyStorePassword(config.getTlsKeyStorePassword())
-                .tlsTrustStoreType(config.getTlsTrustStoreType())
-                .tlsTrustStorePath(config.getTlsTrustStore())
-                .tlsTrustStorePassword(config.getTlsTrustStorePassword())
-                .tlsCiphers(config.getWebServiceTlsCiphers())
-                .tlsProtocols(config.getWebServiceTlsProtocols())
-                .tlsTrustCertsFilePath(config.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(config.getTlsCertificateFilePath())
-                .tlsKeyFilePath(config.getTlsKeyFilePath())
-                .allowInsecureConnection(config.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(config.isTlsRequireTrustedClientCertOnConnect())
-                .tlsEnabledWithKeystore(config.isTlsEnabledWithKeyStore())
-                .serverMode(true)
-                .isHttps(true)
-                .build();
-    }
-
-    protected void refreshSslContext() {
-        try {
-            this.sslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
-        }
-    }
-
-    private SslContextFactory.Server createLegacySslContextFactory(WebSocketProxyConfiguration config)
-            throws Exception {
-        PulsarSslConfiguration sslConfiguration = buildSslConfiguration(config);
-        this.sslFactory = new DefaultPulsarSslFactory();
-        this.sslFactory.initialize(sslConfiguration);
-        this.sslFactory.createInternalSslContext();
-        if (config.getTlsCertRefreshCheckDurationSec() > 0) {
-            this.scheduledExecutorService.scheduleWithFixedDelay(this::refreshSslContext,
-                    config.getTlsCertRefreshCheckDurationSec(),
-                    config.getTlsCertRefreshCheckDurationSec(),
-                    TimeUnit.SECONDS);
-        }
-        return JettySslContextFactory.createSslContextFactory(config.getTlsProvider(),
-                sslFactory, config.isTlsRequireTrustedClientCertOnConnect(),
-                config.getWebServiceTlsCiphers(), config.getWebServiceTlsProtocols());
     }
 
     // PIP-478: build the PulsarTlsFactory for the WEB purpose and drive a vanilla Jetty

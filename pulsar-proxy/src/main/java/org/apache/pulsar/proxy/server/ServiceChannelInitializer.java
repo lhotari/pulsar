@@ -22,7 +22,6 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.flush.FlushConsolidationHandler;
 import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -34,8 +33,6 @@ import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
 
 /**
  * Initialize service channel handlers.
@@ -51,9 +48,7 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
     private final int brokerProxyReadTimeoutMs;
     private final int maxMessageSize;
 
-    // PIP-337 legacy path.
-    private PulsarSslFactory sslFactory;
-    // PIP-478 path (used when selected instead of the legacy PulsarSslFactory).
+    // PIP-478 TLS SPI factory (the only server TLS path since PIP-337 removal, stage 4c).
     private PulsarTlsFactory tlsFactory;
     private TlsHandle<SslContext> tlsSubscription;
     private volatile SslContext tlsServerContext;
@@ -69,26 +64,7 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
         this.maxMessageSize = serviceConfig.getMaxMessageSize();
 
         if (enableTls) {
-            if (TlsFactorySupport.selectPath(serviceConfig.getSslFactoryPlugin(),
-                    serviceConfig.getTlsFactoryClassName()) == TlsFactorySupport.TlsPath.NEW) {
-                initializeTlsFactory(serviceConfig, sslContextRefresher);
-            } else {
-                initializeLegacySslFactory(serviceConfig, sslContextRefresher);
-            }
-        }
-    }
-
-    private void initializeLegacySslFactory(ProxyConfiguration serviceConfig,
-                                            ScheduledExecutorService sslContextRefresher) throws Exception {
-        PulsarSslConfiguration sslConfiguration = buildSslConfiguration(serviceConfig);
-        this.sslFactory = (PulsarSslFactory) Class.forName(serviceConfig.getSslFactoryPlugin())
-                .getConstructor().newInstance();
-        this.sslFactory.initialize(sslConfiguration);
-        this.sslFactory.createInternalSslContext();
-        if (serviceConfig.getTlsCertRefreshCheckDurationSec() > 0) {
-            sslContextRefresher.scheduleWithFixedDelay(this::refreshSslContext,
-                    serviceConfig.getTlsCertRefreshCheckDurationSec(),
-                    serviceConfig.getTlsCertRefreshCheckDurationSec(), TimeUnit.SECONDS);
+            initializeTlsFactory(serviceConfig, sslContextRefresher);
         }
     }
 
@@ -129,10 +105,7 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
         ch.pipeline().addLast("consolidation", new FlushConsolidationHandler(1024,
                 true));
         if (this.enableTls) {
-            final SslHandler tlsHandler = this.tlsFactory != null
-                    ? this.tlsServerContext.newHandler(ch.alloc())
-                    : new SslHandler(this.sslFactory.createServerSslEngine(ch.alloc()));
-            ch.pipeline().addLast(TLS_HANDLER, tlsHandler);
+            ch.pipeline().addLast(TLS_HANDLER, this.tlsServerContext.newHandler(ch.alloc()));
         }
         if (brokerProxyReadTimeoutMs > 0) {
             ch.pipeline().addLast("readTimeoutHandler",
@@ -143,36 +116,5 @@ public class ServiceChannelInitializer extends ChannelInitializer<SocketChannel>
         }
         FrameDecoderUtil.addFrameDecoder(ch.pipeline(), maxMessageSize);
         ch.pipeline().addLast("handler", new ProxyConnection(proxyService, proxyService.getDnsAddressResolverGroup()));
-    }
-
-    protected PulsarSslConfiguration buildSslConfiguration(ProxyConfiguration config) {
-        return PulsarSslConfiguration.builder()
-                .tlsProvider(config.getTlsProvider())
-                .tlsKeyStoreType(config.getTlsKeyStoreType())
-                .tlsKeyStorePath(config.getTlsKeyStore())
-                .tlsKeyStorePassword(config.getTlsKeyStorePassword())
-                .tlsTrustStoreType(config.getTlsTrustStoreType())
-                .tlsTrustStorePath(config.getTlsTrustStore())
-                .tlsTrustStorePassword(config.getTlsTrustStorePassword())
-                .tlsCiphers(config.getTlsCiphers())
-                .tlsProtocols(config.getTlsProtocols())
-                .tlsTrustCertsFilePath(config.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(config.getTlsCertificateFilePath())
-                .tlsKeyFilePath(config.getTlsKeyFilePath())
-                .allowInsecureConnection(config.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(config.isTlsRequireTrustedClientCertOnConnect())
-                .tlsEnabledWithKeystore(config.isTlsEnabledWithKeyStore())
-                .tlsCustomParams(config.getSslFactoryPluginParams())
-                .authData(null)
-                .serverMode(true)
-                .build();
-    }
-
-    protected void refreshSslContext() {
-        try {
-            this.sslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
-        }
     }
 }

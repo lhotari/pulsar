@@ -28,46 +28,24 @@ import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
 import org.testng.annotations.Test;
 
 /**
- * Unit tests for the PIP-478 stage-2b {@link TlsFactorySupport} selection rule and helpers.
+ * Unit tests for the PIP-478 {@link TlsFactorySupport} helpers (the only server TLS path since the PIP-337
+ * removal, stage 4c).
  */
 public class TlsFactorySupportTest {
 
-    private static final String DEFAULT_PLUGIN = DefaultPulsarSslFactory.class.getName();
-
     @Test
-    public void customSslFactoryPluginSelectsLegacy() {
-        // A non-default sslFactoryPlugin keeps the legacy PIP-337 path even if tlsFactoryClassName is set.
-        assertThat(TlsFactorySupport.selectPath("com.example.CustomSslFactory", ""))
-                .isEqualTo(TlsFactorySupport.TlsPath.LEGACY);
-        assertThat(TlsFactorySupport.selectPath("com.example.CustomSslFactory", "com.example.MyTlsFactory"))
-                .isEqualTo(TlsFactorySupport.TlsPath.LEGACY);
+    public void isLegacyCustomDetectsRemovedPip337Plugin() {
+        // A non-blank, non-default sslFactoryPlugin names a removed PIP-337 factory -> the fail-loud trigger
+        // at server startup (stage 4c).
         assertThat(TlsFactorySupport.isLegacyCustom("com.example.CustomSslFactory")).isTrue();
-        assertThat(TlsFactorySupport.isLegacyCustom(DEFAULT_PLUGIN)).isFalse();
+        // A blank value OR the removed default's FQCN is treated as "the default" -> no failure.
+        assertThat(TlsFactorySupport.isLegacyCustom("org.apache.pulsar.common.util.DefaultPulsarSslFactory"))
+                .isFalse();
         assertThat(TlsFactorySupport.isLegacyCustom("")).isFalse();
         assertThat(TlsFactorySupport.isLegacyCustom(null)).isFalse();
-    }
-
-    @Test
-    public void tlsFactoryClassNameSelectsNew() {
-        // Default (or blank) sslFactoryPlugin + a set tlsFactoryClassName selects the new PIP-478 path.
-        assertThat(TlsFactorySupport.selectPath(DEFAULT_PLUGIN, "com.example.MyTlsFactory"))
-                .isEqualTo(TlsFactorySupport.TlsPath.NEW);
-        assertThat(TlsFactorySupport.selectPath("", TlsFactorySupport.DEFAULT_FACTORY))
-                .isEqualTo(TlsFactorySupport.TlsPath.NEW);
-        assertThat(TlsFactorySupport.selectPath(null, "com.example.MyTlsFactory"))
-                .isEqualTo(TlsFactorySupport.TlsPath.NEW);
-    }
-
-    @Test
-    public void neitherSelectsNewDefault() {
-        // EXPERIMENT (default flip): both default/blank selects the new PIP-478 built-in factory.
-        assertThat(TlsFactorySupport.selectPath(DEFAULT_PLUGIN, "")).isEqualTo(TlsFactorySupport.TlsPath.NEW);
-        assertThat(TlsFactorySupport.selectPath("", "")).isEqualTo(TlsFactorySupport.TlsPath.NEW);
-        assertThat(TlsFactorySupport.selectPath(null, null)).isEqualTo(TlsFactorySupport.TlsPath.NEW);
     }
 
     @Test

@@ -26,7 +26,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
@@ -38,30 +37,17 @@ import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 
 /**
- * Shared scaffolding for wiring a component onto the PIP-478 {@link PulsarTlsFactory} SPI alongside the
- * still-functional PIP-337 {@code PulsarSslFactory} path (stage 2b). Server components (broker, proxy,
- * websocket, functions-worker) call these helpers to decide which TLS path to use, instantiate and
- * initialize the new factory, and parse its parameters.
+ * Shared scaffolding for wiring a server component onto the PIP-478 {@link PulsarTlsFactory} SPI — the only
+ * server TLS path since the PIP-337 {@code PulsarSslFactory} removal (stage 4c). Server components (broker,
+ * proxy, websocket, functions-worker) call these helpers to instantiate and initialize the factory, parse
+ * its parameters, and reject a stale PIP-337 {@code sslFactoryPlugin} configuration at startup via
+ * {@link #isLegacyCustom}.
  *
  * <p>The helper is intentionally free of Netty {@code io.netty.handler.ssl} types (the {@code SslContext}
  * subscribe pattern stays inline in the binary-listener components that already depend on
  * {@code netty-handler}); it carries only {@link SslProvider} from {@code netty-common}, which
  * {@code pulsar-broker-common} already has. That keeps this class usable by every component, including the
  * websocket proxy and functions-worker web servers whose only TLS consumer is Jetty.
- *
- * <p><b>Selection rule (EXPERIMENT — default flipped to the new factory).</b> {@link #selectPath} chooses
- * the legacy PIP-337 path or the new PIP-478 path:
- * <ol>
- *   <li>a non-default {@code sslFactoryPlugin}-family value keeps the legacy PIP-337 path (a deprecation
- *       warning is logged once per distinct plugin class);</li>
- *   <li>otherwise, a non-blank {@code tlsFactoryClassName}-family value selects the new PIP-478 path;</li>
- *   <li>otherwise (both default/blank) the new PIP-478 built-in factory is used.</li>
- * </ol>
- * This is the {@code lh-pip-478-tls-default-flip} experiment branch: the default is flipped so a blank
- * {@code tlsFactoryClassName} selects {@link #createFactory the built-in composed default factory} instead
- * of the legacy PIP-337 default. On the mainline {@code lh-pip-478-impl-v2} the new path is opt-in (this
- * last case returns {@code LEGACY}); the flip is the single-line change that stage 4 (PIP-337 removal) makes
- * permanent. Only a custom {@code sslFactoryPlugin} still selects the legacy path.
  */
 @CustomLog
 public final class TlsFactorySupport {
@@ -76,57 +62,21 @@ public final class TlsFactorySupport {
     /**
      * FQCN of the removed PIP-337 default SSL factory. Matched as a string literal (the class itself is
      * removed in PIP-478 stage 4c) so a blank {@code sslFactoryPlugin} value OR this literal is treated as
-     * "the default" — any other non-blank value names a custom PIP-337 plugin.
+     * "the default" — any other non-blank value names a (removed) custom PIP-337 plugin.
      */
     static final String REMOVED_DEFAULT_SSL_FACTORY_CLASS_NAME =
             "org.apache.pulsar.common.util.DefaultPulsarSslFactory";
 
-    private static final Map<String, Boolean> LEGACY_WARNED = new ConcurrentHashMap<>();
-
     private TlsFactorySupport() {
     }
 
-    /** Which TLS integration path a component uses for a given configuration. */
-    public enum TlsPath {
-        /** The PIP-337 {@code PulsarSslFactory} path (unchanged legacy behavior). */
-        LEGACY,
-        /** The PIP-478 {@link PulsarTlsFactory} path. */
-        NEW
-    }
-
     /**
-     * Decide the TLS path per the selection rule documented on this class. When the legacy path is chosen
-     * because a non-default {@code sslFactoryPlugin} is configured, a deprecation warning is logged once per
-     * distinct plugin class name.
+     * Whether a {@code sslFactoryPlugin}-family value names a removed PIP-337 custom factory — a non-blank
+     * value that is not the removed default's FQCN. The PIP-337 path no longer exists (stage 4c), so a
+     * component fails loudly at startup when this returns {@code true}.
      *
-     * @param legacyPluginClassName the component's {@code sslFactoryPlugin}-family value (may be null/blank)
-     * @param tlsFactoryClassName   the component's {@code tlsFactoryClassName}-family value (may be null/blank)
-     * @return {@link TlsPath#LEGACY} or {@link TlsPath#NEW}
-     */
-    public static TlsPath selectPath(String legacyPluginClassName, String tlsFactoryClassName) {
-        if (isLegacyCustom(legacyPluginClassName)) {
-            if (LEGACY_WARNED.putIfAbsent(legacyPluginClassName.trim(), Boolean.TRUE) == null) {
-                log.warn().attr("sslFactoryPlugin", legacyPluginClassName.trim()).log(
-                        "Using the deprecated PIP-337 SSL factory plugin. It is superseded by the PIP-478 "
-                                + "tlsFactoryClassName and will be removed in a later release; migrate the "
-                                + "plugin to org.apache.pulsar.common.tls.PulsarTlsFactory.");
-            }
-            return TlsPath.LEGACY;
-        }
-        if (StringUtils.isNotBlank(tlsFactoryClassName)) {
-            return TlsPath.NEW;
-        }
-        // EXPERIMENT (default flip): both default/blank -> the new PIP-478 built-in factory instead of the
-        // legacy PIP-337 default. Each NEW branch resolves a blank tlsFactoryClassName to its component's
-        // composed default factory (see createFactory). Flipping this single return flips every component
-        // (broker binary+web, proxy PROXY/WEB/BROKER_CLIENT, websocket, functions-worker). Only a custom
-        // sslFactoryPlugin still selects the legacy path (above).
-        return TlsPath.NEW;
-    }
-
-    /**
      * @param legacyPluginClassName a {@code sslFactoryPlugin}-family value
-     * @return whether it names a non-default (custom) PIP-337 factory
+     * @return whether it names a (removed) custom PIP-337 factory
      */
     public static boolean isLegacyCustom(String legacyPluginClassName) {
         return StringUtils.isNotBlank(legacyPluginClassName)

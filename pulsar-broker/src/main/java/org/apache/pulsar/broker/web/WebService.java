@@ -30,8 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import javax.servlet.DispatcherType;
 import javax.servlet.Filter;
 import javax.servlet.FilterChain;
@@ -55,10 +53,7 @@ import org.apache.pulsar.common.configuration.BindAddress;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsPurpose;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
 import org.apache.pulsar.jetty.metrics.JettyStatisticsCollector;
-import org.apache.pulsar.jetty.tls.JettySslContextFactory;
 import org.apache.pulsar.jetty.tls.JettyTlsFactory;
 import org.eclipse.jetty.ee8.nested.ContextHandler;
 import org.eclipse.jetty.ee8.nested.ResourceHandler;
@@ -115,10 +110,7 @@ public class WebService implements AutoCloseable {
     private final ServerConnector httpsConnector;
     private final FilterInitializer filterInitializer;
     private JettyStatisticsCollector jettyStatisticsCollector;
-    // PIP-337 legacy path.
-    private PulsarSslFactory sslFactory;
-    private ScheduledFuture<?> sslContextRefreshTask;
-    // PIP-478 path (used when selected instead of the legacy PulsarSslFactory).
+    // PIP-478 TLS SPI factory (the only server TLS path since PIP-337 removal, stage 4c).
     private PulsarTlsFactory tlsFactory;
     private JettyTlsFactory.ReloadableServerTls reloadableServerTls;
 
@@ -173,12 +165,7 @@ public class WebService implements AutoCloseable {
         SslContextFactory.Server sslCtxFactory = null;
         if (tlsRequired) {
             try {
-                if (TlsFactorySupport.selectPath(config.getSslFactoryPlugin(), config.getTlsFactoryClassName())
-                        == TlsFactorySupport.TlsPath.NEW) {
-                    sslCtxFactory = createTlsFactoryWebServer(config);
-                } else {
-                    sslCtxFactory = createLegacySslContextFactory(config);
-                }
+                sslCtxFactory = createTlsFactoryWebServer(config);
             } catch (Exception e) {
                 throw new PulsarServerException(e);
             }
@@ -542,9 +529,6 @@ public class WebService implements AutoCloseable {
             jettyStatisticsCollector = null;
         }
         webServiceExecutor.join();
-        if (this.sslContextRefreshTask != null) {
-            this.sslContextRefreshTask.cancel(true);
-        }
         // PIP-478: dispose the TLS factory subscription and close the factory, if the new path was used.
         if (this.reloadableServerTls != null) {
             this.reloadableServerTls.subscription().dispose();
@@ -575,46 +559,6 @@ public class WebService implements AutoCloseable {
         }
     }
 
-    protected PulsarSslConfiguration buildSslConfiguration(ServiceConfiguration serviceConfig) {
-        return PulsarSslConfiguration.builder()
-                .tlsKeyStoreType(serviceConfig.getTlsKeyStoreType())
-                .tlsKeyStorePath(serviceConfig.getTlsKeyStore())
-                .tlsKeyStorePassword(serviceConfig.getTlsKeyStorePassword())
-                .tlsTrustStoreType(serviceConfig.getTlsTrustStoreType())
-                .tlsTrustStorePath(serviceConfig.getTlsTrustStore())
-                .tlsTrustStorePassword(serviceConfig.getTlsTrustStorePassword())
-                .tlsCiphers(serviceConfig.getTlsCiphers())
-                .tlsProtocols(serviceConfig.getTlsProtocols())
-                .tlsTrustCertsFilePath(serviceConfig.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(serviceConfig.getTlsCertificateFilePath())
-                .tlsKeyFilePath(serviceConfig.getTlsKeyFilePath())
-                .allowInsecureConnection(serviceConfig.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(serviceConfig.isTlsRequireTrustedClientCertOnConnect())
-                .tlsEnabledWithKeystore(serviceConfig.isTlsEnabledWithKeyStore())
-                .tlsCustomParams(serviceConfig.getSslFactoryPluginParams())
-                .serverMode(true)
-                .isHttps(true)
-                .build();
-    }
-
-    private SslContextFactory.Server createLegacySslContextFactory(ServiceConfiguration config) throws Exception {
-        PulsarSslConfiguration sslConfiguration = buildSslConfiguration(config);
-        this.sslFactory = (PulsarSslFactory) Class.forName(config.getSslFactoryPlugin())
-                .getConstructor().newInstance();
-        this.sslFactory.initialize(sslConfiguration);
-        this.sslFactory.createInternalSslContext();
-        if (config.getTlsCertRefreshCheckDurationSec() > 0) {
-            this.sslContextRefreshTask = this.pulsar.getExecutor()
-                    .scheduleWithFixedDelay(this::refreshSslContext,
-                            config.getTlsCertRefreshCheckDurationSec(),
-                            config.getTlsCertRefreshCheckDurationSec(),
-                            TimeUnit.SECONDS);
-        }
-        return JettySslContextFactory.createSslContextFactory(config.getWebServiceTlsProvider(),
-                this.sslFactory, config.isTlsRequireTrustedClientCertOnConnect(),
-                config.getTlsCiphers(), config.getTlsProtocols());
-    }
-
     // PIP-478: build the PulsarTlsFactory and drive a vanilla Jetty SslContextFactory.Server through the
     // SSLContext subscription (setSslContext pre-start, reload() on rotation). The web server has no cert
     // refresh task — the factory delivers rotations to the reloading server factory.
@@ -629,13 +573,5 @@ public class WebService implements AutoCloseable {
                 config.getWebServiceTlsProvider(), config.isTlsRequireTrustedClientCertOnConnect(),
                 config.getTlsCiphers(), config.getTlsProtocols());
         return this.reloadableServerTls.sslContextFactory();
-    }
-
-    protected void refreshSslContext() {
-        try {
-            this.sslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
-        }
     }
 }

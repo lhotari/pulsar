@@ -20,7 +20,6 @@ package org.apache.pulsar.proxy.server;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
-import static org.apache.commons.lang3.StringUtils.isEmpty;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -40,13 +39,10 @@ import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
 import io.netty.handler.codec.haproxy.HAProxyProxiedProtocol;
 import io.netty.handler.flush.FlushConsolidationHandler;
 import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.CharsetUtil;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import lombok.CustomLog;
 import lombok.Getter;
@@ -65,9 +61,6 @@ import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.FrameDecoderUtil;
 import org.apache.pulsar.common.protocol.PulsarDecoder;
 import org.apache.pulsar.common.stats.Rate;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
-import org.apache.pulsar.common.util.SecurityUtility;
 import org.apache.pulsar.common.util.netty.NettyChannelUtil;
 
 @CustomLog
@@ -90,9 +83,7 @@ public class DirectProxyHandler {
     private AuthenticationDataProvider authenticationDataProvider;
     private final ProxyService service;
     private final Runnable onHandshakeCompleteAction;
-    private final boolean tlsHostnameVerificationEnabled;
     final boolean tlsEnabledWithBroker;
-    private Map<String, PulsarSslFactory> pulsarSslFactoryMap;
 
     @SneakyThrows
     public DirectProxyHandler(ProxyService service, ProxyConnection proxyConnection) {
@@ -105,9 +96,7 @@ public class DirectProxyHandler {
         this.clientAuthData = proxyConnection.clientAuthData;
         this.clientAuthMethod = proxyConnection.clientAuthMethod;
         this.tlsEnabledWithBroker = service.getConfiguration().isTlsEnabledWithBroker();
-        this.tlsHostnameVerificationEnabled = service.getConfiguration().isTlsHostnameVerificationEnabled();
         this.onHandshakeCompleteAction = proxyConnection::cancelKeepAliveTask;
-        this.pulsarSslFactoryMap = new ConcurrentHashMap<>();
     }
 
     public void connect(String brokerHostAndPort, InetSocketAddress targetBrokerAddress, int protocolVersion,
@@ -122,34 +111,9 @@ public class DirectProxyHandler {
             inboundChannel.close();
             return;
         }
-        // PIP-478: when the new SPI is selected for broker-client TLS, ProxyService holds a shared, rotating
-        // SslContext for the BROKER_CLIENT purpose; use it directly (no legacy per-host PulsarSslFactory).
+        // PIP-478: ProxyService holds a shared, rotating SslContext for the BROKER_CLIENT purpose; use it
+        // directly (the only broker-client TLS path since PIP-337 removal, stage 4c).
         final SslContext brokerClientSslContext = tlsEnabledWithBroker ? service.getBrokerClientSslContext() : null;
-        PulsarSslFactory sslFactory =
-                (tlsEnabledWithBroker && brokerClientSslContext == null)
-                        ? pulsarSslFactoryMap.computeIfAbsent(remoteHost, (hostname) -> {
-                    AuthenticationDataProvider authData = null;
-
-                    if (!isEmpty(service.getConfiguration().getBrokerClientAuthenticationPlugin())) {
-                        try {
-                            authData = authentication.getAuthData(remoteHost);
-                        } catch (PulsarClientException e) {
-                            throw new RuntimeException(e);
-                        }
-                    }
-                    PulsarSslConfiguration sslConfiguration =
-                            buildSslConfiguration(service.getConfiguration(), authData);
-                    try {
-                        PulsarSslFactory factory =
-                                (PulsarSslFactory) Class.forName(service.getConfiguration().getSslFactoryPlugin())
-                                        .getConstructor().newInstance();
-                        factory.initialize(sslConfiguration);
-                        factory.createInternalSslContext();
-                        return factory;
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                }) : null;
         ProxyConfiguration config = service.getConfiguration();
 
         // Start the connection attempt.
@@ -177,19 +141,10 @@ public class DirectProxyHandler {
                 if (tlsEnabledWithBroker) {
                     String host = targetBrokerAddress.getHostString();
                     int port = targetBrokerAddress.getPort();
-                    final SslHandler handler;
-                    if (brokerClientSslContext != null) {
-                        // PIP-478: build the handler from the shared client SslContext. Hostname verification
-                        // is baked into the context at build time (per the client TlsPolicy), so it is not
-                        // re-applied here; host/port drive SNI and the verification target.
-                        handler = brokerClientSslContext.newHandler(ch.alloc(), host, port);
-                    } else {
-                        handler = new SslHandler(sslFactory.createClientSslEngine(ch.alloc(), host, port));
-                        if (tlsHostnameVerificationEnabled) {
-                            SecurityUtility.configureSSLHandler(handler);
-                        }
-                    }
-                    ch.pipeline().addLast(TLS_HANDLER, handler);
+                    // PIP-478: build the handler from the shared client SslContext. Hostname verification is
+                    // baked into the context at build time (per the client TlsPolicy), so it is not re-applied
+                    // here; host/port drive SNI and the verification target.
+                    ch.pipeline().addLast(TLS_HANDLER, brokerClientSslContext.newHandler(ch.alloc(), host, port));
                 }
                 int brokerProxyReadTimeoutMs = service.getConfiguration().getBrokerProxyReadTimeoutMs();
                 if (brokerProxyReadTimeoutMs > 0) {
@@ -494,30 +449,6 @@ public class DirectProxyHandler {
 
     private void writeAndFlush(ByteBuf cmd) {
         NettyChannelUtil.writeAndFlushWithVoidPromise(outboundChannel, cmd);
-    }
-
-    protected PulsarSslConfiguration buildSslConfiguration(ProxyConfiguration config,
-                                                           AuthenticationDataProvider authData) {
-        return PulsarSslConfiguration.builder()
-                .tlsProvider(config.getBrokerClientSslProvider())
-                .tlsKeyStoreType(config.getBrokerClientTlsKeyStoreType())
-                .tlsKeyStorePath(config.getBrokerClientTlsKeyStore())
-                .tlsKeyStorePassword(config.getBrokerClientTlsKeyStorePassword())
-                .tlsTrustStoreType(config.getBrokerClientTlsTrustStoreType())
-                .tlsTrustStorePath(config.getBrokerClientTlsTrustStore())
-                .tlsTrustStorePassword(config.getBrokerClientTlsTrustStorePassword())
-                .tlsCiphers(config.getBrokerClientTlsCiphers())
-                .tlsProtocols(config.getBrokerClientTlsProtocols())
-                .tlsTrustCertsFilePath(config.getBrokerClientTrustCertsFilePath())
-                .tlsCertificateFilePath(config.getBrokerClientCertificateFilePath())
-                .tlsKeyFilePath(config.getBrokerClientKeyFilePath())
-                .allowInsecureConnection(config.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(false)
-                .tlsEnabledWithKeystore(config.isBrokerClientTlsEnabledWithKeyStore())
-                .tlsCustomParams(config.getBrokerClientSslFactoryPluginParams())
-                .authData(authData)
-                .serverMode(false)
-                .build();
     }
 
 }

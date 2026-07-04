@@ -325,16 +325,13 @@ public class ProxyService implements Closeable {
             this.serviceUrlTls = null;
         }
 
-        // PIP-478: when the broker-client TLS uses the new SPI, build one shared PulsarTlsFactory serving the
-        // BROKER_CLIENT purpose for the proxy->broker binary path and subscribe to a volatile SslContext that
-        // DirectProxyHandler reads without blocking the event loop (rotation delivered by the subscription).
-        // This uses the subscribing overload rather than the client one-shot form on purpose: the proxy is a
-        // long-lived server holding outbound connections, and blocking createInstance().get() on the Netty
-        // event loop per connection is not acceptable. The endpoint hint is moot for the default file-based
-        // factory, which ignores it.
-        if (proxyConfig.isTlsEnabledWithBroker()
-                && TlsFactorySupport.selectPath(proxyConfig.getBrokerClientSslFactoryPlugin(),
-                        proxyConfig.getBrokerClientTlsFactoryClassName()) == TlsFactorySupport.TlsPath.NEW) {
+        // PIP-478: for the proxy->broker binary path, build one shared PulsarTlsFactory serving the
+        // BROKER_CLIENT purpose and subscribe to a volatile SslContext that DirectProxyHandler reads without
+        // blocking the event loop (rotation delivered by the subscription). This uses the subscribing overload
+        // rather than the client one-shot form on purpose: the proxy is a long-lived server holding outbound
+        // connections, and blocking createInstance().get() on the Netty event loop per connection is not
+        // acceptable. The endpoint hint is moot for the default file-based factory, which ignores it.
+        if (proxyConfig.isTlsEnabledWithBroker()) {
             this.brokerClientTlsFactory = TlsFactorySupport.createFactory(
                     proxyConfig.getBrokerClientTlsFactoryClassName(), null,
                     () -> ProxyTlsFactories.brokerClientFactory(proxyConfig, proxyClientAuthentication));

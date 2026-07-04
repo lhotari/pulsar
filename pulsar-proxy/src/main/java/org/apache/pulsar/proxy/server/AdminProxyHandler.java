@@ -29,8 +29,6 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import javax.net.ssl.SSLContext;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -39,14 +37,11 @@ import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.tls.TlsFactorySupport;
 import org.apache.pulsar.broker.web.AuthenticationFilter;
 import org.apache.pulsar.client.api.Authentication;
-import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.util.ExecutorProvider;
 import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsPurpose;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
 import org.apache.pulsar.jetty.tls.JettyTlsFactory;
 import org.apache.pulsar.policies.data.loadbalancer.ServiceLookupData;
 import org.eclipse.jetty.client.HttpClient;
@@ -90,9 +85,7 @@ class AdminProxyHandler extends ProxyServlet {
     private final Authentication proxyClientAuthentication;
     private final String brokerWebServiceUrl;
     private final String functionWorkerWebServiceUrl;
-    // PIP-337 legacy path.
-    private PulsarSslFactory pulsarSslFactory;
-    // PIP-478 path (used when selected instead of the legacy PulsarSslFactory).
+    // PIP-478 broker-client TLS SPI factory (the only path since PIP-337 removal, stage 4c).
     private PulsarTlsFactory brokerClientTlsFactory;
     // PIP-478: the OpenTelemetry root threaded into the BROKER_CLIENT-purpose TlsFactoryInitContext so
     // pulsar.tls.reload emits; OpenTelemetry.noop() when unset.
@@ -117,17 +110,7 @@ class AdminProxyHandler extends ProxyServlet {
         if (config.isTlsEnabledWithBroker()) {
             this.sslContextRefresher = Executors.newSingleThreadScheduledExecutor(
                     new ExecutorProvider.ExtendedThreadFactory("pulsar-proxy-admin-handler-ssl-refresh"));
-            if (TlsFactorySupport.selectPath(config.getBrokerClientSslFactoryPlugin(),
-                    config.getBrokerClientTlsFactoryClassName()) == TlsFactorySupport.TlsPath.NEW) {
-                this.brokerClientTlsFactory = createBrokerClientTlsFactory();
-            } else {
-                this.pulsarSslFactory = createPulsarSslFactory();
-                if (config.getTlsCertRefreshCheckDurationSec() > 0) {
-                    this.sslContextRefresher.scheduleWithFixedDelay(this::refreshSslContext,
-                            config.getTlsCertRefreshCheckDurationSec(), config.getTlsCertRefreshCheckDurationSec(),
-                            TimeUnit.SECONDS);
-                }
-            }
+            this.brokerClientTlsFactory = createBrokerClientTlsFactory();
         }
     }
 
@@ -262,12 +245,11 @@ class AdminProxyHandler extends ProxyServlet {
         try {
             if (config.isTlsEnabledWithBroker()) {
                 try {
-                    SslContextFactory.Client contextFactory = this.brokerClientTlsFactory != null
-                            // PIP-478: plain (non-subclassed) client factory from a one-shot BROKER_CLIENT
-                            // SSLContext snapshot.
-                            ? JettyTlsFactory.createClientFactory(this.brokerClientTlsFactory,
-                                    TlsPurpose.BROKER_CLIENT, config.getBrokerClientSslProvider())
-                            : new Client(this.pulsarSslFactory);
+                    // PIP-478: plain (non-subclassed) client factory from a one-shot BROKER_CLIENT
+                    // SSLContext snapshot.
+                    SslContextFactory.Client contextFactory = JettyTlsFactory.createClientFactory(
+                            this.brokerClientTlsFactory, TlsPurpose.BROKER_CLIENT,
+                            config.getBrokerClientSslProvider());
                     if (!config.isTlsHostnameVerificationEnabled()) {
                         contextFactory.setEndpointIdentificationAlgorithm(null);
                     }
@@ -358,74 +340,6 @@ class AdminProxyHandler extends ProxyServlet {
         String user = (String) clientRequest.getAttribute(AuthenticationFilter.AuthenticatedRoleAttributeName);
         if (user != null) {
             proxyRequest.headers(mutable -> mutable.ensureField(new HttpField(ORIGINAL_PRINCIPAL_HEADER, user)));
-        }
-    }
-
-    private static class Client extends SslContextFactory.Client {
-
-        private final PulsarSslFactory sslFactory;
-
-        public Client(PulsarSslFactory sslFactory) {
-            super();
-            this.sslFactory = sslFactory;
-        }
-
-        @Override
-        public SSLContext getSslContext() {
-            return this.sslFactory.getInternalSslContext();
-        }
-    }
-
-    protected PulsarSslConfiguration buildSslConfiguration(AuthenticationDataProvider authData) {
-        return PulsarSslConfiguration.builder()
-                .tlsProvider(config.getBrokerClientSslProvider())
-                .tlsKeyStoreType(config.getBrokerClientTlsKeyStoreType())
-                .tlsKeyStorePath(config.getBrokerClientTlsKeyStore())
-                .tlsKeyStorePassword(config.getBrokerClientTlsKeyStorePassword())
-                .tlsTrustStoreType(config.getBrokerClientTlsTrustStoreType())
-                .tlsTrustStorePath(config.getBrokerClientTlsTrustStore())
-                .tlsTrustStorePassword(config.getBrokerClientTlsTrustStorePassword())
-                .tlsCiphers(config.getBrokerClientTlsCiphers())
-                .tlsProtocols(config.getBrokerClientTlsProtocols())
-                .tlsTrustCertsFilePath(config.getBrokerClientTrustCertsFilePath())
-                .tlsCertificateFilePath(config.getBrokerClientCertificateFilePath())
-                .tlsKeyFilePath(config.getBrokerClientKeyFilePath())
-                .allowInsecureConnection(config.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(false)
-                .tlsEnabledWithKeystore(config.isBrokerClientTlsEnabledWithKeyStore())
-                .tlsCustomParams(config.getBrokerClientSslFactoryPluginParams())
-                .authData(authData)
-                .serverMode(false)
-                .isHttps(true)
-                .build();
-    }
-
-    protected PulsarSslFactory createPulsarSslFactory() {
-        try {
-            try {
-                AuthenticationDataProvider authData =
-                        proxyClientAuthentication.getAuthData(URI.create(getWebServiceUrl()).getHost());
-                PulsarSslConfiguration pulsarSslConfiguration = buildSslConfiguration(authData);
-                PulsarSslFactory sslFactory =
-                        (PulsarSslFactory) Class.forName(config.getBrokerClientSslFactoryPlugin())
-                                .getConstructor().newInstance();
-                sslFactory.initialize(pulsarSslConfiguration);
-                sslFactory.createInternalSslContext();
-                return sslFactory;
-            } catch (Exception e) {
-                log.error().exception(e).log("Failed to create Pulsar SSLFactory");
-                throw new PulsarClientException.InvalidConfigurationException(e.getMessage());
-            }
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    protected void refreshSslContext() {
-        try {
-            this.pulsarSslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
         }
     }
 

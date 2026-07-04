@@ -25,8 +25,6 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.flow.FlowControlHandler;
 import io.netty.handler.flush.FlushConsolidationHandler;
 import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslHandler;
-import java.util.concurrent.TimeUnit;
 import lombok.Builder;
 import lombok.CustomLog;
 import lombok.Data;
@@ -41,8 +39,6 @@ import org.apache.pulsar.common.tls.PulsarTlsFactory;
 import org.apache.pulsar.common.tls.TlsFactoryInitContext;
 import org.apache.pulsar.common.tls.TlsHandle;
 import org.apache.pulsar.common.tls.TlsPurpose;
-import org.apache.pulsar.common.util.PulsarSslConfiguration;
-import org.apache.pulsar.common.util.PulsarSslFactory;
 
 @CustomLog
 public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> {
@@ -53,9 +49,7 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     private final String listenerName;
     private final boolean enableTls;
     private final ServiceConfiguration brokerConf;
-    // PIP-337 legacy path.
-    private PulsarSslFactory sslFactory;
-    // PIP-478 path (used when selected instead of the legacy PulsarSslFactory).
+    // PIP-478 TLS SPI factory (the only server TLS path since PIP-337 removal, stage 4c).
     private PulsarTlsFactory tlsFactory;
     private TlsHandle<SslContext> tlsSubscription;
     private volatile SslContext tlsServerContext;
@@ -73,28 +67,9 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         this.enableTls = opts.isEnableTLS();
         ServiceConfiguration serviceConfig = pulsar.getConfiguration();
         if (this.enableTls) {
-            if (TlsFactorySupport.selectPath(serviceConfig.getSslFactoryPlugin(),
-                    serviceConfig.getTlsFactoryClassName()) == TlsFactorySupport.TlsPath.NEW) {
-                initializeTlsFactory(serviceConfig);
-            } else {
-                initializeLegacySslFactory(serviceConfig);
-            }
+            initializeTlsFactory(serviceConfig);
         }
         this.brokerConf = pulsar.getConfiguration();
-    }
-
-    private void initializeLegacySslFactory(ServiceConfiguration serviceConfig) throws Exception {
-        PulsarSslConfiguration pulsarSslConfig = buildSslConfiguration(serviceConfig);
-        this.sslFactory = (PulsarSslFactory) Class.forName(serviceConfig.getSslFactoryPlugin())
-                .getConstructor().newInstance();
-        this.sslFactory.initialize(pulsarSslConfig);
-        this.sslFactory.createInternalSslContext();
-        if (serviceConfig.getTlsCertRefreshCheckDurationSec() > 0) {
-            this.pulsar.getExecutor().scheduleWithFixedDelay(this::refreshSslContext,
-                    serviceConfig.getTlsCertRefreshCheckDurationSec(),
-                    serviceConfig.getTlsCertRefreshCheckDurationSec(),
-                    TimeUnit.SECONDS);
-        }
     }
 
     // PIP-478: build the PulsarTlsFactory, initialize it, and subscribe to the BROKER purpose. A volatile
@@ -139,14 +114,8 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         ch.config().setWriteBufferLowWaterMark(pulsar.getConfig().getPulsarChannelWriteBufferLowWaterMark());
         ch.pipeline().addLast("consolidation", new FlushConsolidationHandler(1024, true));
         if (this.enableTls) {
-            final SslHandler tlsHandler;
-            if (this.tlsFactory != null) {
-                // PIP-478: build the handler from the current (possibly rotated) factory-owned SslContext.
-                tlsHandler = this.tlsServerContext.newHandler(ch.alloc());
-            } else {
-                tlsHandler = new SslHandler(this.sslFactory.createServerSslEngine(ch.alloc()));
-            }
-            ch.pipeline().addLast(TLS_HANDLER, tlsHandler);
+            // PIP-478: build the handler from the current (possibly rotated) factory-owned SslContext.
+            ch.pipeline().addLast(TLS_HANDLER, this.tlsServerContext.newHandler(ch.alloc()));
         }
         ch.pipeline().addLast("ByteBufPairEncoder", ByteBufPair.getEncoder(this.enableTls));
 
@@ -190,34 +159,5 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
          * The name of the listener to associate with the channel (optional).
          */
         private String listenerName;
-    }
-
-    protected PulsarSslConfiguration buildSslConfiguration(ServiceConfiguration serviceConfig) {
-        return PulsarSslConfiguration.builder()
-                .tlsKeyStoreType(serviceConfig.getTlsKeyStoreType())
-                .tlsKeyStorePath(serviceConfig.getTlsKeyStore())
-                .tlsKeyStorePassword(serviceConfig.getTlsKeyStorePassword())
-                .tlsTrustStoreType(serviceConfig.getTlsTrustStoreType())
-                .tlsTrustStorePath(serviceConfig.getTlsTrustStore())
-                .tlsTrustStorePassword(serviceConfig.getTlsTrustStorePassword())
-                .tlsCiphers(serviceConfig.getTlsCiphers())
-                .tlsProtocols(serviceConfig.getTlsProtocols())
-                .tlsTrustCertsFilePath(serviceConfig.getTlsTrustCertsFilePath())
-                .tlsCertificateFilePath(serviceConfig.getTlsCertificateFilePath())
-                .tlsKeyFilePath(serviceConfig.getTlsKeyFilePath())
-                .allowInsecureConnection(serviceConfig.isTlsAllowInsecureConnection())
-                .requireTrustedClientCertOnConnect(serviceConfig.isTlsRequireTrustedClientCertOnConnect())
-                .tlsEnabledWithKeystore(serviceConfig.isTlsEnabledWithKeyStore())
-                .tlsCustomParams(serviceConfig.getSslFactoryPluginParams())
-                .serverMode(true)
-                .build();
-    }
-
-    protected void refreshSslContext() {
-        try {
-            this.sslFactory.update();
-        } catch (Exception e) {
-            log.error().exception(e).log("Failed to refresh SSL context");
-        }
     }
 }
