@@ -449,9 +449,40 @@ public final class TlsPolicy {
 
         /**
          * @return a new immutable {@link TlsPolicy}
+         * @throws IllegalArgumentException if a configured field is inconsistent with the chosen
+         *         {@link Format} — a keystore/truststore field on a {@link Format#PEM} policy, or a PEM file
+         *         field on a {@link Format#KEYSTORE} policy. Validating here (a constructor/builder may throw
+         *         synchronously) keeps the fail-loud contract: a misplaced field is a configuration error, not
+         *         a silently-ignored value.
          */
         public TlsPolicy build() {
+            validateFormatConsistency();
             return new TlsPolicy(this);
+        }
+
+        private void validateFormatConsistency() {
+            if (format == Format.PEM) {
+                rejectForFormat("trustStorePath", trustStorePath);
+                rejectForFormat("trustStorePassword", trustStorePassword);
+                rejectForFormat("keyStorePath", keyStorePath);
+                rejectForFormat("keyStorePassword", keyStorePassword);
+                rejectForFormat("keyStoreType", keyStoreType);
+                rejectForFormat("trustStoreType", trustStoreType);
+            } else { // Format.KEYSTORE
+                rejectForFormat("trustCertsFilePath", trustCertsFilePath);
+                rejectForFormat("certificateFilePath", certificateFilePath);
+                rejectForFormat("keyFilePath", keyFilePath);
+            }
+        }
+
+        private void rejectForFormat(String field, String value) {
+            if (value != null && !value.isBlank()) {
+                throw new IllegalArgumentException("TlsPolicy field '" + field + "' is set but is not valid for "
+                        + "format " + format + "; use the fields matching the chosen format (PEM: "
+                        + "trustCertsFilePath/certificateFilePath/keyFilePath; KEYSTORE: "
+                        + "trustStorePath/keyStorePath/... with keyStoreType/trustStoreType), or set the format "
+                        + "to match the material.");
+            }
         }
     }
 }
