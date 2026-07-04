@@ -26,7 +26,7 @@ import org.apache.pulsar.client.api.v5.auth.HttpAuthHeaders;
 
 /**
  * The {@link HttpAuthCallContext} the {@link HttpAuthenticationDriver} owns for the lifetime of a single
- * HTTP request's retry sequence (PIP-478 stage 3d). The state slot (a {@link ConcurrentHashMap} keyed by
+ * HTTP request's retry sequence (PIP-478). The state slot (a {@link ConcurrentHashMap} keyed by
  * class) carries the plugin's cross-round conversation state — for SASL, the {@code PulsarSaslClient}
  * conversation and the captured role token.
  *

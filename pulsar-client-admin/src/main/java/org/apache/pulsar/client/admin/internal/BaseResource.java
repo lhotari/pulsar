@@ -115,7 +115,7 @@ public abstract class BaseResource {
 
     /**
      * Compute the authentication headers to attach to the outgoing admin request, or a future of
-     * {@code null} when the plugin contributes none (PIP-478 stage 3d).
+     * {@code null} when the plugin contributes none (PIP-478).
      *
      * <p>When the plugin exposes the v5-native SASL-over-HTTP capability (via the
      * {@link AsyncHttpAuthenticationProvider} bridge), the framework {@link HttpAuthenticationDriver} runs

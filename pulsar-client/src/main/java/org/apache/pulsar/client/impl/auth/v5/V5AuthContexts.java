@@ -38,8 +38,9 @@ import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
  * (PIP-478). These are lightweight value holders; the per-call context carries a
  * {@link ConcurrentHashMap}-backed state slot keyed by class.
  *
- * <p>Stage 3b late-binds the client's real framework services (scheduler, bounded blocking executor,
- * HTTP client factory, client instance id) into the init context via {@link ClientAuthenticationServices}
+ * <p>The client's real framework services (scheduler, bounded blocking executor,
+ * HTTP client factory, client instance id) are late-bound into the init context via
+ * {@link ClientAuthenticationServices}
  * — so a credential-fetching body (OAuth2, Athenz) can off-load its blocking fetch onto the blocking
  * executor instead of running it on the Netty event loop. When no services are bound (a plugin used
  * outside a client), the context degrades to {@code null} services and the body falls back to inline
@@ -51,7 +52,7 @@ public final class V5AuthContexts {
     }
 
     /**
-     * Build an init context from the client's late-bound framework services (stage 3b). When
+     * Build an init context from the client's late-bound framework services. When
      * {@code services} is {@code null} the context exposes no services (scheduler / blocking executor /
      * HTTP client factory are all {@code null}), matching the pre-binding behaviour.
      *
@@ -78,7 +79,7 @@ public final class V5AuthContexts {
     }
 
     /**
-     * Run a potentially-blocking credential fetch off the caller thread (PIP-478 stage 3b): a
+     * Run a potentially-blocking credential fetch off the caller thread (PIP-478): a
      * credential-fetching body (OAuth2, Athenz) whose supplier performs network / disk I/O must not run
      * that fetch on the Netty event loop. When a bounded blocking executor is bound, the task runs there;
      * otherwise it runs inline (the degraded pre-binding behaviour), still reporting failures through the

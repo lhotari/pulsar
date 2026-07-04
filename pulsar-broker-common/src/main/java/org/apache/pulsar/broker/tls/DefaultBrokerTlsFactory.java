@@ -34,7 +34,7 @@ import org.apache.pulsar.common.tls.impl.FileBasedTlsFactorySettings;
 
 /**
  * The broker's default {@code PulsarTlsFactory}: a thin {@link FileBasedTlsFactory} whose purpose&rarr;
- * policy map is composed from a {@link ServiceConfiguration} (PIP-478, decision D6).
+ * policy map is composed from a {@link ServiceConfiguration} (PIP-478).
  *
  * <p>It lives in {@code pulsar-broker-common} — which owns the Jetty integration and the broker
  * configuration — so that neither the SPI module nor {@code pulsar-common} carries broker-config

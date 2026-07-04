@@ -64,7 +64,7 @@ public class ClientBuilderImpl implements ClientBuilder {
                 "service URL or service URL provider needs to be specified on the ClientBuilder object.");
         checkArgument(StringUtils.isBlank(conf.getServiceUrl())  || conf.getServiceUrlProvider() == null,
                 "Can only chose one way service URL or service URL provider.");
-        // PIP-478 stage 4c: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default value
+        // PIP-478: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default value
         // loudly rather than silently ignore a security-relevant setting.
         checkArgument(!ClientTlsFactorySupport.isLegacyCustom(conf.getSslFactoryPlugin()),
                 "The PIP-337 sslFactoryPlugin is removed in Pulsar 5.0 (PIP-478); migrate the custom factory to "

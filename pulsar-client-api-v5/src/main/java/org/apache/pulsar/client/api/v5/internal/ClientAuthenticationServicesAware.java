@@ -20,7 +20,7 @@ package org.apache.pulsar.client.api.v5.internal;
 
 /**
  * Implemented by an authentication driver that wants the framework's real client services late-bound
- * into it after the {@code PulsarClient} is constructed (PIP-478 stage 3b).
+ * into it after the {@code PulsarClient} is constructed (PIP-478).
  *
  * <p>The client calls {@link #bindClientAuthenticationServices} exactly once, on
  * {@code conf.getAuthentication()}, <em>before</em> {@code Authentication.start()} — so the bound

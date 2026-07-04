@@ -131,7 +131,7 @@ public class SaslAuthenticationV5 implements Authentication, BinaryAuthDataProvi
         }
     }
 
-    // ---- SASL-over-HTTP: HttpAuthChallengeHandler + HttpAuthHeadersProvider (PIP-478 stage 3d) ----
+    // ---- SASL-over-HTTP: HttpAuthChallengeHandler + HttpAuthHeadersProvider (PIP-478) ----
     //
     // Ports AuthenticationSasl.newRequestHeader / getHeaders. The framework driver runs the
     // 401->resubmit->200 loop (bodiless GET to the original URI); respondToHttpChallengeAsync computes each

@@ -113,7 +113,7 @@ public class DirectProxyHandler {
         }
         // PIP-478: ProxyService holds a shared, rotating SslContext for the BROKER_CLIENT purpose; it is read
         // and pinned per connection inside initChannel below (the only broker-client TLS path since PIP-337
-        // removal, stage 4c). Reading it at connect time (rather than capturing it here, before the async
+        // removal). Reading it at connect time (rather than capturing it here, before the async
         // connect) both narrows the use-after-free window and uses the freshest rotated material.
         ProxyConfiguration config = service.getConfiguration();
 

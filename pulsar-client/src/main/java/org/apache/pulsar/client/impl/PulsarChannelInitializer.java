@@ -59,7 +59,7 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     private final String socks5ProxyPassword;
     private final Socks5ProxyScope socks5ProxyScope;
     private final ClientConfigurationData conf;
-    // PIP-478 client TLS SPI factory (the only client TLS path since PIP-337 removal, stage 4c); non-null
+    // PIP-478 client TLS SPI factory (the only client TLS path since the PIP-337 removal); non-null
     // whenever TLS is enabled. The per-connection SslContext is built off the event loop by the factory
     // (see initTls), which owns rotation, so there is no per-host refresh task.
     private final PulsarTlsFactory clientTlsFactory;
@@ -116,7 +116,7 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     }
 
     /**
-     * New PIP-478 TLS path (stage 3b): build the connection's {@code SslContext} through the client TLS
+     * New PIP-478 TLS path: build the connection's {@code SslContext} through the client TLS
      * SPI factory using the one-shot form with the destination endpoint as a hint. The build runs on the
      * factory's blocking executor (off the Netty event loop), so — unlike the legacy path, which builds
      * the context inline in {@code computeIfAbsent} on the event loop — nothing blocks the event loop.

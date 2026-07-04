@@ -76,7 +76,7 @@ public class AuthenticationAthenz
 
     private static final String APPLICATION_X_PEM_FILE = "application/x-pem-file";
 
-    // PIP-478 stage 3b: the client's framework services, late-bound before start(); null until then.
+    // PIP-478: the client's framework services, late-bound before start(); null until then.
     private transient volatile ClientAuthenticationServices authServices;
 
     private transient KeyRefresher keyRefresher = null;
@@ -164,7 +164,7 @@ public class AuthenticationAthenz
         // PIP-478: drive the v5-native Athenz body on the async binary path. The ZTS role-token cache stays
         // on this shim; the body reads the current role token through getAuthData(), so a broker-pushed
         // REFRESH re-acquires an expired token here exactly as the synchronous path does. The bound blocking
-        // executor off-loads that (ZTS-blocking) fetch so it never runs on the Netty event loop (stage 3b).
+        // executor off-loads that (ZTS-blocking) fetch so it never runs on the Netty event loop.
         return new V5BinaryAuthenticationDriver(new AthenzAuthenticationV5(new ShimRoleTokenProvider(this)),
                 authServices).newAuthenticationExchange(brokerHostName);
     }

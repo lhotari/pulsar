@@ -43,11 +43,10 @@ import org.apache.pulsar.common.tls.impl.FileBasedTlsFactorySettings;
 /**
  * A self-contained {@link PulsarHttpClientFactory} for an OAuth2 {@link FlowBase} that runs <em>standalone</em>
  * — outside any {@code PulsarClient} / {@code PulsarAdmin} that would late-bind the framework HTTP client
- * factory (PIP-478 stage 3c). This is the path the proxy, the broker's broker-client and the CLI tools use
+ * factory (PIP-478). This is the path the proxy, the broker's broker-client and the CLI tools use
  * when they create {@code AuthenticationOAuth2} directly via {@code AuthenticationFactory.create(...).start()}
- * (e.g. {@code ProxyServiceStarter}); before PIP-478 stage 4c removed the private OAuth2 {@code AsyncHttpClient},
- * {@code FlowBase} built its own HTTP client for exactly this case, so this restores that backward-compatible
- * behaviour on the new SPI.
+ * (e.g. {@code ProxyServiceStarter}); {@code FlowBase} self-provisions its own HTTP client for exactly this
+ * case, providing backward-compatible standalone support on the new SPI.
  *
  * <p>It wraps a framework {@link FrameworkHttpClientFactory} whose Netty event loop / timer / DNS resolver are
  * self-provisioned by AsyncHttpClient (HTTP-only, mirroring {@code PulsarAdminImpl.bindAuthenticationServices}),

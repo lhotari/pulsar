@@ -47,7 +47,7 @@ import org.apache.pulsar.common.api.AuthData;
  * (PIP-478).
  *
  * <p>It also implements {@link AsyncAuthenticationDriver} so that the {@code ClientCnx} carve-out
- * (PIP-478 stage 3) can authenticate via the asynchronous (non event-loop-blocking) path. Both the
+ * (PIP-478) can authenticate via the asynchronous (non event-loop-blocking) path. Both the
  * async driver and the synchronous v4 {@link #getAuthData(String)} path are exchange-scoped: one
  * {@link AsyncAuthenticationDriver.AuthenticationExchange} — and one {@link AuthenticationCallContext}
  * with its state slot — backs a single connection attempt, so a plugin's challenge/response
@@ -72,7 +72,7 @@ public class V5ToV4AuthenticationAdapter
 
     private final transient Authentication v5;
     private final transient Map<String, String> params;
-    // Late-bound by the client via bindClientAuthenticationServices(...) before start() (PIP-478 stage 3b);
+    // Late-bound by the client via bindClientAuthenticationServices(...) before start() (PIP-478);
     // null until then (e.g. when the adapter is exercised outside a client), yielding an init context with
     // no framework services.
     private transient volatile ClientAuthenticationServices services;

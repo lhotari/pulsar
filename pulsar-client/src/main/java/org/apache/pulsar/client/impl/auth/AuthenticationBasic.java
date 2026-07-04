@@ -46,7 +46,7 @@ public class AuthenticationBasic
     static final String AUTH_METHOD_NAME = "basic";
     private String userId;
     private String password;
-    // PIP-478 stage 3b: the client's framework services, late-bound before start(); null until then.
+    // PIP-478: the client's framework services, late-bound before start(); null until then.
     private transient volatile ClientAuthenticationServices authServices;
 
     @Override

@@ -174,7 +174,7 @@ public class ProxyServiceStarter {
                 proxyConfigurationCustomizer.accept(config);
             }
 
-            // PIP-478 stage 4c: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default
+            // PIP-478: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default
             // sslFactoryPlugin / brokerClientSslFactoryPlugin loudly at startup rather than silently ignore a
             // security-relevant setting.
             rejectRemovedPip337SslFactoryPlugin(config);
@@ -249,7 +249,7 @@ public class ProxyServiceStarter {
                 + " it should point to the discovery service provider.");
     }
 
-    // PIP-478 stage 4c: reject a stale, non-default PIP-337 sslFactoryPlugin / brokerClientSslFactoryPlugin
+    // PIP-478: reject a stale, non-default PIP-337 sslFactoryPlugin / brokerClientSslFactoryPlugin
     // (removed in 5.0) at startup. The @Deprecated getters are read intentionally here to enforce the removal.
     @SuppressWarnings("deprecation")
     private static void rejectRemovedPip337SslFactoryPlugin(ProxyConfiguration config) {

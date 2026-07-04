@@ -38,7 +38,7 @@ import org.apache.pulsar.common.util.ObjectMapperFactory;
 
 /**
  * Shared scaffolding for wiring a server component onto the PIP-478 {@link PulsarTlsFactory} SPI — the only
- * server TLS path since the PIP-337 {@code PulsarSslFactory} removal (stage 4c). Server components (broker,
+ * server TLS path since the PIP-337 {@code PulsarSslFactory} removal. Server components (broker,
  * proxy, websocket, functions-worker) call these helpers to instantiate and initialize the factory, parse
  * its parameters, and reject a stale PIP-337 {@code sslFactoryPlugin} configuration at startup via
  * {@link #isLegacyCustom}.
@@ -61,7 +61,7 @@ public final class TlsFactorySupport {
 
     /**
      * FQCN of the removed PIP-337 default SSL factory. Matched as a string literal (the class itself is
-     * removed in PIP-478 stage 4c) so a blank {@code sslFactoryPlugin} value OR this literal is treated as
+     * removed in PIP-478) so a blank {@code sslFactoryPlugin} value OR this literal is treated as
      * "the default" — any other non-blank value names a (removed) custom PIP-337 plugin.
      */
     static final String REMOVED_DEFAULT_SSL_FACTORY_CLASS_NAME =
@@ -72,7 +72,7 @@ public final class TlsFactorySupport {
 
     /**
      * Whether a {@code sslFactoryPlugin}-family value names a removed PIP-337 custom factory — a non-blank
-     * value that is not the removed default's FQCN. The PIP-337 path no longer exists (stage 4c), so a
+     * value that is not the removed default's FQCN. The PIP-337 path no longer exists, so a
      * component fails loudly at startup when this returns {@code true}.
      *
      * @param legacyPluginClassName a {@code sslFactoryPlugin}-family value

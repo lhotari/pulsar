@@ -52,7 +52,7 @@ import org.asynchttpclient.proxy.ProxyServer;
 import org.asynchttpclient.proxy.ProxyType;
 
 /**
- * The framework-owned {@link PulsarHttpClientFactory} (PIP-478 stage 3c): builds AsyncHttpClient-backed
+ * The framework-owned {@link PulsarHttpClientFactory} (PIP-478): builds AsyncHttpClient-backed
  * {@link PulsarHttpClient} instances for authentication plugins (OAuth2's token endpoint, Athenz's ZTS)
  * that <em>share</em> the owning {@code PulsarClient}'s Netty event loop, timer and DNS resolver — fixing
  * the v4 problem where {@code AuthenticationOAuth2} spun up private {@code DefaultAsyncHttpClient}
@@ -124,7 +124,7 @@ public final class FrameworkHttpClientFactory implements PulsarHttpClientFactory
      * @return whether a PIP-478 TLS factory is available (the owning client is on the new TLS path), so a
      *         served {@link PulsarHttpClient} resolves its purpose's context from the factory — e.g. the
      *         folded {@code CLIENT_OAUTH2} IdP material — rather than the platform default trust store
-     *         (PIP-478 stage 4a).
+     *         (PIP-478).
      */
     public boolean hasTlsFactory() {
         return tlsFactory.get() != null;

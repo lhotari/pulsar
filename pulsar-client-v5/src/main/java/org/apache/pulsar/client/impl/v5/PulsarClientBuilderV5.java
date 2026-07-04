@@ -120,7 +120,7 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
      * blocking executor instead of running on the Netty event loop (PIP-478 G-IS6: v4 credential calls are
      * ALWAYS off-loaded). The adapter implements {@code ClientAuthenticationServicesAware}, so the client
      * late-binds real executors / HTTP client factory / client instance id into it before {@code start()}
-     * (PIP-478 stage 3b).
+     * (PIP-478).
      */
     private void applyAuthentication() {
         if (v5Authentication == null) {
@@ -303,7 +303,7 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
 
     /**
      * Fold a bridged third-party v4 plugin's file-based TLS material into {@link TlsPurpose#CLIENT_DEFAULT}
-     * (PIP-478 stage 3c). The plugin's {@code getAuthData()} has already been probed by
+     * (PIP-478). The plugin's {@code getAuthData()} has already been probed by
      * {@link #resolveGenericV4} on the application thread (off the event loop), and {@code data} is known to
      * report {@code hasDataForTls()}. Only <em>file-based</em> material (PEM cert/key file paths or a
      * keystore) can be represented in the file-path {@link TlsPolicy}; a plugin that exposes only in-memory

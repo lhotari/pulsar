@@ -92,7 +92,7 @@ public abstract class LegacyV4AuthenticationAdapter implements Authentication {
      * PIP-478 offload discipline, so it is not done here: the built-in TLS plugins report method name
      * {@code "tls"} and are routed to {@link LegacyV4TlsAdapter}; folding an arbitrary third-party
      * {@code hasDataForTls()} plugin's material into the client TLS configuration is a builder-time
-     * concern handled in the client-side migration (PIP-478 stage 3).
+     * concern handled by the client (PIP-478).
      *
      * @param v4 the v4 authentication plugin to wrap
      * @return a v5 {@link Authentication} that delegates to the v4 plugin

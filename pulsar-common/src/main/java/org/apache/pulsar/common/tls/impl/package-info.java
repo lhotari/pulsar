@@ -24,7 +24,7 @@
  * <p>This package lives in {@code pulsar-common} rather than the dependency-light SPI module
  * {@code pulsar-common-api}: it needs {@code netty-handler} and the {@code netty-tcnative} OpenSSL
  * binding to build native contexts, both already present here. The distinct {@code .impl} package name
- * keeps the SPI package ({@code org.apache.pulsar.common.tls}) single-owner (decision D6).
+ * keeps the SPI package ({@code org.apache.pulsar.common.tls}) single-owner.
  *
  * <ul>
  *   <li>{@link org.apache.pulsar.common.tls.impl.FileBasedTlsFactory} — the factory: purpose registry,

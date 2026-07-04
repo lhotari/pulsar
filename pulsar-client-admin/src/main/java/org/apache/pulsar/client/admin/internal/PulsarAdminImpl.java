@@ -114,7 +114,7 @@ public class PulsarAdminImpl implements PulsarAdmin {
     private final ScalableTopics scalableTopics;
     protected final WebTarget root;
     protected final Authentication auth;
-    // PIP-478 stage 4c (R4): the framework HTTP client factory bound into a services-aware auth plugin
+    // PIP-478: the framework HTTP client factory bound into a services-aware auth plugin
     // (e.g. OAuth2) so an admin-only client acquires tokens over the framework client; null when the auth
     // plugin does not implement ClientAuthenticationServicesAware. Closed with this admin.
     private FrameworkHttpClientFactory authHttpClientFactory;
@@ -454,7 +454,7 @@ public class PulsarAdminImpl implements PulsarAdmin {
      * Close the Pulsar admin client to release all the resources.
      */
     /**
-     * PIP-478 stage 4c (R4): bind the framework HTTP client factory into a services-aware auth plugin (e.g.
+     * PIP-478: bind the framework HTTP client factory into a services-aware auth plugin (e.g.
      * OAuth2) before {@code auth.start()}, which eagerly acquires a token via the flow's HTTP client. A
      * {@code PulsarAdmin} used without a {@code PulsarClient} previously rode the now-removed private OAuth2
      * {@code AsyncHttpClient}; this mirrors {@code PulsarClientImpl.bindAuthenticationServices} so admin-only

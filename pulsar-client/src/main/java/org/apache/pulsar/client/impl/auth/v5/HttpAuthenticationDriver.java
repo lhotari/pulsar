@@ -33,7 +33,7 @@ import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
 /**
  * The single framework-side HTTP authentication driver — the shared {@code 401}→resubmit→{@code 200}
  * state machine that both HTTP client APIs (the AsyncHttpClient topic-lookup client and the JAX-RS admin
- * client) reach through a thin {@link HttpChallengeTransport} adapter (PIP-478 stage 3d).
+ * client) reach through a thin {@link HttpChallengeTransport} adapter (PIP-478).
  *
  * <p>The binary protocol runs its multi-round loop in one place ({@code ClientCnx}); HTTP is reached
  * through two client APIs, so the loop lives here instead of inside the plugin (the v4 hazard). The driver

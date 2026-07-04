@@ -1672,7 +1672,7 @@ public class BrokerService implements Closeable {
                                    String brokerClientTrustCertsFilePath,
                                    String brokerClientKeyFilePath, String brokerClientCertificateFilePath,
                                    boolean isTlsHostnameVerificationEnabled) {
-        // PIP-478 stage 4c: the PIP-337 sslFactoryPlugin path is removed; the broker-level value is rejected
+        // PIP-478: the PIP-337 sslFactoryPlugin path is removed; the broker-level value is rejected
         // at startup and the per-cluster ClusterData value is ignored with a WARN (see getReplicationClient).
         clientBuilder
                 .serviceUrl(serviceUrl)
@@ -1701,7 +1701,7 @@ public class BrokerService implements Closeable {
                                         String brokerClientTrustCertsFilePath,
                                         String brokerClientKeyFilePath, String brokerClientCertificateFilePath,
                                         boolean isTlsHostnameVerificationEnabled) {
-        // PIP-478 stage 4c: the PIP-337 sslFactoryPlugin path is removed (see configTlsSettings).
+        // PIP-478: the PIP-337 sslFactoryPlugin path is removed (see configTlsSettings).
         if (brokerClientTlsEnabledWithKeyStore) {
             adminBuilder.useKeyStoreTls(true)
                     .tlsTrustStoreType(brokerClientTlsTrustStoreType)
@@ -1787,7 +1787,7 @@ public class BrokerService implements Closeable {
                 // zk-operation timeout
                 builder.readTimeout(conf.getMetadataStoreOperationTimeoutSeconds(), TimeUnit.SECONDS);
 
-                // PIP-478 stage 4b: route this per-cluster admin client onto the new TLS SPI when opted in.
+                // PIP-478: route this per-cluster admin client onto the new TLS SPI when opted in.
                 pulsar.applyBrokerClientTlsFactoryToAdmin(builder);
 
                 PulsarAdmin adminClient = builder.build();

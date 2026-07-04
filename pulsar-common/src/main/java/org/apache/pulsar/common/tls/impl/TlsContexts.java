@@ -53,7 +53,7 @@ import org.apache.pulsar.common.util.tls.JdkSslContexts;
  *       {@link SslContextBuilder#endpointIdentificationAlgorithm(String)} to {@code "HTTPS"} when the
  *       policy enables it. It cannot be left to a per-{@code SSLEngine} override: Netty's OpenSSL
  *       backend fixes the endpoint-identification algorithm at build time.</li>
- *   <li><b>Server insecure trust (decision D3)</b> — {@code policy.allowInsecureConnection()} on a
+ *   <li><b>Server insecure trust</b> — {@code policy.allowInsecureConnection()} on a
  *       server context installs {@link InsecureTrustManagerFactory#INSTANCE} so an untrusted client
  *       certificate still completes the handshake and remains available for TLS authentication, while
  *       client-auth stays {@link ClientAuth#REQUIRE}/{@link ClientAuth#OPTIONAL} (never

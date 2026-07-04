@@ -96,9 +96,9 @@ public class AuthenticationSasl
     private Map<String, String> configuration;
     private String loginContextName;
     private String serverType = null;
-    // PIP-478 stage 3b: the client's framework services, late-bound before start(); null until then.
+    // PIP-478: the client's framework services, late-bound before start(); null until then.
     private transient volatile ClientAuthenticationServices authServices;
-    // PIP-478 stage 3d: the framework HTTP auth driver for the SASL-over-HTTP flow, created lazily on the
+    // PIP-478: the framework HTTP auth driver for the SASL-over-HTTP flow, created lazily on the
     // first HTTP request after start(). Its default transport is this plugin's own JAX-RS client (the
     // faithful admin-path transport; the lookup path supplies its shared AsyncHttpClient instead).
     private transient volatile HttpAuthenticationDriver httpAuthenticationDriver;
@@ -133,14 +133,14 @@ public class AuthenticationSasl
     public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
         // PIP-478: drive the v5-native SASL body on the async binary path. Each connection attempt gets a
         // fresh exchange whose call-context state slot holds the per-broker PulsarSaslClient across the
-        // multi-round handshake; the SASL-over-HTTP loop stays on this shim (stage 3d).
+        // multi-round handshake; the SASL-over-HTTP loop stays on this shim.
         return new V5BinaryAuthenticationDriver(new SaslAuthenticationV5(new ShimSaslProviderFactory(this)),
                 authServices).newAuthenticationExchange(brokerHostName);
     }
 
     @Override
     public Optional<HttpAuthenticationDriver> httpAuthenticationDriver() {
-        // PIP-478 stage 3d: expose the v5-native SASL-over-HTTP body to the framework HTTP auth driver so the
+        // PIP-478: expose the v5-native SASL-over-HTTP body to the framework HTTP auth driver so the
         // HTTP callers route the 401->resubmit->200 exchange through the shared state machine instead of the
         // deprecated authenticationStage(...) hook (which stays for third-party v4 plugins). The default
         // transport is this plugin's own JAX-RS client — exactly what authenticationStage(...) uses today.

@@ -40,7 +40,7 @@ import org.apache.pulsar.client.api.v5.auth.SinglePassAuthentication;
  * role-token provider.
  *
  * <p>Role-token acquisition performs network I/O. As with the existing v4 Athenz code, the provider may
- * block on the ZTS client; off-loading the blocking call belongs to the framework layer (stage 3b), so
+ * block on the ZTS client; off-loading the blocking call belongs to the framework layer, so
  * this body introduces no threading of its own.
  *
  * <p>Although the v5 {@code Authentication} SPI deliberately does not extend {@link Serializable}, this
@@ -59,7 +59,7 @@ public class AthenzAuthenticationV5 implements SinglePassAuthentication, Seriali
 
     // Late-bound at initializeAsync(...): the client's bounded blocking executor, onto which the
     // (ZTS-blocking) role-token fetch is off-loaded so it never runs on the Netty event loop
-    // (PIP-478 stage 3b). Null when used outside a client, in which case the fetch runs inline.
+    // (PIP-478). Null when used outside a client, in which case the fetch runs inline.
     private transient volatile Executor blockingExecutor;
 
     /**

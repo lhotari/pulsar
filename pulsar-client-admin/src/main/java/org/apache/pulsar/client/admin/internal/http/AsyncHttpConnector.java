@@ -125,7 +125,7 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
     private final EventLoopGroup eventLoopGroup;
     private final boolean createdEventLoopGroup;
     private final Map<String, ConcurrencyReducer<Response>> concurrencyReducers = new ConcurrentHashMap<>();
-    // PIP-478 stage 4b (new TLS path): the resolved PulsarTlsFactory (this connector owns and closes it),
+    // PIP-478 (new TLS path): the resolved PulsarTlsFactory (this connector owns and closes it),
     // a live subscription to the CLIENT_DEFAULT SslContext whose callback refreshes the volatile below on
     // rotation, and the single-thread executor that drives the factory's material rotation / blocking loads.
     private PulsarTlsFactory tlsFactory;
@@ -289,8 +289,8 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
     }
 
     /**
-     * Resolve the new-SPI TLS factory for an https admin URL (the only path since PIP-337 removal, stage 4c):
-     * a {@link PulsarTlsFactory} adopted through the 3b {@code tlsFactory} seam (the broker's admin-client
+     * Resolve the new-SPI TLS factory for an https admin URL (the only path since the PIP-337 removal):
+     * a {@link PulsarTlsFactory} adopted through the {@code tlsFactory} seam (the broker's admin-client
      * attach — see {@code PulsarService.getCreateAdminClientBuilder}), or the built-in file-based factory
      * composed from the {@code tls*} fields. The connector owns the resolved factory (and its rotation
      * executor) and closes both in {@link #close()}.
@@ -309,7 +309,7 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
     }
 
     /**
-     * New PIP-478 HTTPS TLS setup (stage 4b): subscribe once to the {@link TlsPurpose#CLIENT_DEFAULT} Netty
+     * New PIP-478 HTTPS TLS setup: subscribe once to the {@link TlsPurpose#CLIENT_DEFAULT} Netty
      * {@code SslContext} — the callback refreshes a volatile on rotation — and back the AsyncHttpClient
      * {@link SslEngineFactory} with it, mirroring {@code org.apache.pulsar.client.impl.HttpClient} and the
      * framework {@code FrameworkHttpClientFactory}. Each connection's engine is built from the most recently
@@ -708,7 +708,7 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
         try {
             httpClient.close();
             delayer.shutdownNow();
-            // PIP-478 stage 4b (new TLS path): release the CLIENT_DEFAULT subscription, close the factory and
+            // PIP-478 (new TLS path): release the CLIENT_DEFAULT subscription, close the factory and
             // stop its rotation executor (all no-ops when the admin URL is not https).
             if (tlsFactorySubscription != null) {
                 tlsFactorySubscription.dispose();

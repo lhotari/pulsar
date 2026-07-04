@@ -51,7 +51,7 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
     private final String listenerName;
     private final boolean enableTls;
     private final ServiceConfiguration brokerConf;
-    // PIP-478 TLS SPI factory (the only server TLS path since PIP-337 removal, stage 4c).
+    // PIP-478 TLS SPI factory (the only server TLS path since PIP-337 removal).
     private PulsarTlsFactory tlsFactory;
     private TlsHandle<SslContext> tlsSubscription;
     private volatile SslContext tlsServerContext;
