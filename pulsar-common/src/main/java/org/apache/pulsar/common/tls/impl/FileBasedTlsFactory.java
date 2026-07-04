@@ -157,6 +157,12 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         try {
             this.initContext = Objects.requireNonNull(context, "context must not be null");
             this.metrics = TlsReloadMetrics.create(context.openTelemetry(), context.clock());
+            // Cancel any poll scheduled by a prior initialize() so a second call does not orphan the first
+            // (F9): the field is overwritten below and the old task would otherwise run forever.
+            ScheduledFuture<?> previousPoll = this.pollFuture;
+            if (previousPoll != null) {
+                previousPoll.cancel(false);
+            }
             int interval = settings.refreshIntervalSeconds();
             if (interval > 0 && context.scheduler() != null) {
                 this.pollFuture = context.scheduler().scheduleWithFixedDelay(
@@ -189,6 +195,9 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         if (!isSupported(instanceClass)) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
+        if (closed) {
+            return CompletableFuture.failedFuture(new IllegalStateException("FileBasedTlsFactory is closed"));
+        }
         return runAsync(() -> {
             RegisteredSource source = resolve(purpose);
             synchronized (source) {
@@ -205,6 +214,9 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
     private <T> CompletableFuture<Optional<TlsHandle<T>>> createOneShot(TlsPurpose purpose, Class<T> instanceClass) {
         if (!isSupported(instanceClass)) {
             return CompletableFuture.completedFuture(Optional.empty());
+        }
+        if (closed) {
+            return CompletableFuture.failedFuture(new IllegalStateException("FileBasedTlsFactory is closed"));
         }
         return runAsync(() -> {
             RegisteredSource source = resolve(purpose);

@@ -161,12 +161,40 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
         this.nameResolver = sharedResourceHolder.getNameResolver();
         this.eventLoopGroup = sharedResourceHolder.getEventLoopGroup();
         this.createdEventLoopGroup = sharedResourceHolder.isCreateEventLoop();
-        AsyncHttpClientConfig asyncHttpClientConfig =
-                createAsyncHttpClientConfig(conf, connectTimeoutMs, readTimeoutMs, requestTimeoutMs,
-                        autoCertRefreshTimeSeconds, sharedResources);
-        httpClient = createAsyncHttpClient(asyncHttpClientConfig);
+        boolean initialized = false;
+        try {
+            AsyncHttpClientConfig asyncHttpClientConfig =
+                    createAsyncHttpClientConfig(conf, connectTimeoutMs, readTimeoutMs, requestTimeoutMs,
+                            autoCertRefreshTimeSeconds, sharedResources);
+            httpClient = createAsyncHttpClient(asyncHttpClientConfig);
+            initialized = true;
+        } finally {
+            if (!initialized) {
+                // Ctor-throw cleanup (F9): createAsyncHttpClientConfig may already have allocated the TLS
+                // factory and its NON-daemon rotation executor (and, if we created it, the event loop group);
+                // release them here since close() will not run on a half-constructed connector — otherwise the
+                // non-daemon executor keeps the JVM alive.
+                releasePartialResources();
+            }
+        }
         this.requestTimeout = requestTimeoutMs > 0 ? Duration.ofMillis(requestTimeoutMs) : null;
         this.maxRetries = httpClient.getConfig().getMaxRequestRetry();
+    }
+
+    /** Release resources that may have been allocated before a constructor failure (F9). */
+    private void releasePartialResources() {
+        if (tlsFactorySubscription != null) {
+            tlsFactorySubscription.dispose();
+        }
+        if (tlsFactory != null) {
+            tlsFactory.close();
+        }
+        if (tlsFactoryExecutor != null) {
+            tlsFactoryExecutor.shutdownNow();
+        }
+        if (createdEventLoopGroup && eventLoopGroup != null && !eventLoopGroup.isShutdown()) {
+            eventLoopGroup.shutdownGracefully();
+        }
     }
 
     private SharedResourceHolder buildResourcesIfConfigured(

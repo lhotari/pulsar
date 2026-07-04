@@ -471,6 +471,22 @@ public class FileBasedTlsFactoryTest {
         ReferenceCountUtil.release(live);
     }
 
+    @Test
+    public void createInstanceAfterCloseFailsWithoutRebuilding() {
+        // PIP-478 F9: a closed factory must not rebuild/cache a context (which would leak, since close()
+        // already released the memos). createInstance completes exceptionally instead.
+        FileBasedTlsFactory factory = factory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.pem(RSA_CA, BROKER_CERT, BROKER_KEY)),
+                FileBasedTlsFactorySettings.defaults());
+        factory.close();
+
+        assertThatThrownBy(() -> factory.createInstance(TlsPurpose.BROKER, SslContext.class).join())
+                .hasCauseInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() ->
+                factory.createInstance(TlsPurpose.BROKER, SslContext.class, ctx -> { }).join())
+                .hasCauseInstanceOf(IllegalStateException.class);
+    }
+
     private static void assumeOpenSslAvailable() {
         if (!OpenSsl.isAvailable()) {
             throw new SkipException("Native OpenSSL (netty-tcnative) not available in this environment");

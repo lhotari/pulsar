@@ -30,8 +30,10 @@ import java.security.cert.Certificate;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
+import lombok.CustomLog;
 import org.apache.pulsar.common.tls.TlsPolicy;
 import org.apache.pulsar.common.util.SecurityUtility;
 
@@ -55,9 +57,26 @@ import org.apache.pulsar.common.util.SecurityUtility;
  *       {@link ClientAuth#NONE}, per {@code tlsRequireTrustedClientCert} semantics).</li>
  * </ul>
  */
+@CustomLog
 public final class TlsContexts {
 
+    // WARN-once dedup for the insecure (trust-all) mode, keyed by policy value so a rotation's context rebuilds
+    // (and both the Netty and JDK builds of the same policy) log at most once (S-F1).
+    private static final Set<TlsPolicy> INSECURE_WARNED = ConcurrentHashMap.newKeySet();
+
     private TlsContexts() {
+    }
+
+    /**
+     * Log a one-time WARN when an insecure (trust-all) TLS policy is applied at context build (S-F1): peer
+     * certificates are not validated. Deduplicated per policy value so rotation rebuilds do not spam the log.
+     */
+    private static void warnInsecureModeOnce(TlsPolicy policy) {
+        if (policy.allowInsecureConnection() && INSECURE_WARNED.add(policy)) {
+            log.warn().log("TLS insecure mode is enabled (allowInsecureConnection=true): peer certificates are "
+                    + "NOT validated (trust-all). This disables authentication of the remote peer and must be "
+                    + "used only for testing.");
+        }
     }
 
     /**
@@ -113,6 +132,7 @@ public final class TlsContexts {
      * @throws Exception if the context cannot be built
      */
     static SSLContext buildJdkContext(TlsMaterial material, TlsPolicy policy) throws Exception {
+        warnInsecureModeOnce(policy);
         Certificate[] keyCertChain = material.keyCertChainArray();
         return SecurityUtility.createSslContext(policy.allowInsecureConnection(), material.trustCertsArray(),
                 keyCertChain, material.privateKey());
@@ -255,6 +275,7 @@ public final class TlsContexts {
 
     private static void applyClientTrust(SslContextBuilder builder, TlsMaterial material, TlsPolicy policy) {
         if (policy.allowInsecureConnection()) {
+            warnInsecureModeOnce(policy);
             builder.trustManager(InsecureTrustManagerFactory.INSTANCE);
         } else if (material.trustCertsArray().length > 0) {
             builder.trustManager(material.trustCertsArray());
@@ -264,6 +285,7 @@ public final class TlsContexts {
 
     private static void applyServerTrust(SslContextBuilder builder, TlsMaterial material, TlsPolicy policy) {
         if (policy.allowInsecureConnection()) {
+            warnInsecureModeOnce(policy);
             builder.trustManager(InsecureTrustManagerFactory.INSTANCE);
         } else if (material.trustCertsArray().length > 0) {
             builder.trustManager(material.trustCertsArray());

@@ -82,16 +82,24 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
         this.tlsFactory = TlsFactorySupport.createFactory(serviceConfig.getTlsFactoryClassName(),
                 DefaultBrokerTlsFactory.class,
                 () -> DefaultBrokerTlsFactory.fromServiceConfiguration(serviceConfig));
-        TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
-                TlsFactorySupport.parseFactoryConfig(serviceConfig.getTlsFactoryConfig()),
-                pulsar.getExecutor(), pulsar.getExecutor(), pulsar.getOpenTelemetry().getOpenTelemetry());
-        TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
-        this.tlsSubscription = TlsContextAcquisition.acquireNettyContext(this.tlsFactory, TlsPurpose.BROKER,
-                        TlsSynthesisSpec.server(serviceConfig.isTlsRequireTrustedClientCertOnConnect()),
-                        ctx -> this.tlsServerContext = ctx)
-                .get()
-                .orElseThrow(() -> new IllegalStateException(
-                        "TLS factory supplied no Netty SslContext for purpose " + TlsPurpose.BROKER));
+        try {
+            TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
+                    TlsFactorySupport.parseFactoryConfig(serviceConfig.getTlsFactoryConfig()),
+                    pulsar.getExecutor(), pulsar.getExecutor(), pulsar.getOpenTelemetry().getOpenTelemetry());
+            TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
+            this.tlsSubscription = TlsContextAcquisition.acquireNettyContext(this.tlsFactory, TlsPurpose.BROKER,
+                            TlsSynthesisSpec.server(serviceConfig.isTlsRequireTrustedClientCertOnConnect()),
+                            ctx -> this.tlsServerContext = ctx)
+                    .get()
+                    .orElseThrow(() -> new IllegalStateException(
+                            "TLS factory supplied no Netty SslContext for purpose " + TlsPurpose.BROKER));
+        } catch (Exception e) {
+            // Ctor-throw cleanup (F9): the factory was created (and possibly initialized, its rotation
+            // scheduler running) but the subscription failed; close() will not be called on a half-constructed
+            // initializer, so release it here. close() is null-safe and idempotent.
+            close();
+            throw e;
+        }
     }
 
     /** Dispose the PIP-478 TLS factory and its subscription, if any. Safe to call more than once. */

@@ -205,7 +205,7 @@ public class SslParametersSynthesisTest {
     }
 
     @Test
-    public void subscribingAcquisitionReRequestsCompanionOnEachDelivery() throws Exception {
+    public void subscribingAcquisitionPreFetchesCompanionOnce() throws Exception {
         SSLParameters companion = new SSLParameters();
         companion.setProtocols(new String[] {"TLSv1.2"});
         CompanionFactory factory = new CompanionFactory(serverJdkContext(), companion);
@@ -214,8 +214,10 @@ public class SslParametersSynthesisTest {
                 factory, TlsPurpose.BROKER, TlsSynthesisSpec.server(false), ctx -> { }).join().orElseThrow();
 
         assertThat(handle.get().newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols()).containsExactly("TLSv1.2");
-        // Requested once for the SslContext-empty fallback and once per SSLContext delivery (initial load here).
-        assertThat(factory.companionRequests).as("the companion is re-requested on each delivery").isPositive();
+        // F8: the companion is pre-fetched exactly once at subscribe time (not re-requested inside each delivery
+        // callback), so a custom factory that dispatches its creation to the same single-thread executor running
+        // the reload callback cannot self-deadlock. Material still rotates per delivery; engine policy snapshots.
+        assertThat(factory.companionRequests).as("companion pre-fetched once at subscribe").isEqualTo(1);
         handle.dispose();
     }
 

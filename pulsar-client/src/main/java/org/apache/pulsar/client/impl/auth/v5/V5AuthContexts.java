@@ -91,7 +91,13 @@ public final class V5AuthContexts {
      */
     public static <T> CompletableFuture<T> supplyBlocking(Executor blockingExecutor, Supplier<T> task) {
         if (blockingExecutor != null) {
-            return CompletableFuture.supplyAsync(task, blockingExecutor);
+            try {
+                return CompletableFuture.supplyAsync(task, blockingExecutor);
+            } catch (Throwable t) {
+                // A saturated bounded pool with an AbortPolicy rejects synchronously (RejectedExecutionException);
+                // never throw from a future-returning method — surface it through the future instead (F3).
+                return CompletableFuture.failedFuture(t);
+            }
         }
         try {
             return CompletableFuture.completedFuture(task.get());

@@ -140,17 +140,25 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
                 .thenCompose(optHandle -> {
                     CompletableFuture<Channel> future = new CompletableFuture<>();
                     ch.eventLoop().execute(() -> {
+                        TlsHandle<SslContext> handle = null;
                         try {
-                            TlsHandle<SslContext> handle = optHandle.orElseThrow(() -> new IllegalStateException(
+                            handle = optHandle.orElseThrow(() -> new IllegalStateException(
                                     "Client TLS factory supplied no Netty SslContext for purpose "
                                             + TlsPurpose.CLIENT_DEFAULT));
                             SslHandler handler = handle.get()
                                     .newHandler(ch.alloc(), sniHost.getHostName(), sniHost.getPort());
                             ch.pipeline().addFirst(TLS_HANDLER, handler);
                             // Release the retained one-shot context when this connection closes.
-                            ch.closeFuture().addListener(closeFuture -> handle.dispose());
+                            TlsHandle<SslContext> acquired = handle;
+                            ch.closeFuture().addListener(closeFuture -> acquired.dispose());
                             future.complete(ch);
                         } catch (Throwable t) {
+                            // Dispose the retained one-shot context if we acquired it but failed before wiring
+                            // the close-future disposal above, else it leaks its Netty ref (F9). Reaching here
+                            // means the close-future listener was not registered, so there is no double dispose.
+                            if (handle != null) {
+                                handle.dispose();
+                            }
                             future.completeExceptionally(t);
                         }
                     });

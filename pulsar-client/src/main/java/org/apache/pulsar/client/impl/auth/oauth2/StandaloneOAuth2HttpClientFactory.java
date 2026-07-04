@@ -70,19 +70,34 @@ final class StandaloneOAuth2HttpClientFactory implements PulsarHttpClientFactory
 
     StandaloneOAuth2HttpClientFactory(Optional<TlsPolicy> idpTlsPolicy, int refreshIntervalSeconds,
             String instanceId) {
-        if (idpTlsPolicy.isPresent()) {
-            this.tlsExecutor = Executors.newSingleThreadScheduledExecutor(
-                    new DefaultThreadFactory("oauth2-idp-tls"));
-            this.idpTlsFactory = buildIdpTlsFactory(idpTlsPolicy.get(), refreshIntervalSeconds, tlsExecutor);
-        } else {
-            this.tlsExecutor = null;
-            this.idpTlsFactory = null;
+        ScheduledExecutorService executor = null;
+        PulsarTlsFactory tlsFactory = null;
+        try {
+            if (idpTlsPolicy.isPresent()) {
+                // Daemon threads (F7): the standalone factory may be created by a short-lived tool; a leaked
+                // (never-closed) rotation scheduler with non-daemon threads would block JVM exit.
+                executor = Executors.newSingleThreadScheduledExecutor(
+                        new DefaultThreadFactory("oauth2-idp-tls", true));
+                tlsFactory = buildIdpTlsFactory(idpTlsPolicy.get(), refreshIntervalSeconds, executor);
+            }
+            PulsarTlsFactory factoryForSupplier = tlsFactory;
+            // HTTP-only: AsyncHttpClient provisions its own event loop / timer / DNS resolver (as the removed
+            // private OAuth2 client did), so the shared-resource suppliers return null.
+            this.delegate = new FrameworkHttpClientFactory(() -> null, () -> null, () -> null,
+                    () -> factoryForSupplier, new ClientConfigurationData(), instanceId);
+            this.tlsExecutor = executor;
+            this.idpTlsFactory = tlsFactory;
+        } catch (RuntimeException | Error e) {
+            // Ctor-throw cleanup (F7): buildIdpTlsFactory or the delegate build failed after we allocated the
+            // IdP TLS factory / scheduler; release them here since close() will never run on this instance.
+            if (tlsFactory != null) {
+                closeQuietly(tlsFactory);
+            }
+            if (executor != null) {
+                executor.shutdownNow();
+            }
+            throw e;
         }
-        PulsarTlsFactory tlsFactory = this.idpTlsFactory;
-        // HTTP-only: AsyncHttpClient provisions its own event loop / timer / DNS resolver (as the removed
-        // private OAuth2 client did), so the shared-resource suppliers return null.
-        this.delegate = new FrameworkHttpClientFactory(() -> null, () -> null, () -> null,
-                () -> tlsFactory, new ClientConfigurationData(), instanceId);
     }
 
     private static PulsarTlsFactory buildIdpTlsFactory(TlsPolicy policy, int refreshIntervalSeconds,

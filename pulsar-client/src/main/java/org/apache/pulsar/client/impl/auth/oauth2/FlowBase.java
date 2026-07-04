@@ -241,7 +241,10 @@ abstract class FlowBase implements Flow {
     }
 
     @Override
-    public void close() throws Exception {
+    // Synchronized to pair with the synchronized getHttpClient()/resolveHttpClientFactory() lazy init (F7):
+    // otherwise a close() racing the first fetch reads pulsarHttpClient/standaloneHttpClientFactory without the
+    // monitor and can miss (and thus leak) a client or standalone factory that the racing fetch just created.
+    public synchronized void close() throws Exception {
         if (pulsarHttpClient != null) {
             // Idempotent: releases the framework client (which the framework factory also closes on client
             // shutdown).

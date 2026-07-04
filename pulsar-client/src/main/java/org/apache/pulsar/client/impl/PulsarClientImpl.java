@@ -355,6 +355,24 @@ public class PulsarClientImpl implements PulsarClient {
      */
     private void bindAuthenticationServices(Authentication authentication) {
         if (authentication instanceof ClientAuthenticationServicesAware aware) {
+            // Do not (re)bind into a client that is shutting down: a rebind racing close() would install a
+            // FrameworkHttpClientFactory that close() has already passed, leaking it (F5). state is null during
+            // construction (the first bind), which must proceed.
+            State currentState = state.get();
+            if (currentState == State.Closing || currentState == State.Closed) {
+                return;
+            }
+            // Close a previously-bound factory before overwriting it, else each updateAuthentication rebind
+            // (AutoClusterFailover / ControlledClusterFailover) leaks one FrameworkHttpClientFactory (F5).
+            FrameworkHttpClientFactory previous = this.authHttpClientFactory;
+            if (previous != null) {
+                try {
+                    previous.close();
+                } catch (Throwable t) {
+                    log.warn().exception(t)
+                            .log("Failed to close previous framework HTTP client factory during auth rebind");
+                }
+            }
             // PIP-478 stage 3c: the framework HTTP client factory shares the client's event loop, timer, DNS
             // resolver and TLS factory, resolved lazily at newHttpClient() time via these suppliers.
             this.authHttpClientFactory = new FrameworkHttpClientFactory(

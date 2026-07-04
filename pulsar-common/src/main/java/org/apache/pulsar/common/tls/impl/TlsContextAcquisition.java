@@ -207,10 +207,20 @@ public final class TlsContextAcquisition {
                     if (direct.isPresent()) {
                         return CompletableFuture.completedFuture(direct);
                     }
-                    SynthesizingSubscription subscription =
-                            new SynthesizingSubscription(factory, purpose, synthesis, onLoadOrReload);
-                    return factory.createInstance(purpose, SSLContext.class, subscription::onDelivery)
-                            .thenApply(jdk -> jdk.map(subscription::bind));
+                    // Pre-fetch the SSLParameters companion ONCE, before subscribing, and reuse it across
+                    // deliveries (F8): joining the companion inside the per-delivery callback self-deadlocks
+                    // when a custom factory dispatches its creation to the same single-thread executor that
+                    // runs the reload callback (e.g. the admin connector wiring scheduler==blockingExecutor).
+                    // The companion is composed here (never joined), off the delivery thread. Material still
+                    // rotates on every delivery; the engine-policy companion is snapshotted at subscribe time
+                    // (the default file-based factory has no companion, so this is a no-op for it).
+                    return factory.createInstance(purpose, SSLParameters.class).thenCompose(paramsHandle -> {
+                        SSLParameters factoryBaseline = extractBaseline(paramsHandle);
+                        SynthesizingSubscription subscription =
+                                new SynthesizingSubscription(purpose, synthesis, factoryBaseline, onLoadOrReload);
+                        return factory.createInstance(purpose, SSLContext.class, subscription::onDelivery)
+                                .thenApply(jdk -> jdk.map(subscription::bind));
+                    });
                 });
     }
 
@@ -282,28 +292,26 @@ public final class TlsContextAcquisition {
      */
     private static final class SynthesizingSubscription implements TlsHandle<SslContext> {
 
-        private final PulsarTlsFactory factory;
         private final TlsPurpose purpose;
         private final TlsSynthesisSpec synthesis;
+        // Snapshotted once at subscribe time (F8) rather than re-fetched inside the delivery callback.
+        private final SSLParameters factoryBaseline;
         private final Consumer<SslContext> onLoadOrReload;
         private volatile SslContext latest;
         private volatile TlsHandle<SSLContext> underlying;
 
-        SynthesizingSubscription(PulsarTlsFactory factory, TlsPurpose purpose, TlsSynthesisSpec synthesis,
+        SynthesizingSubscription(TlsPurpose purpose, TlsSynthesisSpec synthesis, SSLParameters factoryBaseline,
                                  Consumer<SslContext> onLoadOrReload) {
-            this.factory = factory;
             this.purpose = purpose;
             this.synthesis = synthesis;
+            this.factoryBaseline = factoryBaseline;
             this.onLoadOrReload = onLoadOrReload;
         }
 
         // Serial per subscription (SPI contract); the first delivery happens-before the subscribe future
-        // completes, so `latest` is set by the time bind() runs. The SSLParameters companion is re-requested
-        // with each delivery so engine policy rotates with material; the callback runs off any event loop
-        // (SPI contract), so the synchronous request here never blocks a consumer event loop.
+        // completes, so `latest` is set by the time bind() runs. Material rotates on every delivery; the
+        // engine-policy companion is the pre-fetched snapshot (no blocking join on the delivery thread, F8).
         void onDelivery(SSLContext jdkContext) {
-            SSLParameters factoryBaseline = extractBaseline(
-                    factory.createInstance(purpose, SSLParameters.class).join());
             SslContext wrapped = synthesize(jdkContext, purpose, synthesis, factoryBaseline);
             this.latest = wrapped;
             onLoadOrReload.accept(wrapped);
