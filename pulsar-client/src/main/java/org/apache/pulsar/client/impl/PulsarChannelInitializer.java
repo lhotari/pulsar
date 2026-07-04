@@ -123,7 +123,7 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
      * The synchronous per-connection work is only the pipeline mutation, hopped back onto the event loop.
      *
      * <p>Hostname verification is baked into the factory-built context (per the client {@code TlsPolicy}),
-     * so {@code SecurityUtility.configureSSLHandler} is NOT re-applied here; the SNI host/port drive both
+     * so no per-connection endpoint-identification override is re-applied here; the SNI host/port drive both
      * the SNI header and the verification target. The one-shot handle retains the factory-owned context
      * for the connection's lifetime and is disposed when the channel closes.
      *
