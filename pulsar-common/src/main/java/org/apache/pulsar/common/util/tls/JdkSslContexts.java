@@ -65,14 +65,37 @@ public final class JdkSslContexts {
     public static SSLContext createSslContext(boolean allowInsecureConnection, Certificate[] trustCertficates,
                                               Certificate[] certificates, PrivateKey privateKey)
             throws GeneralSecurityException {
-        return createSslContext(allowInsecureConnection, trustCertficates, certificates, privateKey, null);
+        return createSslContext(allowInsecureConnection, trustCertficates, certificates, privateKey,
+                (String) null);
     }
 
     public static SSLContext createSslContext(boolean allowInsecureConnection, Certificate[] trustCertficates,
                                               Certificate[] certificates, PrivateKey privateKey, String providerName)
             throws GeneralSecurityException {
+        return createSslContextWithProvider(allowInsecureConnection, trustCertficates, certificates, privateKey,
+                JcaProviders.resolveProvider(providerName));
+    }
+
+    /**
+     * Assemble a JDK {@link SSLContext} backed by an already-resolved {@link Provider} (or the platform default
+     * when {@code provider} is {@code null}). This is the PIP-478 {@code jcaProvider} entry point: the caller
+     * resolves the named provider (fail-loud) via {@link JcaProviders#resolveNamedProvider(String)} and passes
+     * it here, so the JDK-engine web/Jetty and fallback paths honor a pinned FIPS / BouncyCastle / PKCS#11
+     * provider.
+     *
+     * @param allowInsecureConnection whether to trust all certificates (insecure)
+     * @param trustCertficates        the trusted CA certificates (may be null/empty)
+     * @param certificates            the key-cert chain (may be null when no client/server cert)
+     * @param privateKey              the private key (may be null)
+     * @param provider                the resolved crypto provider, or {@code null} for the platform default
+     * @return the assembled JDK {@link SSLContext}
+     * @throws GeneralSecurityException if the context cannot be assembled
+     */
+    public static SSLContext createSslContextWithProvider(boolean allowInsecureConnection,
+                                                          Certificate[] trustCertficates, Certificate[] certificates,
+                                                          PrivateKey privateKey, Provider provider)
+            throws GeneralSecurityException {
         KeyStoreHolder ksh = new KeyStoreHolder();
-        Provider provider = JcaProviders.resolveProvider(providerName);
 
         TrustManager[] trustManagers = setupTrustCerts(ksh, allowInsecureConnection, trustCertficates, provider);
         KeyManager[] keyManagers = setupKeyManager(ksh, privateKey, certificates);

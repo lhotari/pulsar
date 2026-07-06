@@ -67,4 +67,38 @@ public class ClientDefaultPolicyStoreTypeTest {
         assertThat(policy.trustStoreType()).isEqualTo("JKS");
         assertThat(policy.keyStorePath()).isNull();
     }
+
+    // PIP-478 Part D: an explicit jcaProvider config key maps onto TlsPolicy.jcaProvider.
+    @Test
+    public void explicitJcaProviderKeyMapsToPolicy() {
+        ClientConfigurationData conf = new ClientConfigurationData();
+        conf.setJcaProvider("BCFIPS");
+        conf.setSslProvider("OPENSSL"); // engine axis; must not clobber the explicit jcaProvider
+
+        TlsPolicy policy = ClientTlsFactorySupport.clientDefaultPolicy(conf);
+
+        assertThat(policy.jcaProvider()).isEqualTo("BCFIPS");
+    }
+
+    // PIP-478 Part D: the v4 sslProvider two-axis split — a non-OPENSSL provider name migrates to jcaProvider
+    // (restoring v4 behavior), while OPENSSL/OPENSSL_REFCNT stay engine-only and leave jcaProvider unset.
+    @Test
+    public void sslProviderProviderNameMigratesToJcaProvider() {
+        ClientConfigurationData conf = new ClientConfigurationData();
+        conf.setSslProvider("Conscrypt");
+
+        assertThat(ClientTlsFactorySupport.clientDefaultPolicy(conf).jcaProvider()).isEqualTo("Conscrypt");
+    }
+
+    @Test
+    public void openSslLiteralsStayEngineOnlyAndLeaveJcaProviderUnset() {
+        for (String engine : new String[] {"OPENSSL", "OPENSSL_REFCNT", "openssl"}) {
+            ClientConfigurationData conf = new ClientConfigurationData();
+            conf.setSslProvider(engine);
+            assertThat(ClientTlsFactorySupport.clientDefaultPolicy(conf).jcaProvider())
+                    .as("engine literal '" + engine + "' does not populate jcaProvider").isNull();
+        }
+        // Unset sslProvider + unset jcaProvider -> null.
+        assertThat(ClientTlsFactorySupport.clientDefaultPolicy(new ClientConfigurationData()).jcaProvider()).isNull();
+    }
 }

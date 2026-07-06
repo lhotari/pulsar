@@ -121,7 +121,10 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
                 .allowInsecureConnection(conf.isTlsAllowInsecureConnection())
                 .enableHostnameVerification(conf.isTlsHostnameVerificationEnabled())
                 .protocols(toList(conf.getTlsProtocols()))
-                .ciphers(toList(conf.getTlsCiphers()));
+                .ciphers(toList(conf.getTlsCiphers()))
+                // PIP-478: pin the JCA crypto provider (FIPS/BC/PKCS#11) for the listener/web material; when
+                // set it forces the JDK engine backed by this provider (distinct from tlsProvider, the engine).
+                .jcaProvider(conf.getJcaProvider());
         if (conf.isTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
                     .keyStoreType(conf.getTlsKeyStoreType())
@@ -145,7 +148,9 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
                 .allowInsecureConnection(conf.isTlsAllowInsecureConnection())
                 .enableHostnameVerification(conf.isTlsHostnameVerificationEnabled())
                 .protocols(toList(conf.getBrokerClientTlsProtocols()))
-                .ciphers(toList(conf.getBrokerClientTlsCiphers()));
+                .ciphers(toList(conf.getBrokerClientTlsCiphers()))
+                // PIP-478: pin the JCA crypto provider for the broker's own outbound (replication) client TLS.
+                .jcaProvider(conf.getBrokerClientJcaProvider());
         if (conf.isBrokerClientTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
                     .keyStoreType(conf.getBrokerClientTlsKeyStoreType())

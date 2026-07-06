@@ -634,6 +634,16 @@ public class ProxyConfiguration implements PulsarConfiguration {
     private String tlsProvider = null;
 
     @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "PIP-478: the name of a java.security.Provider (a FIPS / BouncyCastle / PKCS#11 crypto "
+                    + "provider) to back the proxy's server-side (binary front-end / web) TLS cryptography. A "
+                    + "distinct axis from tlsProvider (the JDK-vs-OpenSSL engine switch): when set, the default "
+                    + "factory builds the JDK engine backed by this provider, overriding the engine choice. "
+                    + "Resolved via the ServiceLoader mechanism (with a fallback to an already-registered "
+                    + "provider), failing loudly when unresolvable.")
+    private String jcaProvider = null;
+
+    @FieldContext(
             category = CATEGORY_KEYSTORE_TLS,
             doc = "TLS KeyStore type configuration for proxy: JKS, PKCS12"
     )
@@ -697,6 +707,15 @@ public class ProxyConfiguration implements PulsarConfiguration {
             doc = "The TLS Provider used by the Pulsar proxy to authenticate with Pulsar brokers"
     )
     private String brokerClientSslProvider = null;
+
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "PIP-478: the name of a java.security.Provider (a FIPS / BouncyCastle / PKCS#11 crypto "
+                    + "provider) to back the proxy's own outbound (proxy-to-broker) client TLS cryptography. "
+                    + "When set, the default factory builds the JDK engine backed by this provider, overriding "
+                    + "the engine choice. Resolved via the ServiceLoader mechanism (with a fallback to an "
+                    + "already-registered provider), failing loudly when unresolvable.")
+    private String brokerClientJcaProvider = null;
 
     // needed when client auth is required
     @FieldContext(

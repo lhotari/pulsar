@@ -21,6 +21,7 @@ package org.apache.pulsar.common.util.tls;
 import java.security.NoSuchAlgorithmException;
 import java.security.Provider;
 import java.security.Security;
+import java.util.ServiceLoader;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import lombok.CustomLog;
@@ -142,6 +143,50 @@ public final class JcaProviders {
         log.debug().attr("provider", provider.getName())
                 .log("Found and Instantiated Bouncy Castle provider in classpath");
         return provider;
+    }
+
+    /**
+     * Resolve a named JCA crypto {@link Provider} for the PIP-478 {@code jcaProvider} field. Resolution uses
+     * the {@link ServiceLoader} mechanism on the application (thread-context) class loader
+     * ({@code META-INF/services/java.security.Provider}), matching by {@link Provider#getName()}; it falls
+     * back to a provider already statically registered in the JVM ({@link Security#getProvider(String)}); and
+     * it fails loudly when the name resolves to nothing (the fail-fast contract — a misconfigured provider
+     * surfaces at client build / server start rather than silently defaulting).
+     *
+     * <p>Unlike {@link #resolveProvider(String)} (which falls back to the default provider), this never
+     * returns {@code null} for a non-blank name: an unresolvable name is a configuration error.
+     *
+     * @param providerName the {@code java.security.Provider} name (blank/{@code null} returns {@code null})
+     * @return the resolved provider, or {@code null} when {@code providerName} is blank
+     * @throws IllegalArgumentException if a non-blank name resolves to no installed provider
+     */
+    public static Provider resolveNamedProvider(String providerName) {
+        if (StringUtils.isBlank(providerName)) {
+            return null;
+        }
+        String name = providerName.trim();
+        // 1. ServiceLoader on the application class loader (META-INF/services/java.security.Provider).
+        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        if (classLoader == null) {
+            classLoader = JcaProviders.class.getClassLoader();
+        }
+        for (Provider provider : ServiceLoader.load(Provider.class, classLoader)) {
+            if (name.equals(provider.getName())) {
+                log.debug().attr("provider", name).log("Resolved JCA provider via ServiceLoader");
+                return provider;
+            }
+        }
+        // 2. Fall back to a provider already statically registered in the JVM.
+        Provider registered = Security.getProvider(name);
+        if (registered != null) {
+            log.debug().attr("provider", name).log("Resolved JCA provider via Security.getProvider");
+            return registered;
+        }
+        // 3. Fail loudly — a misconfigured crypto provider must not silently default.
+        throw new IllegalArgumentException("No java.security.Provider named '" + name + "' could be resolved via "
+                + "ServiceLoader (META-INF/services/java.security.Provider) on the application class loader or via "
+                + "Security.getProvider(...). Ensure the provider (e.g. a FIPS / BouncyCastle / PKCS#11 provider) "
+                + "is on the classpath and registered.");
     }
 
     /**

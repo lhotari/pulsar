@@ -88,7 +88,9 @@ final class ProxyTlsFactories {
                 .allowInsecureConnection(config.isTlsAllowInsecureConnection())
                 .enableHostnameVerification(config.isTlsHostnameVerificationEnabled())
                 .protocols(toList(protocols))
-                .ciphers(toList(ciphers));
+                .ciphers(toList(ciphers))
+                // PIP-478: pin the JCA crypto provider for the proxy's server-side (binary/web) material.
+                .jcaProvider(config.getJcaProvider());
         if (config.isTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
                     .keyStoreType(config.getTlsKeyStoreType())
@@ -111,7 +113,9 @@ final class ProxyTlsFactories {
                 .allowInsecureConnection(config.isTlsAllowInsecureConnection())
                 .enableHostnameVerification(config.isTlsHostnameVerificationEnabled())
                 .protocols(toList(config.getBrokerClientTlsProtocols()))
-                .ciphers(toList(config.getBrokerClientTlsCiphers()));
+                .ciphers(toList(config.getBrokerClientTlsCiphers()))
+                // PIP-478: pin the JCA crypto provider for the proxy's own outbound (proxy->broker) client TLS.
+                .jcaProvider(config.getBrokerClientJcaProvider());
         if (config.isBrokerClientTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
                     .keyStoreType(config.getBrokerClientTlsKeyStoreType())

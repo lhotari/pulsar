@@ -26,6 +26,7 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import java.security.Provider;
 import java.security.cert.Certificate;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -34,6 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import lombok.CustomLog;
+import org.apache.pulsar.common.util.tls.JcaProviders;
 import org.apache.pulsar.common.util.tls.JdkSslContexts;
 import org.apache.pulsar.tls.TlsPolicy;
 
@@ -102,7 +104,8 @@ public final class TlsContexts {
      */
     static SslContext buildNettyClientContext(TlsMaterial material, TlsPolicy policy, SslProvider provider)
             throws Exception {
-        SslContextBuilder builder = SslContextBuilder.forClient().sslProvider(provider);
+        SslContextBuilder builder = SslContextBuilder.forClient();
+        applyEngineProvider(builder, policy, provider);
         applyClientTrust(builder, material, policy);
         if (material.hasKeyMaterial()) {
             builder.keyManager(material.privateKey(), material.keyCertChainArray());
@@ -126,8 +129,8 @@ public final class TlsContexts {
      */
     static SslContext buildNettyServerContext(TlsMaterial material, TlsPolicy policy, SslProvider provider,
                                               boolean requireTrustedClientCert) throws Exception {
-        SslContextBuilder builder = SslContextBuilder.forServer(material.privateKey(), material.keyCertChainArray())
-                .sslProvider(provider);
+        SslContextBuilder builder = SslContextBuilder.forServer(material.privateKey(), material.keyCertChainArray());
+        applyEngineProvider(builder, policy, provider);
         applyServerTrust(builder, material, policy);
         applyCiphersAndProtocols(builder, policy);
         // Never drop to ClientAuth.NONE, even when insecure: a captured client cert powers TLS auth.
@@ -146,8 +149,34 @@ public final class TlsContexts {
     static SSLContext buildJdkContext(TlsMaterial material, TlsPolicy policy) throws Exception {
         warnInsecureModeOnce(policy);
         Certificate[] keyCertChain = material.keyCertChainArray();
-        return JdkSslContexts.createSslContext(policy.allowInsecureConnection(), material.trustCertsArray(),
-                keyCertChain, material.privateKey());
+        // Honor a pinned jcaProvider (a java.security.Provider) on the JDK-engine path (the web/Jetty and
+        // fallback consumers), so FIPS / BouncyCastle / PKCS#11 providers back the SSLContext too (Goal #5).
+        return JdkSslContexts.createSslContextWithProvider(policy.allowInsecureConnection(),
+                material.trustCertsArray(), keyCertChain, material.privateKey(), resolveJcaProvider(policy));
+    }
+
+    /**
+     * Apply the effective Netty engine to the builder. When the policy pins a {@code jcaProvider} (a
+     * {@link Provider} name), use the JDK engine with that provider installed as the SSL-context provider —
+     * overriding the factory-level engine choice, since Netty's native OpenSSL engine cannot delegate to an
+     * arbitrary JCA provider (PIP-478). Otherwise use the passed-in engine provider.
+     */
+    private static void applyEngineProvider(SslContextBuilder builder, TlsPolicy policy, SslProvider engineProvider) {
+        Provider jcaProvider = resolveJcaProvider(policy);
+        if (jcaProvider != null) {
+            builder.sslProvider(SslProvider.JDK).sslContextProvider(jcaProvider);
+        } else {
+            builder.sslProvider(engineProvider);
+        }
+    }
+
+    /**
+     * Resolve the policy's {@code jcaProvider} to a {@link Provider} (fail-loud via {@link JcaProviders}), or
+     * {@code null} when the policy pins no crypto provider.
+     */
+    private static Provider resolveJcaProvider(TlsPolicy policy) {
+        String name = policy.jcaProvider();
+        return (name == null || name.isBlank()) ? null : JcaProviders.resolveNamedProvider(name);
     }
 
     /**

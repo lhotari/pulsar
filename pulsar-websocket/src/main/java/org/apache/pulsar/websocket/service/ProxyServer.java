@@ -257,7 +257,9 @@ public class ProxyServer {
         TlsPolicy.Builder policyBuilder = TlsPolicy.builder()
                 .allowInsecureConnection(config.isTlsAllowInsecureConnection())
                 .protocols(toList(config.getWebServiceTlsProtocols()))
-                .ciphers(toList(config.getWebServiceTlsCiphers()));
+                .ciphers(toList(config.getWebServiceTlsCiphers()))
+                // PIP-478: pin the JCA crypto provider for the websocket web listener (Goal #5).
+                .jcaProvider(config.getJcaProvider());
         if (config.isTlsEnabledWithKeyStore()) {
             policyBuilder.format(TlsPolicy.Format.KEYSTORE)
                     .keyStoreType(config.getTlsKeyStoreType())

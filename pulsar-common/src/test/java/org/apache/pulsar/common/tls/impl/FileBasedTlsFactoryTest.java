@@ -127,6 +127,35 @@ public class FileBasedTlsFactoryTest {
         factory.close();
     }
 
+    // PIP-478 Part D: a TlsPolicy.jcaProvider pins the named java.security.Provider — the JDK SSLContext is
+    // built with that provider, and the Netty context builds on the JDK engine backed by it. SunJSSE is always
+    // installed, so this round-trips the wiring without a FIPS/BouncyCastle dependency.
+    @Test
+    public void jcaProviderPinsTheNamedProviderOnTheBuiltContexts() throws Exception {
+        TlsPolicy policy = TlsPolicy.builder()
+                .format(TlsPolicy.Format.PEM)
+                .trustCertsFilePath(RSA_CA)
+                .certificateFilePath(BROKER_CERT)
+                .keyFilePath(BROKER_KEY)
+                .jcaProvider("SunJSSE")
+                .build();
+        FileBasedTlsFactory factory = factory(Map.of(TlsPurpose.BROKER, policy),
+                FileBasedTlsFactorySettings.defaults());
+
+        Optional<TlsHandle<SSLContext>> jdk = factory.createInstance(TlsPurpose.BROKER, SSLContext.class).join();
+        assertThat(jdk).isPresent();
+        assertThat(jdk.get().get().getProvider().getName())
+                .as("the JDK SSLContext is built with the pinned jcaProvider").isEqualTo("SunJSSE");
+
+        Optional<TlsHandle<SslContext>> netty = factory.createInstance(TlsPurpose.BROKER, SslContext.class).join();
+        assertThat(netty).as("the Netty context builds on the JDK engine backed by the pinned provider").isPresent();
+        assertThat(netty.get().get()).isNotNull();
+
+        jdk.get().dispose();
+        netty.get().dispose();
+        factory.close();
+    }
+
     @Test
     public void buildsContextsFromKeystore() throws Exception {
         FileBasedTlsFactory factory = factory(

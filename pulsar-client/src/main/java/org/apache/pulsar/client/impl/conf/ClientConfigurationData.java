@@ -337,6 +337,17 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     private String sslProvider = null;
 
     @ApiModelProperty(
+            name = "jcaProvider",
+            value = "PIP-478: the name of a java.security.Provider (a FIPS / BouncyCastle / PKCS#11 crypto "
+                    + "provider) to back the client's TLS cryptography. A distinct axis from sslProvider (the "
+                    + "JDK-vs-OpenSSL engine switch): when set, the default factory builds the JDK Netty engine "
+                    + "backed by this provider, overriding the engine choice. Resolved via the ServiceLoader "
+                    + "mechanism (with a fallback to an already-registered provider) and failing loudly when "
+                    + "unresolvable."
+    )
+    private String jcaProvider = null;
+
+    @ApiModelProperty(
             name = "tlsKeyStoreType",
             value = "TLS KeyStore type configuration."
     )

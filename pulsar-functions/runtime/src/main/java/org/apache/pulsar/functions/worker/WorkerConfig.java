@@ -577,6 +577,16 @@ public class WorkerConfig implements Serializable, PulsarConfiguration {
     private String tlsProvider = null;
 
     @FieldContext(
+            category = CATEGORY_SECURITY,
+            doc = "PIP-478: the name of a java.security.Provider (a FIPS / BouncyCastle / PKCS#11 crypto "
+                    + "provider) to back the functions worker web-server TLS cryptography. When set, the "
+                    + "default factory builds the JDK engine backed by this provider. Resolved via the "
+                    + "ServiceLoader mechanism (with a fallback to an already-registered provider), failing "
+                    + "loudly when unresolvable."
+    )
+    private String jcaProvider = null;
+
+    @FieldContext(
             category = CATEGORY_KEYSTORE_TLS,
             doc = "TLS KeyStore type configuration in function worker: JKS, PKCS12"
     )

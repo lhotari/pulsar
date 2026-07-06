@@ -63,6 +63,8 @@ public final class TlsPolicy {
     private final boolean enableHostnameVerification;
     private final List<String> protocols;
     private final List<String> ciphers;
+    // optional JCA crypto provider (a java.security.Provider name)
+    private final String jcaProvider;
 
     private TlsPolicy(Builder b) {
         this.format = b.format;
@@ -79,6 +81,7 @@ public final class TlsPolicy {
         this.enableHostnameVerification = b.enableHostnameVerification;
         this.protocols = List.copyOf(b.protocols);
         this.ciphers = List.copyOf(b.ciphers);
+        this.jcaProvider = b.jcaProvider;
     }
 
     /**
@@ -182,6 +185,18 @@ public final class TlsPolicy {
     }
 
     /**
+     * The JCA crypto provider — a {@link java.security.Provider} name (e.g. a FIPS / BouncyCastle / PKCS#11
+     * provider) to back the TLS engine's cryptography. When set (non-blank), the default file-based factory
+     * builds the JDK Netty engine with this provider installed as the SSL-context provider, taking precedence
+     * over the factory-level OpenSSL/JDK engine choice. Blank/{@code null} means the platform default.
+     *
+     * @return the JCA crypto provider name, or {@code null}/blank for the platform default
+     */
+    public String jcaProvider() {
+        return jcaProvider;
+    }
+
+    /**
      * Create a PEM-format policy.
      *
      * @param trustCerts the trusted CA certificate file path (may be {@code null} for system default)
@@ -266,14 +281,16 @@ public final class TlsPolicy {
                 && Objects.equals(keyStoreType, that.keyStoreType)
                 && Objects.equals(trustStoreType, that.trustStoreType)
                 && protocols.equals(that.protocols)
-                && ciphers.equals(that.ciphers);
+                && ciphers.equals(that.ciphers)
+                && Objects.equals(jcaProvider, that.jcaProvider);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(format, trustCertsFilePath, certificateFilePath, keyFilePath,
                 trustStorePath, trustStorePassword, keyStorePath, keyStorePassword, keyStoreType,
-                trustStoreType, allowInsecureConnection, enableHostnameVerification, protocols, ciphers);
+                trustStoreType, allowInsecureConnection, enableHostnameVerification, protocols, ciphers,
+                jcaProvider);
     }
 
     @Override
@@ -293,6 +310,7 @@ public final class TlsPolicy {
                 + ", enableHostnameVerification=" + enableHostnameVerification
                 + ", protocols=" + protocols
                 + ", ciphers=" + ciphers
+                + ", jcaProvider=" + jcaProvider
                 + '}';
     }
 
@@ -315,6 +333,7 @@ public final class TlsPolicy {
         private boolean enableHostnameVerification = true;
         private List<String> protocols = List.of();
         private List<String> ciphers = List.of();
+        private String jcaProvider;
 
         private Builder() {
         }
@@ -444,6 +463,18 @@ public final class TlsPolicy {
          */
         public Builder ciphers(List<String> ciphers) {
             this.ciphers = ciphers == null ? List.of() : List.copyOf(ciphers);
+            return this;
+        }
+
+        /**
+         * @param jcaProvider the JCA crypto provider name (a {@link java.security.Provider} name, e.g. a FIPS /
+         *                    BouncyCastle / PKCS#11 provider); blank/{@code null} uses the platform default.
+         *                    When set, the default file-based factory pins the JDK engine backed by this
+         *                    provider (overriding the factory engine choice).
+         * @return this builder
+         */
+        public Builder jcaProvider(String jcaProvider) {
+            this.jcaProvider = jcaProvider;
             return this;
         }
 

@@ -92,6 +92,35 @@ public final class ClientTlsFactorySupport {
     }
 
     /**
+     * Resolve the client's JCA crypto provider name for the {@code CLIENT_DEFAULT} {@link TlsPolicy}
+     * (PIP-478). Precedence:
+     * <ol>
+     *   <li>an explicit {@code jcaProvider} config key wins;</li>
+     *   <li>otherwise the v4 {@code sslProvider} value is split along two axes — the
+     *       {@code OPENSSL}/{@code OPENSSL_REFCNT} literals select the native engine (handled by
+     *       {@link #engineProvider(String)}); any other non-blank value is treated as a JCA provider name and
+     *       routed here, restoring the v4 behavior of honoring that named provider (via the JDK engine) rather
+     *       than silently dropping it on upgrade.</li>
+     * </ol>
+     *
+     * @param conf the client configuration
+     * @return the JCA provider name, or {@code null} when none applies
+     */
+    static String resolveClientJcaProvider(ClientConfigurationData conf) {
+        if (StringUtils.isNotBlank(conf.getJcaProvider())) {
+            return conf.getJcaProvider().trim();
+        }
+        String sslProvider = conf.getSslProvider();
+        if (StringUtils.isNotBlank(sslProvider)) {
+            String p = sslProvider.trim();
+            if (!"OPENSSL".equalsIgnoreCase(p) && !"OPENSSL_REFCNT".equalsIgnoreCase(p)) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Compose the {@link TlsPurpose#CLIENT_DEFAULT} {@link TlsPolicy} from the client's {@code tls*}
      * configuration fields. {@code sslProvider} is deliberately NOT part of the policy (it is a
      * factory-engine setting).
@@ -104,7 +133,8 @@ public final class ClientTlsFactorySupport {
                 .allowInsecureConnection(conf.isTlsAllowInsecureConnection())
                 .enableHostnameVerification(conf.isTlsHostnameVerificationEnable())
                 .protocols(toList(conf.getTlsProtocols()))
-                .ciphers(toList(conf.getTlsCiphers()));
+                .ciphers(toList(conf.getTlsCiphers()))
+                .jcaProvider(resolveClientJcaProvider(conf));
         if (conf.isUseKeyStoreTls()) {
             // Map the keystore and truststore types independently (v4 parity): a mixed setup such as a PKCS12
             // keystore with a JKS truststore must load each store with its own type.

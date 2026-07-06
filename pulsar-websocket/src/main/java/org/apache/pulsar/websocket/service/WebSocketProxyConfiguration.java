@@ -250,6 +250,15 @@ public class WebSocketProxyConfiguration implements PulsarConfiguration {
     private String tlsProvider = "Conscrypt";
 
     @FieldContext(
+            doc = "PIP-478: the name of a java.security.Provider (a FIPS / BouncyCastle / PKCS#11 crypto "
+                    + "provider) to back the WebSocket service's web-listener TLS cryptography. When set, the "
+                    + "default factory builds the JDK engine backed by this provider. Resolved via the "
+                    + "ServiceLoader mechanism (with a fallback to an already-registered provider), failing "
+                    + "loudly when unresolvable."
+    )
+    private String jcaProvider = null;
+
+    @FieldContext(
             doc = "TLS KeyStore type configuration in WebSocket: JKS, PKCS12"
     )
     private String tlsKeyStoreType = "JKS";
