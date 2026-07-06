@@ -77,3 +77,26 @@
       fallback" → terminal; HttpResponse.bodyAsString UTF-8 assumption documented.
     All KEEPs re-confirmed; 4 major decisions durable. NEXT: doc pass (line 184 + brokerPort/Form records) →
     re-cut → CI → ROUND 3 fixpoint (judges the single-member Body + confirms convergence).
+
+65. **PART B minimalism round 3 — the "contract-weight vs projection" line (2026-07-06).** 3-model fixpoint
+    re-review of the post-round-2 design. Opus = FIXPOINT (no new cuts; verified AuthenticationCallContext
+    didn't collapse post-brokerPort; single-member sealed Body is a KEEP — flattening would break the public
+    Optional<Body> accessor when the anticipated streaming body lands, and the seal blocks a Body the framework's
+    instanceof-Bytes-else-throw encoder can't handle). Codex + Fable = 3 HTTP-config residuals, which Fable's
+    PRINCIPLED LINE resolved: cut what carries CONTRACT WEIGHT (interaction rule / merge precedence / duplicate
+    path) with no consumer; KEEP zero-rule PROJECTIONS that serve the SPI's third-party audience. Applied (commit
+    dd62471a168b, -60 lines, all zero-producer, additive add-back):
+    - CUT PulsarHttpClientConfig.defaultHeaders()/defaultHeader() [Fable+Codex] — untested "defaults-first-then-
+      per-request-wins" precedence contract, no producer, duplicates per-request header() + the userAgent field.
+    - CUT HttpRequest.Builder.headers(Map) [Fable] — zero callers; a literal second way to do per-entry header()
+      (even AuthenticationSasl iterates calling header(k,v)).
+    - CUT HttpRequest per-request timeout override [Fable-lean+Codex] — no producer; per-instance requestTimeout
+      is the real path.
+    - javadoc wording: HttpRequest body dispatch is instanceof-else-throw, not an "exhaustive switch".
+    KEPT (categorically different, verified): maxResponseBodyBytes (a load-bearing SAFETY GUARD — the 16 MiB cap
+    fails-the-future unconditionally; cutting the knob makes it a hard wall with no recourse = a trap; AND it has
+    a test producer) — NOT the same class as the no-producer duplicate paths; the sealed Body; the zero-rule
+    projections (bodyAsString/header(name)/HttpAuthHeaders.of); the InitContext service seams (real values, TLS
+    twin consumed, anti-Motivation-#3); token(Supplier) (v4 parity — flagged as deserving a follow-up test); the
+    RFC Method enum. No round-2 orphans; 4 major decisions re-affirmed with call-site evidence. NEXT: doc pass →
+    re-cut → CI → ROUND 4 fixpoint (the principled honesty-list suggests convergence).
