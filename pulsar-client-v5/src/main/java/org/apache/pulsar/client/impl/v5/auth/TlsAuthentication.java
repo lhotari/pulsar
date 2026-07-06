@@ -37,26 +37,14 @@ import org.apache.pulsar.client.api.v5.auth.BinaryAuthDataProvider;
 public class TlsAuthentication implements Authentication, BinaryAuthDataProvider {
 
     /**
-     * The default authentication method name for mutual TLS.
+     * The authentication method name for mutual TLS.
      */
     public static final String DEFAULT_AUTH_METHOD_NAME = "tls";
 
-    private final String authMethodName;
-
     /**
-     * Create a TLS authentication plugin with the default {@code "tls"} method name.
+     * Create a TLS authentication plugin advertising the {@code "tls"} method name.
      */
     public TlsAuthentication() {
-        this(DEFAULT_AUTH_METHOD_NAME);
-    }
-
-    /**
-     * Create a TLS authentication plugin with a custom method name.
-     *
-     * @param authMethodName the authentication method name to advertise to the broker
-     */
-    public TlsAuthentication(String authMethodName) {
-        this.authMethodName = authMethodName;
     }
 
     @Override
@@ -66,7 +54,7 @@ public class TlsAuthentication implements Authentication, BinaryAuthDataProvider
 
     @Override
     public String authMethodName() {
-        return authMethodName;
+        return DEFAULT_AUTH_METHOD_NAME;
     }
 
     @Override

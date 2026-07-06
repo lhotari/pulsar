@@ -391,7 +391,6 @@ public abstract class LegacyV4AuthenticationAdapter implements Authentication {
         private final org.apache.pulsar.client.api.Authentication v4;
 
         LegacyV4TlsAdapter(org.apache.pulsar.client.api.Authentication v4) {
-            super(TlsAuthentication.DEFAULT_AUTH_METHOD_NAME);
             this.v4 = v4;
         }
 

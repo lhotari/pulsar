@@ -24,8 +24,8 @@ import org.apache.pulsar.client.api.v5.auth.BinaryAuthDataProvider;
 import org.testng.annotations.Test;
 
 /**
- * Verifies the built-in mTLS plugin: it advertises the {@code "tls"} method name (or a custom override)
- * and carries an empty binary payload, since the certificate is presented at the TLS handshake.
+ * Verifies the built-in mTLS plugin: it advertises the {@code "tls"} method name and carries an empty
+ * binary payload, since the certificate is presented at the TLS handshake.
  */
 public class TlsAuthenticationTest {
 
@@ -38,10 +38,5 @@ public class TlsAuthenticationTest {
         BinaryAuthData data = auth.capability(BinaryAuthDataProvider.class).orElseThrow()
                 .getAuthDataAsync(new SimpleAuthCallContext("broker", 6651)).get();
         assertThat(data.bytes()).isEmpty();
-    }
-
-    @Test
-    public void methodNameIsOverridable() {
-        assertThat(new TlsAuthentication("custom-tls").authMethodName()).isEqualTo("custom-tls");
     }
 }
