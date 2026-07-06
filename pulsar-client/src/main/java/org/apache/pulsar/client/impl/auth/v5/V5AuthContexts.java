@@ -20,7 +20,6 @@ package org.apache.pulsar.client.impl.auth.v5;
 
 import io.opentelemetry.api.OpenTelemetry;
 import java.time.Clock;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -58,15 +57,13 @@ public final class V5AuthContexts {
      *
      * @param services the late-bound client services, or {@code null} if none were bound
      * @param clientInstanceId a stable id for logging correlation when no services are bound
-     * @param params           the configured params (possibly empty)
      * @return a new init context
      */
     public static AuthenticationInitContext initContext(ClientAuthenticationServices services,
-            String clientInstanceId, Map<String, String> params) {
-        Map<String, String> copied = params == null ? Map.of() : Map.copyOf(params);
+            String clientInstanceId) {
         return services == null
-                ? new InitContext(clientInstanceId, copied)
-                : new BoundInitContext(services, copied);
+                ? new InitContext(clientInstanceId)
+                : new BoundInitContext(services);
     }
 
     /**
@@ -109,11 +106,9 @@ public final class V5AuthContexts {
 
     private static final class InitContext implements AuthenticationInitContext {
         private final String clientInstanceId;
-        private final Map<String, String> params;
 
-        InitContext(String clientInstanceId, Map<String, String> params) {
+        InitContext(String clientInstanceId) {
             this.clientInstanceId = clientInstanceId;
-            this.params = params;
         }
 
         @Override
@@ -145,20 +140,13 @@ public final class V5AuthContexts {
         public String clientInstanceId() {
             return clientInstanceId;
         }
-
-        @Override
-        public Map<String, String> params() {
-            return params;
-        }
     }
 
     private static final class BoundInitContext implements AuthenticationInitContext {
         private final ClientAuthenticationServices services;
-        private final Map<String, String> params;
 
-        BoundInitContext(ClientAuthenticationServices services, Map<String, String> params) {
+        BoundInitContext(ClientAuthenticationServices services) {
             this.services = services;
-            this.params = params;
         }
 
         @Override
@@ -191,11 +179,6 @@ public final class V5AuthContexts {
         @Override
         public String clientInstanceId() {
             return services.clientInstanceId();
-        }
-
-        @Override
-        public Map<String, String> params() {
-            return params;
         }
     }
 

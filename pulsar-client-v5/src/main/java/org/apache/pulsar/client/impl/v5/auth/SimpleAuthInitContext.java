@@ -20,7 +20,6 @@ package org.apache.pulsar.client.impl.v5.auth;
 
 import io.opentelemetry.api.OpenTelemetry;
 import java.time.Clock;
-import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import org.apache.pulsar.client.api.v5.auth.AuthenticationInitContext;
@@ -38,18 +37,15 @@ class SimpleAuthInitContext implements AuthenticationInitContext {
     private final Clock clock;
     private final OpenTelemetry openTelemetry;
     private final String clientInstanceId;
-    private final Map<String, String> params;
 
     SimpleAuthInitContext(PulsarHttpClientFactory httpClientFactory, ScheduledExecutorService scheduler,
-            Executor blockingExecutor, Clock clock, OpenTelemetry openTelemetry, String clientInstanceId,
-            Map<String, String> params) {
+            Executor blockingExecutor, Clock clock, OpenTelemetry openTelemetry, String clientInstanceId) {
         this.httpClientFactory = httpClientFactory;
         this.scheduler = scheduler;
         this.blockingExecutor = blockingExecutor;
         this.clock = clock;
         this.openTelemetry = openTelemetry;
         this.clientInstanceId = clientInstanceId;
-        this.params = params == null ? Map.of() : Map.copyOf(params);
     }
 
     @Override
@@ -80,10 +76,5 @@ class SimpleAuthInitContext implements AuthenticationInitContext {
     @Override
     public String clientInstanceId() {
         return clientInstanceId;
-    }
-
-    @Override
-    public Map<String, String> params() {
-        return params;
     }
 }

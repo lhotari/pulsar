@@ -131,7 +131,7 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
         boolean runRaw = bridgedV4 != null && resolveBridgedV4(bridgedV4);
         conf.setAuthentication(runRaw
                 ? bridgedV4
-                : new V5ToV4AuthenticationAdapter(v5Authentication, Map.of()));
+                : new V5ToV4AuthenticationAdapter(v5Authentication));
     }
 
     /**

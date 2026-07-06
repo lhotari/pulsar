@@ -20,7 +20,6 @@ package org.apache.pulsar.client.api.v5.auth;
 
 import io.opentelemetry.api.OpenTelemetry;
 import java.time.Clock;
-import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import org.apache.pulsar.http.PulsarHttpClientFactory;
@@ -40,7 +39,7 @@ public interface AuthenticationInitContext {
      * framework manages lifecycle (event loop, timer, DNS cache, TLS material refresh integration);
      * plugins describe what they need via a
      * {@link org.apache.pulsar.http.PulsarHttpClientConfig} and receive a configured
-     * instance owned by the framework. Multiple instances with different TLS / timeouts / proxy may be
+     * instance owned by the framework. Multiple instances with different TLS / timeouts may be
      * obtained for different uses (e.g. OAuth2 mTLS to the IdP vs HTTP topic lookup).
      *
      * <p>Plugins MUST NOT construct private HTTP clients directly — doing so defeats the framework's
@@ -83,13 +82,4 @@ public interface AuthenticationInitContext {
      * @return a stable id of the owning {@code PulsarClient}, for logging correlation
      */
     String clientInstanceId();
-
-    /**
-     * A convenience copy of the parsed {@code authParams} previously passed to
-     * {@link Authentication#configure}. Mostly useful for plugins constructed reflectively that want
-     * their params at init time too.
-     *
-     * @return the configured parameters (possibly empty)
-     */
-    Map<String, String> params();
 }

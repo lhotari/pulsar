@@ -18,7 +18,6 @@
  */
 package org.apache.pulsar.client.impl.auth.v5;
 
-import java.util.Map;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.auth.BinaryAuthDataProvider;
@@ -40,7 +39,6 @@ public final class V5BinaryAuthenticationDriver implements AsyncAuthenticationDr
 
     private final Authentication v5;
     private final String clientInstanceId;
-    private final Map<String, String> params;
     private final ClientAuthenticationServices services;
     private final AuthMetrics authMetrics;
     private volatile boolean initialized;
@@ -49,7 +47,7 @@ public final class V5BinaryAuthenticationDriver implements AsyncAuthenticationDr
      * @param v5 the v5-native authentication body to drive over the binary transport
      */
     public V5BinaryAuthenticationDriver(Authentication v5) {
-        this(v5, null, null, Map.of());
+        this(v5, null, null);
     }
 
     /**
@@ -59,21 +57,19 @@ public final class V5BinaryAuthenticationDriver implements AsyncAuthenticationDr
      *                 can off-load its blocking fetch onto the bounded blocking executor
      */
     public V5BinaryAuthenticationDriver(Authentication v5, ClientAuthenticationServices services) {
-        this(v5, services, services == null ? null : services.clientInstanceId(), Map.of());
+        this(v5, services, services == null ? null : services.clientInstanceId());
     }
 
     /**
      * @param v5               the v5-native authentication body to drive over the binary transport
      * @param services         the client's late-bound framework services (may be {@code null})
      * @param clientInstanceId a stable id for logging correlation (may be {@code null})
-     * @param params           the configured auth params (possibly empty)
      */
     public V5BinaryAuthenticationDriver(Authentication v5, ClientAuthenticationServices services,
-            String clientInstanceId, Map<String, String> params) {
+            String clientInstanceId) {
         this.v5 = v5;
         this.services = services;
         this.clientInstanceId = clientInstanceId;
-        this.params = params == null ? Map.of() : params;
         this.authMetrics = AuthMetrics.create(services == null ? null : services.openTelemetry());
     }
 
@@ -91,7 +87,7 @@ public final class V5BinaryAuthenticationDriver implements AsyncAuthenticationDr
                     // The built-in bodies (Token/Basic/OAuth2/Athenz/SASL binary) complete initializeAsync
                     // immediately: they only stash the bound blocking executor for later off-loading, so
                     // join() does not block. Failures are surfaced as v4 exceptions via the exchange futures.
-                    v5.initializeAsync(V5AuthContexts.initContext(services, clientInstanceId, params)).join();
+                    v5.initializeAsync(V5AuthContexts.initContext(services, clientInstanceId)).join();
                     initialized = true;
                 }
             }

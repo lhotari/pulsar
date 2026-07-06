@@ -20,7 +20,6 @@ package org.apache.pulsar.client.impl.auth.v5;
 
 import java.net.URI;
 import java.time.Duration;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import org.apache.pulsar.client.api.v5.PulsarClientException;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
@@ -65,7 +64,6 @@ public final class HttpAuthenticationDriver {
     private final Authentication v5;
     private final ClientAuthenticationServices services;
     private final String clientInstanceId;
-    private final Map<String, String> params;
     private final HttpChallengeTransport defaultTransport;
     private final AuthMetrics authMetrics;
     private volatile boolean initialized;
@@ -83,7 +81,6 @@ public final class HttpAuthenticationDriver {
         this.v5 = v5;
         this.services = services;
         this.clientInstanceId = services == null ? null : services.clientInstanceId();
-        this.params = Map.of();
         this.defaultTransport = defaultTransport;
         this.authMetrics = AuthMetrics.create(services == null ? null : services.openTelemetry());
     }
@@ -198,7 +195,7 @@ public final class HttpAuthenticationDriver {
                 if (!initialized) {
                     // The built-in SASL body completes initializeAsync immediately (it reads its JAAS subject
                     // through the shim's provider factory, not the framework services), so join() never blocks.
-                    v5.initializeAsync(V5AuthContexts.initContext(services, clientInstanceId, params)).join();
+                    v5.initializeAsync(V5AuthContexts.initContext(services, clientInstanceId)).join();
                     initialized = true;
                 }
             }

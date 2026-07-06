@@ -123,7 +123,7 @@ public class V5AuthenticationLoaderTest {
                 .containsEntry("realm", "test");
 
         // It drives the binary transport through the v5->v4 adapter that ClientCnx consumes.
-        V5ToV4AuthenticationAdapter adapter = new V5ToV4AuthenticationAdapter(auth, Map.of());
+        V5ToV4AuthenticationAdapter adapter = new V5ToV4AuthenticationAdapter(auth);
         adapter.start();
         assertThat(((FakeV5SinglePass) auth).initialized).isTrue();
         assertThat(adapter.getAuthMethodName()).isEqualTo("fake-v5");

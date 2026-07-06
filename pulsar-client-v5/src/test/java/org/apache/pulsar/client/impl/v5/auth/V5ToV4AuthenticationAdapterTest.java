@@ -24,7 +24,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.ByteArrayOutputStream;
 import java.io.NotSerializableException;
 import java.io.ObjectOutputStream;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
@@ -49,7 +48,7 @@ import org.testng.annotations.Test;
 public class V5ToV4AuthenticationAdapterTest {
 
     private static V5ToV4AuthenticationAdapter wrap(Authentication v5) {
-        return new V5ToV4AuthenticationAdapter(v5, Map.of());
+        return new V5ToV4AuthenticationAdapter(v5);
     }
 
     private static V5ToV4AuthenticationAdapter wrap() {

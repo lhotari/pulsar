@@ -292,7 +292,7 @@ public class LegacyV4AuthenticationAdapterTest {
 
     private SimpleAuthInitContext initContext() {
         return new SimpleAuthInitContext(null, blockingExecutor, blockingExecutor, Clock.systemUTC(),
-                OpenTelemetry.noop(), "test-client", Map.of());
+                OpenTelemetry.noop(), "test-client");
     }
 
     private AuthenticationCallContext callContext() {

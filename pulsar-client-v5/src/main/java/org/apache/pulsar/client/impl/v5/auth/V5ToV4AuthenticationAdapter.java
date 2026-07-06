@@ -71,7 +71,6 @@ public class V5ToV4AuthenticationAdapter
     private static final long serialVersionUID = 1L;
 
     private final transient Authentication v5;
-    private final transient Map<String, String> params;
     // Late-bound by the client via bindClientAuthenticationServices(...) before start() (PIP-478);
     // null until then (e.g. when the adapter is exercised outside a client), yielding an init context with
     // no framework services.
@@ -85,11 +84,9 @@ public class V5ToV4AuthenticationAdapter
      * {@link #bindClientAuthenticationServices} before {@link #start()}.
      *
      * @param v5 the v5 authentication plugin to expose
-     * @param params the authentication parameters
      */
-    public V5ToV4AuthenticationAdapter(Authentication v5, Map<String, String> params) {
+    public V5ToV4AuthenticationAdapter(Authentication v5) {
         this.v5 = v5;
-        this.params = params == null ? Map.of() : Map.copyOf(params);
     }
 
     @Override
@@ -112,11 +109,11 @@ public class V5ToV4AuthenticationAdapter
         ClientAuthenticationServices bound = this.services;
         this.authMetrics = AuthMetrics.create(bound == null ? null : bound.openTelemetry());
         AuthenticationInitContext initContext = bound == null
-                ? new SimpleAuthInitContext(null, null, null, Clock.systemUTC(), OpenTelemetry.noop(), null, params)
+                ? new SimpleAuthInitContext(null, null, null, Clock.systemUTC(), OpenTelemetry.noop(), null)
                 : new SimpleAuthInitContext(bound.httpClientFactory(), bound.scheduler(), bound.blockingExecutor(),
                         bound.clock() == null ? Clock.systemUTC() : bound.clock(),
                         bound.openTelemetry() == null ? OpenTelemetry.noop() : bound.openTelemetry(),
-                        bound.clientInstanceId(), params);
+                        bound.clientInstanceId());
         try {
             v5.initializeAsync(initContext).get();
         } catch (InterruptedException e) {
