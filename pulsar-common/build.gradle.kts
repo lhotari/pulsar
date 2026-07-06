@@ -105,6 +105,11 @@ sourceSets["main"].resources.srcDir(generatePulsarBuildInfo.map {
 
 dependencies {
     implementation(libs.slog)
+    // PIP-478: the purpose-driven TLS factory SPI (org.apache.pulsar.tls) lives in the focused
+    // pulsar-tls-factory-api module; the default FileBasedTlsFactory impl (org.apache.pulsar.common.tls.impl)
+    // and the hostname-verification helpers (org.apache.pulsar.common.tls) live here. Exposed as `api` so
+    // consumers that reference the SPI through pulsar-common keep compiling unchanged.
+    api(project(":pulsar-tls-factory-api"))
     api(project(":pulsar-client-api"))
     api(project(":pulsar-client-admin-api"))
 
@@ -154,6 +159,11 @@ dependencies {
 
     compileOnly(libs.swagger.annotations)
     compileOnly(libs.spotbugs.annotations)
+    // PIP-478: FileBasedTlsFactory emits the pulsar.tls.* reload instruments via the OpenTelemetry handle
+    // exposed on TlsFactoryInitContext. Kept compileOnly (matching pulsar-tls-factory-api) — the real
+    // OpenTelemetry root is always supplied at runtime by the owning component (broker/client), and a noop
+    // root yields no-op instruments.
+    compileOnly(libs.opentelemetry.api)
 
     testImplementation(libs.bc.fips)
     testImplementation(libs.lz4.java)
@@ -161,4 +171,10 @@ dependencies {
     testImplementation(libs.snappy.java)
     testImplementation(libs.awaitility)
     testImplementation(libs.jsonassert)
+    // PIP-478: the TLS factory tests implement TlsFactoryInitContext, whose openTelemetry() accessor
+    // exposes the (compileOnly) OpenTelemetry API from pulsar-tls-factory-api.
+    testImplementation(libs.opentelemetry.api)
+    // PIP-478: the TLS-reload metrics test reads pulsar.tls.* instruments via an in-memory SDK reader.
+    testImplementation(libs.opentelemetry.sdk)
+    testImplementation(libs.opentelemetry.sdk.testing)
 }
