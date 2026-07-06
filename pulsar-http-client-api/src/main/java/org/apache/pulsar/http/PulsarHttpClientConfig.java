@@ -23,7 +23,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import org.apache.pulsar.tls.TlsPurpose;
 
 /**
@@ -45,7 +44,6 @@ public final class PulsarHttpClientConfig {
     private final Duration connectTimeout;
     private final Duration readTimeout;
     private final Duration requestTimeout;
-    private final ProxyConfig proxy;
     private final String userAgent;
     private final Map<String, String> defaultHeaders;
     private final long maxResponseBodyBytes;
@@ -55,7 +53,6 @@ public final class PulsarHttpClientConfig {
         this.connectTimeout = b.connectTimeout;
         this.readTimeout = b.readTimeout;
         this.requestTimeout = b.requestTimeout;
-        this.proxy = b.proxy;
         this.userAgent = b.userAgent;
         this.defaultHeaders = Collections.unmodifiableMap(new LinkedHashMap<>(b.defaultHeaders));
         this.maxResponseBodyBytes = b.maxResponseBodyBytes;
@@ -87,13 +84,6 @@ public final class PulsarHttpClientConfig {
      */
     public Duration requestTimeout() {
         return requestTimeout;
-    }
-
-    /**
-     * @return the proxy settings, if any
-     */
-    public Optional<ProxyConfig> proxy() {
-        return Optional.ofNullable(proxy);
     }
 
     /**
@@ -137,7 +127,6 @@ public final class PulsarHttpClientConfig {
         private Duration connectTimeout = Duration.ofSeconds(10);
         private Duration readTimeout = Duration.ofSeconds(30);
         private Duration requestTimeout = Duration.ofSeconds(30);
-        private ProxyConfig proxy;
         private String userAgent = "Pulsar-Java-v5";
         private final Map<String, String> defaultHeaders = new LinkedHashMap<>();
         private long maxResponseBodyBytes = DEFAULT_MAX_RESPONSE_BODY_BYTES;
@@ -170,15 +159,6 @@ public final class PulsarHttpClientConfig {
          */
         public Builder requestTimeout(Duration requestTimeout) {
             this.requestTimeout = requestTimeout;
-            return this;
-        }
-
-        /**
-         * @param proxy the proxy settings
-         * @return this builder
-         */
-        public Builder proxy(ProxyConfig proxy) {
-            this.proxy = proxy;
             return this;
         }
 
