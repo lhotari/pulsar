@@ -24,47 +24,36 @@ import java.util.Map;
 import org.testng.annotations.Test;
 
 /**
- * Locks the freeze-forever {@link TlsPurpose} identity contract (PIP-478): equality is over
- * {@code (role, name)} only, with the fallback treated as resolution metadata, so a purpose resolves to
- * the same purpose→policy map slot regardless of the fallback the caller minted it with. Also covers the
- * {@code server(name, fallback)} overload.
+ * Locks the {@link TlsPurpose} identity contract (PIP-478): equality is over {@code (role, name)}, so a
+ * purpose resolves to the same purpose→policy map slot regardless of how it was minted.
  */
 public class TlsPurposeTest {
 
     @Test
-    public void equalsAndHashCodeIgnoreFallback() {
-        TlsPurpose noFallback = TlsPurpose.client("x");
-        TlsPurpose withFallback = TlsPurpose.client("x", TlsPurpose.CLIENT_DEFAULT);
-        TlsPurpose withOtherFallback = TlsPurpose.client("x", TlsPurpose.CLIENT_OAUTH2);
-
-        assertThat(withFallback).isEqualTo(noFallback).isEqualTo(withOtherFallback);
-        assertThat(withFallback.hashCode()).isEqualTo(noFallback.hashCode());
+    public void equalsAndHashCodeOverRoleAndName() {
+        assertThat(TlsPurpose.client("x")).isEqualTo(TlsPurpose.client("x"));
+        assertThat(TlsPurpose.client("x").hashCode()).isEqualTo(TlsPurpose.client("x").hashCode());
     }
 
     @Test
-    public void purposeToPolicyMapResolvesSameSlotRegardlessOfFallback() {
-        // The exact defect this guards against: minting with a fallback must NOT split one config entry
-        // into two distinct map keys and cause silent lookup misses.
+    public void purposeIsAStableMapKey() {
         Map<TlsPurpose, String> map = new HashMap<>();
         map.put(TlsPurpose.client("x"), "policy");
 
-        assertThat(map).containsKey(TlsPurpose.client("x", TlsPurpose.CLIENT_DEFAULT));
-        assertThat(map.get(TlsPurpose.client("x", TlsPurpose.CLIENT_OAUTH2))).isEqualTo("policy");
+        assertThat(map).containsKey(TlsPurpose.client("x"));
+        assertThat(map.get(TlsPurpose.client("x"))).isEqualTo("policy");
     }
 
     @Test
-    public void roleAndNameStillDistinguish() {
+    public void roleAndNameDistinguish() {
         assertThat(TlsPurpose.client("x")).isNotEqualTo(TlsPurpose.server("x"));
         assertThat(TlsPurpose.client("x")).isNotEqualTo(TlsPurpose.client("y"));
     }
 
     @Test
-    public void serverWithFallbackKeepsFallbackAsMetadataNotIdentity() {
-        TlsPurpose internal = TlsPurpose.server("broker.internal", TlsPurpose.BROKER);
-        assertThat(internal.role()).isEqualTo(TlsPurpose.Role.SERVER);
-        assertThat(internal.name()).isEqualTo("broker.internal");
-        assertThat(internal.fallback()).contains(TlsPurpose.BROKER);
-        // Same identity as the fallback-less server purpose of the same name.
-        assertThat(internal).isEqualTo(TlsPurpose.server("broker.internal"));
+    public void mintedPurposeCarriesRoleAndName() {
+        TlsPurpose server = TlsPurpose.server("broker.internal");
+        assertThat(server.role()).isEqualTo(TlsPurpose.Role.SERVER);
+        assertThat(server.name()).isEqualTo("broker.internal");
     }
 }

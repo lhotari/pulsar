@@ -33,7 +33,7 @@ import org.apache.pulsar.tls.TlsPurpose;
  * material lives in the configured {@code PulsarTlsFactory} and is looked up by {@link #tlsPurpose()}.
  * For a plugin that needs its own trust domain (the OAuth2 IdP being the canonical case), the plugin
  * selects a distinct purpose — {@link TlsPurpose#CLIENT_OAUTH2}, or a minted variant such as
- * {@code TlsPurpose.client("oauth2.myPlugin", CLIENT_OAUTH2)} — and the operator configures a
+ * {@code TlsPurpose.client("oauth2.myPlugin")} — and the operator configures a
  * {@code TlsPolicy} for that purpose; the plugin never handles raw material. Insecure-connection and
  * hostname-verification behaviour are baked into the built TLS objects by the factory per purpose, so
  * they are not configured here.

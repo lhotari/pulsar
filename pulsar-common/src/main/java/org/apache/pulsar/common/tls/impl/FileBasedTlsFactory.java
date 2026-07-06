@@ -60,12 +60,11 @@ import org.apache.pulsar.tls.TlsPurpose;
  * its engine policy (protocols, ciphers, client-auth mode, hostname verification) natively into the Netty and
  * JDK contexts it builds, so it exposes no separate baseline for the framework to overlay.
  *
- * <p><b>Purpose resolution.</b> A request resolves the requested purpose, then walks its single-level
- * {@link TlsPurpose#fallback() fallback} chain; the first purpose configured with a policy wins. When
- * nothing along the chain is configured, a {@code CLIENT}-role purpose resolves to the system default
- * (OS trust store, no client certificate) and a {@code SERVER}-role purpose fails the request. A
- * resolved-but-unbuildable request completes the future <em>exceptionally</em> — never {@code empty()},
- * which strictly means "unsupported {@code (purpose, class)} combination".
+ * <p><b>Purpose resolution.</b> A request resolves the requested purpose directly against the configured
+ * {@code TlsPurpose -> TlsPolicy} map. When nothing is configured for the purpose, a {@code CLIENT}-role
+ * purpose resolves to the system default (OS trust store, no client certificate) and a {@code SERVER}-role
+ * purpose fails the request. A resolved-but-unbuildable request completes the future <em>exceptionally</em>
+ * — never {@code empty()}, which strictly means "unsupported {@code (purpose, class)} combination".
  *
  * <p><b>Rotation.</b> One {@link TlsMaterialSource} is shared per configured purpose. Server-side
  * subscribers are pushed rebuilt instances by a background poll (interval from the settings, on the
@@ -286,24 +285,22 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
     }
 
     /**
-     * Resolve a requested purpose to the {@link RegisteredSource} that owns its material, following the
-     * single-level fallback chain and the role's empty-fallback rule.
+     * Resolve a requested purpose to the {@link RegisteredSource} that owns its material, applying the
+     * role's terminal-resolution rule when nothing is configured for the purpose.
      *
      * @throws TlsMaterialUnavailableException when a server-role purpose has no material configured
      */
     private RegisteredSource resolve(TlsPurpose purpose) {
         Objects.requireNonNull(purpose, "purpose must not be null");
-        for (TlsPurpose candidate = purpose; candidate != null; candidate = candidate.fallback().orElse(null)) {
-            RegisteredSource source = registry.get(candidate);
-            if (source != null) {
-                return source;
-            }
+        RegisteredSource source = registry.get(purpose);
+        if (source != null) {
+            return source;
         }
         if (purpose.role() == TlsPurpose.Role.CLIENT) {
             return systemDefaultSource();
         }
         throw new TlsMaterialUnavailableException(
-                "No TLS material configured for server purpose " + purpose + " (and it has no fallback)");
+                "No TLS material configured for server purpose " + purpose);
     }
 
     private RegisteredSource systemDefaultSource() {

@@ -140,14 +140,17 @@ public class FileBasedTlsFactoryTest {
     }
 
     @Test
-    public void resolutionFollowsSingleLevelFallbackChain() throws Exception {
+    public void unconfiguredMintedClientPurposeResolvesToSystemDefault() throws Exception {
         FileBasedTlsFactory factory = factory(
                 Map.of(TlsPurpose.CLIENT_DEFAULT, TlsPolicy.pem(RSA_CA, null, null)),
                 FileBasedTlsFactorySettings.defaults());
 
-        TlsPurpose minted = TlsPurpose.client("oauth2.myPlugin", TlsPurpose.CLIENT_DEFAULT);
+        // An arbitrary minted client purpose with no configured policy resolves terminally to the system
+        // default (present, not empty, not an error) — there is no fallback chain to another purpose.
+        TlsPurpose minted = TlsPurpose.client("oauth2.myPlugin");
         Optional<TlsHandle<SslContext>> resolved = factory.createInstance(minted, SslContext.class).join();
-        assertThat(resolved).as("minted purpose resolves via fallback to CLIENT_DEFAULT").isPresent();
+        assertThat(resolved).as("unconfigured minted client purpose resolves to the system default").isPresent();
+        assertThat(resolved.get().get()).isNotNull();
         factory.close();
     }
 
