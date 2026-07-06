@@ -56,3 +56,24 @@
     chunk6 FULL GATE_A+GATE_B). LESSON: the detached-HEAD/stale-label desync is a real rtk hazard — verify the
     branch LABEL points where you think before trusting "monolith tip", and the per-chunk compile gate is what
     catches a deferred-deletion base drift. NEXT: CI green on the fork → fixpoint re-review.
+
+64. **PART B minimalism round 2 — fixpoint check found 2 more (2026-07-06).** 3-model fixpoint re-review:
+    Codex + Opus returned FIXPOINT (no new cuts; kept-contested SSLParameters/SinglePass/TlsEndpoint all
+    re-verified load-bearing), but Fable 5 — grepping production CALL SITES, not just declarations — surfaced 2
+    genuine residuals the other two missed. Applied (commits bc2bff28643/2da449a1985/49b00b2c493):
+    - CUT AuthenticationCallContext.brokerPort() [Fable]: zero readers AND always fabricated as 0 (the async
+      exchange seam is host-only: newAuthenticationExchange(String); both callers passed 0). A shipped LYING
+      accessor — Cut-C's class in stronger form, the inverse of the TlsEndpoint keep (which carries real values).
+      Context is now host-only; per-destination auth would re-enter via the seam, not this context. Additive add-back.
+    - CUT HttpRequest.Form [Fable+Codex]: zero in-tree producers (OAuth2 TokenClient hand-encodes into Bytes;
+      Form appeared only in the framework decode branch). CUT rather than exercise because exercising cannot
+      preserve wire-equivalence — verified vs AHC 2.15.0: escaping + Content-Type match, but Form's Map.copyOf is
+      unordered while TokenClient emits TreeMap-sorted, so producing Form would reorder token-request bytes on the
+      wire. Body is now a single-member sealed interface (Bytes only); NOT collapsed to byte[] (loses Content-Type)
+      — that flattening left as an open round-3 question. TokenClient + OAuth2 wire untouched (all OAuth2 tests green).
+    - CONSISTENCY (round-1 cut residue): PulsarTlsFactory createInstance javadoc rewritten off the removed
+      TlsPurpose#fallback() to the terminal rule (was a WRONG NORMATIVE contract, not just a dead @link — escaped
+      round 1 via Xdoclint:none); PulsarHttpClientFactory @param dropped "proxy"; package-info "single-level
+      fallback" → terminal; HttpResponse.bodyAsString UTF-8 assumption documented.
+    All KEEPs re-confirmed; 4 major decisions durable. NEXT: doc pass (line 184 + brokerPort/Form records) →
+    re-cut → CI → ROUND 3 fixpoint (judges the single-member Body + confirms convergence).
