@@ -55,24 +55,18 @@ public final class AuthenticationFactory {
     }
 
     /**
-     * Create TLS mutual authentication from a PEM client certificate and private key.
+     * Create the built-in TLS mutual-authentication marker plugin (PIP-478).
      *
-     * <p><b>Interaction with {@code tlsPolicy(...)} (PIP-478).</b> When the v5 client also configures a
-     * {@code tlsPolicy(...)}, this plugin's client certificate and key are <em>folded</em> into the
-     * {@code CLIENT_DEFAULT} TLS policy at build time — on the new path the transport reads its material
-     * from the client TLS factory, not from the auth plugin. The fold is per-field and <b>plugin-wins</b>:
-     * the certificate and key from this plugin override any configured on the policy, while the policy's
-     * trust material and flags (hostname verification, protocols, ciphers) are preserved. Without a
-     * {@code tlsPolicy(...)} the legacy behaviour applies — the plugin supplies the transport material
-     * directly. Only PEM file paths are accepted here (a keystore identity is configured through
-     * {@code tlsPolicy(...)}).
+     * <p>This plugin carries no TLS material of its own: it only advertises the {@code "tls"}
+     * authentication method so the broker authenticates from the client certificate presented during the
+     * TLS handshake. Configure the client certificate, private key, and trust material through the client
+     * builder's {@code tlsPolicy(...)} (e.g. {@code TlsPolicy.pem(trustCerts, certFile, keyFile)}); the
+     * transport reads its material from the client TLS factory.
      *
-     * @param certFilePath the path to the client certificate file (PEM format)
-     * @param keyFilePath  the path to the client private key file (PEM format)
-     * @return an {@link Authentication} instance configured for TLS mutual authentication
+     * @return an {@link Authentication} instance that advertises the {@code "tls"} method
      */
-    public static Authentication tls(String certFilePath, String keyFilePath) {
-        return PulsarClientProvider.get().authenticationTls(certFilePath, keyFilePath);
+    public static Authentication tls() {
+        return PulsarClientProvider.get().authenticationTls();
     }
 
     /**

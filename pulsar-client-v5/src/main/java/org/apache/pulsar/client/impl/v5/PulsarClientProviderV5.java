@@ -28,9 +28,9 @@ import org.apache.pulsar.client.api.v5.PulsarClientException;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.internal.PulsarClientProvider;
 import org.apache.pulsar.client.api.v5.schema.Schema;
-import org.apache.pulsar.client.impl.auth.AuthenticationTls;
 import org.apache.pulsar.client.impl.auth.AuthenticationToken;
 import org.apache.pulsar.client.impl.v5.auth.LegacyV4AuthenticationAdapter;
+import org.apache.pulsar.client.impl.v5.auth.TlsAuthentication;
 
 /**
  * ServiceLoader-registered implementation of PulsarClientProvider.
@@ -157,8 +157,8 @@ public final class PulsarClientProviderV5 implements PulsarClientProvider {
     }
 
     @Override
-    public Authentication authenticationTls(String certFilePath, String keyFilePath) {
-        return LegacyV4AuthenticationAdapter.wrap(new AuthenticationTls(certFilePath, keyFilePath));
+    public Authentication authenticationTls() {
+        return new TlsAuthentication();
     }
 
     @Override

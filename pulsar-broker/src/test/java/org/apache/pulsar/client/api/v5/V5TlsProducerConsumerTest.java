@@ -64,29 +64,33 @@ public class V5TlsProducerConsumerTest extends TlsProducerConsumerBase {
     }
 
     /**
-     * mTLS trust supplied through {@code tlsPolicy(...)} and the client identity through a bridged v4
-     * {@code AuthenticationTls} — exercising the builder-time material fold that merges the auth plugin's
-     * certificate/key into the {@code CLIENT_DEFAULT} policy on the new path.
+     * mTLS material (trust + client certificate/key) supplied through {@code tlsPolicy(...)} and the auth
+     * method advertised through the built-in no-arg {@link AuthenticationFactory#tls()} marker plugin,
+     * which carries no material itself — the broker authenticates from the certificate presented during the
+     * TLS handshake, sourced from the client TLS factory.
      */
     @Test
-    public void testV5MtlsViaAuthenticationTlsFold() throws Exception {
+    public void testV5MtlsViaTlsPolicyWithTlsAuthMarker() throws Exception {
         internalSetUpForNamespace();
 
-        TlsPolicy trustOnly = TlsPolicy.builder()
+        TlsPolicy policy = TlsPolicy.builder()
                 .format(TlsPolicy.Format.PEM)
                 .trustCertsFilePath(CA_CERT_FILE_PATH)
+                .certificateFilePath(getTlsFileForClient("admin.cert"))
+                .keyFilePath(getTlsFileForClient("admin.key-pk8"))
+                // The shared test broker cert is not guaranteed to carry a SAN for the advertised host, so
+                // (as the v4 TLS suites do) hostname verification is left off.
                 .enableHostnameVerification(false)
                 .build();
 
         @Cleanup
         PulsarClient client = PulsarClient.builder()
                 .serviceUrl(pulsar.getBrokerServiceUrlTls())
-                .tlsPolicy(trustOnly)
-                .authentication(AuthenticationFactory.tls(
-                        getTlsFileForClient("admin.cert"), getTlsFileForClient("admin.key-pk8")))
+                .tlsPolicy(policy)
+                .authentication(AuthenticationFactory.tls())
                 .build();
 
-        assertProduceConsume(client, TOPIC + "-fold", "v5-mtls-via-fold");
+        assertProduceConsume(client, TOPIC + "-marker", "v5-mtls-via-marker");
     }
 
     private static void assertProduceConsume(PulsarClient client, String topic, String payload)
