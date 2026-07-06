@@ -47,6 +47,7 @@ import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationService;
 import org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsServlet;
+import org.apache.pulsar.broker.tls.TlsFactorySupport;
 import org.apache.pulsar.broker.web.plugin.servlet.AdditionalServletWithClassLoader;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationFactory;
@@ -173,6 +174,11 @@ public class ProxyServiceStarter {
                 proxyConfigurationCustomizer.accept(config);
             }
 
+            // PIP-478: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default
+            // sslFactoryPlugin / brokerClientSslFactoryPlugin loudly at startup rather than silently ignore a
+            // security-relevant setting.
+            rejectRemovedPip337SslFactoryPlugin(config);
+
             if (!isBlank(zookeeperServers)) {
                 // Use zookeeperServers from command line
                 config.setMetadataStoreUrl(zookeeperServers);
@@ -243,6 +249,19 @@ public class ProxyServiceStarter {
                 + " it should point to the discovery service provider.");
     }
 
+    // PIP-478: reject a stale, non-default PIP-337 sslFactoryPlugin / brokerClientSslFactoryPlugin
+    // (removed in 5.0) at startup. The @Deprecated getters are read intentionally here to enforce the removal.
+    @SuppressWarnings("deprecation")
+    private static void rejectRemovedPip337SslFactoryPlugin(ProxyConfiguration config) {
+        if (TlsFactorySupport.isLegacyCustom(config.getSslFactoryPlugin())
+                || TlsFactorySupport.isLegacyCustom(config.getBrokerClientSslFactoryPlugin())) {
+            throw new IllegalArgumentException("The PIP-337 sslFactoryPlugin / brokerClientSslFactoryPlugin "
+                    + "configuration is removed in Pulsar 5.0 (PIP-478); migrate the custom factory to a "
+                    + "PulsarTlsFactory via tlsFactoryClassName / brokerClientTlsFactoryClassName and clear "
+                    + "sslFactoryPlugin / brokerClientSslFactoryPlugin.");
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         ProxyServiceStarter serviceStarter = new ProxyServiceStarter(args);
         try {
@@ -277,8 +296,9 @@ public class ProxyServiceStarter {
 
         // create proxy service
         proxyService = new ProxyService(config, authenticationService, proxyClientAuthentication);
-        // create a web-service
-        server = new WebServer(config, authenticationService);
+        // create a web-service (PIP-478: share the proxy's OpenTelemetry root so the WEB-purpose TLS factory
+        // emits pulsar.tls.reload instead of a no-op)
+        server = new WebServer(config, authenticationService, proxyService.getOpenTelemetry().getOpenTelemetry());
 
         if (!embeddedMode) {
             Runtime.getRuntime().addShutdownHook(new Thread(this::close));
@@ -391,8 +411,12 @@ public class ProxyServiceStarter {
             }
         }
 
+        // PIP-478: thread the proxy's OpenTelemetry root so the admin handler's BROKER_CLIENT TLS factory
+        // emits pulsar.tls.reload (no-op when no ProxyService is available, e.g. in tests).
+        io.opentelemetry.api.OpenTelemetry telemetryRoot = service != null
+                ? service.getOpenTelemetry().getOpenTelemetry() : io.opentelemetry.api.OpenTelemetry.noop();
         AdminProxyHandler adminProxyHandler = new AdminProxyHandler(config, discoveryProvider,
-                proxyClientAuthentication);
+                proxyClientAuthentication, telemetryRoot);
         ServletHolder servletHolder = new ServletHolder(adminProxyHandler);
         server.addServlet("/admin", servletHolder);
         server.addServlet("/lookup", servletHolder);

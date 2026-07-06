@@ -28,7 +28,6 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.api.ProxyProtocol;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
 import org.apache.pulsar.common.util.URIPreconditions;
 
 /**
@@ -171,14 +170,26 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
                     + "used by the internal client to authenticate with Pulsar brokers"
     )
     private String brokerClientCertificateFilePath;
+    /**
+     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478). Retained in the cluster
+     *     metadata schema for wire/metadata compatibility, but a configured value is ignored with a WARN;
+     *     factory-class selection is broker-level ({@code brokerClientTlsFactoryClassName}).
+     */
+    @Deprecated
     @ApiModelProperty(
             name = "brokerClientSslFactoryPlugin",
-            value = "SSL Factory plugin used by internal client to generate the SSL Context and Engine"
+            value = "Deprecated (PIP-478): removed in Pulsar 5.0. Retained for metadata compatibility but "
+                    + "ignored (with a WARN); factory selection is broker-level."
     )
     private String brokerClientSslFactoryPlugin;
+    /**
+     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478). Retained for metadata
+     *     compatibility but ignored.
+     */
+    @Deprecated
     @ApiModelProperty(
             name = "brokerClientSslFactoryPluginParams",
-            value = "Parameters used by the internal client's SSL factory plugin to generate the SSL Context and Engine"
+            value = "Deprecated (PIP-478): removed in Pulsar 5.0. Retained for metadata compatibility but ignored."
     )
     private String brokerClientSslFactoryPluginParams;
     @ApiModelProperty(
@@ -244,7 +255,7 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
         private String brokerClientCertificateFilePath;
         private String brokerClientKeyFilePath;
         private String brokerClientTrustCertsFilePath;
-        private String brokerClientSslFactoryPlugin = DefaultPulsarSslFactory.class.getName();
+        private String brokerClientSslFactoryPlugin;
         private String brokerClientSslFactoryPluginParams;
         private String listenerName;
 
@@ -362,12 +373,14 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
         }
 
         @Override
+        @Deprecated
         public ClusterDataImplBuilder brokerClientSslFactoryPlugin(String sslFactoryPlugin) {
             this.brokerClientSslFactoryPlugin = sslFactoryPlugin;
             return this;
         }
 
         @Override
+        @Deprecated
         public ClusterDataImplBuilder brokerClientSslFactoryPluginParams(String sslFactoryPluginParams) {
             this.brokerClientSslFactoryPluginParams = sslFactoryPluginParams;
             return this;

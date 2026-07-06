@@ -52,7 +52,6 @@ import org.apache.pulsar.common.policies.data.TopicType;
 import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.sasl.SaslConstants;
 import org.apache.pulsar.common.topics.TopicsPattern;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
 import org.apache.pulsar.common.util.DirectMemoryUtils;
 import org.apache.pulsar.metadata.api.MetadataStoreFactory;
 import org.apache.pulsar.metadata.impl.ZKMetadataStore;
@@ -1868,8 +1867,10 @@ public class ServiceConfiguration implements PulsarConfiguration {
     @FieldContext(
             category = CATEGORY_TLS,
             doc = "Whether the hostname is validated when the broker creates a TLS connection with other brokers"
+                    + " (e.g. geo-replication and broker-to-broker lookup). Enabled by default since Pulsar 5.0"
+                    + " (PIP-478): a peer broker whose certificate does not match its hostname/SAN is rejected."
     )
-    private boolean tlsHostnameVerificationEnabled = false;
+    private boolean tlsHostnameVerificationEnabled = true;
     @FieldContext(
         category = CATEGORY_TLS,
         doc = "Specify the tls protocols the broker will use to negotiate during TLS Handshake.\n\n"
@@ -1887,15 +1888,39 @@ public class ServiceConfiguration implements PulsarConfiguration {
         doc = "Specify whether Client certificates are required for TLS Reject.\n"
             + "the Connection if the Client Certificate is not trusted")
     private boolean tlsRequireTrustedClientCertOnConnect = false;
+    /**
+     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478); a non-default value is
+     *     rejected at broker startup. Use {@code tlsFactoryClassName}.
+     */
+    @Deprecated
     @FieldContext(
             category = CATEGORY_TLS,
-            doc = "SSL Factory Plugin class to provide SSLEngine and SSLContext objects. The default "
-                    + " class used is DefaultSslFactory.")
-    private String sslFactoryPlugin = DefaultPulsarSslFactory.class.getName();
+            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0. Retained only "
+                    + "to reject a stale configuration at startup; use tlsFactoryClassName instead.")
+    private String sslFactoryPlugin = "";
+    /**
+     * @deprecated since 5.0.0: superseded by {@code tlsFactoryConfig} (PIP-478).
+     */
+    @Deprecated
     @FieldContext(
             category = CATEGORY_TLS,
-            doc = "SSL Factory plugin configuration parameters.")
+            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0; superseded by "
+                    + "tlsFactoryConfig.")
     private String sslFactoryPluginParams = "";
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "PIP-478 TLS factory (PulsarTlsFactory) class name for the broker's server-side TLS "
+                    + "(binary listener and web server; purposes BROKER/PROXY/WEB). An empty value or the "
+                    + "literal 'default' selects the built-in DefaultBrokerTlsFactory composed from these "
+                    + "tls* settings, otherwise the named class is instantiated via its public no-arg "
+                    + "constructor. This is the only server TLS path; the removed PIP-337 sslFactoryPlugin "
+                    + "keys are rejected at startup when set to a non-default value.")
+    private String tlsFactoryClassName = "";
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "PIP-478 configuration parameters for tlsFactoryClassName, passed to the factory as its "
+                    + "init params. Accepts a JSON object or a comma-separated key=value list.")
+    private String tlsFactoryConfig = "";
 
     /***** --- Authentication. --- ****/
     @FieldContext(
@@ -4126,15 +4151,40 @@ public class ServiceConfiguration implements PulsarConfiguration {
                   + " used by the internal client to authenticate with Pulsar brokers"
     )
     private Set<String> brokerClientTlsProtocols = new TreeSet<>();
+    /**
+     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478); a non-default value is
+     *     rejected at broker startup. Use {@code brokerClientTlsFactoryClassName}.
+     */
+    @Deprecated
     @FieldContext(
             category = CATEGORY_TLS,
-            doc = "SSL Factory Plugin class used by internal client to provide SSLEngine and SSLContext objects. "
-                    + "The default class used is DefaultSslFactory.")
-    private String brokerClientSslFactoryPlugin = DefaultPulsarSslFactory.class.getName();
+            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0. Retained only "
+                    + "to reject a stale configuration at startup; use brokerClientTlsFactoryClassName instead.")
+    private String brokerClientSslFactoryPlugin = "";
+    /**
+     * @deprecated since 5.0.0: superseded by {@code brokerClientTlsFactoryConfig} (PIP-478).
+     */
+    @Deprecated
     @FieldContext(
             category = CATEGORY_TLS,
-            doc = "SSL Factory plugin configuration parameters used by internal client.")
+            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0; superseded by "
+                    + "brokerClientTlsFactoryConfig.")
     private String brokerClientSslFactoryPluginParams = "";
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "PIP-478 TLS factory (PulsarTlsFactory) class name for the broker's own outbound "
+                    + "(broker-to-broker) client connections (purpose BROKER_CLIENT). An empty value or the "
+                    + "literal 'default' selects the built-in default factory composed from the brokerClient "
+                    + "tls* settings, otherwise the named class is instantiated via its public no-arg "
+                    + "constructor. This is the only outbound-client TLS path; the removed PIP-337 "
+                    + "brokerClientSslFactoryPlugin keys are rejected at startup when set to a non-default "
+                    + "value.")
+    private String brokerClientTlsFactoryClassName = "";
+    @FieldContext(
+            category = CATEGORY_TLS,
+            doc = "PIP-478 configuration parameters for brokerClientTlsFactoryClassName. Accepts a JSON "
+                    + "object or a comma-separated key=value list.")
+    private String brokerClientTlsFactoryConfig = "";
 
     /* packages management service configurations (begin) */
 

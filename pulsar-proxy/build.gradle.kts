@@ -27,6 +27,11 @@ dependencies {
     api(project(":pulsar-broker-common"))
     implementation(project(":pulsar-client-original"))
     implementation(project(":pulsar-common"))
+    // PIP-478: the proxy's server classes use the TLS factory SPI directly. ProxyService.getLookupClientTlsFactory()
+    // returns PulsarTlsFactory but is consumed only within this module (ProxyConnection), and the proxy is an
+    // application module (packaged into the distribution / referenced by the BOM, not compiled against), so
+    // `implementation`.
+    implementation(project(":pulsar-tls-factory-api"))
     implementation(project(":pulsar-opentelemetry"))
     implementation(project(":pulsar-docs-tools"))
     implementation(project(":pulsar-websocket"))
@@ -81,4 +86,7 @@ dependencies {
     testImplementation(libs.jjwt.impl)
     testImplementation(libs.okhttp3)
     testImplementation(libs.testcontainers)
+    // PIP-478: assert the proxy's TLS factory emits pulsar.tls.reload through the wired OpenTelemetry root.
+    testImplementation(libs.opentelemetry.sdk)
+    testImplementation(libs.opentelemetry.sdk.testing)
 }

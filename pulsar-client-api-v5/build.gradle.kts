@@ -22,6 +22,11 @@ plugins {
 }
 
 dependencies {
+    // PIP-478: the auth SPI's AuthenticationInitContext exposes PulsarHttpClientFactory and the
+    // client builder accepts a TlsPolicy, so the HTTP + TLS factory SPIs are part of this API's
+    // surface. Unpublished-depends-on-published is allowed by the build guard.
+    api(project(":pulsar-tls-factory-api"))
+    api(project(":pulsar-http-client-api"))
     compileOnly(libs.protobuf.java)
     compileOnly(libs.opentelemetry.api)
 }

@@ -26,6 +26,9 @@ dependencies {
     api(project(":pulsar-broker-common"))
     implementation(project(":pulsar-common"))
     implementation(project(":pulsar-client-original"))
+    // PIP-478: ProxyServer uses the TLS factory SPI directly (private tlsFactory field); it is not exposed on
+    // this module's ABI, so `implementation`.
+    implementation(project(":pulsar-tls-factory-api"))
     implementation(project(":pulsar-docs-tools"))
     implementation(libs.commons.lang3)
     implementation(libs.jersey.container.servlet.core)

@@ -522,14 +522,44 @@ public class WorkerConfig implements Serializable, PulsarConfiguration {
     private boolean useTls = false;
     @FieldContext(
         category = CATEGORY_SECURITY,
-        doc = "Whether to enable hostname verification on TLS connections"
+        doc = "Whether to enable hostname verification on TLS connections to the broker. Enabled by default "
+                + "since Pulsar 5.0 (PIP-478): a broker whose certificate does not match its hostname/SAN is "
+                + "rejected."
     )
-    private boolean tlsEnableHostnameVerification = false;
+    private boolean tlsEnableHostnameVerification = true;
     @FieldContext(
             category = CATEGORY_SECURITY,
             doc = "Tls cert refresh duration in seconds (set 0 to check on every new connection)"
         )
         private long tlsCertRefreshCheckDurationSec = 300;
+    @FieldContext(
+            category = CATEGORY_SECURITY,
+            doc = "PIP-478 TLS factory (PulsarTlsFactory) class name for the functions-worker web server "
+                    + "TLS (purpose WEB). When set, the new PIP-478 TLS SPI is used instead of the built-in "
+                    + "file-based TLS loading: an empty value or the literal 'default' selects the built-in "
+                    + "default factory composed from these tls* settings, otherwise the named class is "
+                    + "instantiated via its public no-arg constructor. This is the functions worker's first "
+                    + "TLS-factory pluggability.")
+    private String tlsFactoryClassName = "";
+    @FieldContext(
+            category = CATEGORY_SECURITY,
+            doc = "PIP-478 configuration parameters for tlsFactoryClassName. Accepts a JSON object or a "
+                    + "comma-separated key=value list.")
+    private String tlsFactoryConfig = "";
+    @FieldContext(
+            category = CATEGORY_SECURITY,
+            doc = "PIP-478 TLS factory (PulsarTlsFactory) class name for the functions-worker's own outbound "
+                    + "(worker-to-broker) client connections (purpose BROKER_CLIENT). An empty value or the "
+                    + "literal 'default' selects the built-in default factory composed from the broker-client "
+                    + "tls* settings, otherwise the named class is instantiated via its public no-arg "
+                    + "constructor. This is the only outbound-client TLS-factory path for the functions "
+                    + "worker.")
+    private String brokerClientTlsFactoryClassName = "";
+    @FieldContext(
+            category = CATEGORY_SECURITY,
+            doc = "PIP-478 configuration parameters for brokerClientTlsFactoryClassName. Accepts a JSON object "
+                    + "or a comma-separated key=value list.")
+    private String brokerClientTlsFactoryConfig = "";
 
     /**** --- KeyStore TLS config variables. --- ****/
     @FieldContext(

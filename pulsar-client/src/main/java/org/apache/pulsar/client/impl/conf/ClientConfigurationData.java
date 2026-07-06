@@ -45,7 +45,9 @@ import org.apache.pulsar.client.api.ServiceUrlProvider;
 import org.apache.pulsar.client.api.Socks5ProxyScope;
 import org.apache.pulsar.client.impl.auth.AuthenticationDisabled;
 import org.apache.pulsar.client.util.Secret;
-import org.apache.pulsar.common.util.DefaultPulsarSslFactory;
+import org.apache.pulsar.tls.PulsarTlsFactory;
+import org.apache.pulsar.tls.TlsPolicy;
+import org.apache.pulsar.tls.TlsPurpose;
 
 
 /**
@@ -201,19 +203,50 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     @ApiModelProperty(
             name = "tlsHostnameVerificationEnable",
             value = "Whether the hostname is validated when the client creates a TLS connection with brokers."
+                    + " Enabled by default since Pulsar 5.0 (PIP-478): a broker whose certificate does not match"
+                    + " its hostname/SAN is rejected."
     )
-    private boolean tlsHostnameVerificationEnable = false;
+    private boolean tlsHostnameVerificationEnable = true;
 
+    /**
+     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478); a non-default value fails
+     *     {@code ClientBuilder.build()}. Migrate the custom factory to a {@code PulsarTlsFactory} on the v5
+     *     client builder.
+     */
+    @Deprecated
     @ApiModelProperty(
             name = "sslFactoryPlugin",
-            value = "SSL Factory Plugin class to provide SSLEngine and SSLContext objects. The default "
-                    + " class used is DefaultPulsarSslFactory.")
-    private String sslFactoryPlugin = DefaultPulsarSslFactory.class.getName();
+            value = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0; a "
+                    + "non-default value fails the client build. Migrate to a v5 PulsarTlsFactory.")
+    private String sslFactoryPlugin = "";
 
+    /**
+     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478). Migrate the custom factory
+     *     to a {@code PulsarTlsFactory} on the v5 client builder.
+     */
+    @Deprecated
     @ApiModelProperty(
             name = "sslFactoryPluginParams",
-            value = "SSL Factory plugin configuration parameters.")
+            value = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0.")
     private String sslFactoryPluginParams = "";
+
+    // PIP-478: the client-side TLS SPI seam. These transient fields are set by the v5 builder
+    // (never serialized; a shallow clone() keeps the references so the connection pool / HTTP lookup see
+    // them). tlsPolicyMap holds the per-purpose TlsPolicy values configured through the v5 builder's
+    // tlsPolicy(...) methods; its presence selects the new PIP-478 TLS path. tlsFactory holds either a
+    // PulsarTlsFactory the user adopted through the v5 builder's tlsFactory(...), or — once
+    // PulsarClientImpl has resolved the path — the factory the connection layer builds engines from
+    // (non-null => new path active).
+    @JsonIgnore
+    private transient Map<TlsPurpose, TlsPolicy> tlsPolicyMap;
+    @JsonIgnore
+    private transient PulsarTlsFactory tlsFactory;
+    // PIP-478: factory-specific parameters delivered to a custom (non-default) TLS factory named by
+    // brokerClientTlsFactoryClassName via TlsFactoryInitContext.params(). Set by the broker (parsed from
+    // brokerClientTlsFactoryConfig the same way the server-side tlsFactoryConfig is parsed); empty/unset for
+    // the default file-based factory, which ignores params.
+    @JsonIgnore
+    private transient Map<String, String> tlsFactoryParams;
 
     @ApiModelProperty(
             name = "concurrentLookupRequest",

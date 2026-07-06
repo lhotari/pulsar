@@ -27,6 +27,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.resolver.AddressResolver;
 import io.netty.resolver.NameResolver;
 import io.netty.util.Timer;
+import io.opentelemetry.api.OpenTelemetry;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -41,11 +42,15 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -72,6 +77,10 @@ import org.apache.pulsar.client.api.TableViewBuilder;
 import org.apache.pulsar.client.api.schema.KeyValueSchema;
 import org.apache.pulsar.client.api.schema.SchemaInfoProvider;
 import org.apache.pulsar.client.api.transaction.TransactionBuilder;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
+import org.apache.pulsar.client.impl.auth.v5.DefaultClientAuthenticationServices;
+import org.apache.pulsar.client.impl.auth.v5.FrameworkHttpClientFactory;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.conf.ConsumerConfigurationData;
 import org.apache.pulsar.client.impl.conf.ProducerConfigurationData;
@@ -82,6 +91,7 @@ import org.apache.pulsar.client.impl.schema.AutoConsumeSchema;
 import org.apache.pulsar.client.impl.schema.AutoProduceBytesSchema;
 import org.apache.pulsar.client.impl.schema.generic.GenericAvroSchema;
 import org.apache.pulsar.client.impl.schema.generic.MultiVersionSchemaInfoProvider;
+import org.apache.pulsar.client.impl.tls.ClientTlsFactorySupport;
 import org.apache.pulsar.client.impl.transaction.TransactionBuilderImpl;
 import org.apache.pulsar.client.impl.transaction.TransactionCoordinatorClientImpl;
 import org.apache.pulsar.client.util.ExecutorProvider;
@@ -99,6 +109,7 @@ import org.apache.pulsar.common.topics.TopicsPatternFactory;
 import org.apache.pulsar.common.util.Backoff;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.netty.DnsResolverUtil;
+import org.apache.pulsar.tls.PulsarTlsFactory;
 import org.jspecify.annotations.Nullable;
 
 @CustomLog
@@ -126,6 +137,31 @@ public class PulsarClientImpl implements PulsarClient {
     private final ExecutorProvider lookupExecutorProvider;
 
     private final ScheduledExecutorProvider scheduledExecutorProvider;
+
+    // PIP-478: AutoClusterFailover mutates the TLS material/identity on `conf` at runtime
+    // (updateTlsTrustCertsFilePath / updateAuthentication). The client TLS factory is composed once from that
+    // material, so a mutation would otherwise never reach it. Rebuild-not-mutate: rebuild the factory from the
+    // updated conf and swap it into the binary connection pool so NEW connections use the per-target trust /
+    // identity. Only the framework-built default file-based factory is rebuildable — a v5-adopted custom
+    // factory / policy map owns its own material and is left untouched. Superseded factories are retained until
+    // client close (a shared HTTP-lookup subscription may still read the previous factory, and existing binary
+    // connections keep their contexts alive via their own refcount), so they are not closed eagerly.
+    private final Object tlsFactoryRebuildLock = new Object();
+    private volatile boolean clientTlsFactoryRebuildable;
+    private final List<PulsarTlsFactory> supersededTlsFactories = new CopyOnWriteArrayList<>();
+
+    // PIP-478: a stable id for the owning client (logging correlation), plus a small bounded,
+    // cached blocking executor created on demand and reaped when idle. It off-loads potentially-blocking
+    // authentication work (credential I/O, legacy v4 plugin calls) so it never runs on the Netty event
+    // loop. Created only when the configured auth actually wants framework services.
+    private static final AtomicLong CLIENT_INSTANCE_ID_GENERATOR = new AtomicLong();
+    private static final int AUTH_BLOCKING_MAX_THREADS = 16;
+    private final String clientInstanceId = "pulsar-client-" + CLIENT_INSTANCE_ID_GENERATOR.incrementAndGet();
+    private volatile ExecutorService blockingAuthExecutor;
+    // PIP-478: the framework HTTP client factory handed to an auth driver that wants one; null when
+    // no ClientAuthenticationServicesAware plugin is configured. Closed with the client.
+    private volatile FrameworkHttpClientFactory authHttpClientFactory;
+
     private final boolean createdEventLoopGroup;
     private final boolean createdCnxPool;
     private final DnsResolverGroupImpl dnsResolverGroupLocalInstance;
@@ -228,9 +264,11 @@ public class PulsarClientImpl implements PulsarClient {
             this.eventLoopGroup = eventLoopGroupReference;
             this.instrumentProvider = new InstrumentProvider(conf.getOpenTelemetry());
             clientClock = conf.getClock();
-            conf.getAuthentication().start();
             this.scheduledExecutorProvider = scheduledExecutorProvider != null ? scheduledExecutorProvider :
                     PulsarClientResourcesConfigurer.createScheduledExecutorProvider(conf);
+            // PIP-478: resolve the client-side TLS SPI factory (new path) before the connection
+            // pool and HTTP lookup are created — both read conf.getTlsFactory() to branch onto it.
+            setupClientTlsFactory();
             if (connectionPool != null) {
                 connectionPoolReference = connectionPool;
                 dnsResolverGroupLocalInstance = null;
@@ -270,6 +308,14 @@ public class PulsarClientImpl implements PulsarClient {
             } else {
                 this.timer = timer;
             }
+            // PIP-478: late-bind the client's framework services (scheduler, bounded blocking
+            // executor, framework HTTP client factory, client instance id) into the authentication driver and
+            // start it — AFTER the shared event loop, timer, DNS resolver and TLS factory exist, so a plugin
+            // whose start()/initializeAsync(...) reaches for a framework HTTP client (OAuth2, Athenz) gets one
+            // backed by the fully-shared resources. bind precedes start() so the plugin sees the services from
+            // its first call. Nothing between the config above and here consumes started authentication.
+            bindAuthenticationServices(conf.getAuthentication());
+            conf.getAuthentication().start();
             lookup = createLookup(conf.getServiceUrl());
 
             if (conf.getServiceUrlProvider() != null) {
@@ -310,6 +356,141 @@ public class PulsarClientImpl implements PulsarClient {
             closeCnxPool(connectionPoolReference);
             throw t;
         }
+    }
+
+    /**
+     * Late-bind the client's framework services into the configured authentication driver if it wants
+     * them (PIP-478). Called before {@code Authentication.start()} so the plugin's
+     * {@code initializeAsync(...)} sees real services. A plain v4 plugin that does not implement
+     * {@link ClientAuthenticationServicesAware} is left untouched.
+     *
+     * @param authentication the configured authentication (never {@code null};
+     *        {@code AuthenticationDisabled} when unset)
+     */
+    private void bindAuthenticationServices(Authentication authentication) {
+        if (authentication instanceof ClientAuthenticationServicesAware aware) {
+            // Do not (re)bind into a client that is shutting down: a rebind racing close() would install a
+            // FrameworkHttpClientFactory that close() has already passed, leaking it. state is null during
+            // construction (the first bind), which must proceed.
+            State currentState = state.get();
+            if (currentState == State.Closing || currentState == State.Closed) {
+                return;
+            }
+            // Close a previously-bound factory before overwriting it, else each updateAuthentication rebind
+            // (AutoClusterFailover / ControlledClusterFailover) leaks one FrameworkHttpClientFactory.
+            FrameworkHttpClientFactory previous = this.authHttpClientFactory;
+            if (previous != null) {
+                try {
+                    previous.close();
+                } catch (Throwable t) {
+                    log.warn().exception(t)
+                            .log("Failed to close previous framework HTTP client factory during auth rebind");
+                }
+            }
+            // PIP-478: the framework HTTP client factory shares the client's event loop, timer, DNS
+            // resolver and TLS factory, resolved lazily at newHttpClient() time via these suppliers.
+            this.authHttpClientFactory = new FrameworkHttpClientFactory(
+                    () -> eventLoopGroup, () -> timer, this::getNameResolver, conf::getTlsFactory,
+                    conf, clientInstanceId);
+            ClientAuthenticationServices services = new DefaultClientAuthenticationServices(
+                    authHttpClientFactory,
+                    (ScheduledExecutorService) scheduledExecutorProvider.getExecutor(),
+                    blockingAuthExecutor(),
+                    clientClock,
+                    conf.getOpenTelemetry() != null ? conf.getOpenTelemetry() : OpenTelemetry.noop(),
+                    clientInstanceId);
+            aware.bindClientAuthenticationServices(services);
+        }
+    }
+
+    /**
+     * Resolve the client-side TLS SPI factory (PIP-478) and stash it on the configuration so the connection
+     * pool ({@code PulsarChannelInitializer}) and the HTTP lookup ({@code HttpClient}) build engines from it.
+     * This is the only client TLS path since the PIP-337 removal; it runs only when TLS is enabled
+     * (a plaintext client leaves {@code conf.getTlsFactory()} null, and its transports never request TLS). On
+     * the v5-builder path a fail-fast probe of {@code CLIENT_DEFAULT} runs, so a bad configuration fails the
+     * client build.
+     *
+     * @throws PulsarClientException if the TLS factory cannot be built / initialized / probed
+     */
+    private void setupClientTlsFactory() throws PulsarClientException {
+        if (!conf.isUseTls()) {
+            return;
+        }
+        // Rebuildable (PIP-478) only when the framework composes the default file-based factory from the
+        // conf tls* fields; a v5-adopted custom factory or an explicit policy map self-manages its material and
+        // must not be rebuilt from the conf fields on an AutoClusterFailover material update.
+        this.clientTlsFactoryRebuildable = conf.getTlsFactory() == null && conf.getTlsPolicyMap() == null;
+        try {
+            ScheduledExecutorService executor = (ScheduledExecutorService) scheduledExecutorProvider.getExecutor();
+            var factory = ClientTlsFactorySupport.resolveClientTlsFactory(conf, executor, executor,
+                    conf.getOpenTelemetry() != null ? conf.getOpenTelemetry() : OpenTelemetry.noop());
+            conf.setTlsFactory(factory);
+        } catch (Exception e) {
+            throw new PulsarClientException.InvalidConfigurationException(e);
+        }
+    }
+
+    /**
+     * Rebuild the client TLS factory from the current (just-mutated) {@link ClientConfigurationData} and swap
+     * it into the binary connection pool so NEW connections pick up per-target trust roots / TLS identity
+     * (PIP-478). Invoked when AutoClusterFailover updates the client's TLS material at runtime
+     * ({@link #updateTlsTrustCertsFilePath} / {@link #updateTlsTrustStorePathAndPassword} /
+     * {@link #updateAuthentication}). This is the rebuild-not-mutate counterpart of the once-composed factory:
+     * without it the mutation never reaches the transport (a v4-parity regression).
+     *
+     * <p>No-op unless TLS is enabled and the factory is the framework-built default (a v5-adopted custom
+     * factory / policy map owns its own material). The superseded factory is retained until the client closes
+     * rather than closed here: existing binary connections keep their already-acquired contexts alive via their
+     * own refcount, and a shared HTTP-lookup subscription may still read the previous factory (the HTTP client's
+     * TLS was fixed at build in v4 too, so it keeps the old material — consistent behaviour). On a rebuild
+     * failure the previous factory is kept so the client stays usable; connections to the new target then fail
+     * loudly at handshake rather than silently using the wrong trust.
+     */
+    private void rebuildClientTlsFactory() {
+        if (!conf.isUseTls() || !clientTlsFactoryRebuildable) {
+            return;
+        }
+        synchronized (tlsFactoryRebuildLock) {
+            PulsarTlsFactory previous = conf.getTlsFactory();
+            // Clear so resolveClientTlsFactory rebuilds from the updated conf rather than re-adopting `previous`.
+            conf.setTlsFactory(null);
+            PulsarTlsFactory rebuilt;
+            try {
+                ScheduledExecutorService executor =
+                        (ScheduledExecutorService) scheduledExecutorProvider.getExecutor();
+                rebuilt = ClientTlsFactorySupport.resolveClientTlsFactory(conf, executor, executor,
+                        conf.getOpenTelemetry() != null ? conf.getOpenTelemetry() : OpenTelemetry.noop());
+            } catch (Exception e) {
+                // Keep the previous factory so the client stays functional; log loudly.
+                conf.setTlsFactory(previous);
+                log.error().exception(e).log("Failed to rebuild the client TLS factory after a runtime TLS "
+                        + "material update; keeping the previous factory");
+                return;
+            }
+            conf.setTlsFactory(rebuilt);
+            cnxPool.updateClientTlsFactory(rebuilt);
+            if (previous != null) {
+                supersededTlsFactories.add(previous);
+            }
+        }
+    }
+
+    /**
+     * Lazily create the bounded blocking executor for authentication credential I/O (PIP-478):
+     * a small cached pool with zero core threads (created on demand, reaped after 60s idle) and a hard
+     * upper bound. It is created only when an auth driver actually asks for framework services, and is
+     * shut down when the client closes.
+     *
+     * @return the blocking executor
+     */
+    private synchronized Executor blockingAuthExecutor() {
+        if (blockingAuthExecutor == null) {
+            blockingAuthExecutor = new ThreadPoolExecutor(0, AUTH_BLOCKING_MAX_THREADS, 60L, TimeUnit.SECONDS,
+                    new SynchronousQueue<>(),
+                    new ExecutorProvider.ExtendedThreadFactory("pulsar-client-auth-blocking", true));
+        }
+        return blockingAuthExecutor;
     }
 
     private void reduceConsumerReceiverQueueSize() {
@@ -1046,6 +1227,19 @@ public class PulsarClientImpl implements PulsarClient {
         try {
             // We will throw the last thrown exception only, though logging all of them.
             Throwable throwable = null;
+            // PIP-478: close the framework HTTP client factory (and every client it still owns)
+            // first — its AsyncHttpClient instances share the client's event loop, timer and DNS resolver and
+            // hold TLS subscriptions, so they must be released before those shared resources and the TLS
+            // factory are torn down below. A plugin's own close() later is idempotent on an already-closed
+            // client.
+            if (authHttpClientFactory != null) {
+                try {
+                    authHttpClientFactory.close();
+                } catch (Throwable t) {
+                    log.warn().exception(t).log("Failed to close framework HTTP client factory");
+                    throwable = t;
+                }
+            }
             if (lookup != null) {
                 try {
                     lookup.close();
@@ -1125,6 +1319,30 @@ public class PulsarClientImpl implements PulsarClient {
                     throwable = t;
                 }
             }
+            // PIP-478: release the auth blocking executor if one was created.
+            if (blockingAuthExecutor != null) {
+                blockingAuthExecutor.shutdownNow();
+            }
+            // PIP-478: close the client-owned (or adopted) TLS factory on the new path.
+            if (conf != null && conf.getTlsFactory() != null) {
+                try {
+                    conf.getTlsFactory().close();
+                } catch (Throwable t) {
+                    log.warn().exception(t).log("Failed to close TLS factory");
+                    throwable = t;
+                }
+            }
+            // PIP-478: close any TLS factories superseded by an AutoClusterFailover rebuild; they were kept
+            // alive (not closed eagerly) so in-flight connections / a shared HTTP subscription stayed valid.
+            for (PulsarTlsFactory superseded : supersededTlsFactories) {
+                try {
+                    superseded.close();
+                } catch (Throwable t) {
+                    log.warn().exception(t).log("Failed to close a superseded TLS factory");
+                    throwable = t;
+                }
+            }
+            supersededTlsFactories.clear();
             if (throwable != null) {
                 throw throwable;
             }
@@ -1219,12 +1437,19 @@ public class PulsarClientImpl implements PulsarClient {
             conf.getAuthentication().close();
         }
         conf.setAuthentication(authentication);
+        // PIP-478: bind framework services into the swapped-in auth before starting it.
+        bindAuthenticationServices(conf.getAuthentication());
         conf.getAuthentication().start();
+        // PIP-478: a swapped-in auth may carry TLS client identity (e.g. AuthenticationTls), so rebuild the
+        // client TLS factory to fold the new identity into connections established after the update.
+        rebuildClientTlsFactory();
     }
 
     public void updateTlsTrustCertsFilePath(String tlsTrustCertsFilePath) {
         log.info().attr("tlsTrustCertsFilePath", tlsTrustCertsFilePath).log("Updating tlsTrustCertsFilePath");
         conf.setTlsTrustCertsFilePath(tlsTrustCertsFilePath);
+        // PIP-478: rebuild the client TLS factory so the updated trust roots reach new connections.
+        rebuildClientTlsFactory();
     }
 
     public void updateTlsTrustStorePathAndPassword(String tlsTrustStorePath, String tlsTrustStorePassword) {
@@ -1232,6 +1457,8 @@ public class PulsarClientImpl implements PulsarClient {
                 .log("Updating tlsTrustStorePath to, tlsTrustStorePassword to *****");
         conf.setTlsTrustStorePath(tlsTrustStorePath);
         conf.setTlsTrustStorePassword(tlsTrustStorePassword);
+        // PIP-478: rebuild the client TLS factory so the updated keystore trust reaches new connections.
+        rebuildClientTlsFactory();
     }
 
     public CompletableFuture<Pair<ClientCnx, Boolean>> getConnection(String topic, int randomKeyForSelectConnection) {
