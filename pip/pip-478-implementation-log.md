@@ -37,3 +37,22 @@
     NON-CUTS (correct stops): wrap/unwrapV4 stays public (cross-package same-module); HTTP header case-asymmetry
     is DELIBERATE (request=wire-verbatim fidelity, response/auth-headers=lowercase lookup-convenience). NEXT: doc
     pass (removals + decision records + single-valued-header contract) → re-cut series → CI → fixpoint re-review.
+
+63. **PART B minimalism round 1 — series re-cut + pushed; a base-integrity issue caught & resolved (2026-07-06).**
+    Re-cut all 6 chunks from the minimalism monolith + force-pushed to the fork. SHAs: 01=009551706dd,
+    02=b1c13b67178, 03=50afe6f8b6d, 04=12d5e945c3c, 04b=15c4929d487, 06=9301a1b36c5.
+    BOUNDARY ISSUE (rebuild8 caught it): the minimalism work landed on a DETACHED HEAD (4ddd7466ff7) while the
+    lh-pip-478-impl-v2 label went stale (rtk tooling desync around an earlier canary checkout), AND that 4ddd
+    snapshot did NOT carry the chunk-6 PIP-337/CN removal (the 18 deletions were deferred, per the deletions-to-
+    last-chunk rule — 4ddd had them PRESENT). Resolved WITHOUT papering over it: (A) removal is definitively in
+    scope; chunk 6 re-stacks the byte-identical 18-file removal (== the CI-green fork-06). Proven benign by TWO
+    trust anchors: (1) chunk-6 FULL GATE_A (assemble + checkstyleTest = whole-repo main+test compile) BUILD
+    SUCCESSFUL + git grep of all 18 deleted class names = 0 matches → the 18 files are DEAD CODE in 4ddd; (2)
+    base sanity — ServiceConfiguration/ClientConfigurationData HV default = true (R5), JcaProviders has zero CN-
+    class references (b9a26f6 edit present), the 10 migration deletions absent. Constructed the true complete
+    monolith C = 4ddd + 18-file removal (= rebuild-06 tree), re-pointed lh-pip-478-impl-v2 → 1f053fe9a17
+    (backups: tags pip478-implv2-stale-32df, pip478-mono-4ddd). Equivalence rebuild-06 == lh-pip-478-impl-v2
+    (excl impl-log) = ZERO. All chunk gates green (chunk4 FULL GATE_A+GATE_B + proxy-TLS runtime + 5 spot tests;
+    chunk6 FULL GATE_A+GATE_B). LESSON: the detached-HEAD/stale-label desync is a real rtk hazard — verify the
+    branch LABEL points where you think before trusting "monolith tip", and the per-chunk compile gate is what
+    catches a deferred-deletion base drift. NEXT: CI green on the fork → fixpoint re-review.
