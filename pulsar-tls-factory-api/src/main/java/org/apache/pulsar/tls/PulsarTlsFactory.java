@@ -80,9 +80,10 @@ import java.util.function.Consumer;
  * that has resolved a purpose to material (or to the system default) and <em>supports the requested
  * class</em> must <strong>never</strong> return {@code empty()} for it — a resolved-but-unbuildable
  * request completes the future <em>exceptionally</em> instead, so a real configuration error cannot be
- * masked by the framework quietly falling back to {@code SSLContext} synthesis; and a factory must
- * honor {@link TlsPurpose#fallback()} as specified (resolve the purpose, then its single fallback,
- * then the role's empty-fallback rule) unless it documents divergent resolution.
+ * masked by the framework quietly falling back to {@code SSLContext} synthesis; and when nothing is
+ * configured for a purpose a factory applies the role's terminal rule — an unconfigured client purpose
+ * resolves to the system default, an unconfigured server purpose is a configuration error — unless it
+ * documents divergent resolution.
  *
  * <p><b>Never throws synchronously.</b> Like every future-returning method in this SPI,
  * {@code createInstance} reports all failures — including argument validation and build errors — by

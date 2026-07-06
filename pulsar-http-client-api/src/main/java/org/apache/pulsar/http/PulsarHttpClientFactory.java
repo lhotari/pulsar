@@ -43,7 +43,7 @@ public interface PulsarHttpClientFactory {
      * failures surface later on the returned {@link PulsarHttpClient}'s request {@code CompletableFuture}s,
      * never as a synchronous throw.
      *
-     * @param config per-instance configuration (timeouts, proxy, TLS purpose, ...)
+     * @param config per-instance configuration (timeouts, TLS purpose, ...)
      * @return a configured HTTP client
      * @throws IllegalStateException if the factory is closed, or the config's {@code TlsPurpose} cannot be
      *         resolved to TLS material

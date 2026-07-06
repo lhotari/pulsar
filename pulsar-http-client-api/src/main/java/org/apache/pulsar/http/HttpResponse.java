@@ -97,6 +97,8 @@ public final class HttpResponse {
     }
 
     /**
+     * Decode the body as UTF-8, ignoring any charset declared in the response {@code Content-Type}.
+     *
      * @return the response body decoded as UTF-8
      */
     public String bodyAsString() {

@@ -28,8 +28,8 @@
  *
  * <ul>
  *   <li>{@link org.apache.pulsar.common.tls.impl.FileBasedTlsFactory} — the factory: purpose registry,
- *       single-level fallback resolution, one-shot and subscribing handles, and the rotation
- *       reload fan-out.</li>
+ *       direct purpose resolution with the role's terminal rule, one-shot and subscribing handles, and
+ *       the rotation reload fan-out.</li>
  *   <li>{@code TlsMaterialSource} / {@code TlsMaterial} — load, watch, cache one material set with a
  *       fixed mtime baseline and value-equality change suppression.</li>
  *   <li>{@link org.apache.pulsar.common.tls.impl.TlsContexts} — build the Netty/JDK contexts and
