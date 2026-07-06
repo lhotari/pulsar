@@ -41,7 +41,6 @@ import org.apache.pulsar.client.api.Socks5ProxyScope;
 import org.apache.pulsar.client.impl.auth.AuthenticationDisabled;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.conf.ConfigurationDataUtils;
-import org.apache.pulsar.client.impl.tls.ClientTlsFactorySupport;
 import org.apache.pulsar.common.tls.InetAddressUtils;
 
 public class ClientBuilderImpl implements ClientBuilder {
@@ -58,18 +57,11 @@ public class ClientBuilderImpl implements ClientBuilder {
     }
 
     @Override
-    @SuppressWarnings("deprecation")
     public PulsarClient build() throws PulsarClientException {
         checkArgument(StringUtils.isNotBlank(conf.getServiceUrl()) || conf.getServiceUrlProvider() != null,
                 "service URL or service URL provider needs to be specified on the ClientBuilder object.");
         checkArgument(StringUtils.isBlank(conf.getServiceUrl())  || conf.getServiceUrlProvider() == null,
                 "Can only chose one way service URL or service URL provider.");
-        // PIP-478: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default value
-        // loudly rather than silently ignore a security-relevant setting.
-        checkArgument(!ClientTlsFactorySupport.isLegacyCustom(conf.getSslFactoryPlugin()),
-                "The PIP-337 sslFactoryPlugin is removed in Pulsar 5.0 (PIP-478); migrate the custom factory to "
-                        + "a PulsarTlsFactory (via the v5 client builder tlsFactory(...)) and clear "
-                        + "sslFactoryPlugin.");
 
         if (conf.getServiceUrlProvider() != null) {
             checkArgument(StringUtils.isNotBlank(conf.getServiceUrlProvider().getServiceUrl()),
@@ -485,20 +477,6 @@ public class ClientBuilderImpl implements ClientBuilder {
     @Override
     public ClientBuilder socks5ProxyScope(Socks5ProxyScope socks5ProxyScope) {
         conf.setSocks5ProxyScope(socks5ProxyScope);
-        return this;
-    }
-
-    @Override
-    @Deprecated
-    public ClientBuilder sslFactoryPlugin(String sslFactoryPlugin) {
-        conf.setSslFactoryPlugin(StringUtils.isBlank(sslFactoryPlugin) ? "" : sslFactoryPlugin);
-        return this;
-    }
-
-    @Override
-    @Deprecated
-    public ClientBuilder sslFactoryPluginParams(String sslFactoryPluginParams) {
-        conf.setSslFactoryPluginParams(sslFactoryPluginParams);
         return this;
     }
 

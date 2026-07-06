@@ -293,27 +293,6 @@ public interface PulsarAdminBuilder {
     PulsarAdminBuilder tlsProtocols(Set<String> tlsProtocols);
 
     /**
-     * SSL Factory Plugin used to generate the SSL Context and SSLEngine.
-     * @param sslFactoryPlugin Name of the SSL Factory Class to be used.
-     * @return PulsarAdminBuilder
-     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478). Setting a non-default
-     *     value fails {@link #build()}; port the custom factory to a {@code PulsarTlsFactory}. Retained
-     *     (non-functional) for v4 source compatibility.
-     */
-    @Deprecated
-    PulsarAdminBuilder sslFactoryPlugin(String sslFactoryPlugin);
-
-    /**
-     * Parameters used by the SSL Factory Plugin class.
-     * @param sslFactoryPluginParams String parameters to be used by the SSL Factory Class.
-     * @return PulsarAdminBuilder
-     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478). Port the custom factory to
-     *     a {@code PulsarTlsFactory}. Retained (non-functional) for v4 source compatibility.
-     */
-    @Deprecated
-    PulsarAdminBuilder sslFactoryPluginParams(String sslFactoryPluginParams);
-
-    /**
      * This sets the connection time out for the pulsar admin client.
      *
      * @param connectionTimeout

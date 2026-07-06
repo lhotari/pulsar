@@ -847,20 +847,6 @@ public class PulsarService implements AutoCloseable, ShutdownService {
     /**
      * Start the pulsar service instance.
      */
-    // PIP-478: reject a stale, non-default PIP-337 sslFactoryPlugin / brokerClientSslFactoryPlugin
-    // (removed in 5.0) at startup. The @Deprecated getters are read intentionally here to enforce the removal.
-    @SuppressWarnings("deprecation")
-    private static void rejectRemovedPip337SslFactoryPlugin(ServiceConfiguration config)
-            throws PulsarServerException {
-        if (TlsFactorySupport.isLegacyCustom(config.getSslFactoryPlugin())
-                || TlsFactorySupport.isLegacyCustom(config.getBrokerClientSslFactoryPlugin())) {
-            throw new PulsarServerException("The PIP-337 sslFactoryPlugin / brokerClientSslFactoryPlugin "
-                    + "configuration is removed in Pulsar 5.0 (PIP-478); migrate the custom factory to a "
-                    + "PulsarTlsFactory via tlsFactoryClassName / brokerClientTlsFactoryClassName and clear "
-                    + "sslFactoryPlugin / brokerClientSslFactoryPlugin.");
-        }
-    }
-
     public void start() throws PulsarServerException {
         log.info()
                 .attr("version", (brokerVersion != null ? brokerVersion : "unknown"))
@@ -910,11 +896,6 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                         config.getBacklogQuotaDefaultLimitSecond(),
                         config.getDefaultRetentionTimeInMinutes() * 60));
             }
-
-            // PIP-478: the PIP-337 sslFactoryPlugin path is removed; reject a stale, non-default
-            // sslFactoryPlugin / brokerClientSslFactoryPlugin loudly at startup rather than silently ignore a
-            // security-relevant setting.
-            rejectRemovedPip337SslFactoryPlugin(config);
 
             openTelemetryTopicStats = new OpenTelemetryTopicStats(this);
             openTelemetryConsumerStats = new OpenTelemetryConsumerStats(this);

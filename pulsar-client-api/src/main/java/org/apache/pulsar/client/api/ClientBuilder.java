@@ -739,28 +739,6 @@ public interface ClientBuilder extends Serializable, Cloneable {
     ClientBuilder socks5ProxyScope(Socks5ProxyScope socks5ProxyScope);
 
     /**
-     * Set the SSL Factory Plugin for custom implementation to create SSL Context and SSLEngine.
-     * @param sslFactoryPlugin ssl factory class name
-     * @return the client builder instance
-     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478). Setting a non-default
-     *     value fails {@link #build()}; port the custom factory to a {@code PulsarTlsFactory} and configure it
-     *     on the v5 client builder. Retained (non-functional) for v4 source compatibility.
-     */
-    @Deprecated
-    ClientBuilder sslFactoryPlugin(String sslFactoryPlugin);
-
-    /**
-     * Set the SSL Factory Plugin params for the ssl factory plugin to use.
-     * @param sslFactoryPluginParams Params in String format that will be inputted to the SSL Factory Plugin
-     * @return the client builder instance
-     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478). Port the custom factory to
-     *     a {@code PulsarTlsFactory} on the v5 client builder. Retained (non-functional) for v4 source
-     *     compatibility.
-     */
-    @Deprecated
-    ClientBuilder sslFactoryPluginParams(String sslFactoryPluginParams);
-
-    /**
      * Set Cert Refresh interval in seconds.
      * @param autoCertRefreshSeconds
      * @return the client builder instance

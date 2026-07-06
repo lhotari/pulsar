@@ -39,9 +39,9 @@ import org.apache.pulsar.tls.TlsFactoryInitContext;
 /**
  * Shared scaffolding for wiring a server component onto the PIP-478 {@link PulsarTlsFactory} SPI — the only
  * server TLS path since the PIP-337 {@code PulsarSslFactory} removal. Server components (broker,
- * proxy, websocket, functions-worker) call these helpers to instantiate and initialize the factory, parse
- * its parameters, and reject a stale PIP-337 {@code sslFactoryPlugin} configuration at startup via
- * {@link #isLegacyCustom}.
+ * proxy, websocket, functions-worker) call these helpers to instantiate and initialize the factory and parse
+ * its parameters. A stale PIP-337 {@code sslFactoryPlugin} configuration key left in a config file is
+ * rejected at config-file load by the removed-key validation in {@code PulsarConfigurationLoader}.
  *
  * <p>The helper is intentionally free of Netty {@code io.netty.handler.ssl} types (the {@code SslContext}
  * subscribe pattern stays inline in the binary-listener components that already depend on
@@ -59,28 +59,7 @@ public final class TlsFactorySupport {
      */
     public static final String DEFAULT_FACTORY = "default";
 
-    /**
-     * FQCN of the removed PIP-337 default SSL factory. Matched as a string literal (the class itself is
-     * removed in PIP-478) so a blank {@code sslFactoryPlugin} value OR this literal is treated as
-     * "the default" — any other non-blank value names a (removed) custom PIP-337 plugin.
-     */
-    static final String REMOVED_DEFAULT_SSL_FACTORY_CLASS_NAME =
-            "org.apache.pulsar.common.util.DefaultPulsarSslFactory";
-
     private TlsFactorySupport() {
-    }
-
-    /**
-     * Whether a {@code sslFactoryPlugin}-family value names a removed PIP-337 custom factory — a non-blank
-     * value that is not the removed default's FQCN. The PIP-337 path no longer exists, so a
-     * component fails loudly at startup when this returns {@code true}.
-     *
-     * @param legacyPluginClassName a {@code sslFactoryPlugin}-family value
-     * @return whether it names a (removed) custom PIP-337 factory
-     */
-    public static boolean isLegacyCustom(String legacyPluginClassName) {
-        return StringUtils.isNotBlank(legacyPluginClassName)
-                && !REMOVED_DEFAULT_SSL_FACTORY_CLASS_NAME.equals(legacyPluginClassName.trim());
     }
 
     /**

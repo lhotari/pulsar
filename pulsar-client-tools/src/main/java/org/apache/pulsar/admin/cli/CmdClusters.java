@@ -365,17 +365,6 @@ public class CmdClusters extends CmdBase {
                 description = "path for the TLS certificate file", required = false)
         protected String brokerClientCertificateFilePath;
 
-        @Option(names = "--tls-factory-plugin",
-                description = "Deprecated: no effect since 5.0; TLS factory selection is broker-level "
-                        + "configuration (PIP-478). The value is still written to the cluster metadata but "
-                        + "ignored by 5.0 brokers.")
-        protected String brokerClientSslFactoryPlugin;
-
-        @Option(names = "--tls-factory-plugin-params",
-                description = "Deprecated: no effect since 5.0; TLS factory selection is broker-level "
-                        + "configuration (PIP-478).")
-        protected String brokerClientSslFactoryPluginParams;
-
         @Option(names = "--listener-name",
                 description = "listenerName when client would like to connect to cluster", required = false)
         protected String listenerName;
@@ -451,12 +440,6 @@ public class CmdClusters extends CmdBase {
             }
             if (brokerClientCertificateFilePath != null) {
                 builder.brokerClientCertificateFilePath(brokerClientCertificateFilePath);
-            }
-            if (StringUtils.isNotBlank(brokerClientSslFactoryPlugin)) {
-                builder.brokerClientSslFactoryPlugin(brokerClientSslFactoryPlugin);
-            }
-            if (StringUtils.isNotBlank(brokerClientSslFactoryPluginParams)) {
-                builder.brokerClientSslFactoryPluginParams(brokerClientSslFactoryPluginParams);
             }
 
             if (listenerName != null) {

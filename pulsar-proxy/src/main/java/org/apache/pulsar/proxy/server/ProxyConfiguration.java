@@ -669,25 +669,6 @@ public class ProxyConfiguration implements PulsarConfiguration {
     )
     private String tlsTrustStorePassword = null;
 
-    /**
-     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478); a non-default value is
-     *     rejected at proxy startup. Use {@code tlsFactoryClassName}.
-     */
-    @Deprecated
-    @FieldContext(
-            category = CATEGORY_TLS,
-            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0. Retained only "
-                    + "to reject a stale configuration at startup; use tlsFactoryClassName instead.")
-    private String sslFactoryPlugin = "";
-    /**
-     * @deprecated since 5.0.0: superseded by {@code tlsFactoryConfig} (PIP-478).
-     */
-    @Deprecated
-    @FieldContext(
-            category = CATEGORY_TLS,
-            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0; superseded by "
-                    + "tlsFactoryConfig.")
-    private String sslFactoryPluginParams = "";
     @FieldContext(
             category = CATEGORY_TLS,
             doc = "PIP-478 TLS factory (PulsarTlsFactory) class name for the proxy's server-side TLS "
@@ -772,25 +753,6 @@ public class ProxyConfiguration implements PulsarConfiguration {
     )
     private Set<String> brokerClientTlsProtocols = new TreeSet<>();
 
-    /**
-     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478); a non-default value is
-     *     rejected at proxy startup. Use {@code brokerClientTlsFactoryClassName}.
-     */
-    @Deprecated
-    @FieldContext(
-            category = CATEGORY_TLS,
-            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0. Retained only "
-                    + "to reject a stale configuration at startup; use brokerClientTlsFactoryClassName instead.")
-    private String brokerClientSslFactoryPlugin = "";
-    /**
-     * @deprecated since 5.0.0: superseded by {@code brokerClientTlsFactoryConfig} (PIP-478).
-     */
-    @Deprecated
-    @FieldContext(
-            category = CATEGORY_TLS,
-            doc = "Deprecated (PIP-478): the PIP-337 SSL factory plugin is removed in Pulsar 5.0; superseded by "
-                    + "brokerClientTlsFactoryConfig.")
-    private String brokerClientSslFactoryPluginParams = "";
     @FieldContext(
             category = CATEGORY_TLS,
             doc = "PIP-478 TLS factory (PulsarTlsFactory) class name for the proxy's own outbound "

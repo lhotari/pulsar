@@ -37,18 +37,6 @@ import org.testng.annotations.Test;
 public class TlsFactorySupportTest {
 
     @Test
-    public void isLegacyCustomDetectsRemovedPip337Plugin() {
-        // A non-blank, non-default sslFactoryPlugin names a removed PIP-337 factory -> the fail-loud trigger
-        // at server startup (stage 4c).
-        assertThat(TlsFactorySupport.isLegacyCustom("com.example.CustomSslFactory")).isTrue();
-        // A blank value OR the removed default's FQCN is treated as "the default" -> no failure.
-        assertThat(TlsFactorySupport.isLegacyCustom("org.apache.pulsar.common.util.DefaultPulsarSslFactory"))
-                .isFalse();
-        assertThat(TlsFactorySupport.isLegacyCustom("")).isFalse();
-        assertThat(TlsFactorySupport.isLegacyCustom(null)).isFalse();
-    }
-
-    @Test
     public void createFactoryUsesDefaultForBlankSentinelOrDefaultClassName() throws Exception {
         PulsarTlsFactory sentinel = new NoOpTlsFactory();
         assertThat(TlsFactorySupport.createFactory("", NoOpTlsFactory.class, () -> sentinel)).isSameAs(sentinel);
