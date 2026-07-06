@@ -100,3 +100,21 @@
     twin consumed, anti-Motivation-#3); token(Supplier) (v4 parity — flagged as deserving a follow-up test); the
     RFC Method enum. No round-2 orphans; 4 major decisions re-affirmed with call-site evidence. NEXT: doc pass →
     re-cut → CI → ROUND 4 fixpoint (the principled honesty-list suggests convergence).
+
+66. **PART B COMPLETE — minimalism FIXPOINT reached, unanimous (2026-07-06).** Round 4 (fixpoint confirmation):
+    ALL THREE models — Codex GPT-5.5, Fable 5, Opus 4.8 — independently returned FIXPOINT with the anti-
+    manufactured-cut guard in force. The reviewers who drove every prior cut (Codex + Fable) now find NOTHING:
+    the contract-weight-with-no-consumer category (the class rounds 1-3 removed) is empty; round-3 cuts left no
+    dangling refs; the "honesty list" keeps (safety guards + escape valves, zero-rule projections for plugin
+    authors, service seams with consuming twins, RFC vocabulary, SSLParameters/SinglePass/TlsEndpoint) are all
+    correctly kept — verified against production call sites, not declarations. The four major decisions hold IN
+    SHIPPED CODE: capability(Class) sole discovery (zero instanceof-capability dispatch anywhere), one-way module
+    arrows (tls-factory-api imports no http/client packages), flat (role,name) TlsPurpose (no fallback residue),
+    rebuild-not-mutate rotation (delegate-swap helpers removed). No forcing shape remains.
+    ARC: Part B ran 4 review rounds + 3 cut-iterations. Round 1 (-232 lines), round 2 (brokerPort + Form), round 3
+    (defaultHeaders + headers(Map) + per-request timeout), each fully re-cut into the 6-PR series + CI-green.
+    Fable's PRINCIPLED LINE — "cut what carries contract weight (interaction rule / merge precedence / duplicate
+    path) with no consumer; KEEP zero-rule projections that serve third-party authors, safety guards with their
+    escape valves, and service seams with consuming twins" — is the deciding rule and a KEY skill lesson.
+    Fixed a trivial record-K wording nit (Opus: "sole timeout knob" → "sole request timeout knob; connect/read
+    remain separate"). NEXT: final re-cut (folds the K nit) + CI green, then Part C — the PIP-design skill.
