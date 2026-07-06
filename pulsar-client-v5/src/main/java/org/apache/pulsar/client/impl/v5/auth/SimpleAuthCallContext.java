@@ -30,22 +30,15 @@ import org.apache.pulsar.client.api.v5.auth.AuthenticationCallContext;
 class SimpleAuthCallContext implements AuthenticationCallContext {
 
     private final String brokerHost;
-    private final int brokerPort;
     private final Map<Class<?>, Object> state = new ConcurrentHashMap<>();
 
-    SimpleAuthCallContext(String brokerHost, int brokerPort) {
+    SimpleAuthCallContext(String brokerHost) {
         this.brokerHost = brokerHost;
-        this.brokerPort = brokerPort;
     }
 
     @Override
     public String brokerHost() {
         return brokerHost;
-    }
-
-    @Override
-    public int brokerPort() {
-        return brokerPort;
     }
 
     @Override

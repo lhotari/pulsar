@@ -68,11 +68,10 @@ public final class V5AuthContexts {
 
     /**
      * @param brokerHost the broker host
-     * @param brokerPort the broker port (0 when unknown)
      * @return a new binary-protocol call context with a fresh state slot
      */
-    public static AuthenticationCallContext binaryCallContext(String brokerHost, int brokerPort) {
-        return new BinaryCallContext(brokerHost, brokerPort);
+    public static AuthenticationCallContext binaryCallContext(String brokerHost) {
+        return new BinaryCallContext(brokerHost);
     }
 
     /**
@@ -184,22 +183,15 @@ public final class V5AuthContexts {
 
     private static final class BinaryCallContext implements AuthenticationCallContext {
         private final String brokerHost;
-        private final int brokerPort;
         private final ConcurrentHashMap<Class<?>, Object> stateSlot = new ConcurrentHashMap<>();
 
-        BinaryCallContext(String brokerHost, int brokerPort) {
+        BinaryCallContext(String brokerHost) {
             this.brokerHost = brokerHost;
-            this.brokerPort = brokerPort;
         }
 
         @Override
         public String brokerHost() {
             return brokerHost;
-        }
-
-        @Override
-        public int brokerPort() {
-            return brokerPort;
         }
 
         @Override

@@ -45,7 +45,7 @@ import org.testng.annotations.Test;
 public class BinaryAuthenticationExchangeTest {
 
     private static AuthenticationExchange exchange(CountingBody body) {
-        return new BinaryAuthenticationExchange(body, V5AuthContexts.binaryCallContext("broker-1", 0));
+        return new BinaryAuthenticationExchange(body, V5AuthContexts.binaryCallContext("broker-1"));
     }
 
     @Test

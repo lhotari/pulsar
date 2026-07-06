@@ -76,7 +76,7 @@ public final class V5BinaryAuthenticationDriver implements AsyncAuthenticationDr
     @Override
     public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
         ensureInitialized();
-        return new BinaryAuthenticationExchange(v5, V5AuthContexts.binaryCallContext(brokerHostName, 0),
+        return new BinaryAuthenticationExchange(v5, V5AuthContexts.binaryCallContext(brokerHostName),
                 authMetrics);
     }
 

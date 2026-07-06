@@ -36,7 +36,7 @@ public class TlsAuthenticationTest {
         auth.initializeAsync(null).get();
 
         BinaryAuthData data = auth.capability(BinaryAuthDataProvider.class).orElseThrow()
-                .getAuthDataAsync(new SimpleAuthCallContext("broker", 6651)).get();
+                .getAuthDataAsync(new SimpleAuthCallContext("broker")).get();
         assertThat(data.bytes()).isEmpty();
     }
 }

@@ -147,7 +147,7 @@ public class V5ToV4AuthenticationAdapter
 
     @Override
     public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
-        return new BinaryAuthenticationExchange(v5, new SimpleAuthCallContext(brokerHostName, 0), authMetrics);
+        return new BinaryAuthenticationExchange(v5, new SimpleAuthCallContext(brokerHostName), authMetrics);
     }
 
     /**

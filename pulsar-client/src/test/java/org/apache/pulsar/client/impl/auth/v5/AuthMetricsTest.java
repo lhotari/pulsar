@@ -99,7 +99,7 @@ public class AuthMetricsTest {
 
     private static CompletableFuture<AuthData> drive(OpenTelemetrySdk sdk, FakeBody body) {
         BinaryAuthenticationExchange exchange = new BinaryAuthenticationExchange(
-                body, V5AuthContexts.binaryCallContext("broker.example.com", 0), AuthMetrics.create(sdk));
+                body, V5AuthContexts.binaryCallContext("broker.example.com"), AuthMetrics.create(sdk));
         return exchange.getAuthDataAsync();
     }
 

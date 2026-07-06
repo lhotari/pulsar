@@ -23,9 +23,9 @@ import java.util.Optional;
 /**
  * The per-call context for binary-protocol authentication (PIP-478).
  *
- * <p>Carries the broker routing details and exposes a per-exchange state slot for retaining
+ * <p>Carries the broker host and exposes a per-exchange state slot for retaining
  * conversation state across challenge-response rounds. Most implementations produce the same credential
- * for every call and never inspect the routing fields.
+ * for every call and never inspect the broker host.
  */
 public interface AuthenticationCallContext {
 
@@ -33,11 +33,6 @@ public interface AuthenticationCallContext {
      * @return the broker host this connection is being established to
      */
     String brokerHost();
-
-    /**
-     * @return the broker port this connection is being established to
-     */
-    int brokerPort();
 
     /**
      * Retrieve an implementation-controlled state object previously stored with

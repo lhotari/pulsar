@@ -296,6 +296,6 @@ public class LegacyV4AuthenticationAdapterTest {
     }
 
     private AuthenticationCallContext callContext() {
-        return new SimpleAuthCallContext("broker-1.example.com", 6650);
+        return new SimpleAuthCallContext("broker-1.example.com");
     }
 }
