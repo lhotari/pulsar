@@ -118,3 +118,21 @@
     escape valves, and service seams with consuming twins" — is the deciding rule and a KEY skill lesson.
     Fixed a trivial record-K wording nit (Opus: "sole timeout knob" → "sole request timeout knob; connect/read
     remain separate"). NEXT: final re-cut (folds the K nit) + CI green, then Part C — the PIP-design skill.
+
+67. **PART C COMPLETE — PIP-design skill created + mission A/B/C done (2026-07-07).** Created the Claude skill
+    `pip-design` in ~/workspace-pulsar/pulsar-contributor-toolbox/claude-code/skills/pip-design/SKILL.md,
+    capturing this mission's methodology: (1) understand the draft against the code (grep production call sites,
+    not declarations — verify, don't trust prose); (2) multi-model multi-viewpoint review (Fable 5 design-
+    coherence/subtractive + Opus 4.8 xhigh durability/implementability + Codex GPT-5.5 adversarial; convergence =
+    confidence); (3) the minimalism judgment — the "cut contract-weight, keep zero-rule projections" principle,
+    additive-add-back, the lying-accessor/duplicate-path tests, and the manufactured-minimalism guard; (4) the
+    full doc+code+CI pipeline with decision records (cut: what/why/add-back/tradeoff; keep: rationale + honesty
+    list); (5) iterate to a fixpoint (review until a full round finds nothing). Embeds both quotes (Saint-Exupery
+    + Jobs) as the north star. Also documents the equivalence-checked stacked-PR decomposition + CI/orchestration
+    discipline for PIPs with a reference implementation.
+    MISSION STATUS: A (secure-by-default series, CI-green) + B (minimalism fixpoint, unanimous 3-model) + C
+    (skill) all COMPLETE. Final fixpoint series on lhotari/pulsar: 01=460190e14db 02=64cd17f89bb 03=86dff7b2fdb
+    04=71c3c582bd7 04b=ca5c4d25606 06=668de490c82 (code byte-identical to the CI-validated round-3 series; only
+    a doc-word differs; final CI clean except the recurring TopicPoliciesTest.setupTestTopic flake, rerun-
+    clearing). Monolith lh-pip-478-impl-v2 @ d8721a1978a. Reserved for the human author (deliberately NOT done):
+    master rebase + apache-facing PRs + human review.
