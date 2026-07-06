@@ -32,7 +32,6 @@ import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
@@ -145,21 +144,6 @@ public class FrameworkHttpClientFactoryTest {
             HttpResponse response = client.execute(request).get(30, TimeUnit.SECONDS);
             assertThat(response.statusCode()).isEqualTo(201);
             assertThat(response.bodyAsString()).isEqualTo("posted:payload:ct=application/json");
-            client.close();
-        }
-    }
-
-    @Test
-    public void testPostForm() throws Exception {
-        try (FrameworkHttpClientFactory factory = newFactory()) {
-            PulsarHttpClient client = factory.newHttpClient(genericConfig().build());
-            HttpRequest request = HttpRequest.builder(HttpRequest.Method.POST, URI.create(baseUrl + "/echo-post"))
-                    .body(new HttpRequest.Form(Map.of("k", "v")))
-                    .build();
-            HttpResponse response = client.execute(request).get(30, TimeUnit.SECONDS);
-            assertThat(response.statusCode()).isEqualTo(201);
-            assertThat(response.bodyAsString()).contains("posted:k=v")
-                    .contains("ct=application/x-www-form-urlencoded");
             client.close();
         }
     }

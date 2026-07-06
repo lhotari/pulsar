@@ -29,7 +29,7 @@ import java.util.Optional;
  * An immutable HTTP request (PIP-478).
  *
  * <p>Construct via {@link #builder(Method, URI)}. The optional {@link Body} is a sealed type so the
- * set of body shapes ({@link Bytes} or {@link Form}) is closed and exhaustively switchable.
+ * set of body shapes (currently only {@link Bytes}) is closed and exhaustively switchable.
  *
  * <p><b>Headers are single-valued and keyed by exact name.</b> Unlike {@link HttpResponse} (whose names
  * are canonicalised), request header names are NOT case-folded: they are stored verbatim as supplied to
@@ -44,8 +44,8 @@ public final class HttpRequest {
         GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH
     }
 
-    /** A request body. Sealed: either raw {@link Bytes} or a URL-encoded {@link Form}. */
-    public sealed interface Body permits Bytes, Form {
+    /** A request body. Sealed to the single {@link Bytes} shape. */
+    public sealed interface Body permits Bytes {
     }
 
     /**
@@ -61,17 +61,6 @@ public final class HttpRequest {
      * @param contentType the {@code Content-Type} value
      */
     public record Bytes(byte[] content, String contentType) implements Body {
-    }
-
-    /**
-     * An {@code application/x-www-form-urlencoded} body.
-     *
-     * @param fields the form fields (encoded by the implementation)
-     */
-    public record Form(Map<String, String> fields) implements Body {
-        public Form {
-            fields = Map.copyOf(fields);
-        }
     }
 
     private final Method method;

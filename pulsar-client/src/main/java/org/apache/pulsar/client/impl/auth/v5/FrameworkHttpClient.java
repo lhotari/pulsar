@@ -106,8 +106,6 @@ public final class FrameworkHttpClient implements PulsarHttpClient {
                 if (bytes.contentType() != null) {
                     builder.setHeader(HttpHeaderNames.CONTENT_TYPE, bytes.contentType());
                 }
-            } else if (body instanceof HttpRequest.Form form) {
-                form.fields().forEach(builder::addFormParam);
             } else {
                 throw new IllegalArgumentException("Unsupported request body type: " + body.getClass().getName());
             }
