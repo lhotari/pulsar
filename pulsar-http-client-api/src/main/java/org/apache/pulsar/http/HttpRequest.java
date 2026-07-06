@@ -19,7 +19,6 @@
 package org.apache.pulsar.http;
 
 import java.net.URI;
-import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -29,7 +28,8 @@ import java.util.Optional;
  * An immutable HTTP request (PIP-478).
  *
  * <p>Construct via {@link #builder(Method, URI)}. The optional {@link Body} is a sealed type so the
- * set of body shapes (currently only {@link Bytes}) is closed and exhaustively switchable.
+ * set of body shapes (currently only {@link Bytes}) is closed; the framework's single body-encoding
+ * site dispatches on the body type.
  *
  * <p><b>Headers are single-valued and keyed by exact name.</b> Unlike {@link HttpResponse} (whose names
  * are canonicalised), request header names are NOT case-folded: they are stored verbatim as supplied to
@@ -67,14 +67,12 @@ public final class HttpRequest {
     private final URI uri;
     private final Map<String, String> headers;
     private final Body body;
-    private final Duration timeout;
 
     private HttpRequest(Builder b) {
         this.method = b.method;
         this.uri = b.uri;
         this.headers = Collections.unmodifiableMap(new LinkedHashMap<>(b.headers));
         this.body = b.body;
-        this.timeout = b.timeout;
     }
 
     /**
@@ -106,13 +104,6 @@ public final class HttpRequest {
     }
 
     /**
-     * @return a per-request timeout override, if any
-     */
-    public Optional<Duration> timeout() {
-        return Optional.ofNullable(timeout);
-    }
-
-    /**
      * Create a builder.
      *
      * @param method the HTTP method
@@ -131,7 +122,6 @@ public final class HttpRequest {
         private final URI uri;
         private final Map<String, String> headers = new LinkedHashMap<>();
         private Body body;
-        private Duration timeout;
 
         private Builder(Method method, URI uri) {
             this.method = method;
@@ -151,17 +141,6 @@ public final class HttpRequest {
         }
 
         /**
-         * Add all of the given headers.
-         *
-         * @param values the headers to add
-         * @return this builder
-         */
-        public Builder headers(Map<String, String> values) {
-            headers.putAll(values);
-            return this;
-        }
-
-        /**
          * Set the request body.
          *
          * @param body the body
@@ -169,17 +148,6 @@ public final class HttpRequest {
          */
         public Builder body(Body body) {
             this.body = body;
-            return this;
-        }
-
-        /**
-         * Override the default request timeout for this request.
-         *
-         * @param timeout the timeout
-         * @return this builder
-         */
-        public Builder timeout(Duration timeout) {
-            this.timeout = timeout;
             return this;
         }
 

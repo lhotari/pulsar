@@ -19,9 +19,6 @@
 package org.apache.pulsar.http;
 
 import java.time.Duration;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Objects;
 import org.apache.pulsar.tls.TlsPurpose;
 
@@ -45,7 +42,6 @@ public final class PulsarHttpClientConfig {
     private final Duration readTimeout;
     private final Duration requestTimeout;
     private final String userAgent;
-    private final Map<String, String> defaultHeaders;
     private final long maxResponseBodyBytes;
 
     private PulsarHttpClientConfig(Builder b) {
@@ -54,7 +50,6 @@ public final class PulsarHttpClientConfig {
         this.readTimeout = b.readTimeout;
         this.requestTimeout = b.requestTimeout;
         this.userAgent = b.userAgent;
-        this.defaultHeaders = Collections.unmodifiableMap(new LinkedHashMap<>(b.defaultHeaders));
         this.maxResponseBodyBytes = b.maxResponseBodyBytes;
     }
 
@@ -94,13 +89,6 @@ public final class PulsarHttpClientConfig {
     }
 
     /**
-     * @return headers attached to every request issued by this client
-     */
-    public Map<String, String> defaultHeaders() {
-        return defaultHeaders;
-    }
-
-    /**
      * @return the maximum buffered response body size in bytes
      */
     public long maxResponseBodyBytes() {
@@ -128,7 +116,6 @@ public final class PulsarHttpClientConfig {
         private Duration readTimeout = Duration.ofSeconds(30);
         private Duration requestTimeout = Duration.ofSeconds(30);
         private String userAgent = "Pulsar-Java-v5";
-        private final Map<String, String> defaultHeaders = new LinkedHashMap<>();
         private long maxResponseBodyBytes = DEFAULT_MAX_RESPONSE_BODY_BYTES;
 
         private Builder(TlsPurpose tlsPurpose) {
@@ -168,16 +155,6 @@ public final class PulsarHttpClientConfig {
          */
         public Builder userAgent(String userAgent) {
             this.userAgent = userAgent;
-            return this;
-        }
-
-        /**
-         * @param name  default header name
-         * @param value default header value
-         * @return this builder
-         */
-        public Builder defaultHeader(String name, String value) {
-            this.defaultHeaders.put(name, value);
             return this;
         }
 

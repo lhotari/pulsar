@@ -96,8 +96,6 @@ public final class FrameworkHttpClient implements PulsarHttpClient {
             builder.setNameResolver(nameResolver);
         }
 
-        // Default headers first, then per-request headers so the latter win.
-        config.defaultHeaders().forEach(builder::setHeader);
         request.headers().forEach(builder::setHeader);
 
         request.body().ifPresent(body -> {
@@ -111,7 +109,6 @@ public final class FrameworkHttpClient implements PulsarHttpClient {
             }
         });
 
-        request.timeout().ifPresent(timeout -> builder.setRequestTimeout((int) timeout.toMillis()));
         return builder.build();
     }
 
