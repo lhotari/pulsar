@@ -483,6 +483,18 @@ public class ClientBuilderImpl implements ClientBuilder {
     }
 
     @Override
+    public ClientBuilder tlsFactoryClassName(String tlsFactoryClassName) {
+        conf.setTlsFactoryClassName(StringUtils.isBlank(tlsFactoryClassName) ? "" : tlsFactoryClassName);
+        return this;
+    }
+
+    @Override
+    public ClientBuilder tlsFactoryConfig(String tlsFactoryConfig) {
+        conf.setTlsFactoryConfig(StringUtils.isBlank(tlsFactoryConfig) ? "" : tlsFactoryConfig);
+        return this;
+    }
+
+    @Override
     public ClientBuilder autoCertRefreshSeconds(int autoCertRefreshSeconds) {
         conf.setAutoCertRefreshSeconds(autoCertRefreshSeconds);
         return this;

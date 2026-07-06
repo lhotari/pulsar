@@ -739,6 +739,27 @@ public interface ClientBuilder extends Serializable, Cloneable {
     ClientBuilder socks5ProxyScope(Socks5ProxyScope socks5ProxyScope);
 
     /**
+     * Set the class name of a custom {@code PulsarTlsFactory} (PIP-478) used to build the client's TLS
+     * engines. An empty value or the literal {@code "default"} selects the built-in file-based factory
+     * composed from the {@code tls*} settings; any other value is instantiated reflectively via its public
+     * no-arg constructor. This is the by-name successor of the removed PIP-337 {@code sslFactoryPlugin}.
+     *
+     * @param tlsFactoryClassName the {@code PulsarTlsFactory} class name (blank/{@code default} for built-in)
+     * @return the client builder instance
+     */
+    ClientBuilder tlsFactoryClassName(String tlsFactoryClassName);
+
+    /**
+     * Set the configuration parameters passed to a custom {@link #tlsFactoryClassName(String)} as its init
+     * params (PIP-478). Accepts a JSON object or a comma-separated {@code key=value} list; ignored by the
+     * built-in file-based factory.
+     *
+     * @param tlsFactoryConfig the factory configuration (JSON object or {@code key=value} list)
+     * @return the client builder instance
+     */
+    ClientBuilder tlsFactoryConfig(String tlsFactoryConfig);
+
+    /**
      * Set Cert Refresh interval in seconds.
      * @param autoCertRefreshSeconds
      * @return the client builder instance

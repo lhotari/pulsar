@@ -19,6 +19,7 @@
 package org.apache.pulsar.client.impl.tls;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import java.util.Map;
@@ -88,6 +89,87 @@ public class ClientTlsFactoryParamsDeliveryTest {
         conf.setServiceUrl("pulsar+ssl://localhost:6651");
         conf.setTlsFactory(factory);
         return conf;
+    }
+
+    // PIP-478 Part C: the v4 by-name selector tlsFactoryClassName instantiates a custom PulsarTlsFactory
+    // reflectively (no v5-builder instance/policy map set) and parses tlsFactoryConfig JSON into its init params.
+    @Test
+    public void byNameFactoryInstantiatedReflectivelyWithParsedJsonConfig() throws Exception {
+        ByNameCapturingTlsFactory.capturedParams = null;
+        ClientConfigurationData conf = new ClientConfigurationData();
+        conf.setServiceUrl("pulsar+ssl://localhost:6651");
+        conf.setTlsFactoryClassName(ByNameCapturingTlsFactory.class.getName());
+        conf.setTlsFactoryConfig("{\"issuerUrl\":\"https://idp.example\",\"region\":\"eu\"}");
+
+        PulsarTlsFactory resolved =
+                ClientTlsFactorySupport.resolveClientTlsFactory(conf, executor, executor, null);
+
+        assertThat(resolved).as("the by-name factory is instantiated reflectively")
+                .isInstanceOf(ByNameCapturingTlsFactory.class);
+        assertThat(ByNameCapturingTlsFactory.capturedParams)
+                .as("tlsFactoryConfig JSON is parsed into the factory init params")
+                .containsEntry("issuerUrl", "https://idp.example")
+                .containsEntry("region", "eu");
+    }
+
+    @Test
+    public void byNameFactoryParsesKeyValueConfig() throws Exception {
+        ByNameCapturingTlsFactory.capturedParams = null;
+        ClientConfigurationData conf = new ClientConfigurationData();
+        conf.setServiceUrl("pulsar+ssl://localhost:6651");
+        conf.setTlsFactoryClassName(ByNameCapturingTlsFactory.class.getName());
+        conf.setTlsFactoryConfig("issuerUrl=https://idp.example, region = eu");
+
+        ClientTlsFactorySupport.resolveClientTlsFactory(conf, executor, executor, null);
+
+        assertThat(ByNameCapturingTlsFactory.capturedParams)
+                .as("comma-separated key=value tlsFactoryConfig is parsed into the factory init params")
+                .containsEntry("issuerUrl", "https://idp.example")
+                .containsEntry("region", "eu");
+    }
+
+    @Test
+    public void byNameFactoryFailsLoudWhenClassNotInstantiable() {
+        ClientConfigurationData conf = new ClientConfigurationData();
+        conf.setServiceUrl("pulsar+ssl://localhost:6651");
+        conf.setTlsFactoryClassName("com.example.DoesNotExist");
+
+        assertThatThrownBy(() -> ClientTlsFactorySupport.resolveClientTlsFactory(conf, executor, executor, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("tlsFactoryClassName");
+    }
+
+    /**
+     * A public no-arg {@link PulsarTlsFactory} for the by-name reflective-instantiation test; records the
+     * init-context params statically (the factory is created reflectively, so no instance reference is held).
+     */
+    public static final class ByNameCapturingTlsFactory implements PulsarTlsFactory {
+        static volatile Map<String, String> capturedParams;
+
+        public ByNameCapturingTlsFactory() {
+        }
+
+        @Override
+        public CompletableFuture<Void> initialize(TlsFactoryInitContext context) {
+            capturedParams = context.params();
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(TlsPurpose purpose,
+                Class<T> instanceClass) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+
+        @Override
+        public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(TlsPurpose purpose,
+                Class<T> instanceClass, Consumer<T> onLoadOrReload) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+
+        @Override
+        public void close() {
+        }
     }
 
     /** A minimal {@link PulsarTlsFactory} that records the init-context params and serves an empty client context. */

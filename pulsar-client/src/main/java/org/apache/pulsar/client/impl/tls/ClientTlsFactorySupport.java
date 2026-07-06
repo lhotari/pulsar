@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.client.impl.tls;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslProvider;
 import io.opentelemetry.api.OpenTelemetry;
@@ -44,6 +45,7 @@ import org.apache.pulsar.common.tls.impl.FileBasedTlsFactory;
 import org.apache.pulsar.common.tls.impl.FileBasedTlsFactorySettings;
 import org.apache.pulsar.common.tls.impl.TlsContextAcquisition;
 import org.apache.pulsar.common.tls.impl.TlsSynthesisSpec;
+import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.tls.PulsarTlsFactory;
 import org.apache.pulsar.tls.TlsFactoryInitContext;
 import org.apache.pulsar.tls.TlsHandle;
@@ -124,8 +126,16 @@ public final class ClientTlsFactorySupport {
 
     /**
      * Resolve the effective client TLS factory, initialized and (on the v5-builder path) probed. Since the
-     * PIP-337 removal this always returns a non-null factory: an adopted v5 {@code tlsFactory}, or
-     * the built-in file-based factory composed from the {@code tls*} fields.
+     * PIP-337 removal this always returns a non-null factory. Selection precedence (PIP-478):
+     * <ol>
+     *   <li>a v5-builder-adopted {@code tlsFactory} instance (owned/closed by the client), or a v5
+     *       {@code tlsPolicyMap};</li>
+     *   <li>the v4 by-name selector {@code tlsFactoryClassName} — a custom {@link PulsarTlsFactory}
+     *       instantiated reflectively via its public no-arg constructor, parameterized by
+     *       {@code tlsFactoryConfig} (JSON object or {@code key=value} list), the by-name successor of the
+     *       removed PIP-337 {@code sslFactoryPlugin};</li>
+     *   <li>the built-in file-based factory composed from the {@code tls*} fields.</li>
+     * </ol>
      *
      * @param conf             the client configuration
      * @param scheduler        the framework scheduler (for material rotation polling)
@@ -140,9 +150,18 @@ public final class ClientTlsFactorySupport {
             throws Exception {
         boolean v5BuilderPath = conf.getTlsFactory() != null || conf.getTlsPolicyMap() != null;
         PulsarTlsFactory factory;
+        Map<String, String> initParams;
         if (conf.getTlsFactory() != null) {
             // The v5 builder adopted a custom factory; the client owns and closes it.
             factory = conf.getTlsFactory();
+            initParams = conf.getTlsFactoryParams() == null ? Map.of() : Map.copyOf(conf.getTlsFactoryParams());
+        } else if (conf.getTlsPolicyMap() == null && isCustomFactoryClass(conf.getTlsFactoryClassName())) {
+            // PIP-478 v4 by-name successor: no v5-builder instance/policy map is set, and tlsFactoryClassName
+            // names a custom PulsarTlsFactory. Instantiate it reflectively and parse tlsFactoryConfig JSON into
+            // its init params (mirrors the server-side TlsFactorySupport). The factory self-sources material;
+            // the tls* file/keystore composition below does not apply.
+            factory = instantiateNamedFactory(conf.getTlsFactoryClassName(), "tlsFactoryClassName");
+            initParams = parseFactoryConfig(conf.getTlsFactoryConfig());
         } else {
             // Fold the auth plugin's TLS identity (AuthenticationTls / AuthenticationKeyStoreTls) into
             // CLIENT_DEFAULT (auth-cert-wins), so a plugin-supplied client certificate reaches the transport
@@ -151,14 +170,88 @@ public final class ClientTlsFactorySupport {
             // so client construction never eagerly calls getAuthData() — no eager OAuth2 token fetch.
             factory = new FileBasedTlsFactory(composePolicies(conf), settings(conf),
                     clientDefaultAuthMaterialSuppliers(conf));
+            initParams = conf.getTlsFactoryParams() == null ? Map.of() : Map.copyOf(conf.getTlsFactoryParams());
         }
-        initializeBlocking(factory, initContext(conf, scheduler, blockingExecutor, openTelemetry));
+        initializeBlocking(factory, initContext(initParams, scheduler, blockingExecutor, openTelemetry));
         // Fail-fast probe only on the v5-builder path.
         if (v5BuilderPath) {
             probe(factory, TlsPurpose.CLIENT_DEFAULT,
                     TlsSynthesisSpec.client(conf.isTlsHostnameVerificationEnable()));
         }
         return factory;
+    }
+
+    /**
+     * Whether a factory class name selects a custom (reflectively-instantiated) {@link PulsarTlsFactory}
+     * rather than the built-in file-based default: a non-blank value that is neither the reserved
+     * {@code "default"} sentinel nor the default factory's own FQCN.
+     *
+     * @param factoryClassName the configured factory class name
+     * @return whether it names a custom factory
+     */
+    static boolean isCustomFactoryClass(String factoryClassName) {
+        if (StringUtils.isBlank(factoryClassName)) {
+            return false;
+        }
+        String name = factoryClassName.trim();
+        return !DEFAULT_FACTORY.equalsIgnoreCase(name) && !FileBasedTlsFactory.class.getName().equals(name);
+    }
+
+    /**
+     * Reflectively instantiate a named {@link PulsarTlsFactory} via its public no-arg constructor, failing
+     * loudly (an {@link IllegalArgumentException} naming the config key) when it cannot be instantiated.
+     *
+     * @param factoryClassName the factory class name to instantiate
+     * @param configKeyName    the config key naming it (for the failure message)
+     * @return the instantiated factory
+     */
+    static PulsarTlsFactory instantiateNamedFactory(String factoryClassName, String configKeyName) {
+        try {
+            return (PulsarTlsFactory) Class.forName(factoryClassName.trim()).getConstructor().newInstance();
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalArgumentException(
+                    "Could not instantiate " + configKeyName + " '" + factoryClassName + "'", e);
+        }
+    }
+
+    /**
+     * Parse a {@code tlsFactoryConfig} string into the factory init params map (mirrors the server-side
+     * {@code TlsFactorySupport.parseFactoryConfig}). A blank value yields an empty map; a value starting with
+     * <code>{</code> is parsed as a JSON object; otherwise it is parsed as a comma-separated
+     * {@code key=value} list.
+     *
+     * @param tlsFactoryConfig the configured factory params (may be null/blank)
+     * @return an immutable params map (possibly empty)
+     */
+    static Map<String, String> parseFactoryConfig(String tlsFactoryConfig) {
+        if (StringUtils.isBlank(tlsFactoryConfig)) {
+            return Map.of();
+        }
+        String trimmed = tlsFactoryConfig.trim();
+        if (trimmed.startsWith("{")) {
+            try {
+                Map<String, String> parsed = ObjectMapperFactory.getMapper().reader()
+                        .forType(new TypeReference<Map<String, String>>() {})
+                        .readValue(trimmed);
+                return parsed == null ? Map.of() : Map.copyOf(parsed);
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Failed to parse tlsFactoryConfig as a JSON object", e);
+            }
+        }
+        Map<String, String> map = new LinkedHashMap<>();
+        for (String pair : trimmed.split(",")) {
+            String entry = pair.trim();
+            if (entry.isEmpty()) {
+                continue;
+            }
+            int eq = entry.indexOf('=');
+            if (eq < 0) {
+                map.put(entry, "");
+            } else {
+                map.put(entry.substring(0, eq).trim(), entry.substring(eq + 1).trim());
+            }
+        }
+        return Map.copyOf(map);
     }
 
     /**
@@ -186,16 +279,8 @@ public final class ClientTlsFactorySupport {
      * @return an uninitialized {@link PulsarTlsFactory}
      */
     public static PulsarTlsFactory brokerClientTlsFactory(ClientConfigurationData conf, String factoryClassName) {
-        String className = factoryClassName == null ? "" : factoryClassName.trim();
-        if (!className.isEmpty()
-                && !DEFAULT_FACTORY.equalsIgnoreCase(className)
-                && !FileBasedTlsFactory.class.getName().equals(className)) {
-            try {
-                return (PulsarTlsFactory) Class.forName(className).getConstructor().newInstance();
-            } catch (ReflectiveOperationException e) {
-                throw new IllegalArgumentException(
-                        "Could not instantiate brokerClientTlsFactoryClassName '" + className + "'", e);
-            }
+        if (isCustomFactoryClass(factoryClassName)) {
+            return instantiateNamedFactory(factoryClassName, "brokerClientTlsFactoryClassName");
         }
         // Broker-client (server startup / replication client creation): register the broker-client TLS fold
         // when the plugin carries TLS material.
@@ -391,17 +476,17 @@ public final class ClientTlsFactorySupport {
         }
     }
 
-    private static TlsFactoryInitContext initContext(ClientConfigurationData conf,
+    private static TlsFactoryInitContext initContext(Map<String, String> params,
             ScheduledExecutorService scheduler, Executor blockingExecutor, OpenTelemetry openTelemetry) {
         OpenTelemetry ot = openTelemetry == null ? OpenTelemetry.noop() : openTelemetry;
-        // PIP-478: deliver the broker-supplied factory params (from brokerClientTlsFactoryConfig) to
-        // a custom factory; empty for the default file-based factory, which ignores them.
-        Map<String, String> params = conf.getTlsFactoryParams() == null
-                ? Map.of() : Map.copyOf(conf.getTlsFactoryParams());
+        // PIP-478: deliver the factory params to a custom factory — the broker-supplied params (from
+        // brokerClientTlsFactoryConfig) or the v4 client's parsed tlsFactoryConfig; empty for the default
+        // file-based factory, which ignores them.
+        Map<String, String> safeParams = params == null ? Map.of() : Map.copyOf(params);
         return new TlsFactoryInitContext() {
             @Override
             public Map<String, String> params() {
-                return params;
+                return safeParams;
             }
 
             @Override

@@ -208,6 +208,21 @@ public class ClientConfigurationData implements Serializable, Cloneable {
     )
     private boolean tlsHostnameVerificationEnable = true;
 
+    @ApiModelProperty(
+            name = "tlsFactoryClassName",
+            value = "PIP-478: the class name of a custom PulsarTlsFactory to build the client's TLS engines. "
+                    + "An empty value or the literal 'default' selects the built-in file-based factory composed "
+                    + "from the tls* fields; any other value is instantiated reflectively via its public no-arg "
+                    + "constructor. This is the by-name successor of the removed PIP-337 sslFactoryPlugin.")
+    private String tlsFactoryClassName = "";
+
+    @ApiModelProperty(
+            name = "tlsFactoryConfig",
+            value = "PIP-478: configuration parameters passed to a custom tlsFactoryClassName as its init "
+                    + "params. Accepts a JSON object or a comma-separated key=value list; ignored by the "
+                    + "built-in file-based factory.")
+    private String tlsFactoryConfig = "";
+
     // PIP-478: the client-side TLS SPI seam. These transient fields are set by the v5 builder
     // (never serialized; a shallow clone() keeps the references so the connection pool / HTTP lookup see
     // them). tlsPolicyMap holds the per-purpose TlsPolicy values configured through the v5 builder's
