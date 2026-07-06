@@ -44,6 +44,30 @@ import org.testng.annotations.Test;
  */
 public class ConfigurationDataUtilsTest {
 
+    // PIP-478: a stale, removed PIP-337 sslFactoryPlugin key in a loadConf map is rejected loudly with an
+    // actionable migration message pointing to the tlsFactoryClassName successor.
+    @Test
+    public void testRemovedPip337SslFactoryPluginKeysRejectedLoudly() {
+        for (String key : new String[] {"sslFactoryPlugin", "sslFactoryPluginParams"}) {
+            Map<String, Object> config = new HashMap<>();
+            config.put(key, "com.example.CustomSslFactory");
+            try {
+                ConfigurationDataUtils.rejectRemovedPip337TlsFactoryKeys(config);
+                fail("expected IllegalArgumentException for removed key " + key);
+            } catch (IllegalArgumentException e) {
+                assertTrue(e.getMessage().contains(key), "message should name the removed key: " + e.getMessage());
+                assertTrue(e.getMessage().contains("tlsFactoryClassName"),
+                        "message should point to the successor: " + e.getMessage());
+            }
+        }
+        // A blank value (the default) or an absent key is tolerated.
+        Map<String, Object> tolerated = new HashMap<>();
+        tolerated.put("sslFactoryPlugin", "");
+        ConfigurationDataUtils.rejectRemovedPip337TlsFactoryKeys(tolerated);
+        ConfigurationDataUtils.rejectRemovedPip337TlsFactoryKeys(new HashMap<>());
+        ConfigurationDataUtils.rejectRemovedPip337TlsFactoryKeys(null);
+    }
+
     @Test
     public void testLoadClientConfigurationData() {
         ClientConfigurationData confData = new ClientConfigurationData();

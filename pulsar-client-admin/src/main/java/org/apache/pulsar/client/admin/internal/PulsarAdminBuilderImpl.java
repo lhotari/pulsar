@@ -73,6 +73,8 @@ public class PulsarAdminBuilderImpl implements PulsarAdminBuilder {
 
     @Override
     public PulsarAdminBuilder loadConf(Map<String, Object> config) {
+        // PIP-478: reject a stale, removed PIP-337 sslFactoryPlugin key with an actionable message.
+        ConfigurationDataUtils.rejectRemovedPip337TlsFactoryKeys(config);
         conf = ConfigurationDataUtils.loadData(config, conf, ClientConfigurationData.class);
         setAuthenticationFromPropsIfAvailable(conf);
         if (config.containsKey("acceptGzipCompression")) {

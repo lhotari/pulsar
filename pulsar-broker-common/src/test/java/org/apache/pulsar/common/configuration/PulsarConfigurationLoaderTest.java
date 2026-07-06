@@ -25,6 +25,7 @@ import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.expectThrows;
 import com.google.common.collect.Sets;
 import java.io.File;
 import java.io.FileInputStream;
@@ -84,6 +85,37 @@ public class PulsarConfigurationLoaderTest {
     public void testConfigurationConverting_checkNonExistMember() {
         assertThrows(IllegalArgumentException.class,
                 () -> PulsarConfigurationLoader.convertFrom(new MockConfiguration(), false));
+    }
+
+    // PIP-478: a stale, removed PIP-337 sslFactoryPlugin key set to a non-default value is rejected loudly at
+    // config-file load with an actionable migration message, replacing the removed @Deprecated fail-loud field.
+    @Test
+    public void testRemovedPip337SslFactoryPluginKeysRejectedLoudly() {
+        for (String key : new String[] {"sslFactoryPlugin", "sslFactoryPluginParams",
+                "brokerClientSslFactoryPlugin", "brokerClientSslFactoryPluginParams"}) {
+            Properties props = new Properties();
+            props.setProperty("clusterName", "test");
+            props.setProperty(key, "com.example.CustomSslFactory");
+            IllegalArgumentException ex = expectThrows(IllegalArgumentException.class,
+                    () -> PulsarConfigurationLoader.create(props, ServiceConfiguration.class));
+            assertTrue(ex.getMessage().contains(key), "message should name the removed key: " + ex.getMessage());
+            assertTrue(ex.getMessage().contains("tlsFactoryClassName"),
+                    "message should point to the successor: " + ex.getMessage());
+        }
+        // A blank value (the default) is tolerated -> loads cleanly.
+        Properties blank = new Properties();
+        blank.setProperty("clusterName", "test");
+        blank.setProperty("sslFactoryPlugin", "");
+        blank.setProperty("brokerClientSslFactoryPlugin", "");
+        assertNotNull(expectNoThrow(() -> PulsarConfigurationLoader.create(blank, ServiceConfiguration.class)));
+    }
+
+    private static <T> T expectNoThrow(java.util.concurrent.Callable<T> callable) {
+        try {
+            return callable.call();
+        } catch (Exception e) {
+            throw new AssertionError("expected no exception but got: " + e, e);
+        }
     }
 
     // Deprecation warning suppressed as this test targets deprecated methods

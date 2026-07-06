@@ -88,6 +88,8 @@ public class ClientBuilderImpl implements ClientBuilder {
 
     @Override
     public ClientBuilder loadConf(Map<String, Object> config) {
+        // PIP-478: reject a stale, removed PIP-337 sslFactoryPlugin key with an actionable message.
+        ConfigurationDataUtils.rejectRemovedPip337TlsFactoryKeys(config);
         conf = ConfigurationDataUtils.loadData(config, conf, ClientConfigurationData.class);
         setAuthenticationFromPropsIfAvailable(conf);
         return this;
