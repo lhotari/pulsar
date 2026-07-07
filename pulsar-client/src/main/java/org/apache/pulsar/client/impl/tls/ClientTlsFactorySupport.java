@@ -26,6 +26,7 @@ import java.time.Clock;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -96,11 +97,12 @@ public final class ClientTlsFactorySupport {
      * (PIP-478). Precedence:
      * <ol>
      *   <li>an explicit {@code jcaProvider} config key wins;</li>
-     *   <li>otherwise the v4 {@code sslProvider} value is split along two axes — the
-     *       {@code OPENSSL}/{@code OPENSSL_REFCNT} literals select the native engine (handled by
-     *       {@link #engineProvider(String)}); any other non-blank value is treated as a JCA provider name and
-     *       routed here, restoring the v4 behavior of honoring that named provider (via the JDK engine) rather
-     *       than silently dropping it on upgrade.</li>
+     *   <li>otherwise the v4 {@code sslProvider} value is split along two axes — the Netty
+     *       {@link SslProvider} engine literals ({@code JDK} / {@code OPENSSL} / {@code OPENSSL_REFCNT},
+     *       case-insensitive) stay on the engine axis (handled by {@link #engineProvider(String)}) and leave
+     *       {@code jcaProvider} null; any other non-blank value is treated as a JCA provider name and routed
+     *       here, restoring the v4 behavior of honoring that named provider (via the JDK engine) rather than
+     *       silently dropping it on upgrade.</li>
      * </ol>
      *
      * @param conf the client configuration
@@ -111,13 +113,33 @@ public final class ClientTlsFactorySupport {
             return conf.getJcaProvider().trim();
         }
         String sslProvider = conf.getSslProvider();
-        if (StringUtils.isNotBlank(sslProvider)) {
-            String p = sslProvider.trim();
-            if (!"OPENSSL".equalsIgnoreCase(p) && !"OPENSSL_REFCNT".equalsIgnoreCase(p)) {
-                return p;
-            }
+        if (StringUtils.isNotBlank(sslProvider) && !isSslProviderEngineLiteral(sslProvider)) {
+            return sslProvider.trim();
         }
         return null;
+    }
+
+    /**
+     * Whether the {@code sslProvider} string names a Netty {@link SslProvider} engine literal ({@code JDK} /
+     * {@code OPENSSL} / {@code OPENSSL_REFCNT}, case-insensitive) rather than a JCA crypto provider name. Engine
+     * literals stay on the engine axis ({@link #engineProvider(String)} maps them to the Netty engine); only
+     * other values are routed to the {@code jcaProvider} axis by {@link #resolveClientJcaProvider}. This keeps a
+     * valid v4 {@code sslProvider=JDK} on the engine axis instead of misrouting it to a (non-existent) JCA
+     * provider named "JDK", which would fail loudly.
+     *
+     * @param sslProvider the configured {@code sslProvider} string (may be null/blank)
+     * @return whether it is a Netty {@link SslProvider} engine literal
+     */
+    private static boolean isSslProviderEngineLiteral(String sslProvider) {
+        if (StringUtils.isBlank(sslProvider)) {
+            return false;
+        }
+        try {
+            SslProvider.valueOf(sslProvider.trim().toUpperCase(Locale.ROOT));
+            return true;
+        } catch (IllegalArgumentException notAnEngineLiteral) {
+            return false;
+        }
     }
 
     /**

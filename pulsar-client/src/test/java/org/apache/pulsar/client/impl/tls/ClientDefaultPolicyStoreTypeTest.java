@@ -101,4 +101,21 @@ public class ClientDefaultPolicyStoreTypeTest {
         // Unset sslProvider + unset jcaProvider -> null.
         assertThat(ClientTlsFactorySupport.clientDefaultPolicy(new ClientConfigurationData()).jcaProvider()).isNull();
     }
+
+    // PIP-478 (FIX): sslProvider=JDK is a valid Netty SslProvider engine literal (v4 accepted it) — it must
+    // stay on the ENGINE axis and leave jcaProvider unset, NOT be misrouted to a (non-existent) JCA provider
+    // named "JDK", which JcaProviders.resolveNamedProvider would reject loudly at build. Regression guard.
+    @Test
+    public void jdkEngineLiteralStaysEngineOnlyWhileOtherProviderMigrates() {
+        for (String jdk : new String[] {"JDK", "jdk", " Jdk "}) {
+            ClientConfigurationData conf = new ClientConfigurationData();
+            conf.setSslProvider(jdk);
+            assertThat(ClientTlsFactorySupport.clientDefaultPolicy(conf).jcaProvider())
+                    .as("engine literal '" + jdk + "' leaves jcaProvider unset").isNull();
+        }
+        // A non-engine-literal value (a JCA provider name) still migrates to jcaProvider (v4 parity).
+        ClientConfigurationData bcfips = new ClientConfigurationData();
+        bcfips.setSslProvider("BCFIPS");
+        assertThat(ClientTlsFactorySupport.clientDefaultPolicy(bcfips).jcaProvider()).isEqualTo("BCFIPS");
+    }
 }
