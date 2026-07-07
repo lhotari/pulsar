@@ -256,7 +256,7 @@ public class WebSocketProxyConfiguration implements PulsarConfiguration {
                     + "ServiceLoader mechanism (with a fallback to an already-registered provider), failing "
                     + "loudly when unresolvable."
     )
-    private String jcaProvider = null;
+    private String jsseProvider = null;
 
     @FieldContext(
             doc = "TLS KeyStore type configuration in WebSocket: JKS, PKCS12"

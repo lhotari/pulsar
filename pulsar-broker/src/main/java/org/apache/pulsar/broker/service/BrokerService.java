@@ -1658,13 +1658,13 @@ public class BrokerService implements Closeable {
                 .allowTlsInsecureConnection(isTlsAllowInsecureConnection)
                 .enableTlsHostnameVerification(isTlsHostnameVerificationEnabled)
                 // PIP-478: propagate the broker-client TLS engine (sslProvider) and JCA crypto provider
-                // (jcaProvider) so geo-replication clients honor them, mirroring
+                // (jsseProvider) so geo-replication clients honor them, mirroring
                 // PulsarService.createClientConfigurationData. Without this the replication client silently
                 // builds TLS with the default JDK provider (e.g. a FIPS/OpenSSL provider downgrade).
                 .sslProvider(pulsar.getConfiguration().getBrokerClientSslProvider());
-        // jcaProvider has no ClientBuilder setter; set it on the underlying config like sslProvider above.
+        // jsseProvider has no ClientBuilder setter; set it on the underlying config like sslProvider above.
         ((ClientBuilderImpl) clientBuilder).getClientConfigurationData()
-                .setJcaProvider(pulsar.getConfiguration().getBrokerClientJcaProvider());
+                .setJsseProvider(pulsar.getConfiguration().getBrokerClientJsseProvider());
         if (brokerClientTlsEnabledWithKeyStore) {
             clientBuilder.useKeyStoreTls(true)
                     .tlsTrustStoreType(brokerClientTlsTrustStoreType)
@@ -1705,13 +1705,13 @@ public class BrokerService implements Closeable {
         adminBuilder.allowTlsInsecureConnection(isTlsAllowInsecureConnection)
                 .enableTlsHostnameVerification(isTlsHostnameVerificationEnabled)
                 // PIP-478: propagate the broker-client TLS engine (sslProvider) and JCA crypto provider
-                // (jcaProvider) so cross-cluster admin clients honor them, mirroring
+                // (jsseProvider) so cross-cluster admin clients honor them, mirroring
                 // PulsarService.createClientConfigurationData. Without this the cluster admin silently builds
                 // TLS with the default JDK provider (e.g. a FIPS/OpenSSL provider downgrade).
                 .sslProvider(pulsar.getConfiguration().getBrokerClientSslProvider());
-        // jcaProvider has no PulsarAdminBuilder setter; set it on the underlying config like sslProvider.
+        // jsseProvider has no PulsarAdminBuilder setter; set it on the underlying config like sslProvider.
         ((PulsarAdminBuilderImpl) adminBuilder).getConf()
-                .setJcaProvider(pulsar.getConfiguration().getBrokerClientJcaProvider());
+                .setJsseProvider(pulsar.getConfiguration().getBrokerClientJsseProvider());
     }
 
     public PulsarAdmin getClusterPulsarAdmin(String cluster, Optional<ClusterData> clusterDataOp) {

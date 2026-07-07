@@ -64,7 +64,7 @@ public final class TlsPolicy {
     private final List<String> protocols;
     private final List<String> ciphers;
     // optional JCA crypto provider (a java.security.Provider name)
-    private final String jcaProvider;
+    private final String jsseProvider;
 
     private TlsPolicy(Builder b) {
         this.format = b.format;
@@ -81,7 +81,7 @@ public final class TlsPolicy {
         this.enableHostnameVerification = b.enableHostnameVerification;
         this.protocols = List.copyOf(b.protocols);
         this.ciphers = List.copyOf(b.ciphers);
-        this.jcaProvider = b.jcaProvider;
+        this.jsseProvider = b.jsseProvider;
     }
 
     /**
@@ -192,8 +192,8 @@ public final class TlsPolicy {
      *
      * @return the JCA crypto provider name, or {@code null}/blank for the platform default
      */
-    public String jcaProvider() {
-        return jcaProvider;
+    public String jsseProvider() {
+        return jsseProvider;
     }
 
     /**
@@ -282,7 +282,7 @@ public final class TlsPolicy {
                 && Objects.equals(trustStoreType, that.trustStoreType)
                 && protocols.equals(that.protocols)
                 && ciphers.equals(that.ciphers)
-                && Objects.equals(jcaProvider, that.jcaProvider);
+                && Objects.equals(jsseProvider, that.jsseProvider);
     }
 
     @Override
@@ -290,7 +290,7 @@ public final class TlsPolicy {
         return Objects.hash(format, trustCertsFilePath, certificateFilePath, keyFilePath,
                 trustStorePath, trustStorePassword, keyStorePath, keyStorePassword, keyStoreType,
                 trustStoreType, allowInsecureConnection, enableHostnameVerification, protocols, ciphers,
-                jcaProvider);
+                jsseProvider);
     }
 
     @Override
@@ -310,7 +310,7 @@ public final class TlsPolicy {
                 + ", enableHostnameVerification=" + enableHostnameVerification
                 + ", protocols=" + protocols
                 + ", ciphers=" + ciphers
-                + ", jcaProvider=" + jcaProvider
+                + ", jsseProvider=" + jsseProvider
                 + '}';
     }
 
@@ -333,7 +333,7 @@ public final class TlsPolicy {
         private boolean enableHostnameVerification = true;
         private List<String> protocols = List.of();
         private List<String> ciphers = List.of();
-        private String jcaProvider;
+        private String jsseProvider;
 
         private Builder() {
         }
@@ -467,14 +467,14 @@ public final class TlsPolicy {
         }
 
         /**
-         * @param jcaProvider the JCA crypto provider name (a {@link java.security.Provider} name, e.g. a FIPS /
+         * @param jsseProvider the JCA crypto provider name (a {@link java.security.Provider} name, e.g. a FIPS /
          *                    BouncyCastle / PKCS#11 provider); blank/{@code null} uses the platform default.
          *                    When set, the default file-based factory pins the JDK engine backed by this
          *                    provider (overriding the factory engine choice).
          * @return this builder
          */
-        public Builder jcaProvider(String jcaProvider) {
-            this.jcaProvider = jcaProvider;
+        public Builder jsseProvider(String jsseProvider) {
+            this.jsseProvider = jsseProvider;
             return this;
         }
 

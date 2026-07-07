@@ -148,7 +148,7 @@ public final class JcaProviders {
     }
 
     /**
-     * Resolve a named JCA crypto {@link Provider} for the PIP-478 {@code jcaProvider} field. Resolution uses
+     * Resolve a named JCA crypto {@link Provider} for the PIP-478 {@code jsseProvider} field. Resolution uses
      * the {@link ServiceLoader} mechanism on the application (thread-context) class loader
      * ({@code META-INF/services/java.security.Provider}), matching by {@link Provider#getName()}; it falls
      * back to a provider already statically registered in the JVM ({@link Security#getProvider(String)}); and

@@ -78,7 +78,7 @@ public final class JdkSslContexts {
 
     /**
      * Assemble a JDK {@link SSLContext} backed by an already-resolved {@link Provider} (or the platform default
-     * when {@code provider} is {@code null}). This is the PIP-478 {@code jcaProvider} entry point: the caller
+     * when {@code provider} is {@code null}). This is the PIP-478 {@code jsseProvider} entry point: the caller
      * resolves the named provider (fail-loud) via {@link JcaProviders#resolveNamedProvider(String)} and passes
      * it here, so the JDK-engine web/Jetty and fallback paths honor a pinned FIPS / BouncyCastle / PKCS#11
      * provider.
@@ -113,8 +113,8 @@ public final class JdkSslContexts {
         if (certificates != null && privateKey != null) {
             ksh.setPrivateKey("private", privateKey, certificates);
             // Pin the KeyManagerFactory to the resolved provider (like the SSLContext and TrustManagerFactory
-            // above), so a configured jcaProvider (FIPS / BouncyCastle / PKCS#11) also backs the private-key
-            // side; the null-provider path is unchanged, so no regression when jcaProvider is unset.
+            // above), so a configured jsseProvider (FIPS / BouncyCastle / PKCS#11) also backs the private-key
+            // side; the null-provider path is unchanged, so no regression when jsseProvider is unset.
             KeyManagerFactory kmf = provider != null
                     ? KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm(), provider)
                     : KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());

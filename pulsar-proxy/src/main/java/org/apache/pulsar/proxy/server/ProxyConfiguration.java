@@ -641,7 +641,7 @@ public class ProxyConfiguration implements PulsarConfiguration {
                     + "factory builds the JDK engine backed by this provider, overriding the engine choice. "
                     + "Resolved via the ServiceLoader mechanism (with a fallback to an already-registered "
                     + "provider), failing loudly when unresolvable.")
-    private String jcaProvider = null;
+    private String jsseProvider = null;
 
     @FieldContext(
             category = CATEGORY_KEYSTORE_TLS,
@@ -715,7 +715,7 @@ public class ProxyConfiguration implements PulsarConfiguration {
                     + "When set, the default factory builds the JDK engine backed by this provider, overriding "
                     + "the engine choice. Resolved via the ServiceLoader mechanism (with a fallback to an "
                     + "already-registered provider), failing loudly when unresolvable.")
-    private String brokerClientJcaProvider = null;
+    private String brokerClientJsseProvider = null;
 
     // needed when client auth is required
     @FieldContext(

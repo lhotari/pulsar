@@ -68,54 +68,54 @@ public class ClientDefaultPolicyStoreTypeTest {
         assertThat(policy.keyStorePath()).isNull();
     }
 
-    // PIP-478 Part D: an explicit jcaProvider config key maps onto TlsPolicy.jcaProvider.
+    // PIP-478 Part D: an explicit jsseProvider config key maps onto TlsPolicy.jsseProvider.
     @Test
-    public void explicitJcaProviderKeyMapsToPolicy() {
+    public void explicitJsseProviderKeyMapsToPolicy() {
         ClientConfigurationData conf = new ClientConfigurationData();
-        conf.setJcaProvider("BCFIPS");
-        conf.setSslProvider("OPENSSL"); // engine axis; must not clobber the explicit jcaProvider
+        conf.setJsseProvider("BCFIPS");
+        conf.setSslProvider("OPENSSL"); // engine axis; must not clobber the explicit jsseProvider
 
         TlsPolicy policy = ClientTlsFactorySupport.clientDefaultPolicy(conf);
 
-        assertThat(policy.jcaProvider()).isEqualTo("BCFIPS");
+        assertThat(policy.jsseProvider()).isEqualTo("BCFIPS");
     }
 
-    // PIP-478 Part D: the v4 sslProvider two-axis split — a non-OPENSSL provider name migrates to jcaProvider
-    // (restoring v4 behavior), while OPENSSL/OPENSSL_REFCNT stay engine-only and leave jcaProvider unset.
+    // PIP-478 Part D: the v4 sslProvider two-axis split — a non-OPENSSL provider name migrates to jsseProvider
+    // (restoring v4 behavior), while OPENSSL/OPENSSL_REFCNT stay engine-only and leave jsseProvider unset.
     @Test
-    public void sslProviderProviderNameMigratesToJcaProvider() {
+    public void sslProviderProviderNameMigratesToJsseProvider() {
         ClientConfigurationData conf = new ClientConfigurationData();
         conf.setSslProvider("Conscrypt");
 
-        assertThat(ClientTlsFactorySupport.clientDefaultPolicy(conf).jcaProvider()).isEqualTo("Conscrypt");
+        assertThat(ClientTlsFactorySupport.clientDefaultPolicy(conf).jsseProvider()).isEqualTo("Conscrypt");
     }
 
     @Test
-    public void openSslLiteralsStayEngineOnlyAndLeaveJcaProviderUnset() {
+    public void openSslLiteralsStayEngineOnlyAndLeaveJsseProviderUnset() {
         for (String engine : new String[] {"OPENSSL", "OPENSSL_REFCNT", "openssl"}) {
             ClientConfigurationData conf = new ClientConfigurationData();
             conf.setSslProvider(engine);
-            assertThat(ClientTlsFactorySupport.clientDefaultPolicy(conf).jcaProvider())
-                    .as("engine literal '" + engine + "' does not populate jcaProvider").isNull();
+            assertThat(ClientTlsFactorySupport.clientDefaultPolicy(conf).jsseProvider())
+                    .as("engine literal '" + engine + "' does not populate jsseProvider").isNull();
         }
-        // Unset sslProvider + unset jcaProvider -> null.
-        assertThat(ClientTlsFactorySupport.clientDefaultPolicy(new ClientConfigurationData()).jcaProvider()).isNull();
+        // Unset sslProvider + unset jsseProvider -> null.
+        assertThat(ClientTlsFactorySupport.clientDefaultPolicy(new ClientConfigurationData()).jsseProvider()).isNull();
     }
 
     // PIP-478 (FIX): sslProvider=JDK is a valid Netty SslProvider engine literal (v4 accepted it) — it must
-    // stay on the ENGINE axis and leave jcaProvider unset, NOT be misrouted to a (non-existent) JCA provider
+    // stay on the ENGINE axis and leave jsseProvider unset, NOT be misrouted to a (non-existent) JCA provider
     // named "JDK", which JcaProviders.resolveNamedProvider would reject loudly at build. Regression guard.
     @Test
     public void jdkEngineLiteralStaysEngineOnlyWhileOtherProviderMigrates() {
         for (String jdk : new String[] {"JDK", "jdk", " Jdk "}) {
             ClientConfigurationData conf = new ClientConfigurationData();
             conf.setSslProvider(jdk);
-            assertThat(ClientTlsFactorySupport.clientDefaultPolicy(conf).jcaProvider())
-                    .as("engine literal '" + jdk + "' leaves jcaProvider unset").isNull();
+            assertThat(ClientTlsFactorySupport.clientDefaultPolicy(conf).jsseProvider())
+                    .as("engine literal '" + jdk + "' leaves jsseProvider unset").isNull();
         }
-        // A non-engine-literal value (a JCA provider name) still migrates to jcaProvider (v4 parity).
+        // A non-engine-literal value (a JCA provider name) still migrates to jsseProvider (v4 parity).
         ClientConfigurationData bcfips = new ClientConfigurationData();
         bcfips.setSslProvider("BCFIPS");
-        assertThat(ClientTlsFactorySupport.clientDefaultPolicy(bcfips).jcaProvider()).isEqualTo("BCFIPS");
+        assertThat(ClientTlsFactorySupport.clientDefaultPolicy(bcfips).jsseProvider()).isEqualTo("BCFIPS");
     }
 }

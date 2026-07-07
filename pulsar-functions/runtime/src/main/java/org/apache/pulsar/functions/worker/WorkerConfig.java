@@ -584,7 +584,7 @@ public class WorkerConfig implements Serializable, PulsarConfiguration {
                     + "ServiceLoader mechanism (with a fallback to an already-registered provider), failing "
                     + "loudly when unresolvable."
     )
-    private String jcaProvider = null;
+    private String jsseProvider = null;
 
     @FieldContext(
             category = CATEGORY_KEYSTORE_TLS,

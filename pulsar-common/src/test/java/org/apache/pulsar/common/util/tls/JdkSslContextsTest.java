@@ -30,8 +30,8 @@ import org.testng.annotations.Test;
 
 /**
  * PIP-478 (FIX): {@link JdkSslContexts#createSslContextWithProvider} pins the {@code KeyManagerFactory} to the
- * resolved jcaProvider (like the {@code SSLContext} and {@code TrustManagerFactory}), while the null-provider
- * path is unchanged so an unset jcaProvider does not regress.
+ * resolved jsseProvider (like the {@code SSLContext} and {@code TrustManagerFactory}), while the null-provider
+ * path is unchanged so an unset jsseProvider does not regress.
  */
 public class JdkSslContextsTest {
 
@@ -62,7 +62,7 @@ public class JdkSslContextsTest {
     }
 
     // Regression guard: provider == null keeps the KeyManagerFactory on the default (no-provider) form, so an
-    // unset jcaProvider is unaffected by FIX 5.
+    // unset jsseProvider is unaffected by FIX 5.
     @Test
     public void nullProviderPathUnchanged() throws Exception {
         X509Certificate[] trust = PemReader.loadCertificatesFromPemFile(RSA_CA);

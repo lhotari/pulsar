@@ -96,11 +96,11 @@ public final class ClientTlsFactorySupport {
      * Resolve the client's JCA crypto provider name for the {@code CLIENT_DEFAULT} {@link TlsPolicy}
      * (PIP-478). Precedence:
      * <ol>
-     *   <li>an explicit {@code jcaProvider} config key wins;</li>
+     *   <li>an explicit {@code jsseProvider} config key wins;</li>
      *   <li>otherwise the v4 {@code sslProvider} value is split along two axes — the Netty
      *       {@link SslProvider} engine literals ({@code JDK} / {@code OPENSSL} / {@code OPENSSL_REFCNT},
      *       case-insensitive) stay on the engine axis (handled by {@link #engineProvider(String)}) and leave
-     *       {@code jcaProvider} null; any other non-blank value is treated as a JCA provider name and routed
+     *       {@code jsseProvider} null; any other non-blank value is treated as a JCA provider name and routed
      *       here, restoring the v4 behavior of honoring that named provider (via the JDK engine) rather than
      *       silently dropping it on upgrade.</li>
      * </ol>
@@ -108,9 +108,9 @@ public final class ClientTlsFactorySupport {
      * @param conf the client configuration
      * @return the JCA provider name, or {@code null} when none applies
      */
-    static String resolveClientJcaProvider(ClientConfigurationData conf) {
-        if (StringUtils.isNotBlank(conf.getJcaProvider())) {
-            return conf.getJcaProvider().trim();
+    static String resolveClientJsseProvider(ClientConfigurationData conf) {
+        if (StringUtils.isNotBlank(conf.getJsseProvider())) {
+            return conf.getJsseProvider().trim();
         }
         String sslProvider = conf.getSslProvider();
         if (StringUtils.isNotBlank(sslProvider) && !isSslProviderEngineLiteral(sslProvider)) {
@@ -123,7 +123,7 @@ public final class ClientTlsFactorySupport {
      * Whether the {@code sslProvider} string names a Netty {@link SslProvider} engine literal ({@code JDK} /
      * {@code OPENSSL} / {@code OPENSSL_REFCNT}, case-insensitive) rather than a JCA crypto provider name. Engine
      * literals stay on the engine axis ({@link #engineProvider(String)} maps them to the Netty engine); only
-     * other values are routed to the {@code jcaProvider} axis by {@link #resolveClientJcaProvider}. This keeps a
+     * other values are routed to the {@code jsseProvider} axis by {@link #resolveClientJsseProvider}. This keeps a
      * valid v4 {@code sslProvider=JDK} on the engine axis instead of misrouting it to a (non-existent) JCA
      * provider named "JDK", which would fail loudly.
      *
@@ -156,7 +156,7 @@ public final class ClientTlsFactorySupport {
                 .enableHostnameVerification(conf.isTlsHostnameVerificationEnable())
                 .protocols(toList(conf.getTlsProtocols()))
                 .ciphers(toList(conf.getTlsCiphers()))
-                .jcaProvider(resolveClientJcaProvider(conf));
+                .jsseProvider(resolveClientJsseProvider(conf));
         if (conf.isUseKeyStoreTls()) {
             // Map the keystore and truststore types independently (v4 parity): a mixed setup such as a PKCS12
             // keystore with a JKS truststore must load each store with its own type.

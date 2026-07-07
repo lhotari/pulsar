@@ -930,11 +930,11 @@ public class ProxyConnection extends PulsarHandler {
             }
             clientConf.setTlsAllowInsecureConnection(proxyConfig.isTlsAllowInsecureConnection());
             // PIP-478: propagate the broker-client TLS engine (sslProvider) and JCA crypto provider
-            // (jcaProvider) onto the internal lookup client config so the proxy's outbound broker client
+            // (jsseProvider) onto the internal lookup client config so the proxy's outbound broker client
             // honors them — otherwise they are dropped (never copied into ClientConfigurationData) and the
             // engine/provider silently defaults.
             clientConf.setSslProvider(proxyConfig.getBrokerClientSslProvider());
-            clientConf.setJcaProvider(proxyConfig.getBrokerClientJcaProvider());
+            clientConf.setJsseProvider(proxyConfig.getBrokerClientJsseProvider());
             clientConf.setTlsFactory(service.getLookupClientTlsFactory());
         }
         return clientConf;

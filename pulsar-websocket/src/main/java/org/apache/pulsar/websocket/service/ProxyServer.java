@@ -259,7 +259,7 @@ public class ProxyServer {
                 .protocols(toList(config.getWebServiceTlsProtocols()))
                 .ciphers(toList(config.getWebServiceTlsCiphers()))
                 // PIP-478: pin the JCA crypto provider for the websocket web listener (Goal #5).
-                .jcaProvider(config.getJcaProvider());
+                .jsseProvider(config.getJsseProvider());
         if (config.isTlsEnabledWithKeyStore()) {
             policyBuilder.format(TlsPolicy.Format.KEYSTORE)
                     .keyStoreType(config.getTlsKeyStoreType())
