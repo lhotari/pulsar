@@ -148,6 +148,7 @@ import org.apache.pulsar.broker.validator.BindAddressValidator;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.PulsarAdminBuilder;
 import org.apache.pulsar.client.admin.PulsarAdminException;
+import org.apache.pulsar.client.admin.internal.PulsarAdminBuilderImpl;
 import org.apache.pulsar.client.api.ClientBuilder;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
@@ -1655,7 +1656,15 @@ public class BrokerService implements Closeable {
         clientBuilder
                 .serviceUrl(serviceUrl)
                 .allowTlsInsecureConnection(isTlsAllowInsecureConnection)
-                .enableTlsHostnameVerification(isTlsHostnameVerificationEnabled);
+                .enableTlsHostnameVerification(isTlsHostnameVerificationEnabled)
+                // PIP-478: propagate the broker-client TLS engine (sslProvider) and JCA crypto provider
+                // (jcaProvider) so geo-replication clients honor them, mirroring
+                // PulsarService.createClientConfigurationData. Without this the replication client silently
+                // builds TLS with the default JDK provider (e.g. a FIPS/OpenSSL provider downgrade).
+                .sslProvider(pulsar.getConfiguration().getBrokerClientSslProvider());
+        // jcaProvider has no ClientBuilder setter; set it on the underlying config like sslProvider above.
+        ((ClientBuilderImpl) clientBuilder).getClientConfigurationData()
+                .setJcaProvider(pulsar.getConfiguration().getBrokerClientJcaProvider());
         if (brokerClientTlsEnabledWithKeyStore) {
             clientBuilder.useKeyStoreTls(true)
                     .tlsTrustStoreType(brokerClientTlsTrustStoreType)
@@ -1694,7 +1703,15 @@ public class BrokerService implements Closeable {
                     .tlsCertificateFilePath(brokerClientCertificateFilePath);
         }
         adminBuilder.allowTlsInsecureConnection(isTlsAllowInsecureConnection)
-                .enableTlsHostnameVerification(isTlsHostnameVerificationEnabled);
+                .enableTlsHostnameVerification(isTlsHostnameVerificationEnabled)
+                // PIP-478: propagate the broker-client TLS engine (sslProvider) and JCA crypto provider
+                // (jcaProvider) so cross-cluster admin clients honor them, mirroring
+                // PulsarService.createClientConfigurationData. Without this the cluster admin silently builds
+                // TLS with the default JDK provider (e.g. a FIPS/OpenSSL provider downgrade).
+                .sslProvider(pulsar.getConfiguration().getBrokerClientSslProvider());
+        // jcaProvider has no PulsarAdminBuilder setter; set it on the underlying config like sslProvider.
+        ((PulsarAdminBuilderImpl) adminBuilder).getConf()
+                .setJcaProvider(pulsar.getConfiguration().getBrokerClientJcaProvider());
     }
 
     public PulsarAdmin getClusterPulsarAdmin(String cluster, Optional<ClusterData> clusterDataOp) {
