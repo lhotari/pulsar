@@ -96,6 +96,48 @@ public class CredentialOffloadTest {
     }
 
     @Test
+    public void slowFileTokenSupplierRunsOnBlockingExecutorNotCaller() throws Exception {
+        // PIP-478 FIX B: the built-in token body's supplier can be a file:/... reader (Files.readAllBytes),
+        // so its read must be off-loaded onto the blocking executor, never run inline on the caller/event loop.
+        ExecutorService blocking = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, BLOCKING_THREAD_NAME);
+            t.setDaemon(true);
+            return t;
+        });
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        try {
+            AtomicReference<String> supplierThread = new AtomicReference<>();
+            CountDownLatch entered = new CountDownLatch(1);
+            TokenAuthenticationV5 body = new TokenAuthenticationV5(() -> {
+                supplierThread.set(Thread.currentThread().getName());
+                entered.countDown();
+                sleep(300);
+                return "the-file-token";
+            });
+
+            V5BinaryAuthenticationDriver driver =
+                    new V5BinaryAuthenticationDriver(body, services(blocking, scheduler));
+            AuthenticationExchange exchange = driver.newAuthenticationExchange("broker.example.com");
+
+            String callerThread = Thread.currentThread().getName();
+            CompletableFuture<AuthData> future = exchange.getAuthDataAsync();
+
+            // The read is off-loaded: the future must NOT already be complete on the caller thread.
+            assertThat(entered.await(5, SECONDS)).isTrue();
+            assertThat(future).isNotCompleted();
+
+            AuthData data = future.get(5, SECONDS);
+            assertThat(new String(data.getBytes(), UTF_8)).isEqualTo("the-file-token");
+            // The blocking supplier ran on the client's blocking executor, not on the caller thread.
+            assertThat(supplierThread.get()).isEqualTo(BLOCKING_THREAD_NAME);
+            assertThat(supplierThread.get()).isNotEqualTo(callerThread);
+        } finally {
+            blocking.shutdownNow();
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
     public void supplierFailureCompletesFutureExceptionallyNotSynchronously() throws Exception {
         ExecutorService blocking = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, BLOCKING_THREAD_NAME);
