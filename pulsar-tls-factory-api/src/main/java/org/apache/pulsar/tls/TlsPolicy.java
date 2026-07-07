@@ -63,7 +63,7 @@ public final class TlsPolicy {
     private final boolean enableHostnameVerification;
     private final List<String> protocols;
     private final List<String> ciphers;
-    // optional JCA crypto provider (a java.security.Provider name)
+    // optional JSSE (SSLContext) provider (a java.security.Provider name)
     private final String jsseProvider;
 
     private TlsPolicy(Builder b) {
@@ -185,12 +185,16 @@ public final class TlsPolicy {
     }
 
     /**
-     * The JCA crypto provider — a {@link java.security.Provider} name (e.g. a FIPS / BouncyCastle / PKCS#11
-     * provider) to back the TLS engine's cryptography. When set (non-blank), the default file-based factory
-     * builds the JDK Netty engine with this provider installed as the SSL-context provider, taking precedence
-     * over the factory-level OpenSSL/JDK engine choice. Blank/{@code null} means the platform default.
+     * The JSSE (SSLContext) provider — a {@link java.security.Provider} name that supplies an
+     * {@link javax.net.ssl.SSLContext} (TLS) implementation (e.g. the BouncyCastle JSSE provider {@code BCJSSE}
+     * for FIPS, with {@code BCFIPS} registered separately as the crypto provider it uses) — used to build the
+     * TLS {@code SSLContext}. When set (non-blank), the default file-based factory builds the JDK Netty engine
+     * with this provider installed as the {@code SSLContext} provider, taking precedence over the factory-level
+     * OpenSSL/JDK engine choice. Blank/{@code null} means the platform default. This is the JSSE provider that
+     * builds the {@code SSLContext}, not a crypto-only {@code java.security.Provider}: a crypto-only provider
+     * such as {@code BCFIPS} exposes no {@code SSLContext.TLS} and cannot be named here directly.
      *
-     * @return the JCA crypto provider name, or {@code null}/blank for the platform default
+     * @return the JSSE (SSLContext) provider name, or {@code null}/blank for the platform default
      */
     public String jsseProvider() {
         return jsseProvider;
@@ -467,10 +471,12 @@ public final class TlsPolicy {
         }
 
         /**
-         * @param jsseProvider the JCA crypto provider name (a {@link java.security.Provider} name, e.g. a FIPS /
-         *                    BouncyCastle / PKCS#11 provider); blank/{@code null} uses the platform default.
-         *                    When set, the default file-based factory pins the JDK engine backed by this
-         *                    provider (overriding the factory engine choice).
+         * @param jsseProvider the JSSE (SSLContext) provider name (a {@link java.security.Provider} name that
+         *                    supplies an {@link javax.net.ssl.SSLContext} implementation, e.g. the BouncyCastle
+         *                    JSSE provider {@code BCJSSE} for FIPS, with {@code BCFIPS} registered separately as
+         *                    the crypto provider it uses); blank/{@code null} uses the platform default. When set,
+         *                    the default file-based factory pins the JDK engine with this provider as the
+         *                    {@code SSLContext} provider (overriding the factory engine choice).
          * @return this builder
          */
         public Builder jsseProvider(String jsseProvider) {

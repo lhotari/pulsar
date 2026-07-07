@@ -61,14 +61,14 @@ public class ProxyConnectionTest {
     }
 
     // PIP-478 (FIX): the proxy's internal lookup client must carry the broker-client TLS engine (sslProvider)
-    // and JCA crypto provider (jsseProvider) config — they were otherwise dropped (never copied into the
+    // and JSSE (SSLContext) provider (jsseProvider) config — they were otherwise dropped (never copied into the
     // ClientConfigurationData), silently defaulting the engine/provider on the proxy->broker connection.
     @Test
     public void testCreateClientConfigurationPropagatesTlsProviders() {
         ProxyConfiguration proxyConfiguration = new ProxyConfiguration();
         proxyConfiguration.setTlsEnabledWithBroker(true);
         proxyConfiguration.setBrokerClientSslProvider("OPENSSL");
-        proxyConfiguration.setBrokerClientJsseProvider("BCFIPS");
+        proxyConfiguration.setBrokerClientJsseProvider("BCJSSE");
 
         ProxyService proxyService = mock(ProxyService.class);
         doReturn(proxyConfiguration).when(proxyService).getConfiguration();
@@ -78,6 +78,6 @@ public class ProxyConnectionTest {
         ProxyConnection proxyConnection = new ProxyConnection(proxyService, null);
         ClientConfigurationData clientConfiguration = proxyConnection.createClientConfiguration();
         assertEquals(clientConfiguration.getSslProvider(), "OPENSSL");
-        assertEquals(clientConfiguration.getJsseProvider(), "BCFIPS");
+        assertEquals(clientConfiguration.getJsseProvider(), "BCJSSE");
     }
 }

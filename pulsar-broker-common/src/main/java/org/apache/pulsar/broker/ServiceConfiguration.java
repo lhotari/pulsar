@@ -3992,12 +3992,14 @@ public class ServiceConfiguration implements PulsarConfiguration {
 
     @FieldContext(
             category = CATEGORY_TLS,
-            doc = "PIP-478: the name of a java.security.Provider (a FIPS / BouncyCastle / PKCS#11 crypto "
-                    + "provider) to back the broker's server-side (listener/web) TLS cryptography. A distinct "
-                    + "axis from tlsProvider (the JDK-vs-OpenSSL engine switch): when set, the default factory "
-                    + "builds the JDK engine backed by this provider, overriding the engine choice. Resolved "
-                    + "via the ServiceLoader mechanism (with a fallback to an already-registered provider), "
-                    + "failing loudly when unresolvable.")
+            doc = "PIP-478: the name of a JSSE (SSLContext) provider — a java.security.Provider that supplies "
+                    + "an SSLContext (TLS) implementation (e.g. the BouncyCastle JSSE provider BCJSSE for FIPS, "
+                    + "with BCFIPS registered separately as the crypto provider it uses) — used to build the "
+                    + "broker's server-side (listener/web) TLS SSLContext. A distinct axis from tlsProvider (the "
+                    + "JDK-vs-OpenSSL engine switch): when set, the default factory builds the JDK engine with "
+                    + "this provider as the SSLContext provider, overriding the engine choice. Resolved via the "
+                    + "ServiceLoader mechanism (with a fallback to an already-registered provider), failing "
+                    + "loudly when unresolvable.")
     private String jsseProvider = null;
 
     @FieldContext(
@@ -4159,11 +4161,13 @@ public class ServiceConfiguration implements PulsarConfiguration {
     private String brokerClientTlsFactoryConfig = "";
     @FieldContext(
             category = CATEGORY_TLS,
-            doc = "PIP-478: the name of a java.security.Provider (a FIPS / BouncyCastle / PKCS#11 crypto "
-                    + "provider) to back the broker's own outbound (broker-to-broker / replication) client TLS "
-                    + "cryptography. When set, the default factory builds the JDK engine backed by this "
-                    + "provider, overriding the engine choice. Resolved via the ServiceLoader mechanism (with a "
-                    + "fallback to an already-registered provider), failing loudly when unresolvable.")
+            doc = "PIP-478: the name of a JSSE (SSLContext) provider — a java.security.Provider that supplies "
+                    + "an SSLContext (TLS) implementation (e.g. the BouncyCastle JSSE provider BCJSSE for FIPS, "
+                    + "with BCFIPS registered separately as the crypto provider it uses) — used to build the "
+                    + "broker's own outbound (broker-to-broker / replication) client TLS SSLContext. When set, "
+                    + "the default factory builds the JDK engine with this provider as the SSLContext provider, "
+                    + "overriding the engine choice. Resolved via the ServiceLoader mechanism (with a fallback "
+                    + "to an already-registered provider), failing loudly when unresolvable.")
     private String brokerClientJsseProvider = null;
 
     /* packages management service configurations (begin) */

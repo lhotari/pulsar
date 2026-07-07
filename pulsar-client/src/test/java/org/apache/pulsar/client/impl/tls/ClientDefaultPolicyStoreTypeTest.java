@@ -72,12 +72,12 @@ public class ClientDefaultPolicyStoreTypeTest {
     @Test
     public void explicitJsseProviderKeyMapsToPolicy() {
         ClientConfigurationData conf = new ClientConfigurationData();
-        conf.setJsseProvider("BCFIPS");
+        conf.setJsseProvider("BCJSSE");
         conf.setSslProvider("OPENSSL"); // engine axis; must not clobber the explicit jsseProvider
 
         TlsPolicy policy = ClientTlsFactorySupport.clientDefaultPolicy(conf);
 
-        assertThat(policy.jsseProvider()).isEqualTo("BCFIPS");
+        assertThat(policy.jsseProvider()).isEqualTo("BCJSSE");
     }
 
     // PIP-478 Part D: the v4 sslProvider two-axis split — a non-OPENSSL provider name migrates to jsseProvider
@@ -103,7 +103,7 @@ public class ClientDefaultPolicyStoreTypeTest {
     }
 
     // PIP-478 (FIX): sslProvider=JDK is a valid Netty SslProvider engine literal (v4 accepted it) — it must
-    // stay on the ENGINE axis and leave jsseProvider unset, NOT be misrouted to a (non-existent) JCA provider
+    // stay on the ENGINE axis and leave jsseProvider unset, NOT be misrouted to a (non-existent) JSSE provider
     // named "JDK", which JcaProviders.resolveNamedProvider would reject loudly at build. Regression guard.
     @Test
     public void jdkEngineLiteralStaysEngineOnlyWhileOtherProviderMigrates() {
@@ -113,9 +113,9 @@ public class ClientDefaultPolicyStoreTypeTest {
             assertThat(ClientTlsFactorySupport.clientDefaultPolicy(conf).jsseProvider())
                     .as("engine literal '" + jdk + "' leaves jsseProvider unset").isNull();
         }
-        // A non-engine-literal value (a JCA provider name) still migrates to jsseProvider (v4 parity).
-        ClientConfigurationData bcfips = new ClientConfigurationData();
-        bcfips.setSslProvider("BCFIPS");
-        assertThat(ClientTlsFactorySupport.clientDefaultPolicy(bcfips).jsseProvider()).isEqualTo("BCFIPS");
+        // A non-engine-literal value (a JSSE provider name) still migrates to jsseProvider (v4 parity).
+        ClientConfigurationData bcjsse = new ClientConfigurationData();
+        bcjsse.setSslProvider("BCJSSE");
+        assertThat(ClientTlsFactorySupport.clientDefaultPolicy(bcjsse).jsseProvider()).isEqualTo("BCJSSE");
     }
 }

@@ -149,17 +149,17 @@ public final class TlsContexts {
     static SSLContext buildJdkContext(TlsMaterial material, TlsPolicy policy) throws Exception {
         warnInsecureModeOnce(policy);
         Certificate[] keyCertChain = material.keyCertChainArray();
-        // Honor a pinned jsseProvider (a java.security.Provider) on the JDK-engine path (the web/Jetty and
-        // fallback consumers), so FIPS / BouncyCastle / PKCS#11 providers back the SSLContext too (Goal #5).
+        // Honor a pinned jsseProvider (a JSSE java.security.Provider) on the JDK-engine path (the web/Jetty and
+        // fallback consumers), so a FIPS JSSE provider (BCJSSE) builds the SSLContext too (Goal #5).
         return JdkSslContexts.createSslContextWithProvider(policy.allowInsecureConnection(),
                 material.trustCertsArray(), keyCertChain, material.privateKey(), resolveJsseProvider(policy));
     }
 
     /**
-     * Apply the effective Netty engine to the builder. When the policy pins a {@code jsseProvider} (a
-     * {@link Provider} name), use the JDK engine with that provider installed as the SSL-context provider —
+     * Apply the effective Netty engine to the builder. When the policy pins a {@code jsseProvider} (a JSSE
+     * {@link Provider} name), use the JDK engine with that provider installed as the SSLContext provider —
      * overriding the factory-level engine choice, since Netty's native OpenSSL engine cannot delegate to an
-     * arbitrary JCA provider (PIP-478). Otherwise use the passed-in engine provider.
+     * arbitrary JSSE provider (PIP-478). Otherwise use the passed-in engine provider.
      */
     private static void applyEngineProvider(SslContextBuilder builder, TlsPolicy policy, SslProvider engineProvider) {
         Provider jsseProvider = resolveJsseProvider(policy);
@@ -172,7 +172,7 @@ public final class TlsContexts {
 
     /**
      * Resolve the policy's {@code jsseProvider} to a {@link Provider} (fail-loud via {@link JcaProviders}), or
-     * {@code null} when the policy pins no crypto provider.
+     * {@code null} when the policy pins no JSSE provider.
      */
     private static Provider resolveJsseProvider(TlsPolicy policy) {
         String name = policy.jsseProvider();

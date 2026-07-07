@@ -45,7 +45,7 @@ public class JdkSslContextsTest {
 
     // With a client key present (cert + key non-null) setupKeyManager builds a KeyManagerFactory; FIX 5 pins it
     // to the resolved provider. SunJSSE supplies the default KMF algorithm, so the build succeeds and the whole
-    // context (SSLContext + KMF + TMF) is backed by the pinned provider — the FIPS/BouncyCastle/PKCS#11 intent.
+    // context (SSLContext + KMF + TMF) is backed by the pinned JSSE provider — the FIPS JSSE-provider (BCJSSE) intent.
     @Test
     public void pinsKeyManagerFactoryToTheProviderWithClientKey() throws Exception {
         X509Certificate[] trust = PemReader.loadCertificatesFromPemFile(RSA_CA);

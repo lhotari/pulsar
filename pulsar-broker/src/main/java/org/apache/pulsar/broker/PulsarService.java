@@ -1934,7 +1934,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         if (tlsEnabled) {
             conf.setTlsCiphers(this.getConfiguration().getBrokerClientTlsCiphers());
             conf.setTlsProtocols(this.getConfiguration().getBrokerClientTlsProtocols());
-            // PIP-478: propagate the broker-client TLS engine (sslProvider) and JCA crypto provider
+            // PIP-478: propagate the broker-client TLS engine (sslProvider) and JSSE (SSLContext) provider
             // (jsseProvider) onto the internal client config so the broker's own outbound client honors them —
             // both are documented as "used by the internal client" but were otherwise dropped here (never
             // copied into ClientConfigurationData), silently defaulting the engine/provider.

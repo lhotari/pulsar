@@ -102,7 +102,7 @@ public class BrokerInternalClientConfigurationOverrideTest extends BrokerTestBas
         // The replication client builds its SSL context lazily (per connection), so arbitrary provider names are
         // safe here — the test only asserts the config is carried, it never opens a TLS connection.
         pulsar.getConfiguration().setBrokerClientSslProvider("JDK");
-        pulsar.getConfiguration().setBrokerClientJsseProvider("BCFIPS");
+        pulsar.getConfiguration().setBrokerClientJsseProvider("BCJSSE");
         try {
             ClusterData data = ClusterData.builder()
                     .serviceUrlTls("https://localhost:8443")
@@ -113,7 +113,7 @@ public class BrokerInternalClientConfigurationOverrideTest extends BrokerTestBas
                     .getReplicationClient("provider_propagation_repl_cluster", Optional.of(data));
             ClientConfigurationData clientConf = client.getConfiguration();
             Assert.assertEquals(clientConf.getSslProvider(), "JDK");
-            Assert.assertEquals(clientConf.getJsseProvider(), "BCFIPS");
+            Assert.assertEquals(clientConf.getJsseProvider(), "BCJSSE");
         } finally {
             pulsar.getConfiguration().setBrokerClientSslProvider(null);
             pulsar.getConfiguration().setBrokerClientJsseProvider(null);
@@ -124,7 +124,7 @@ public class BrokerInternalClientConfigurationOverrideTest extends BrokerTestBas
     public void testClusterPulsarAdminTlsProviderPropagation() {
         // PIP-478 FIX A: the cross-cluster admin client must inherit the same providers. Unlike the replication
         // client, PulsarAdminImpl builds the TLS context eagerly in its constructor, so the provider values must
-        // actually resolve on this JVM: "JDK" stays on the Netty engine axis and "SunJSSE" is a standard JCA
+        // actually resolve on this JVM: "JDK" stays on the Netty engine axis and "SunJSSE" is a standard JSSE
         // provider that supplies a "TLS" SSLContext. Insecure connection avoids needing trust-cert material.
         pulsar.getConfiguration().setBrokerClientSslProvider("JDK");
         pulsar.getConfiguration().setBrokerClientJsseProvider("SunJSSE");

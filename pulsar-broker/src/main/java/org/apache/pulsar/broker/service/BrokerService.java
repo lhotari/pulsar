@@ -1657,7 +1657,7 @@ public class BrokerService implements Closeable {
                 .serviceUrl(serviceUrl)
                 .allowTlsInsecureConnection(isTlsAllowInsecureConnection)
                 .enableTlsHostnameVerification(isTlsHostnameVerificationEnabled)
-                // PIP-478: propagate the broker-client TLS engine (sslProvider) and JCA crypto provider
+                // PIP-478: propagate the broker-client TLS engine (sslProvider) and JSSE (SSLContext) provider
                 // (jsseProvider) so geo-replication clients honor them, mirroring
                 // PulsarService.createClientConfigurationData. Without this the replication client silently
                 // builds TLS with the default JDK provider (e.g. a FIPS/OpenSSL provider downgrade).
@@ -1704,7 +1704,7 @@ public class BrokerService implements Closeable {
         }
         adminBuilder.allowTlsInsecureConnection(isTlsAllowInsecureConnection)
                 .enableTlsHostnameVerification(isTlsHostnameVerificationEnabled)
-                // PIP-478: propagate the broker-client TLS engine (sslProvider) and JCA crypto provider
+                // PIP-478: propagate the broker-client TLS engine (sslProvider) and JSSE (SSLContext) provider
                 // (jsseProvider) so cross-cluster admin clients honor them, mirroring
                 // PulsarService.createClientConfigurationData. Without this the cluster admin silently builds
                 // TLS with the default JDK provider (e.g. a FIPS/OpenSSL provider downgrade).

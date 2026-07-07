@@ -148,7 +148,8 @@ public final class JcaProviders {
     }
 
     /**
-     * Resolve a named JCA crypto {@link Provider} for the PIP-478 {@code jsseProvider} field. Resolution uses
+     * Resolve a named {@link Provider} — e.g. the JSSE (SSLContext) provider named by the PIP-478
+     * {@code jsseProvider} field. Resolution uses
      * the {@link ServiceLoader} mechanism on the application (thread-context) class loader
      * ({@code META-INF/services/java.security.Provider}), matching by {@link Provider#getName()}; it falls
      * back to a provider already statically registered in the JVM ({@link Security#getProvider(String)}); and
@@ -201,10 +202,10 @@ public final class JcaProviders {
             log.debug().attr("provider", name).log("Resolved JCA provider via Security.getProvider");
             return registered;
         }
-        // 3. Fail loudly — a misconfigured crypto provider must not silently default.
+        // 3. Fail loudly — a misconfigured provider must not silently default.
         throw new IllegalArgumentException("No java.security.Provider named '" + name + "' could be resolved via "
                 + "ServiceLoader (META-INF/services/java.security.Provider) on the application class loader or via "
-                + "Security.getProvider(...). Ensure the provider (e.g. a FIPS / BouncyCastle / PKCS#11 provider) "
+                + "Security.getProvider(...). Ensure the provider (e.g. a JSSE/SSLContext provider such as BCJSSE) "
                 + "is on the classpath and registered.");
     }
 

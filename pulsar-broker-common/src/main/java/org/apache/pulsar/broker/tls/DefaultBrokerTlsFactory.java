@@ -122,8 +122,9 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
                 .enableHostnameVerification(conf.isTlsHostnameVerificationEnabled())
                 .protocols(toList(conf.getTlsProtocols()))
                 .ciphers(toList(conf.getTlsCiphers()))
-                // PIP-478: pin the JCA crypto provider (FIPS/BC/PKCS#11) for the listener/web material; when
-                // set it forces the JDK engine backed by this provider (distinct from tlsProvider, the engine).
+                // PIP-478: pin the JSSE (SSLContext) provider (e.g. BCJSSE for FIPS) for the listener/web
+                // material; when set it forces the JDK engine with this provider building the SSLContext
+                // (distinct from tlsProvider, the engine).
                 .jsseProvider(conf.getJsseProvider());
         if (conf.isTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
@@ -149,7 +150,7 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
                 .enableHostnameVerification(conf.isTlsHostnameVerificationEnabled())
                 .protocols(toList(conf.getBrokerClientTlsProtocols()))
                 .ciphers(toList(conf.getBrokerClientTlsCiphers()))
-                // PIP-478: pin the JCA crypto provider for the broker's own outbound (replication) client TLS.
+                // PIP-478: pin the JSSE (SSLContext) provider for the broker's own outbound (replication) client TLS.
                 .jsseProvider(conf.getBrokerClientJsseProvider());
         if (conf.isBrokerClientTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
