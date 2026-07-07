@@ -98,7 +98,7 @@ public final class JdkSslContexts {
         KeyStoreHolder ksh = new KeyStoreHolder();
 
         TrustManager[] trustManagers = setupTrustCerts(ksh, allowInsecureConnection, trustCertficates, provider);
-        KeyManager[] keyManagers = setupKeyManager(ksh, privateKey, certificates);
+        KeyManager[] keyManagers = setupKeyManager(ksh, privateKey, certificates, provider);
 
         SSLContext sslCtx = provider != null ? SSLContext.getInstance("TLS", provider)
                 : SSLContext.getInstance("TLS");
@@ -106,12 +106,18 @@ public final class JdkSslContexts {
         return sslCtx;
     }
 
-    private static KeyManager[] setupKeyManager(KeyStoreHolder ksh, PrivateKey privateKey, Certificate[] certificates)
+    private static KeyManager[] setupKeyManager(KeyStoreHolder ksh, PrivateKey privateKey, Certificate[] certificates,
+                                                Provider provider)
             throws KeyStoreException, NoSuchAlgorithmException, UnrecoverableKeyException {
         KeyManager[] keyManagers = null;
         if (certificates != null && privateKey != null) {
             ksh.setPrivateKey("private", privateKey, certificates);
-            KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            // Pin the KeyManagerFactory to the resolved provider (like the SSLContext and TrustManagerFactory
+            // above), so a configured jcaProvider (FIPS / BouncyCastle / PKCS#11) also backs the private-key
+            // side; the null-provider path is unchanged, so no regression when jcaProvider is unset.
+            KeyManagerFactory kmf = provider != null
+                    ? KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm(), provider)
+                    : KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
             kmf.init(ksh.getKeyStore(), "".toCharArray());
             keyManagers = kmf.getKeyManagers();
         }
