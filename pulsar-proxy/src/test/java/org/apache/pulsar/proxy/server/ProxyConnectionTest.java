@@ -59,4 +59,25 @@ public class ProxyConnectionTest {
         clientConfiguration = proxyConnection.createClientConfiguration();
         assertEquals(clientConfiguration.getServiceUrl(), proxyUrl);
     }
+
+    // PIP-478 (FIX): the proxy's internal lookup client must carry the broker-client TLS engine (sslProvider)
+    // and JCA crypto provider (jcaProvider) config — they were otherwise dropped (never copied into the
+    // ClientConfigurationData), silently defaulting the engine/provider on the proxy->broker connection.
+    @Test
+    public void testCreateClientConfigurationPropagatesTlsProviders() {
+        ProxyConfiguration proxyConfiguration = new ProxyConfiguration();
+        proxyConfiguration.setTlsEnabledWithBroker(true);
+        proxyConfiguration.setBrokerClientSslProvider("OPENSSL");
+        proxyConfiguration.setBrokerClientJcaProvider("BCFIPS");
+
+        ProxyService proxyService = mock(ProxyService.class);
+        doReturn(proxyConfiguration).when(proxyService).getConfiguration();
+        doReturn("pulsar+ssl://proxy:6651").when(proxyService).getServiceUrlTls();
+        doReturn("pulsar://proxy:6650").when(proxyService).getServiceUrl();
+
+        ProxyConnection proxyConnection = new ProxyConnection(proxyService, null);
+        ClientConfigurationData clientConfiguration = proxyConnection.createClientConfiguration();
+        assertEquals(clientConfiguration.getSslProvider(), "OPENSSL");
+        assertEquals(clientConfiguration.getJcaProvider(), "BCFIPS");
+    }
 }
