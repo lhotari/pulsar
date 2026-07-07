@@ -136,3 +136,27 @@
     a doc-word differs; final CI clean except the recurring TopicPoliciesTest.setupTestTopic flake, rerun-
     clearing). Monolith lh-pip-478-impl-v2 @ d8721a1978a. Reserved for the human author (deliberately NOT done):
     master rebase + apache-facing PRs + human review.
+
+68. **CONFIG-REMOVAL + jcaProvider + FIPS design & impl, reviewed & fixed (2026-07-07).** Two user directives:
+    (a) remove ALL PIP-337 sslFactoryPlugin config in 5.0 for the v4 client too (not deprecate), add tlsFactoryClassName/
+    tlsFactoryConfig successor on the v4 client+admin; (b) add jcaProvider (renamed from the legacy "jceProvider" per user)
+    to TlsPolicy — names a java.security.Provider (ServiceLoader on app classloader, else Security.getProvider, fail-loud);
+    when set the default factory builds SslProvider.JDK + sslContextProvider (overrides engine). DESIGN also finalized:
+    FIPS-140-3 goal/motivation incl. the L1 (BC-FIPS + file PEM, plaintext key entry permitted) vs L3 (PKCS#11 HSM, keys
+    never leave the module — served by a custom PulsarTlsFactory) distinction; pulsar-client-shaded correction (v5 will NOT
+    ship shaded, users relocate themselves); and REMOVED the "Minimalism review" section + the "five-plus years" durability
+    statement + the Saint-Exupery/Jobs quotes + all multi-model-review framing (user: read as the author's own document).
+    IMPL Parts A-D (config removal 4819ed630dc; removed-key validation 068a3f5dc5c; v4 successor 54b0cfda6da; jcaProvider
+    wired every component f6535cdbe46). MULTI-MODEL REVIEW (Codex adversarial high + own wiring sweep) found 6 real defects
+    the impl's 118 tests missed: #1 brokerClient jca/sslProvider not propagated to the internal PulsarClient (FIPS gap),
+    #2 brokerClient_ prefix bypassed the removed-key reject, #3 sslProvider=JDK misrouted to jcaProvider (hard v4 regression),
+    #4 ServiceLoader could abort before the Security.getProvider fallback, #5 KeyManagerFactory not provider-pinned, #6 reject
+    fired on the old default FQCN. ALL FIXED + tested (803a0cfa67a FIX3 code+doc, 944f3f566c0 FIX2+6, 79b34162ab5 FIX4,
+    11fb3dd98bc FIX5, 1efb5228bdf FIX1); every touched module builds main+test, all suites green. LESSON: a clean local run
+    (118 passing tests) is weak evidence — the adversarial review caught FIPS-undermining + v4-breaking bugs the tests didn't.
+    PUBLISHED (human-directed, this cycle): apache/pulsar #25890 (the human's official PIP-478 PR, head 31bc080) updated with
+    the finalized+corrected pip-478.md + a FIPS-140-3/TLS-transport description; fork #241 design series (head 46dea9ae48c)
+    matched. Drafted a friendly PIP-489 (FIPS-mode proposal) reply in ~/Downloads/pip-489-comment.txt suggesting PIP-489 build
+    upon PIP-478 for the TLS-transport slice (jcaProvider L1 + PulsarTlsFactory/HSM L3 + PulsarHttpClient), for the human to post.
+    Monolith lh-pip-478-impl-v2 @ 1efb5228bdf (design finalized + impl A-D + 6 fixes). NEXT: fold the fixed impl into the fork
+    code chunks #242-247 (still fixpoint code) — full 6-chunk re-cut, deletions to chunk 6, equivalence to monolith — + Personal CI.
