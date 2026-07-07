@@ -20,6 +20,7 @@ package org.apache.pulsar.client.impl.auth.v5;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.pulsar.common.sasl.SaslConstants.SASL_AUTH_ROLE_TOKEN;
+import static org.apache.pulsar.common.sasl.SaslConstants.SASL_AUTH_ROLE_TOKEN_EXPIRED;
 import static org.apache.pulsar.common.sasl.SaslConstants.SASL_AUTH_TOKEN;
 import static org.apache.pulsar.common.sasl.SaslConstants.SASL_HEADER_STATE;
 import static org.apache.pulsar.common.sasl.SaslConstants.SASL_HEADER_TYPE;
@@ -27,6 +28,7 @@ import static org.apache.pulsar.common.sasl.SaslConstants.SASL_STATE_CLIENT_INIT
 import static org.apache.pulsar.common.sasl.SaslConstants.SASL_STATE_COMPLETE;
 import static org.apache.pulsar.common.sasl.SaslConstants.SASL_STATE_NEGOTIATE;
 import static org.apache.pulsar.common.sasl.SaslConstants.SASL_STATE_SERVER;
+import static org.apache.pulsar.common.sasl.SaslConstants.SASL_STATE_SERVER_CHECK_TOKEN;
 import static org.apache.pulsar.common.sasl.SaslConstants.SASL_TYPE_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import java.net.URI;
@@ -101,6 +103,55 @@ public class SaslAuthenticationV5HttpTest {
         assertThat(factory.createCalls).isEqualTo(1);
         assertThat(factory.created.get(0).authenticateCalls).isEqualTo(1);
         assertThat(server.requestStates).containsExactly(SASL_STATE_CLIENT_INIT);
+    }
+
+    @Test
+    public void secondRequestReplaysCachedRoleTokenWithServerCheckToken() throws Exception {
+        // PIP-478 FIX C: the framework HTTP driver reuses ONE body across requests. The first request runs a
+        // full negotiation and caches the role token on the body; the second request must replay that cached
+        // token with State=ServerCheckToken instead of restarting a fresh Kerberos Init negotiation (the v4
+        // AuthenticationSasl cross-request cache behavior).
+        CountingFactory factory = new CountingFactory();
+        RoleTokenServer server = new RoleTokenServer("role-token-abc");
+        HttpAuthenticationDriver driver =
+                new HttpAuthenticationDriver(new SaslAuthenticationV5(factory), null, server);
+
+        // First request: full negotiation issues and caches the role token.
+        HttpAuthHeaders first = driver.authenticateAsync(ADMIN_URI, null, Duration.ofSeconds(30)).get();
+        assertThat(first.get(SASL_AUTH_ROLE_TOKEN)).hasValue("role-token-abc");
+        assertThat(server.requestStates).containsExactly(SASL_STATE_CLIENT_INIT);
+
+        server.reset();
+
+        // Second request on the SAME driver/body: replayed with ServerCheckToken, NOT a fresh Init.
+        HttpAuthHeaders second = driver.authenticateAsync(ADMIN_URI, null, Duration.ofSeconds(30)).get();
+        assertThat(second.get(SASL_AUTH_ROLE_TOKEN)).hasValue("role-token-abc");
+        assertThat(second.get(SASL_HEADER_STATE)).hasValue(SASL_STATE_COMPLETE);
+        assertThat(server.requestStates).containsExactly(SASL_STATE_SERVER_CHECK_TOKEN);
+        // The single replayed warmup round carried the cached role token — no Init/negotiation round.
+        assertThat(server.requests.get(0).get(SASL_AUTH_ROLE_TOKEN)).hasValue("role-token-abc");
+    }
+
+    @Test
+    public void expiredCachedRoleTokenTriggersFreshNegotiation() throws Exception {
+        // PIP-478 FIX C: when the server reports the replayed cached token expired (SaslAuthRoleTokenExpired),
+        // the body drops the cache and renegotiates from Init, ending with a freshly issued role token.
+        CountingFactory factory = new CountingFactory();
+        RoleTokenServer server = new RoleTokenServer("role-token-1");
+        HttpAuthenticationDriver driver =
+                new HttpAuthenticationDriver(new SaslAuthenticationV5(factory), null, server);
+
+        // First request caches role-token-1.
+        driver.authenticateAsync(ADMIN_URI, null, Duration.ofSeconds(30)).get();
+
+        server.reset();
+        server.expireNextCheckThenIssue("role-token-2");
+
+        // Second request: ServerCheckToken -> server says EXPIRED -> renegotiate from Init -> role-token-2.
+        HttpAuthHeaders second = driver.authenticateAsync(ADMIN_URI, null, Duration.ofSeconds(30)).get();
+        assertThat(second.get(SASL_AUTH_ROLE_TOKEN)).hasValue("role-token-2");
+        assertThat(second.get(SASL_HEADER_STATE)).hasValue(SASL_STATE_COMPLETE);
+        assertThat(server.requestStates).containsExactly(SASL_STATE_SERVER_CHECK_TOKEN, SASL_STATE_CLIENT_INIT);
     }
 
     // ---- fakes ----
@@ -187,6 +238,68 @@ public class SaslAuthenticationV5HttpTest {
             headers.put(SASL_STATE_SERVER, "1");
             headers.put(SASL_AUTH_TOKEN, Base64.getEncoder().encodeToString(("server-" + serverStep).getBytes(UTF_8)));
             return CompletableFuture.completedFuture(new Result(401, HttpAuthHeaders.of(headers)));
+        }
+    }
+
+    /**
+     * A fake server that also honors the role-token replay path (State=ServerCheckToken), used to exercise
+     * the FIX C cross-request cache. Init negotiation completes in one round. A ServerCheckToken is answered
+     * {@code 200} (validated) unless {@link #expireNextCheckThenIssue} armed an expiry, in which case the
+     * first ServerCheckToken is answered {@code 401} EXPIRED and the following Init issues the rotated token.
+     */
+    private static final class RoleTokenServer implements HttpChallengeTransport {
+        final List<String> requestStates = new ArrayList<>();
+        final List<HttpAuthHeaders> requests = new ArrayList<>();
+        private String roleToken;
+        private boolean expireNextCheck;
+        private String rotatedRoleToken;
+
+        RoleTokenServer(String roleToken) {
+            this.roleToken = roleToken;
+        }
+
+        void reset() {
+            requestStates.clear();
+            requests.clear();
+        }
+
+        void expireNextCheckThenIssue(String rotatedRoleToken) {
+            this.expireNextCheck = true;
+            this.rotatedRoleToken = rotatedRoleToken;
+        }
+
+        @Override
+        public CompletableFuture<Result> get(URI uri, HttpAuthHeaders requestHeaders, Duration timeout) {
+            requests.add(requestHeaders);
+            String state = requestHeaders.get(SASL_HEADER_STATE).orElse(null);
+            requestStates.add(state);
+            if (SASL_STATE_SERVER_CHECK_TOKEN.equalsIgnoreCase(state)) {
+                if (expireNextCheck) {
+                    expireNextCheck = false;
+                    Map<String, String> headers = new LinkedHashMap<>();
+                    headers.put(SASL_HEADER_TYPE, SASL_TYPE_VALUE);
+                    headers.put(SASL_HEADER_STATE, SASL_AUTH_ROLE_TOKEN_EXPIRED);
+                    return CompletableFuture.completedFuture(new Result(401, HttpAuthHeaders.of(headers)));
+                }
+                return complete(roleToken);
+            }
+            if (SASL_STATE_CLIENT_INIT.equalsIgnoreCase(state)) {
+                if (rotatedRoleToken != null) {
+                    roleToken = rotatedRoleToken;
+                    rotatedRoleToken = null;
+                }
+                return complete(roleToken);
+            }
+            return CompletableFuture.completedFuture(new Result(400, HttpAuthHeaders.empty()));
+        }
+
+        private CompletableFuture<Result> complete(String issuedRoleToken) {
+            Map<String, String> headers = new LinkedHashMap<>();
+            headers.put(SASL_HEADER_TYPE, SASL_TYPE_VALUE);
+            headers.put(SASL_HEADER_STATE, SASL_STATE_COMPLETE);
+            headers.put(SASL_STATE_SERVER, "1");
+            headers.put(SASL_AUTH_ROLE_TOKEN, issuedRoleToken);
+            return CompletableFuture.completedFuture(new Result(200, HttpAuthHeaders.of(headers)));
         }
     }
 }

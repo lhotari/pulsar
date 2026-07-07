@@ -34,6 +34,8 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.v5.PulsarClientException;
 import org.apache.pulsar.client.api.v5.auth.AuthChallenge;
@@ -84,6 +86,18 @@ public class SaslAuthenticationV5 implements Authentication, BinaryAuthDataProvi
 
     private final SaslProviderFactory providerFactory;
 
+    // PIP-478 FIX D: the client's bounded blocking executor, late-bound at initializeAsync(...). The SASL
+    // provider creation and evaluateChallenge/authenticate (GSSAPI/Kerberos) work is off-loaded onto it so
+    // it never runs on the Netty event loop. Null when used outside a client -> degraded inline computation.
+    private transient volatile Executor blockingExecutor;
+
+    // PIP-478 FIX C: the cross-request SASL-over-HTTP role-token cache, restoring the v4
+    // AuthenticationSasl.saslRoleToken semantics. The framework HTTP auth driver reuses ONE body instance
+    // across requests but gives each request a fresh call-context/conversation, so the validated role token
+    // must live on the body to be replayed (State=ServerCheckToken) instead of restarting a full Kerberos
+    // negotiation every request. Cleared and re-negotiated on SaslAuthRoleTokenExpired.
+    private transient volatile String cachedRoleToken;
+
     /**
      * @param providerFactory creates a fresh per-exchange SASL data provider for a broker host
      */
@@ -98,37 +112,45 @@ public class SaslAuthenticationV5 implements Authentication, BinaryAuthDataProvi
 
     @Override
     public CompletableFuture<Void> initializeAsync(AuthenticationInitContext ctx) {
+        this.blockingExecutor = ctx.blockingExecutor();
         return CompletableFuture.completedFuture(null);
     }
 
     @Override
     public CompletableFuture<BinaryAuthData> getAuthDataAsync(AuthenticationCallContext ctx) {
-        try {
-            AuthenticationDataProvider provider = providerFactory.create(ctx.brokerHost());
-            ctx.setStateObject(AuthenticationDataProvider.class, provider);
-            AuthData initData = provider.authenticate(AuthData.INIT_AUTH_DATA);
-            return CompletableFuture.completedFuture(new BinaryAuthData(initData.getBytes()));
-        } catch (Throwable t) {
-            return CompletableFuture.failedFuture(t);
-        }
+        // FIX D: run the SASL provider creation + initial evaluateChallenge off the event loop.
+        return V5AuthContexts.supplyBlocking(blockingExecutor, () -> {
+            try {
+                AuthenticationDataProvider provider = providerFactory.create(ctx.brokerHost());
+                ctx.setStateObject(AuthenticationDataProvider.class, provider);
+                AuthData initData = provider.authenticate(AuthData.INIT_AUTH_DATA);
+                return new BinaryAuthData(initData.getBytes());
+            } catch (Exception e) {
+                throw new CompletionException(e);
+            }
+        });
     }
 
     @Override
     public CompletableFuture<ChallengeResponse> respondToChallengeAsync(AuthenticationCallContext ctx,
                                                                         AuthChallenge authChallenge) {
-        try {
-            AuthenticationDataProvider provider = ctx.getStateObject(AuthenticationDataProvider.class).orElse(null);
-            if (provider == null) {
-                // No prior state (e.g. a broker-pushed challenge without a preceding connect call on this
-                // context); start a fresh SASL exchange.
-                provider = providerFactory.create(ctx.brokerHost());
-                ctx.setStateObject(AuthenticationDataProvider.class, provider);
+        // FIX D: run evaluateChallenge (GSSAPI) off the event loop.
+        return V5AuthContexts.supplyBlocking(blockingExecutor, () -> {
+            try {
+                AuthenticationDataProvider provider =
+                        ctx.getStateObject(AuthenticationDataProvider.class).orElse(null);
+                if (provider == null) {
+                    // No prior state (e.g. a broker-pushed challenge without a preceding connect call on this
+                    // context); start a fresh SASL exchange.
+                    provider = providerFactory.create(ctx.brokerHost());
+                    ctx.setStateObject(AuthenticationDataProvider.class, provider);
+                }
+                AuthData response = provider.authenticate(AuthData.of(authChallenge.bytes()));
+                return new ChallengeResponse(response.getBytes());
+            } catch (Exception e) {
+                throw new CompletionException(e);
             }
-            AuthData response = provider.authenticate(AuthData.of(authChallenge.bytes()));
-            return CompletableFuture.completedFuture(new ChallengeResponse(response.getBytes()));
-        } catch (Throwable t) {
-            return CompletableFuture.failedFuture(t);
-        }
+        });
     }
 
     // ---- SASL-over-HTTP: HttpAuthChallengeHandler + HttpAuthHeadersProvider (PIP-478) ----
@@ -151,57 +173,62 @@ public class SaslAuthenticationV5 implements Authentication, BinaryAuthDataProvi
 
     @Override
     public CompletableFuture<HttpAuthHeaders> respondToHttpChallengeAsync(HttpAuthCallContext ctx) {
-        try {
-            SaslHttpConversation conv = conversation(ctx);
-            // The server carries its prior response's SASL headers here (empty on the first round).
-            boolean hasPrevious = ctx.serverChallengeHeaders().isPresent();
-            // Capture the role token if the server has issued it (the terminal 200 also carries it).
-            String issuedRoleToken = header(ctx, SASL_AUTH_ROLE_TOKEN);
-            if (issuedRoleToken != null) {
-                conv.roleToken = issuedRoleToken;
-            }
-
-            Map<String, String> headers = new LinkedHashMap<>();
-            // The SASL data provider's HTTP headers (SASL-Type: Kerberos), on every request.
-            conv.provider.getHttpHeaders().forEach(e -> headers.put(e.getKey(), e.getValue()));
-
-            // Role token exists but the server reported it expired: drop it and restart the SASL exchange.
-            if (isRoleTokenExpired(conv, ctx)) {
-                hasPrevious = false;
-                conv.roleToken = null;
-                conv.provider = providerFactory.create(host(ctx));
-            }
-
-            // Role token in hand: replay it, asking the server to check / negotiate / complete.
-            if (conv.roleToken != null) {
-                headers.put(SASL_AUTH_ROLE_TOKEN, conv.roleToken);
-                if (!hasPrevious) {
-                    headers.put(SASL_HEADER_STATE, SASL_STATE_SERVER_CHECK_TOKEN);
-                } else if (SASL_STATE_COMPLETE.equalsIgnoreCase(header(ctx, SASL_HEADER_STATE))) {
-                    headers.put(SASL_HEADER_STATE, SASL_STATE_COMPLETE);
-                } else {
-                    headers.put(SASL_HEADER_STATE, SASL_STATE_NEGOTIATE);
+        // FIX D: run the SASL negotiation (evaluateChallenge/GSSAPI) off the event loop.
+        return V5AuthContexts.supplyBlocking(blockingExecutor, () -> {
+            try {
+                SaslHttpConversation conv = conversation(ctx);
+                // The server carries its prior response's SASL headers here (empty on the first round).
+                boolean hasPrevious = ctx.serverChallengeHeaders().isPresent();
+                // Capture the role token if the server has issued it (the terminal 200 also carries it).
+                String issuedRoleToken = header(ctx, SASL_AUTH_ROLE_TOKEN);
+                if (issuedRoleToken != null) {
+                    conv.roleToken = issuedRoleToken;
                 }
-                return CompletableFuture.completedFuture(HttpAuthHeaders.of(headers));
-            }
 
-            // No role token yet: run the SASL negotiation.
-            if (!hasPrevious) {
-                headers.put(SASL_HEADER_STATE, SASL_STATE_CLIENT_INIT);
-                AuthData initData = conv.provider.authenticate(AuthData.INIT_AUTH_DATA);
-                headers.put(SASL_AUTH_TOKEN, Base64.getEncoder().encodeToString(initData.getBytes()));
-            } else {
-                AuthData brokerData = AuthData.of(Base64.getDecoder().decode(header(ctx, SASL_AUTH_TOKEN)));
-                AuthData clientData = conv.provider.authenticate(brokerData);
-                headers.put(SASL_STATE_SERVER, header(ctx, SASL_STATE_SERVER));
-                headers.put(SASL_HEADER_TYPE, SASL_TYPE_VALUE);
-                headers.put(SASL_HEADER_STATE, SASL_STATE_NEGOTIATE);
-                headers.put(SASL_AUTH_TOKEN, Base64.getEncoder().encodeToString(clientData.getBytes()));
+                Map<String, String> headers = new LinkedHashMap<>();
+                // The SASL data provider's HTTP headers (SASL-Type: Kerberos), on every request.
+                conv.provider.getHttpHeaders().forEach(e -> headers.put(e.getKey(), e.getValue()));
+
+                // Role token exists but the server reported it expired: drop it (including the cross-request
+                // cache, FIX C) and restart the SASL exchange.
+                if (isRoleTokenExpired(conv, ctx)) {
+                    hasPrevious = false;
+                    conv.roleToken = null;
+                    cachedRoleToken = null;
+                    conv.provider = providerFactory.create(host(ctx));
+                }
+
+                // Role token in hand: replay it, asking the server to check / negotiate / complete.
+                if (conv.roleToken != null) {
+                    headers.put(SASL_AUTH_ROLE_TOKEN, conv.roleToken);
+                    if (!hasPrevious) {
+                        headers.put(SASL_HEADER_STATE, SASL_STATE_SERVER_CHECK_TOKEN);
+                    } else if (SASL_STATE_COMPLETE.equalsIgnoreCase(header(ctx, SASL_HEADER_STATE))) {
+                        headers.put(SASL_HEADER_STATE, SASL_STATE_COMPLETE);
+                    } else {
+                        headers.put(SASL_HEADER_STATE, SASL_STATE_NEGOTIATE);
+                    }
+                    return HttpAuthHeaders.of(headers);
+                }
+
+                // No role token yet: run the SASL negotiation.
+                if (!hasPrevious) {
+                    headers.put(SASL_HEADER_STATE, SASL_STATE_CLIENT_INIT);
+                    AuthData initData = conv.provider.authenticate(AuthData.INIT_AUTH_DATA);
+                    headers.put(SASL_AUTH_TOKEN, Base64.getEncoder().encodeToString(initData.getBytes()));
+                } else {
+                    AuthData brokerData = AuthData.of(Base64.getDecoder().decode(header(ctx, SASL_AUTH_TOKEN)));
+                    AuthData clientData = conv.provider.authenticate(brokerData);
+                    headers.put(SASL_STATE_SERVER, header(ctx, SASL_STATE_SERVER));
+                    headers.put(SASL_HEADER_TYPE, SASL_TYPE_VALUE);
+                    headers.put(SASL_HEADER_STATE, SASL_STATE_NEGOTIATE);
+                    headers.put(SASL_AUTH_TOKEN, Base64.getEncoder().encodeToString(clientData.getBytes()));
+                }
+                return HttpAuthHeaders.of(headers);
+            } catch (Exception e) {
+                throw new CompletionException(e);
             }
-            return CompletableFuture.completedFuture(HttpAuthHeaders.of(headers));
-        } catch (Throwable t) {
-            return CompletableFuture.failedFuture(t);
-        }
+        });
     }
 
     @Override
@@ -220,6 +247,9 @@ public class SaslAuthenticationV5 implements Authentication, BinaryAuthDataProvi
             if (conv != null) {
                 conv.roleToken = roleToken;
             }
+            // FIX C: publish the validated role token to the cross-request cache so the next request replays
+            // it (State=ServerCheckToken) instead of restarting a full Kerberos negotiation (v4 semantics).
+            cachedRoleToken = roleToken;
             Map<String, String> headers = new LinkedHashMap<>();
             headers.put(SASL_HEADER_TYPE, SASL_TYPE_VALUE);
             headers.put(SASL_AUTH_ROLE_TOKEN, roleToken);
@@ -235,6 +265,9 @@ public class SaslAuthenticationV5 implements Authentication, BinaryAuthDataProvi
         if (conv == null) {
             conv = new SaslHttpConversation();
             conv.provider = providerFactory.create(host(ctx));
+            // FIX C: seed this request's conversation from the cross-request role-token cache so a
+            // previously validated token is replayed (State=ServerCheckToken) rather than renegotiated.
+            conv.roleToken = cachedRoleToken;
             ctx.setStateObject(SaslHttpConversation.class, conv);
         }
         return conv;
