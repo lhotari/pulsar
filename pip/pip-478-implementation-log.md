@@ -160,3 +160,25 @@
     upon PIP-478 for the TLS-transport slice (jcaProvider L1 + PulsarTlsFactory/HSM L3 + PulsarHttpClient), for the human to post.
     Monolith lh-pip-478-impl-v2 @ 1efb5228bdf (design finalized + impl A-D + 6 fixes). NEXT: fold the fixed impl into the fork
     code chunks #242-247 (still fixpoint code) — full 6-chunk re-cut, deletions to chunk 6, equivalence to monolith — + Personal CI.
+
+69. **Multi-model Codex per-PR review + 2 fix rounds + jsseProvider rename (2026-07-07).** Ran 4 Codex (gpt-5.5 high)
+    read-only per-PR reviews of the fork series. Round 1 (config-removal/jcaProvider) fixed 6 defects; ROUND 2 found 7 more
+    real bugs the impl's tests missed — dominant theme = the event-loop-blocking the PIP set out to kill, leaking through:
+    A BrokerService.configTlsSettings/configAdminTlsSettings dropped the brokerClient provider (geo-rep + cross-cluster admin
+    silent FIPS downgrade — FIX 1 was incomplete); B built-in token plugin read the token file on the event loop; C SASL-over-
+    HTTP lost its cross-request role-token cache (v4 wire/behavior regression); D SASL GSSAPI ran inline; E FileBasedTlsFactory
+    dispose double-release race; F close()-vs-in-flight leak; G reflective factory ignored the TCCL. ALL 7 fixed + tested green
+    (SASL cache restored via a volatile body-level cachedRoleToken mirroring v4). DESIGN findings: #1 (jcaProvider mis-framed —
+    sslContextProvider needs a JSSE provider; jcaProvider=BCFIPS FAILS since BC-FIPS is crypto-only with no SSLContext.TLS; FIPS
+    needs BCJSSE) → user chose to RENAME jcaProvider→jsseProvider + reframe (jsseProvider = the JSSE/SSLContext provider; FIPS =
+    jsseProvider=BCJSSE with BC-FIPS registered separately as the crypto provider). #3 ClusterData purpose contradiction →
+    reconciled to the verified code model (per-client factory from each client's own config carrying per-cluster material,
+    fixed BROKER_CLIENT purpose, NO minted per-cluster purposes). #4 break-summary augmented (ClusterData accessors + CmdClusters
+    CLI). #6 "non-default value" defined (default FQCN tolerated). REMAINING design notes (surfaced, not blocking): #2 v4
+    in-memory TLS material not representable in the bridge; #5 "custom PIP-337 factories are rare" is an unverified assumption.
+    GIT-RECOVERY LESSON: a re-cut builder left the worktree on a temp branch `recut-build`; the next fix builder built on that
+    wrong base. Recovered by cherry-picking the 5 fix commits onto the correct monolith (clean) + re-verifying (compile + all
+    fix tests pass). Added an explicit base-verification guard (branch+SHA+clean check, STOP if wrong) to the rename builder —
+    it passed. Monolith lh-pip-478-impl-v2 @ 0730ba49414 (complete: config removal + jsseProvider + round-1&2 fixes + reframe +
+    #3/#4/#6). NEXT: re-cut the mega-chunk-6 series (fixpoint chunks + corrected design; chunk 6 = monolith) + re-push apache
+    #25890 & fork #241 with the corrected design + CI.
