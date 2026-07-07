@@ -30,6 +30,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import javax.net.ssl.SSLContext;
@@ -201,6 +202,13 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         return runAsync(() -> {
             RegisteredSource source = resolve(purpose);
             synchronized (source) {
+                // FIX F: close() runs releaseAll() under this same source lock, and may have completed after
+                // the outer closed-check but before this task acquired the lock. Re-check here so we never
+                // build+cache+deliver a context (and register a subscription) whose factory-owned reference
+                // would then never be released — that would leak past shutdown.
+                if (closed) {
+                    throw new IllegalStateException("FileBasedTlsFactory is closed");
+                }
                 T instance = loadInitialInstance(source, instanceClass);
                 Subscription<T> subscription = new Subscription<>(instanceClass, onLoadOrReload);
                 // Initial delivery happens-before the returned future completes (same thread, ordered).
@@ -221,6 +229,11 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
         return runAsync(() -> {
             RegisteredSource source = resolve(purpose);
             synchronized (source) {
+                // FIX F: re-check under the source lock (see createInstance above) so a task racing a
+                // concurrent close()/releaseAll() never builds+retains a context that then leaks past shutdown.
+                if (closed) {
+                    throw new IllegalStateException("FileBasedTlsFactory is closed");
+                }
                 T instance = loadInitialInstance(source, instanceClass);
                 retain(instance);
                 return Optional.of((TlsHandle<T>) new OneShotHandle<>(instance));
@@ -565,7 +578,9 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
     /** A one-shot handle: exposes the built instance and releases its retained reference on dispose. */
     private static final class OneShotHandle<T> implements TlsHandle<T> {
         private final T instance;
-        private volatile boolean disposed;
+        // FIX E: an AtomicBoolean, not a volatile flag — a plain check-then-set lets two concurrent
+        // dispose() callers both pass the guard and over-decrement the cached context's refcount.
+        private final AtomicBoolean disposed = new AtomicBoolean(false);
 
         OneShotHandle(T instance) {
             this.instance = instance;
@@ -578,8 +593,7 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
 
         @Override
         public void dispose() {
-            if (!disposed) {
-                disposed = true;
+            if (disposed.compareAndSet(false, true)) {
                 release(instance);
             }
         }

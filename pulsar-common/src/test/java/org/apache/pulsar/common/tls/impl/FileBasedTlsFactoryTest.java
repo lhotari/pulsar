@@ -44,9 +44,14 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -569,6 +574,113 @@ public class FileBasedTlsFactoryTest {
         assertThatThrownBy(() ->
                 factory.createInstance(TlsPurpose.BROKER, SslContext.class, ctx -> { }).join())
                 .hasCauseInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    public void createInstanceRacingConcurrentCloseFailsAndDoesNotRebuild() {
+        // PIP-478 FIX F: close() runs releaseAll() under the source lock. A createInstance task that passed
+        // the outer closed-check but is only scheduled to run AFTER close() completed must NOT build+cache a
+        // fresh context (whose factory-owned reference close() would never release -> shutdown leak). A gated
+        // executor reproduces exactly that interleaving deterministically; the task must fail instead.
+        GatedExecutor gated = new GatedExecutor();
+        FileBasedTlsFactory factory = new FileBasedTlsFactory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.pem(RSA_CA, BROKER_CERT, BROKER_KEY)),
+                FileBasedTlsFactorySettings.defaults());
+        factory.initialize(initContext(scheduler, gated)).join();
+
+        gated.pause();
+        // Passes the outer closed-check; the build task is now held on the executor, not yet run.
+        CompletableFuture<Optional<TlsHandle<SslContext>>> pending =
+                factory.createInstance(TlsPurpose.BROKER, SslContext.class);
+        assertThat(pending).isNotDone();
+
+        // close() runs first (releaseAll under the source lock).
+        factory.close();
+
+        // Now the held task runs and re-checks closed under the source lock: it fails instead of rebuilding.
+        gated.releaseHeld();
+        assertThat(pending).isDone();
+        assertThatThrownBy(pending::join).hasCauseInstanceOf(IllegalStateException.class);
+
+        // The subscribing variant behaves identically.
+        GatedExecutor gated2 = new GatedExecutor();
+        FileBasedTlsFactory factory2 = new FileBasedTlsFactory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.pem(RSA_CA, BROKER_CERT, BROKER_KEY)),
+                FileBasedTlsFactorySettings.defaults());
+        factory2.initialize(initContext(scheduler, gated2)).join();
+        gated2.pause();
+        CompletableFuture<Optional<TlsHandle<SslContext>>> pending2 =
+                factory2.createInstance(TlsPurpose.BROKER, SslContext.class, ctx -> { });
+        factory2.close();
+        gated2.releaseHeld();
+        assertThatThrownBy(pending2::join).hasCauseInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    public void oneShotHandleDisposeIsIdempotentUnderConcurrency() throws Exception {
+        // PIP-478 FIX E: OneShotHandle.dispose() must release exactly once. A plain check-then-set on a
+        // volatile flag lets two concurrent disposers both pass the guard and over-release, freeing the shared
+        // cached context's native SSL_CTX (refCnt -> 0). OpenSSL is required because JDK contexts are not
+        // reference-counted (release is a no-op there, so the bug cannot surface). With the AtomicBoolean
+        // compareAndSet guard, exactly one release happens and the cache keeps its reference across iterations.
+        assumeOpenSslAvailable();
+        FileBasedTlsFactory factory = factory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.pem(RSA_CA, BROKER_CERT, BROKER_KEY)),
+                FileBasedTlsFactorySettings.builder().engineProvider(SslProvider.OPENSSL).build());
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < 500; i++) {
+                TlsHandle<SslContext> handle =
+                        factory.createInstance(TlsPurpose.BROKER, SslContext.class).join().get();
+                SslContext ctx = handle.get();
+                assertThat(ctx).isInstanceOf(ReferenceCounted.class);
+                CyclicBarrier barrier = new CyclicBarrier(2);
+                Callable<Void> disposer = () -> {
+                    barrier.await();
+                    handle.dispose();
+                    return null;
+                };
+                Future<Void> f1 = pool.submit(disposer);
+                Future<Void> f2 = pool.submit(disposer);
+                f1.get();
+                f2.get();
+                // Exactly one release despite two concurrent dispose() calls: the cache still owns the context.
+                // Pre-fix, both callers over-released and freed the shared cached context (refCnt 0), which the
+                // next iteration's retain() would reject with IllegalReferenceCountException.
+                assertThat(((ReferenceCounted) ctx).refCnt())
+                        .as("cache reference survives concurrent dispose at iteration %d", i).isPositive();
+            }
+        } finally {
+            pool.shutdownNow();
+            factory.close();
+        }
+    }
+
+    /** An executor that can hold submitted tasks so a test can interleave a close() before they run. */
+    private static final class GatedExecutor implements Executor {
+        private volatile boolean paused;
+        private final CopyOnWriteArrayList<Runnable> held = new CopyOnWriteArrayList<>();
+
+        void pause() {
+            paused = true;
+        }
+
+        void releaseHeld() {
+            paused = false;
+            for (Runnable r : held) {
+                r.run();
+            }
+            held.clear();
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            if (paused) {
+                held.add(command);
+            } else {
+                command.run();
+            }
+        }
     }
 
     private static void assumeOpenSslAvailable() {
