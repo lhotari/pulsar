@@ -92,7 +92,11 @@ public class PulsarConfigurationLoaderTest {
     @Test
     public void testRemovedPip337SslFactoryPluginKeysRejectedLoudly() {
         for (String key : new String[] {"sslFactoryPlugin", "sslFactoryPluginParams",
-                "brokerClientSslFactoryPlugin", "brokerClientSslFactoryPluginParams"}) {
+                "brokerClientSslFactoryPlugin", "brokerClientSslFactoryPluginParams",
+                // PIP-478 (FIX): broker.conf passes brokerClient_<clientKey> through to the internal client, so
+                // the prefixed form of the client removed keys must be rejected too (it would otherwise be
+                // silently dropped by ClientConfigurationData ignoreUnknown).
+                "brokerClient_sslFactoryPlugin", "brokerClient_sslFactoryPluginParams"}) {
             Properties props = new Properties();
             props.setProperty("clusterName", "test");
             props.setProperty(key, "com.example.CustomSslFactory");
@@ -108,6 +112,34 @@ public class PulsarConfigurationLoaderTest {
         blank.setProperty("sslFactoryPlugin", "");
         blank.setProperty("brokerClientSslFactoryPlugin", "");
         assertNotNull(expectNoThrow(() -> PulsarConfigurationLoader.create(blank, ServiceConfiguration.class)));
+    }
+
+    // PIP-478 (FIX): a *Plugin key still naming the OLD DEFAULT factory FQCN is equivalent to "unset" (no
+    // custom factory), so it is tolerated — only a non-default (custom) value needs migration. The *PluginParams
+    // keys carry no default value, so any non-blank value is still rejected.
+    @Test
+    public void testRemovedPip337DefaultSslFactoryFqcnTolerated() {
+        String defaultFqcn = "org.apache.pulsar.common.util.DefaultPulsarSslFactory";
+        for (String key : new String[] {"sslFactoryPlugin", "brokerClientSslFactoryPlugin",
+                "brokerClient_sslFactoryPlugin"}) {
+            Properties props = new Properties();
+            props.setProperty("clusterName", "test");
+            props.setProperty(key, defaultFqcn);
+            assertNotNull(expectNoThrow(() -> PulsarConfigurationLoader.create(props, ServiceConfiguration.class)),
+                    "old default factory FQCN on '" + key + "' should be tolerated");
+        }
+        // A custom (non-default) value on the same key is still rejected.
+        Properties custom = new Properties();
+        custom.setProperty("clusterName", "test");
+        custom.setProperty("sslFactoryPlugin", "com.acme.CustomFactory");
+        expectThrows(IllegalArgumentException.class,
+                () -> PulsarConfigurationLoader.create(custom, ServiceConfiguration.class));
+        // The default FQCN is NOT a *PluginParams default -> a non-blank params value is still rejected.
+        Properties params = new Properties();
+        params.setProperty("clusterName", "test");
+        params.setProperty("sslFactoryPluginParams", defaultFqcn);
+        expectThrows(IllegalArgumentException.class,
+                () -> PulsarConfigurationLoader.create(params, ServiceConfiguration.class));
     }
 
     private static <T> T expectNoThrow(java.util.concurrent.Callable<T> callable) {

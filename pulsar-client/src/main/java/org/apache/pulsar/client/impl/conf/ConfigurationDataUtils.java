@@ -42,12 +42,21 @@ public final class ConfigurationDataUtils {
             List.of("sslFactoryPlugin", "sslFactoryPluginParams");
 
     /**
+     * The old PIP-337 default {@code sslFactoryPlugin} implementation FQCN. Its class is deleted in Pulsar 5.0
+     * (PIP-478), so this is a plain string literal. A {@code *Plugin} key still carrying this default value is
+     * equivalent to "unset" (no custom factory), so it is tolerated — only a non-default (custom) factory needs
+     * migration.
+     */
+    static final String DEFAULT_PIP337_SSL_FACTORY_CLASS = "org.apache.pulsar.common.util.DefaultPulsarSslFactory";
+
+    /**
      * Reject a stale, non-default PIP-337 SSL-factory key (removed in Pulsar 5.0, PIP-478) left in a client
-     * {@code loadConf} map. A key that is absent or blank is tolerated; a non-blank value fails loudly with an
-     * actionable migration message.
+     * {@code loadConf} map. A key that is absent or blank is tolerated; a {@code *Plugin} key still naming the
+     * old default factory FQCN ({@link #DEFAULT_PIP337_SSL_FACTORY_CLASS}) is also tolerated (equivalent to
+     * unset); any other non-blank value fails loudly with an actionable migration message.
      *
      * @param config the client configuration map
-     * @throws IllegalArgumentException if a removed PIP-337 key is present with a non-default (non-blank) value
+     * @throws IllegalArgumentException if a removed PIP-337 key is present with a non-default value
      */
     public static void rejectRemovedPip337TlsFactoryKeys(Map<String, Object> config) {
         if (config == null) {
@@ -55,12 +64,18 @@ public final class ConfigurationDataUtils {
         }
         for (String key : REMOVED_PIP337_TLS_FACTORY_KEYS) {
             Object value = config.get(key);
-            if (value != null && StringUtils.isNotBlank(value.toString())) {
-                throw new IllegalArgumentException("The PIP-337 '" + key + "' client configuration key is "
-                        + "removed in Pulsar 5.0 (PIP-478). Migrate the custom SSL factory to a PulsarTlsFactory "
-                        + "selected by tlsFactoryClassName / tlsFactoryConfig and remove '" + key + "' from the "
-                        + "configuration.");
+            if (value == null || StringUtils.isBlank(value.toString())) {
+                continue;
             }
+            // A *Plugin key still set to the old default factory FQCN means no custom factory — tolerate it as
+            // if unset. The *PluginParams keys carry no default value, so any non-blank value is rejected.
+            if (key.endsWith("Plugin") && DEFAULT_PIP337_SSL_FACTORY_CLASS.equals(value.toString().trim())) {
+                continue;
+            }
+            throw new IllegalArgumentException("The PIP-337 '" + key + "' client configuration key is "
+                    + "removed in Pulsar 5.0 (PIP-478). Migrate the custom SSL factory to a PulsarTlsFactory "
+                    + "selected by tlsFactoryClassName / tlsFactoryConfig and remove '" + key + "' from the "
+                    + "configuration.");
         }
     }
 

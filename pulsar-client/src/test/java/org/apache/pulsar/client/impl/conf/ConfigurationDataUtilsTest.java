@@ -68,6 +68,35 @@ public class ConfigurationDataUtilsTest {
         ConfigurationDataUtils.rejectRemovedPip337TlsFactoryKeys(null);
     }
 
+    // PIP-478 (FIX): the OLD DEFAULT factory FQCN on the *Plugin key is equivalent to "unset" (no custom
+    // factory) and is tolerated; a custom value is still rejected, and the default FQCN is not a valid
+    // *PluginParams value so a non-blank params value is still rejected.
+    @Test
+    public void testRemovedPip337DefaultSslFactoryFqcnTolerated() {
+        String defaultFqcn = "org.apache.pulsar.common.util.DefaultPulsarSslFactory";
+        Map<String, Object> defaulted = new HashMap<>();
+        defaulted.put("sslFactoryPlugin", defaultFqcn);
+        ConfigurationDataUtils.rejectRemovedPip337TlsFactoryKeys(defaulted); // tolerated -> no throw
+
+        Map<String, Object> custom = new HashMap<>();
+        custom.put("sslFactoryPlugin", "com.acme.CustomFactory");
+        try {
+            ConfigurationDataUtils.rejectRemovedPip337TlsFactoryKeys(custom);
+            fail("expected IllegalArgumentException for a custom sslFactoryPlugin");
+        } catch (IllegalArgumentException expected) {
+            // ok
+        }
+
+        Map<String, Object> params = new HashMap<>();
+        params.put("sslFactoryPluginParams", defaultFqcn);
+        try {
+            ConfigurationDataUtils.rejectRemovedPip337TlsFactoryKeys(params);
+            fail("expected IllegalArgumentException for a non-blank sslFactoryPluginParams");
+        } catch (IllegalArgumentException expected) {
+            // ok
+        }
+    }
+
     @Test
     public void testLoadClientConfigurationData() {
         ClientConfigurationData confData = new ClientConfigurationData();
