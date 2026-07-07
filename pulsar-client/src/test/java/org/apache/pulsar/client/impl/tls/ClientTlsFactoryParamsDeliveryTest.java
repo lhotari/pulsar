@@ -22,6 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -137,6 +139,97 @@ public class ClientTlsFactoryParamsDeliveryTest {
         assertThatThrownBy(() -> ClientTlsFactorySupport.resolveClientTlsFactory(conf, executor, executor, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("tlsFactoryClassName");
+    }
+
+    // PIP-478 FIX G: the by-name reflective instantiation must honor the thread context classloader
+    // (PulsarAdminImpl sets it to the plugin loader), not only the defining loader. A child-first TCCL loads
+    // its own copy of the factory class, so the instance's classloader reveals which path was taken: with the
+    // fix it is the TCCL; the pre-fix Class.forName(name) would have returned the app/defining loader's copy.
+    @Test
+    public void byNameFactoryHonorsThreadContextClassLoader() throws Exception {
+        String name = TcclOnlyFactory.class.getName();
+        TcclFactoryClassLoader tccl = new TcclFactoryClassLoader(getClass().getClassLoader(), name);
+        ClassLoader original = Thread.currentThread().getContextClassLoader();
+        try {
+            Thread.currentThread().setContextClassLoader(tccl);
+            PulsarTlsFactory factory =
+                    ClientTlsFactorySupport.instantiateNamedFactory(name, "tlsFactoryClassName");
+
+            assertThat(factory.getClass().getClassLoader())
+                    .as("factory loaded through the thread context classloader, not the defining loader")
+                    .isSameAs(tccl);
+            assertThat((Object) factory.getClass())
+                    .as("a distinct Class from the one the defining loader resolves")
+                    .isNotSameAs(TcclOnlyFactory.class);
+        } finally {
+            Thread.currentThread().setContextClassLoader(original);
+        }
+    }
+
+    /**
+     * A child-first {@link ClassLoader} that defines its own copy of a single target class (delegating every
+     * other class to the parent), so a class loaded through it is a distinct {@link Class} from the parent's.
+     */
+    private static final class TcclFactoryClassLoader extends ClassLoader {
+        private final String targetName;
+
+        TcclFactoryClassLoader(ClassLoader parent, String targetName) {
+            super(parent);
+            this.targetName = targetName;
+        }
+
+        @Override
+        protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            if (!name.equals(targetName)) {
+                return super.loadClass(name, resolve);
+            }
+            synchronized (getClassLoadingLock(name)) {
+                Class<?> loaded = findLoadedClass(name);
+                if (loaded == null) {
+                    String path = name.replace('.', '/') + ".class";
+                    try (InputStream in = getParent().getResourceAsStream(path)) {
+                        if (in == null) {
+                            throw new ClassNotFoundException(name);
+                        }
+                        byte[] bytes = in.readAllBytes();
+                        loaded = defineClass(name, bytes, 0, bytes.length);
+                    } catch (IOException e) {
+                        throw new ClassNotFoundException(name, e);
+                    }
+                }
+                if (resolve) {
+                    resolveClass(loaded);
+                }
+                return loaded;
+            }
+        }
+    }
+
+    /** A public no-arg {@link PulsarTlsFactory} used only to observe which classloader instantiated it. */
+    public static final class TcclOnlyFactory implements PulsarTlsFactory {
+        public TcclOnlyFactory() {
+        }
+
+        @Override
+        public CompletableFuture<Void> initialize(TlsFactoryInitContext context) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(TlsPurpose purpose,
+                Class<T> instanceClass) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+
+        @Override
+        public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(TlsPurpose purpose,
+                Class<T> instanceClass, Consumer<T> onLoadOrReload) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+
+        @Override
+        public void close() {
+        }
     }
 
     /**

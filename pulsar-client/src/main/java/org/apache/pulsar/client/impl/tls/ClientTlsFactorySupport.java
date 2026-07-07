@@ -258,8 +258,15 @@ public final class ClientTlsFactorySupport {
      * @return the instantiated factory
      */
     static PulsarTlsFactory instantiateNamedFactory(String factoryClassName, String configKeyName) {
+        String name = factoryClassName.trim();
+        // FIX G: honor the thread context classloader (PulsarAdminImpl sets it to the plugin loader via
+        // setContextClassLoader) so a factory class visible only through a custom TCCL is found. Plain
+        // Class.forName(name) uses only this class's defining loader and misses TCCL-only classes. Fall back
+        // to the defining loader when no TCCL is set.
+        ClassLoader tccl = Thread.currentThread().getContextClassLoader();
         try {
-            return (PulsarTlsFactory) Class.forName(factoryClassName.trim()).getConstructor().newInstance();
+            Class<?> clazz = tccl != null ? Class.forName(name, true, tccl) : Class.forName(name);
+            return (PulsarTlsFactory) clazz.getConstructor().newInstance();
         } catch (ReflectiveOperationException e) {
             throw new IllegalArgumentException(
                     "Could not instantiate " + configKeyName + " '" + factoryClassName + "'", e);
