@@ -21,6 +21,8 @@ package org.apache.pulsar.common.util.tls;
 import java.security.NoSuchAlgorithmException;
 import java.security.Provider;
 import java.security.Security;
+import java.util.Iterator;
+import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -170,7 +172,24 @@ public final class JcaProviders {
         if (classLoader == null) {
             classLoader = JcaProviders.class.getClassLoader();
         }
-        for (Provider provider : ServiceLoader.load(Provider.class, classLoader)) {
+        // Iterate defensively: a single broken META-INF/services/java.security.Provider entry (an unrelated
+        // provider whose class fails to load) throws ServiceConfigurationError from hasNext()/next(). Skipping
+        // it — rather than aborting the whole loop — lets a good provider still resolve here, and otherwise
+        // still falls through to the Security.getProvider fallback (step 2) rather than failing early.
+        Iterator<Provider> it = ServiceLoader.load(Provider.class, classLoader).iterator();
+        while (true) {
+            Provider provider;
+            try {
+                if (!it.hasNext()) {
+                    break;
+                }
+                provider = it.next();
+            } catch (ServiceConfigurationError brokenEntry) {
+                log.debug().exception(brokenEntry)
+                        .log("Skipping a broken java.security.Provider ServiceLoader entry while resolving a "
+                                + "named JCA provider");
+                continue;
+            }
             if (name.equals(provider.getName())) {
                 log.debug().attr("provider", name).log("Resolved JCA provider via ServiceLoader");
                 return provider;
