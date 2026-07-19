@@ -242,6 +242,20 @@ public class FileBasedTlsFactoryTest {
         factory.close();
     }
 
+    // SPI contract: argument-validation failures complete the returned future exceptionally; the
+    // subscribing overload must not throw NPE on the calling thread for a null callback.
+    @Test
+    public void subscribingCreateInstanceRejectsNullCallbackAsynchronously() throws Exception {
+        FileBasedTlsFactory factory = factory(
+                Map.of(TlsPurpose.BROKER, TlsPolicy.pem(RSA_CA, BROKER_CERT, BROKER_KEY)),
+                FileBasedTlsFactorySettings.defaults());
+        java.util.concurrent.CompletableFuture<?> future =
+                factory.createInstance(TlsPurpose.BROKER, SslContext.class, null);
+        assertThat(future).isCompletedExceptionally();
+        assertThatThrownBy(future::join).hasCauseInstanceOf(NullPointerException.class);
+        factory.close();
+    }
+
     @Test
     public void clientHostnameVerificationIsBakedIntoTheContext() throws Exception {
         FileBasedTlsFactory verifying = factory(

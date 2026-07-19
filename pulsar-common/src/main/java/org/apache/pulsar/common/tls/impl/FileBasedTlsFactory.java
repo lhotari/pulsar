@@ -192,7 +192,11 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
     @Override
     public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(
             TlsPurpose purpose, Class<T> instanceClass, Consumer<T> onLoadOrReload) {
-        Objects.requireNonNull(onLoadOrReload, "onLoadOrReload must not be null");
+        if (onLoadOrReload == null) {
+            // SPI contract: argument-validation failures complete the returned future exceptionally — this
+            // method never throws on the calling thread.
+            return CompletableFuture.failedFuture(new NullPointerException("onLoadOrReload must not be null"));
+        }
         if (!isSupported(instanceClass)) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -524,7 +528,10 @@ public class FileBasedTlsFactory implements PulsarTlsFactory {
     private static final class Subscription<T> {
         private final Class<T> instanceClass;
         private final Consumer<T> callback;
-        private T current;
+        // Volatile: written under the source monitor (deliver), but read lock-free by SubscriptionHandle.get()
+        // from arbitrary consumer threads — the handle contract promises the most recent delivery, which
+        // needs the happens-before edge (a stale read can outlive the deferred-release window below).
+        private volatile T current;
         // Deferred release (PIP-478 use-after-free): the instance superseded by the most recent delivery
         // is kept alive one extra generation rather than released immediately. Consumers hold a bare volatile
         // borrow of the delivered instance and later call newHandler/newEngine on it off a different thread;

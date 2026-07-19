@@ -24,8 +24,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.handler.ssl.SslContext;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
@@ -271,6 +275,45 @@ public class SslParametersSynthesisTest {
         handle.dispose();
     }
 
+    @Test
+    public void staleOutOfOrderCompanionCannotRegressTheLastGoodBaseline() throws Exception {
+        CompanionFactory factory = new CompanionFactory(serverJdkContext(), protocols("TLSv1.2"));
+        TlsHandle<SslContext> handle = TlsContextAcquisition.acquireNettyContext(
+                factory, TlsPurpose.BROKER, TlsSynthesisSpec.server(false), ctx -> { }).join().orElseThrow();
+
+        // Two rotations whose companion requests stay pending, then complete OUT OF ORDER: the newer
+        // (generation-3) companion first, the stale generation-2 one late.
+        factory.deferCompanionRequests();
+        factory.rotate(serverJdkContext(), null);
+        factory.rotate(serverJdkContext(), null);
+        factory.completePendingCompanion(1, protocols("TLSv1.3"));
+        assertThat(handle.get().newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols())
+                .containsExactly("TLSv1.3");
+        factory.completePendingCompanion(0, protocols("TLSv1.2"));
+
+        // A further rotation whose companion request FAILS must republish the last-good generation-3 policy;
+        // the stale generation-2 completion above must not have regressed it.
+        factory.failCompanionRequests();
+        factory.rotate(serverJdkContext(), null);
+        assertThat(handle.get().newEngine(ByteBufAllocator.DEFAULT).getEnabledProtocols())
+                .as("the stale out-of-order companion must not regress the retained last-good policy")
+                .containsExactly("TLSv1.3");
+        handle.dispose();
+    }
+
+    @Test
+    public void companionFailureReleasesTheAcquiredJdkHandle() throws Exception {
+        CompanionFactory factory = new CompanionFactory(clientJdkContextTrustOnly(), protocols("TLSv1.2"));
+        factory.failCompanionRequests();
+
+        assertThatThrownBy(() -> TlsContextAcquisition.acquireNettyContext(
+                factory, TlsPurpose.CLIENT_DEFAULT, TlsSynthesisSpec.client(false)).join())
+                .hasMessageContaining("companion unavailable");
+        assertThat(factory.jdkHandleDisposals.get())
+                .as("the already-acquired JDK handle is released when the companion request fails")
+                .isEqualTo(1);
+    }
+
     // ---- T4: LIVE handshakes driven through the full factory -> acquisition path (not the low-level
     // synthesize helper, and not just getters): the factory-supplied companion actually decides a real
     // handshake outcome after flowing through TlsContextAcquisition.acquireNettyContext. ----
@@ -349,6 +392,10 @@ public class SslParametersSynthesisTest {
         private volatile SSLParameters companion;
         private volatile Consumer<SSLContext> sslContextSubscriber;
         private volatile boolean failCompanion;
+        private volatile boolean deferCompanion;
+        private final List<CompletableFuture<Optional<TlsHandle<SSLParameters>>>> pendingCompanions =
+                Collections.synchronizedList(new ArrayList<>());
+        private final AtomicInteger jdkHandleDisposals = new AtomicInteger();
         private int companionRequests;
 
         CompanionFactory(SSLContext jdkContext, SSLParameters companion) {
@@ -362,11 +409,18 @@ public class SslParametersSynthesisTest {
         }
 
         @Override
+        @SuppressWarnings({"unchecked", "rawtypes"})
         public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(TlsPurpose purpose,
                                                                             Class<T> instanceClass) {
             if (instanceClass == SSLParameters.class && failCompanion) {
                 companionRequests++;
                 return CompletableFuture.failedFuture(new IllegalStateException("companion unavailable"));
+            }
+            if (instanceClass == SSLParameters.class && deferCompanion) {
+                companionRequests++;
+                CompletableFuture<Optional<TlsHandle<SSLParameters>>> pending = new CompletableFuture<>();
+                pendingCompanions.add(pending);
+                return (CompletableFuture) pending;
             }
             return CompletableFuture.completedFuture(instanceFor(instanceClass));
         }
@@ -374,6 +428,15 @@ public class SslParametersSynthesisTest {
         /** Make subsequent one-shot {@code SSLParameters} companion requests complete exceptionally. */
         void failCompanionRequests() {
             this.failCompanion = true;
+        }
+
+        /** Leave subsequent companion requests uncompleted; complete them manually (possibly out of order). */
+        void deferCompanionRequests() {
+            this.deferCompanion = true;
+        }
+
+        void completePendingCompanion(int index, SSLParameters params) {
+            pendingCompanions.get(index).complete(Optional.of(handleOf(params)));
         }
 
         @Override
@@ -398,7 +461,18 @@ public class SslParametersSynthesisTest {
         @SuppressWarnings("unchecked")
         private <T> Optional<TlsHandle<T>> instanceFor(Class<T> instanceClass) {
             if (instanceClass == SSLContext.class) {
-                return Optional.of((TlsHandle<T>) handleOf(jdkContext));
+                SSLContext context = jdkContext;
+                return Optional.of((TlsHandle<T>) new TlsHandle<SSLContext>() {
+                    @Override
+                    public SSLContext get() {
+                        return context;
+                    }
+
+                    @Override
+                    public void dispose() {
+                        jdkHandleDisposals.incrementAndGet();
+                    }
+                });
             }
             if (instanceClass == SSLParameters.class) {
                 companionRequests++;

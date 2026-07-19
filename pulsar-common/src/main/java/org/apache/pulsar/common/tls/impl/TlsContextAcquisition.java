@@ -243,8 +243,16 @@ public final class TlsContextAcquisition {
             if (jdk.isEmpty()) {
                 return CompletableFuture.<Optional<TlsHandle<SslContext>>>completedFuture(Optional.empty());
             }
-            return paramsSupplier.get().thenApply(paramsHandle ->
-                    Optional.of(synthesizeOneShot(jdk.get(), purpose, synthesis, extractBaseline(paramsHandle))));
+            return paramsSupplier.get()
+                    .thenApply(paramsHandle -> Optional.of(
+                            synthesizeOneShot(jdk.get(), purpose, synthesis, extractBaseline(paramsHandle))))
+                    .whenComplete((result, err) -> {
+                        if (err != null) {
+                            // The JDK handle was already acquired; a companion failure must release that
+                            // interest, or every failed acquisition leaks one factory/HSM/cache reference.
+                            jdk.get().dispose();
+                        }
+                    });
         });
     }
 
@@ -335,35 +343,37 @@ public final class TlsContextAcquisition {
             if (firstDelivery.compareAndSet(true, false)) {
                 // The first delivery fires synchronously inside the subscribe call; reuse the companion the
                 // outer composition already fetched so `latest` is set before the subscribe future completes.
-                publish(jdkContext, lastBaseline, generation);
+                publish(jdkContext, lastBaseline, generation, true);
                 return;
             }
             // Rotation: re-request the companion so engine policy rotates WITH the material. Composed
             // asynchronously and never joined on the delivery thread: joining would self-deadlock a
             // factory that dispatches companion creation to the same single-thread executor running this
             // callback. The default file-based factory returns no companion, so this stays a no-op for it.
-            factory.createInstance(purpose, SSLParameters.class).whenComplete((companion, err) -> {
-                SSLParameters baseline;
-                if (err != null) {
-                    // A transient companion-fetch failure must not downgrade engine policy: keep the
-                    // last-good baseline and still rotate the material.
-                    baseline = lastBaseline;
-                } else {
-                    baseline = extractBaseline(companion);
-                    lastBaseline = baseline;
-                }
-                publish(jdkContext, baseline, generation);
-            });
+            // The last-good baseline is maintained inside the generation-guarded publish, never here: a
+            // superseded companion completing late must not regress it.
+            factory.createInstance(purpose, SSLParameters.class).whenComplete((companion, err) ->
+                    publish(jdkContext, err != null ? null : extractBaseline(companion), generation,
+                            err == null));
         }
 
         // Publish the synthesized context for `generation`, dropping a result already superseded by a newer
         // delivery. Synchronized because rotation companions may complete on arbitrary threads and out of
-        // order; the guard keeps `latest` and the consumer callback monotonic in delivery order.
-        private synchronized void publish(SSLContext jdkContext, SSLParameters baseline, long generation) {
+        // order; the guard keeps `latest`, the consumer callback, AND the retained last-good baseline
+        // monotonic in delivery order.
+        private synchronized void publish(SSLContext jdkContext, SSLParameters baseline, long generation,
+                                          boolean baselineResolved) {
             if (generation < lastPublishedGeneration) {
                 return;
             }
             lastPublishedGeneration = generation;
+            if (baselineResolved) {
+                lastBaseline = baseline;
+            } else {
+                // A transient companion-fetch failure must not downgrade engine policy: keep the last-good
+                // baseline, read under the same guard so a stale companion can never have regressed it.
+                baseline = lastBaseline;
+            }
             SslContext wrapped = synthesize(jdkContext, purpose, synthesis, baseline);
             this.latest = wrapped;
             onLoadOrReload.accept(wrapped);
