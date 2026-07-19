@@ -182,3 +182,34 @@
     it passed. Monolith lh-pip-478-impl-v2 @ 0730ba49414 (complete: config removal + jsseProvider + round-1&2 fixes + reframe +
     #3/#4/#6). NEXT: re-cut the mega-chunk-6 series (fixpoint chunks + corrected design; chunk 6 = monolith) + re-push apache
     #25890 & fork #241 with the corrected design + CI.
+70. **MASTER REBASE + ROUND-1 gpt-5.6-sol/Fable REVIEW CYCLE (2026-07-19, user-directed).** Directive: rebase on
+    latest origin/master, keep improving with Fable + Codex "gpt5.6", Personal-CI PRs, iterate to fixpoint.
+    REBASE: merged origin/master 3d00280d122 (185 commits: Netty 4.1.134→4.2.16, AHC 2.15→3.0.10 Duration APIs,
+    Swagger v3/jakarta ee10 PIP-472, BK 4.18, #26020 publishing, master-side v5 migrations of pulsar-perf + CLI)
+    into the monolith — 27 conflicts (23 via resolve+verify agent pipeline, 4 modify/delete by hand; backup tag
+    pip478-pre-master-sync-0b4600e, merge 385ab68e66c). The merge audit surfaced a REAL latent bug: Netty 4.2
+    defaults client SslContexts to HTTPS endpoint identification; buildNettyClientContext never cleared it when HV
+    is off → HV-disabled clients still hostname-verified (fix 25274b5, existing test proven fail-without/pass-with;
+    the synthesized-JDK path was already correct). Master adaptations: MessageCryptoBc→JcaProviders, CLI/perf→
+    org.apache.pulsar.tls.TlsPolicy, AHC Duration wrapping. Series RE-CUT onto master via deterministic tree
+    builder (36 shared-path intermediates from 3-way merge-file base=old-06/ours=merged/theirs=old-04b; 2 hand-
+    resolved config intermediates keep deprecated sslFactoryPlugin fields in @Schema syntax at chunk 4); per-chunk
+    sanityCheck gates VERIFIED-tree green (a silent checkout-abort on the untracked impl-log invalidated one gate
+    run — always assert rev-parse HEAD==expected); pushed 01=8e501b189b2b..06=374ee9b8df59, series-base→master.
+    CODEX MODEL: "gpt5.6" = gpt-5.6-sol (flagship; bare gpt-5.6 alias rejected on ChatGPT accounts; CLI self-
+    updated 0.141→0.144.6; family sol/terra/luna).
+    ROUND 1: 5 Codex gpt-5.6-sol per-chunk reviews (16 findings) + Fable 6-dimension workflow (14 findings) →
+    EVERY finding adversarially verified before fixing. REFUTED with evidence (7): S3-2/S3-6 (already fixed by the
+    entry-69 FIX E/F), S3-5 (scheduler-owns-rotation is the documented contract), S6-2 (ClusterData lenient-drop
+    is the documented deliberate model), S6-3 (Jersey async pool unbounded → no starvation), 2 chunk-placement
+    artifacts (SASL fixes live in chunk 6). CONFIRMED+FIXED (all test-verified): SASL round bound orTimeout
+    (97a834a); jsseProvider KMF/TMF algorithm negotiation — BCJSSE registers X.509/PKIX not SunX509, verified in
+    bc-java (2bba508); v4 auth-header composition offloaded off the shared event loop — BLOCKER, OAuth2 shim
+    self-deadlock via shared ELG on the redirect path, thread-asserting test (c2c1d2e); 4 TLS factory hardenings —
+    generation-guarded lastBaseline, volatile Subscription.current, companion-failure handle dispose, async null-
+    callback reject (993aacd); round-1 batch (a56bb32): CLI HV secure default + keystore translation (the 'not
+    supported' warning was FALSE), proxy lookup-leg brokerClientTlsFactory propagation (HSM outage fix), OAuth2
+    redirect parity + streaming maxResponseBodyBytes enforcement, channel-init reject-dispose, jsseProvider conf
+    docs + CN→SAN wording + comment corrections. Doc: merge-rule 2 states the explicit endpoint-id clear (477d223).
+    NEXT: partition restructure (fold fixes+jsseProvider into introducing chunks; chunk-6 message must disclose
+    config-removal+successor — Fable BLOCKER on message honesty), re-gate, re-push, CI, ROUND 2 to fixpoint.
