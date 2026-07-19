@@ -112,16 +112,41 @@ public final class JdkSslContexts {
         KeyManager[] keyManagers = null;
         if (certificates != null && privateKey != null) {
             ksh.setPrivateKey("private", privateKey, certificates);
-            // Pin the KeyManagerFactory to the resolved provider (like the SSLContext and TrustManagerFactory
-            // above), so a configured jsseProvider (a FIPS JSSE provider such as BCJSSE) also backs the
-            // private-key side; the null-provider path is unchanged, so no regression when jsseProvider is unset.
-            KeyManagerFactory kmf = provider != null
-                    ? KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm(), provider)
-                    : KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            // Prefer a KeyManagerFactory from the resolved provider, so a configured jsseProvider (a FIPS
+            // JSSE provider such as BCJSSE) also backs the private-key side. The algorithm must be
+            // negotiated: BCJSSE registers X.509 (with X509/PKIX aliases) but NOT the JDK's default
+            // "SunX509", and a provider with no KeyManagerFactory service at all (e.g. Conscrypt) falls
+            // back to the platform default factory — the pinned provider still supplies the SSLContext,
+            // which consumes standard X509KeyManagers.
+            KeyManagerFactory kmf;
+            if (provider != null) {
+                String algorithm = supportedAlgorithm(provider, "KeyManagerFactory",
+                        KeyManagerFactory.getDefaultAlgorithm(), "PKIX");
+                kmf = algorithm != null ? KeyManagerFactory.getInstance(algorithm, provider)
+                        : KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            } else {
+                kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            }
             kmf.init(ksh.getKeyStore(), "".toCharArray());
             keyManagers = kmf.getKeyManagers();
         }
         return keyManagers;
+    }
+
+    /**
+     * Select an algorithm the provider actually implements for a JCA service type: the platform default
+     * algorithm when the provider registers it (directly or through an alias), else the given fallback,
+     * else {@code null} when the provider offers no such service at all.
+     */
+    static String supportedAlgorithm(Provider provider, String serviceType, String defaultAlgorithm,
+            String fallbackAlgorithm) {
+        if (provider.getService(serviceType, defaultAlgorithm) != null) {
+            return defaultAlgorithm;
+        }
+        if (provider.getService(serviceType, fallbackAlgorithm) != null) {
+            return fallbackAlgorithm;
+        }
+        return null;
     }
 
     private static TrustManager[] setupTrustCerts(KeyStoreHolder ksh, boolean allowInsecureConnection,
@@ -131,9 +156,18 @@ public final class JdkSslContexts {
         if (allowInsecureConnection) {
             trustManagers = InsecureTrustManagerFactory.INSTANCE.getTrustManagers();
         } else {
-            TrustManagerFactory tmf = securityProvider != null
-                    ? TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm(), securityProvider)
-                    : TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            // Same algorithm negotiation as the key-manager side: prefer the pinned provider's
+            // TrustManagerFactory (BCJSSE registers PKIX, the platform default), fall back to the platform
+            // factory for a provider that offers none (e.g. Conscrypt).
+            TrustManagerFactory tmf;
+            if (securityProvider != null) {
+                String algorithm = supportedAlgorithm(securityProvider, "TrustManagerFactory",
+                        TrustManagerFactory.getDefaultAlgorithm(), "PKIX");
+                tmf = algorithm != null ? TrustManagerFactory.getInstance(algorithm, securityProvider)
+                        : TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            } else {
+                tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            }
 
             if (trustCertficates == null || trustCertficates.length == 0) {
                 tmf.init((KeyStore) null);

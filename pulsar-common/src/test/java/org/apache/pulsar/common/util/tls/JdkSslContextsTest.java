@@ -25,6 +25,7 @@ import java.security.PrivateKey;
 import java.security.Provider;
 import java.security.Security;
 import java.security.cert.X509Certificate;
+import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import org.testng.annotations.Test;
 
@@ -71,5 +72,43 @@ public class JdkSslContextsTest {
 
         SSLContext ctx = JdkSslContexts.createSslContextWithProvider(false, trust, cert, key, null);
         assertThat(ctx).isNotNull();
+    }
+
+    // BCJSSE registers KeyManagerFactory.X.509 with X509/PKIX aliases but NOT the JDK default "SunX509"
+    // (bc-java BouncyCastleJsseProvider.configure()), so the factory algorithm must be negotiated per
+    // provider rather than pinned to KeyManagerFactory.getDefaultAlgorithm().
+    @Test
+    public void algorithmNegotiationSelectsTheAliasedFallbackForBcjsseShapedProviders() {
+        Provider bcjsseShaped = new Provider("BCJSSE-shaped", "1.0", "test stub") {
+            {
+                put("KeyManagerFactory.X.509", "org.example.StubKeyManagerFactorySpi");
+                put("Alg.Alias.KeyManagerFactory.X509", "X.509");
+                put("Alg.Alias.KeyManagerFactory.PKIX", "X.509");
+                put("TrustManagerFactory.PKIX", "org.example.StubTrustManagerFactorySpi");
+            }
+        };
+        assertThat(JdkSslContexts.supportedAlgorithm(bcjsseShaped, "KeyManagerFactory", "SunX509", "PKIX"))
+                .as("the JDK default SunX509 is absent; the PKIX alias resolves").isEqualTo("PKIX");
+        assertThat(JdkSslContexts.supportedAlgorithm(bcjsseShaped, "TrustManagerFactory", "PKIX", "PKIX"))
+                .isEqualTo("PKIX");
+    }
+
+    // A JSSE provider with no key/trust-manager services at all (Conscrypt) selects no provider algorithm;
+    // the caller then falls back to the platform default factory while the SSLContext stays pinned.
+    @Test
+    public void algorithmNegotiationReturnsNullForProvidersWithoutTheService() {
+        Provider conscryptShaped = new Provider("Conscrypt-shaped", "1.0", "test stub") { };
+        assertThat(JdkSslContexts.supportedAlgorithm(conscryptShaped, "KeyManagerFactory", "SunX509", "PKIX"))
+                .isNull();
+        assertThat(JdkSslContexts.supportedAlgorithm(conscryptShaped, "TrustManagerFactory", "PKIX", "PKIX"))
+                .isNull();
+    }
+
+    @Test
+    public void algorithmNegotiationPrefersTheDefaultWhenRegistered() {
+        Provider sunjsse = Security.getProvider("SunJSSE");
+        assertThat(JdkSslContexts.supportedAlgorithm(sunjsse, "KeyManagerFactory",
+                KeyManagerFactory.getDefaultAlgorithm(), "PKIX"))
+                .isEqualTo(KeyManagerFactory.getDefaultAlgorithm());
     }
 }
