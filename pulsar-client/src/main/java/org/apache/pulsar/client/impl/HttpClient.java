@@ -111,8 +111,8 @@ public class HttpClient implements Closeable {
         // host/port, i.e. cross-origin.
         confBuilder.setFollowRedirect(false);
         confBuilder.setMaxRedirects(conf.getMaxLookupRedirects());
-        confBuilder.setConnectTimeout(DEFAULT_CONNECT_TIMEOUT_IN_SECONDS * 1000);
-        confBuilder.setReadTimeout(DEFAULT_READ_TIMEOUT_IN_SECONDS * 1000);
+        confBuilder.setConnectTimeout(Duration.ofSeconds(DEFAULT_CONNECT_TIMEOUT_IN_SECONDS));
+        confBuilder.setReadTimeout(Duration.ofSeconds(DEFAULT_READ_TIMEOUT_IN_SECONDS));
         confBuilder.setUserAgent(String.format("Pulsar-Java-v%s%s",
                 PulsarVersion.getVersion(),
                 (conf.getDescription() == null ? "" : ("-" + conf.getDescription()))
@@ -182,7 +182,7 @@ public class HttpClient implements Closeable {
         // Bound how long an established pooled HTTPS connection keeps pre-rotation material: new
         // connections pick up rotation via the SslEngineFactory above, but a pooled connection would otherwise
         // hold pre-rotation trust/cert indefinitely. Aligns with FrameworkHttpClientFactory.
-        confBuilder.setConnectionTtl(TlsContextAcquisition.httpTlsRotationConnectionTtlMillis());
+        confBuilder.setConnectionTtl(Duration.ofMillis(TlsContextAcquisition.httpTlsRotationConnectionTtlMillis()));
     }
 
     String getServiceUrl() {
@@ -400,7 +400,7 @@ public class HttpClient implements Closeable {
                         .setHeader("Accept", "application/json");
                 requestHeaders.asMap().forEach((name, value) -> builder.addHeader(name, value));
                 if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
-                    builder.setRequestTimeout((int) Math.min(Integer.MAX_VALUE, timeout.toMillis()));
+                    builder.setRequestTimeout(timeout);
                 }
                 builder.execute().toCompletableFuture().whenComplete((response, t) -> {
                     if (t != null) {

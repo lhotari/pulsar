@@ -24,6 +24,7 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.resolver.NameResolver;
 import io.netty.util.Timer;
 import java.net.InetAddress;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -164,9 +165,9 @@ public final class FrameworkHttpClientFactory implements PulsarHttpClientFactory
         // Redirects are surfaced to the caller as-is (AHC >= 2.14.5 strips the Authorization header when it
         // follows redirects itself); the plugin layer decides how to follow them.
         b.setFollowRedirect(false);
-        b.setConnectTimeout((int) config.connectTimeout().toMillis());
-        b.setReadTimeout((int) config.readTimeout().toMillis());
-        b.setRequestTimeout((int) config.requestTimeout().toMillis());
+        b.setConnectTimeout(config.connectTimeout());
+        b.setReadTimeout(config.readTimeout());
+        b.setRequestTimeout(config.requestTimeout());
         b.setUserAgent(config.userAgent());
         return b;
     }
@@ -198,7 +199,7 @@ public final class FrameworkHttpClientFactory implements PulsarHttpClientFactory
                 }
             });
             // Bound how long pre-rotation material survives on established pooled connections.
-            builder.setConnectionTtl(TlsContextAcquisition.httpTlsRotationConnectionTtlMillis());
+            builder.setConnectionTtl(Duration.ofMillis(TlsContextAcquisition.httpTlsRotationConnectionTtlMillis()));
             return subscription;
         }
         // Legacy path: only cluster (CLIENT_DEFAULT) traffic maps the client's tls* behavioural flags; a

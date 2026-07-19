@@ -18,6 +18,8 @@
  */
 package org.apache.pulsar.client.impl.v5;
 
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
@@ -29,8 +31,10 @@ import org.apache.pulsar.client.api.v5.PulsarClientBuilder;
 import org.apache.pulsar.client.api.v5.PulsarClientException;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.config.ConnectionPolicy;
+import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.v5.auth.LegacyV4AuthenticationAdapter;
 import org.apache.pulsar.tls.TlsPolicy;
+import org.apache.pulsar.tls.TlsPurpose;
 import org.testng.annotations.Test;
 
 /**
@@ -191,6 +195,79 @@ public class PulsarClientBuilderV5Test {
                 .build()) {
             assertNotNull(client, "an in-memory-only generic TLS plugin must not fail the client build");
         }
+    }
+
+    @Test
+    public void testTlsPolicyFieldsPropagate() {
+        // Build a fully-populated TlsPolicy and confirm the policy — every field intact — lands on the
+        // underlying v4 ClientConfigurationData. Used to be a stub that only set useTls=true; under
+        // PIP-478 the policy rides conf.tlsPolicyMap under TlsPurpose.CLIENT_DEFAULT (consumed by the
+        // client TLS factory) instead of the legacy per-field TLS settings.
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        TlsPolicy policy = TlsPolicy.builder()
+                .trustCertsFilePath("/path/to/ca.pem")
+                .keyFilePath("/path/to/client.key")
+                .certificateFilePath("/path/to/client.cert")
+                .allowInsecureConnection(true)
+                .enableHostnameVerification(false)
+                .build();
+
+        builder.tlsPolicy(policy);
+
+        ClientConfigurationData conf = builder.getConfForTesting();
+        assertTrue(conf.isUseTls());
+        TlsPolicy applied = conf.getTlsPolicyMap().get(TlsPurpose.CLIENT_DEFAULT);
+        assertNotNull(applied, "the policy must land on the conf under CLIENT_DEFAULT");
+        assertEquals(applied.trustCertsFilePath(), "/path/to/ca.pem");
+        assertEquals(applied.keyFilePath(), "/path/to/client.key");
+        assertEquals(applied.certificateFilePath(), "/path/to/client.cert");
+        assertTrue(applied.allowInsecureConnection());
+        assertFalse(applied.enableHostnameVerification());
+    }
+
+    @Test
+    public void testTlsPolicyInsecureShortcut() {
+        // TlsPolicy.insecure() is the dev convenience that disables verification.
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        builder.tlsPolicy(TlsPolicy.insecure());
+
+        ClientConfigurationData conf = builder.getConfForTesting();
+        assertTrue(conf.isUseTls());
+        TlsPolicy applied = conf.getTlsPolicyMap().get(TlsPurpose.CLIENT_DEFAULT);
+        assertNotNull(applied, "the insecure policy must land on the conf under CLIENT_DEFAULT");
+        assertTrue(applied.allowInsecureConnection());
+        assertFalse(applied.enableHostnameVerification());
+    }
+
+    @Test
+    public void testAuthenticationPluginAndParamsInstantiatesAuthentication() throws Exception {
+        // Regression for a bug where authentication(plugin, params) only set the strings and
+        // never instantiated the plugin. PulsarClientImpl reads the actual Authentication instance
+        // via conf.getAuthentication() at connect time — without it, the client connects with no
+        // credentials and the broker rejects the handshake. Under PIP-478 the plugin is built eagerly
+        // at authentication(...) and resolved into conf.authentication at build();
+        // resolveAuthenticationForTest() runs that resolution. Use the v4 AuthenticationDisabled stub
+        // which always exists on the classpath; we only care that *some* instance lands on the conf.
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        builder.authentication(
+                "org.apache.pulsar.client.impl.auth.AuthenticationDisabled", "");
+
+        ClientConfigurationData conf = builder.getConfForTesting();
+        assertEquals(conf.getAuthPluginClassName(),
+                "org.apache.pulsar.client.impl.auth.AuthenticationDisabled");
+        assertNotNull(builder.resolveAuthenticationForTest(),
+                "Authentication instance must be created and attached to the conf");
+        assertNotNull(conf.getAuthentication(),
+                "Authentication instance must be created and attached to the conf");
+    }
+
+    @Test
+    public void testAuthenticationPluginNotFoundIsWrapped() {
+        // A bad plugin class name should surface as V5 PulsarClientException (not a v4 exception
+        // type leaking through the surface).
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        assertThrows(PulsarClientException.class, () ->
+                builder.authentication("com.example.NoSuchAuth", ""));
     }
 
     /** A minimal generic (non-built-in) v4 TLS plugin for the fold tests. */

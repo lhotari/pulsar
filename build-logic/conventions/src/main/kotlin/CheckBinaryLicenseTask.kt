@@ -69,7 +69,6 @@ abstract class CheckBinaryLicenseTask : DefaultTask() {
             "pulsar-package",
             "pulsar-tls-factory-api",
             "pulsar-websocket",
-            "bouncy-castle-bc",
         )
 
         val bundledJars = sortedSetOf<String>()

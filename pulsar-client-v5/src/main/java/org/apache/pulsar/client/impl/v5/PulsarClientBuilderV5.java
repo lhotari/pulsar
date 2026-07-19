@@ -62,6 +62,10 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
 
     PulsarClientBuilderV5() {
         conf.setStatsIntervalSeconds(0);
+        // v5 SDK transactions use the metadata-store (PIP-473) coordinator. This internal flag
+        // routes the underlying v4 TC client to it, keeping v5 transactions independent from any
+        // v4 SDK clients (which use the legacy coordinator) on the same cluster.
+        conf.setScalableTransactions(true);
     }
 
     @Override
@@ -400,6 +404,11 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
         this.description = description;
         conf.setDescription(description);
         return this;
+    }
+
+    /** @return the underlying v4 configuration data; for tests in this package only. */
+    ClientConfigurationData getConfForTesting() {
+        return conf;
     }
 
     /**

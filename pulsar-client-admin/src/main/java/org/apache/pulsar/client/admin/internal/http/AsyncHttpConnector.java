@@ -37,6 +37,10 @@ import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.ssl.SslContext;
 import io.netty.resolver.NameResolver;
 import io.netty.util.concurrent.DefaultThreadFactory;
+import jakarta.ws.rs.ProcessingException;
+import jakarta.ws.rs.client.Client;
+import jakarta.ws.rs.core.HttpHeaders;
+import jakarta.ws.rs.core.Response.Status;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.InetAddress;
@@ -55,10 +59,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 import javax.net.ssl.SSLEngine;
-import javax.ws.rs.ProcessingException;
-import javax.ws.rs.client.Client;
-import javax.ws.rs.core.HttpHeaders;
-import javax.ws.rs.core.Response.Status;
 import lombok.CustomLog;
 import lombok.Data;
 import lombok.Getter;
@@ -249,7 +249,7 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
             confBuilder.setAcquireFreeChannelTimeout(conf.getRequestTimeoutMs());
         }
         if (conf.getConnectionMaxIdleSeconds() > 0) {
-            confBuilder.setPooledConnectionIdleTimeout(conf.getConnectionMaxIdleSeconds() * 1000);
+            confBuilder.setPooledConnectionIdleTimeout(Duration.ofSeconds(conf.getConnectionMaxIdleSeconds()));
         }
         if (sharedResources != null) {
             if (this.eventLoopGroup != null) {
@@ -262,14 +262,14 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
         confBuilder.setCookieStore(null);
         confBuilder.setUseProxyProperties(true);
         confBuilder.setFollowRedirect(false);
-        confBuilder.setRequestTimeout(conf.getRequestTimeoutMs());
-        confBuilder.setConnectTimeout(connectTimeoutMs);
-        confBuilder.setReadTimeout(readTimeoutMs);
+        confBuilder.setRequestTimeout(Duration.ofMillis(conf.getRequestTimeoutMs()));
+        confBuilder.setConnectTimeout(Duration.ofMillis(connectTimeoutMs));
+        confBuilder.setReadTimeout(Duration.ofMillis(readTimeoutMs));
         confBuilder.setUserAgent(String.format("Pulsar-Java-v%s%s",
                 PulsarVersion.getVersion(),
                 (conf.getDescription() == null ? "" : ("-" + conf.getDescription()))
         ));
-        confBuilder.setRequestTimeout(requestTimeoutMs);
+        confBuilder.setRequestTimeout(Duration.ofMillis(requestTimeoutMs));
         confBuilder.setIoThreadsCount(conf.getNumIoThreads());
         confBuilder.setKeepAliveStrategy(new DefaultKeepAliveStrategy() {
             @Override
@@ -280,6 +280,9 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
                         && super.keepAlive(remoteAddress, ahcRequest, request, response);
             }
         });
+        // This flag only governs AsyncHttpClient's default engine factory; the https path installs its own
+        // SslEngineFactory with hostname verification baked into the factory-built Netty context (see
+        // configureAsyncHttpClientWithTlsFactory).
         confBuilder.setDisableHttpsEndpointIdentificationAlgorithm(!conf.isTlsHostnameVerificationEnable());
         configureSocks5ProxyIfNeeded(confBuilder, conf);
     }
@@ -343,7 +346,7 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
         // Bound how long an established pooled HTTPS connection keeps pre-rotation material: new
         // connections pick up rotation via the SslEngineFactory above, but a pooled connection would otherwise
         // hold pre-rotation trust/cert indefinitely. Aligns with FrameworkHttpClientFactory.
-        confBuilder.setConnectionTtl(TlsContextAcquisition.httpTlsRotationConnectionTtlMillis());
+        confBuilder.setConnectionTtl(Duration.ofMillis(TlsContextAcquisition.httpTlsRotationConnectionTtlMillis()));
     }
 
     /**
@@ -357,11 +360,11 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
 
     /**
      * @return the AsyncHttpClient connection-TTL (millis) bounding how long a pooled HTTPS connection keeps
-     *         pre-rotation TLS material on the new factory path (0 when unset, i.e. the legacy/plaintext path)
+     *         pre-rotation TLS material on the new factory path (negative when unset, i.e. the plaintext path)
      */
     @VisibleForTesting
     public int getConnectionTtlMs() {
-        return httpClient.getConfig().getConnectionTtl();
+        return (int) httpClient.getConfig().getConnectionTtl().toMillis();
     }
 
     @Override
@@ -406,7 +409,7 @@ public class AsyncHttpConnector implements Connector, AsyncHttpRequestExecutor {
             } else {
                 ClientResponse jerseyResponse =
                         new ClientResponse(Status.fromStatusCode(response.getStatusCode()), jerseyRequest);
-                jerseyResponse.setStatusInfo(new javax.ws.rs.core.Response.StatusType() {
+                jerseyResponse.setStatusInfo(new jakarta.ws.rs.core.Response.StatusType() {
                     @Override
                     public int getStatusCode() {
                         return response.getStatusCode();

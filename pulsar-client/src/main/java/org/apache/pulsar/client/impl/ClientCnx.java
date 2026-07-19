@@ -43,7 +43,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
@@ -139,6 +141,11 @@ public class ClientCnx extends PulsarHandler {
                     .expectedItems(16)
                     .concurrencyLevel(1)
                     .build();
+    // pendingRequests stores all pending request futures but does not preserve the command type,
+    // so there is no way to distinguish lookup requests from other requests (e.g. producer/consumer creation,
+    // getTopics, getLastMessageId). This set tracks which requestIds belong to lookup requests,
+    // so that removePendingRequest can release the lookup semaphore correctly.
+    private final Set<Long> pendingLookupRequestIds = ConcurrentHashMap.newKeySet();
     // LookupRequests that waiting in client side.
     private final Queue<Pair<Long, Pair<ByteBuf, TimedCompletableFuture<LookupDataResult>>>> waitingLookupRequests;
 
@@ -192,6 +199,12 @@ public class ClientCnx extends PulsarHandler {
     private final ConcurrentLongHashMap<ScalableTopicsWatcherSession> scalableTopicsWatchers =
             ConcurrentLongHashMap.<ScalableTopicsWatcherSession>newBuilder()
                     .expectedItems(4)
+                    .concurrencyLevel(1)
+                    .build();
+
+    private final ConcurrentLongHashMap<TcAssignmentsWatcherSession> tcAssignmentsWatchers =
+            ConcurrentLongHashMap.<TcAssignmentsWatcherSession>newBuilder()
+                    .expectedItems(2)
                     .concurrencyLevel(1)
                     .build();
 
@@ -264,6 +277,8 @@ public class ClientCnx extends PulsarHandler {
     private boolean supportsTopicWatcherReconcile;
     @Getter
     private boolean supportsScalableTopics;
+    @Getter
+    private boolean supportsTcMetadataDiscovery;
 
     /** Idle stat. **/
     @Getter
@@ -474,13 +489,16 @@ public class ClientCnx extends PulsarHandler {
         ConnectException e = new ConnectException(
                 "Disconnected from server at " + ctx.channel().remoteAddress());
 
+        // Fail out all waiting lookup requests first, and clear the queue so that
+        // releasePermitAndDriveWaitingQueue won't dispatch requests on a dead connection.
+        waitingLookupRequests.forEach(pair -> pair.getRight().getRight().completeExceptionally(e));
+        waitingLookupRequests.clear();
         // Fail out all the pending ops
         pendingRequests.forEach((key, future) -> {
-            if (pendingRequests.remove(key, future) && !future.isDone()) {
+            if (removePendingRequest(key, future) && !future.isDone()) {
                 future.completeExceptionally(e);
             }
         });
-        waitingLookupRequests.forEach(pair -> pair.getRight().getRight().completeExceptionally(e));
 
         // Notify all attached producers/consumers so they have a chance to reconnect
         producers.forEach((id, producer) -> producer.connectionClosed(this, Optional.empty(), Optional.empty()));
@@ -490,8 +508,7 @@ public class ClientCnx extends PulsarHandler {
         dagWatchSessions.forEach((__, session) -> session.connectionClosed());
         scalableConsumerSessions.forEach((__, session) -> session.connectionClosed());
         scalableTopicsWatchers.forEach((__, session) -> session.connectionClosed());
-
-        waitingLookupRequests.clear();
+        tcAssignmentsWatchers.forEach((__, session) -> session.connectionClosed());
 
         producers.clear();
         consumers.clear();
@@ -499,6 +516,7 @@ public class ClientCnx extends PulsarHandler {
         dagWatchSessions.clear();
         scalableConsumerSessions.clear();
         scalableTopicsWatchers.clear();
+        tcAssignmentsWatchers.clear();
 
         timeoutTask.cancel(true);
     }
@@ -555,6 +573,8 @@ public class ClientCnx extends PulsarHandler {
             connected.hasFeatureFlags() && connected.getFeatureFlags().isSupportsTopicWatcherReconcile();
         supportsScalableTopics =
             connected.hasFeatureFlags() && connected.getFeatureFlags().isSupportsScalableTopics();
+        supportsTcMetadataDiscovery =
+            connected.hasFeatureFlags() && connected.getFeatureFlags().isSupportsTcMetadataDiscovery();
 
         // set remote protocol version to the correct version before we complete the connection future
         setRemoteEndpointProtocolVersion(connected.getProtocolVersion());
@@ -833,8 +853,9 @@ public class ClientCnx extends PulsarHandler {
     protected void handleAckResponse(CommandAckResponse ackResponse) {
         checkArgument(state == State.Ready);
         checkArgument(ackResponse.getRequestId() >= 0);
-        CompletableFuture<?> completableFuture = pendingRequests.remove(ackResponse.getRequestId());
-        if (completableFuture != null && !completableFuture.isDone()) {
+        long requestId = ackResponse.getRequestId();
+        CompletableFuture<?> completableFuture = pendingRequests.get(requestId);
+        if (completableFuture != null && removePendingRequest(requestId, completableFuture)) {
             if (!ackResponse.hasError()) {
                 completableFuture.complete(null);
             } else {
@@ -879,8 +900,8 @@ public class ClientCnx extends PulsarHandler {
             log.debug().attr("requestId", success.getRequestId())
                     .log("Received success response from server");
         long requestId = success.getRequestId();
-        CompletableFuture<?> requestFuture = pendingRequests.remove(requestId);
-        if (requestFuture != null) {
+        CompletableFuture<?> requestFuture = pendingRequests.get(requestId);
+        if (requestFuture != null && removePendingRequest(requestId, requestFuture)) {
             requestFuture.complete(null);
         } else {
             duplicatedResponseCounter.incrementAndGet();
@@ -896,8 +917,8 @@ public class ClientCnx extends PulsarHandler {
                     .log("Received success GetLastMessageId response from server");
         long requestId = success.getRequestId();
         CompletableFuture<CommandGetLastMessageIdResponse> requestFuture =
-                (CompletableFuture<CommandGetLastMessageIdResponse>) pendingRequests.remove(requestId);
-        if (requestFuture != null) {
+                (CompletableFuture<CommandGetLastMessageIdResponse>) pendingRequests.get(requestId);
+        if (requestFuture != null && removePendingRequest(requestId, requestFuture)) {
             requestFuture.complete(new CommandGetLastMessageIdResponse().copyFrom(success));
         } else {
             duplicatedResponseCounter.incrementAndGet();
@@ -929,8 +950,8 @@ public class ClientCnx extends PulsarHandler {
         }
 
         CompletableFuture<ProducerResponse> requestFuture =
-                (CompletableFuture<ProducerResponse>) pendingRequests.remove(requestId);
-        if (requestFuture != null) {
+                (CompletableFuture<ProducerResponse>) pendingRequests.get(requestId);
+        if (requestFuture != null && removePendingRequest(requestId, requestFuture)) {
             ProducerResponse pr = new ProducerResponse(success.getProducerName(),
                     success.getLastSequenceId(),
                     success.getSchemaVersion(),
@@ -953,9 +974,10 @@ public class ClientCnx extends PulsarHandler {
         });
 
         long requestId = lookupResult.getRequestId();
-        CompletableFuture<LookupDataResult> requestFuture = getAndRemovePendingLookupRequest(requestId);
+        CompletableFuture<LookupDataResult> requestFuture =
+                (CompletableFuture<LookupDataResult>) pendingRequests.get(requestId);
 
-        if (requestFuture != null) {
+        if (requestFuture != null && removePendingRequest(requestId, requestFuture)) {
             if (requestFuture.isCompletedExceptionally()) {
                 log.debug()
                         .attr("requestId", lookupResult.getRequestId())
@@ -980,6 +1002,7 @@ public class ClientCnx extends PulsarHandler {
                 requestFuture.complete(new LookupDataResult(lookupResult));
             }
         } else {
+            duplicatedResponseCounter.incrementAndGet();
             log.warn().attr("requestId", lookupResult.getRequestId())
                     .log("Received unknown request id from server");
         }
@@ -996,9 +1019,10 @@ public class ClientCnx extends PulsarHandler {
         });
 
         long requestId = lookupResult.getRequestId();
-        CompletableFuture<LookupDataResult> requestFuture = getAndRemovePendingLookupRequest(requestId);
+        CompletableFuture<LookupDataResult> requestFuture =
+                (CompletableFuture<LookupDataResult>) pendingRequests.get(requestId);
 
-        if (requestFuture != null) {
+        if (requestFuture != null && removePendingRequest(requestId, requestFuture)) {
             if (requestFuture.isCompletedExceptionally()) {
                 log.debug()
                         .attr("requestId", lookupResult.getRequestId())
@@ -1023,6 +1047,7 @@ public class ClientCnx extends PulsarHandler {
                 requestFuture.complete(new LookupDataResult(lookupResult.getPartitions()));
             }
         } else {
+            duplicatedResponseCounter.incrementAndGet();
             log.warn().attr("requestId", lookupResult.getRequestId())
                     .log("Received unknown request id from server");
         }
@@ -1071,41 +1096,63 @@ public class ClientCnx extends PulsarHandler {
 
     // caller of this method needs to be protected under pendingLookupRequestSemaphore
     private void addPendingLookupRequests(long requestId, TimedCompletableFuture<LookupDataResult> future) {
+        pendingLookupRequestIds.add(requestId);
         pendingRequests.put(requestId, future);
         requestTimeoutQueue.add(new RequestTime(requestId, RequestType.Lookup));
     }
 
-    private CompletableFuture<LookupDataResult> getAndRemovePendingLookupRequest(long requestId) {
-        CompletableFuture<LookupDataResult> result =
-                (CompletableFuture<LookupDataResult>) pendingRequests.remove(requestId);
-        if (result != null) {
-            Pair<Long, Pair<ByteBuf, TimedCompletableFuture<LookupDataResult>>> firstOneWaiting =
-                    waitingLookupRequests.poll();
-            if (firstOneWaiting != null) {
-                maxLookupRequestSemaphore.release();
-                // schedule a new lookup in.
-                eventLoopGroup.execute(() -> {
-                    long newId = firstOneWaiting.getLeft();
-                    TimedCompletableFuture<LookupDataResult> newFuture = firstOneWaiting.getRight().getRight();
-                    addPendingLookupRequests(newId, newFuture);
-                    ctx.writeAndFlush(firstOneWaiting.getRight().getLeft()).addListener(writeFuture -> {
-                        if (!writeFuture.isSuccess()) {
-                            log.warn()
-                                    .attr("requestId", newId)
-                                    .exceptionMessage(writeFuture.cause())
-                                    .log("Failed to send request to broker");
-                            getAndRemovePendingLookupRequest(newId);
+    /**
+     * Release the lookup semaphore permit and drive the waiting queue.
+     * This is the single centralized primitive for permit release/transfer.
+     */
+    private void releasePermitAndDriveWaitingQueue() {
+        Pair<Long, Pair<ByteBuf, TimedCompletableFuture<LookupDataResult>>> firstOneWaiting =
+                waitingLookupRequests.poll();
+        if (firstOneWaiting != null) {
+            maxLookupRequestSemaphore.release();
+            // schedule a new lookup in.
+            eventLoopGroup.execute(() -> {
+                long newId = firstOneWaiting.getLeft();
+                TimedCompletableFuture<LookupDataResult> newFuture = firstOneWaiting.getRight().getRight();
+                addPendingLookupRequests(newId, newFuture);
+                ctx.writeAndFlush(firstOneWaiting.getRight().getLeft()).addListener(writeFuture -> {
+                    if (!writeFuture.isSuccess()) {
+                        log.warn()
+                                .attr("requestId", newId)
+                                .exceptionMessage(writeFuture.cause())
+                                .log("Failed to send request to broker");
+                        if (removePendingRequest(newId, newFuture)) {
                             newFuture.completeExceptionally(writeFuture.cause());
                         }
-                    });
+                    }
                 });
-            } else {
-                pendingLookupRequestSemaphore.release();
-            }
+            });
         } else {
-            duplicatedResponseCounter.incrementAndGet();
+            pendingLookupRequestSemaphore.release();
         }
-        return result;
+    }
+
+    /**
+     * Unified cleanup primitive for all pending requests.
+     * Uses pendingRequests.remove(requestId, expectedFuture) as the single CAS contention point.
+     * Only the thread that successfully removes the entry from pendingRequests owns the cleanup
+     * responsibility (including permit release for lookup requests).
+     *
+     * @param requestId the request ID to remove
+     * @param expectedFuture the expected future value for CAS comparison
+     * @return true if this call successfully obtained ownership and performed cleanup
+     */
+    private boolean removePendingRequest(long requestId, CompletableFuture<?> expectedFuture) {
+        // CAS: only one thread can successfully remove from pendingRequests
+        if (!pendingRequests.remove(requestId, expectedFuture)) {
+            return false;
+        }
+        // Won the CAS. If it's a lookup request, release the permit and drive waiting queue.
+        if (pendingLookupRequestIds.contains(requestId)) {
+            releasePermitAndDriveWaitingQueue();
+            pendingLookupRequestIds.remove(requestId);
+        }
+        return true;
     }
 
     @Override
@@ -1158,8 +1205,8 @@ public class ClientCnx extends PulsarHandler {
             log.error().attr("message", error.getMessage()).log("Get not allowed error");
             connectionFuture.completeExceptionally(new PulsarClientException.NotAllowedException(error.getMessage()));
         }
-        CompletableFuture<?> requestFuture = pendingRequests.remove(requestId);
-        if (requestFuture != null) {
+        CompletableFuture<?> requestFuture = pendingRequests.get(requestId);
+        if (requestFuture != null && removePendingRequest(requestId, requestFuture)) {
             requestFuture.completeExceptionally(
                     getPulsarClientException(error.getError(),
                                              buildError(error.getRequestId(), error.getMessage())));
@@ -1263,13 +1310,6 @@ public class ClientCnx extends PulsarHandler {
         TimedCompletableFuture<LookupDataResult> future = new TimedCompletableFuture<>();
 
         if (pendingLookupRequestSemaphore.tryAcquire()) {
-            future.whenComplete((lookupDataResult, throwable) -> {
-                if (throwable instanceof ConnectException
-                        || throwable instanceof PulsarClientException.LookupException
-                        || FutureUtil.unwrapCompletionException(throwable) instanceof TimeoutException) {
-                    pendingLookupRequestSemaphore.release();
-                }
-            });
             addPendingLookupRequests(requestId, future);
             ctx.writeAndFlush(request).addListener(writeFuture -> {
                 if (!writeFuture.isSuccess()) {
@@ -1277,8 +1317,9 @@ public class ClientCnx extends PulsarHandler {
                             .attr("requestId", requestId)
                             .exceptionMessage(writeFuture.cause())
                             .log("Failed to send request to broker");
-                    getAndRemovePendingLookupRequest(requestId);
-                    future.completeExceptionally(writeFuture.cause());
+                    if (removePendingRequest(requestId, future)) {
+                        future.completeExceptionally(writeFuture.cause());
+                    }
                 }
             });
         } else {
@@ -1326,8 +1367,8 @@ public class ClientCnx extends PulsarHandler {
                 .log("Received get topics of namespace success response from server");
 
         CompletableFuture<GetTopicsResult> requestFuture =
-                (CompletableFuture<GetTopicsResult>) pendingRequests.remove(requestId);
-        if (requestFuture != null) {
+                (CompletableFuture<GetTopicsResult>) pendingRequests.get(requestId);
+        if (requestFuture != null && removePendingRequest(requestId, requestFuture)) {
             requestFuture.complete(new GetTopicsResult(topics,
                     success.hasTopicsHash() ? success.getTopicsHash() : null,
                     success.isFiltered(),
@@ -1346,8 +1387,8 @@ public class ClientCnx extends PulsarHandler {
         long requestId = commandGetSchemaResponse.getRequestId();
 
         CompletableFuture<CommandGetSchemaResponse> future =
-                (CompletableFuture<CommandGetSchemaResponse>) pendingRequests.remove(requestId);
-        if (future == null) {
+                (CompletableFuture<CommandGetSchemaResponse>) pendingRequests.get(requestId);
+        if (future == null || !removePendingRequest(requestId, future)) {
             duplicatedResponseCounter.incrementAndGet();
             log.warn().attr("requestId", requestId)
                     .log("Received unknown request id from server");
@@ -1361,10 +1402,10 @@ public class ClientCnx extends PulsarHandler {
         checkArgument(state == State.Ready);
         long requestId = commandGetOrCreateSchemaResponse.getRequestId();
         CompletableFuture<CommandGetOrCreateSchemaResponse> future =
-                (CompletableFuture<CommandGetOrCreateSchemaResponse>) pendingRequests.remove(requestId);
-        if (future == null) {
+                (CompletableFuture<CommandGetOrCreateSchemaResponse>) pendingRequests.get(requestId);
+        if (future == null || !removePendingRequest(requestId, future)) {
             duplicatedResponseCounter.incrementAndGet();
-            log.warn().attr("requestId", requestId)
+            log.warn().attr("requestId", commandGetOrCreateSchemaResponse.getRequestId())
                     .log("Received unknown request id from server");
             return;
         }
@@ -1398,7 +1439,7 @@ public class ClientCnx extends PulsarHandler {
         pendingRequests.put(requestId, future);
         (flush ? ctx.writeAndFlush(requestMessage) : ctx.write(requestMessage)).addListener(writeFuture -> {
             if (!writeFuture.isSuccess()) {
-                if (pendingRequests.remove(requestId, future) && !future.isDone()) {
+                if (removePendingRequest(requestId, future)) {
                     log.warn()
                             .attr("send", requestType.getDescription())
                             .exceptionMessage(writeFuture.cause())
@@ -1519,9 +1560,8 @@ public class ClientCnx extends PulsarHandler {
                 .attr("requestId", response.getRequestId())
                 .log("Received tc client connect response from server");
         long requestId = response.getRequestId();
-        CompletableFuture<?> requestFuture = pendingRequests.remove(requestId);
-
-        if (requestFuture != null && !requestFuture.isDone()) {
+        CompletableFuture<?> requestFuture = pendingRequests.get(requestId);
+        if (requestFuture != null && removePendingRequest(requestId, requestFuture)) {
             if (!response.hasError()) {
                 requestFuture.complete(null);
             } else {
@@ -1592,8 +1632,8 @@ public class ClientCnx extends PulsarHandler {
                 .log("Received watchTopicListSuccess response from server");
         long requestId = commandWatchTopicListSuccess.getRequestId();
         CompletableFuture<CommandWatchTopicListSuccess> requestFuture =
-                (CompletableFuture<CommandWatchTopicListSuccess>) pendingRequests.remove(requestId);
-        if (requestFuture != null) {
+                (CompletableFuture<CommandWatchTopicListSuccess>) pendingRequests.get(requestId);
+        if (requestFuture != null && removePendingRequest(requestId, requestFuture)) {
             requestFuture.complete(new CommandWatchTopicListSuccess().copyFrom(commandWatchTopicListSuccess));
         } else {
             duplicatedResponseCounter.incrementAndGet();
@@ -1666,8 +1706,8 @@ public class ClientCnx extends PulsarHandler {
         log.debug().attr("requestId", requestId).log("Received scalableTopicSubscribeResponse");
 
         if (cmd.hasError()) {
-            CompletableFuture<? extends Object> requestFuture = pendingRequests.remove(requestId);
-            if (requestFuture != null && !requestFuture.isDone()) {
+            CompletableFuture<? extends Object> requestFuture = pendingRequests.get(requestId);
+            if (requestFuture != null && removePendingRequest(requestId, requestFuture)) {
                 requestFuture.completeExceptionally(new PulsarClientException(
                         "Scalable topic subscribe failed: " + cmd.getError()
                                 + (cmd.hasMessage() ? " - " + cmd.getMessage() : "")));
@@ -1678,8 +1718,9 @@ public class ClientCnx extends PulsarHandler {
         @SuppressWarnings("unchecked")
         TimedCompletableFuture<org.apache.pulsar.common.api.proto.ScalableConsumerAssignment>
                 requestFuture = (TimedCompletableFuture<
-                org.apache.pulsar.common.api.proto.ScalableConsumerAssignment>) pendingRequests.remove(requestId);
-        if (requestFuture == null || requestFuture.isDone()) {
+                org.apache.pulsar.common.api.proto.ScalableConsumerAssignment>) pendingRequests.get(requestId);
+        if (requestFuture == null || !removePendingRequest(requestId, requestFuture)) {
+            duplicatedResponseCounter.incrementAndGet();
             log.warn().attr("requestId", requestId)
                     .log("Received scalable topic subscribe response for unknown / completed request");
             return;
@@ -1783,6 +1824,62 @@ public class ClientCnx extends PulsarHandler {
 
     public void removeScalableTopicsWatcher(long watchId) {
         scalableTopicsWatchers.remove(watchId);
+    }
+
+    /** Client-side receiver for transaction-coordinator assignment snapshots. */
+    public interface TcAssignmentsWatcherSession {
+        void onSnapshot(int parallelism, java.util.Map<Long, String[]> leaders);
+
+        void onError(org.apache.pulsar.common.api.proto.ServerError error, String message);
+
+        void connectionClosed();
+    }
+
+    public void registerTcAssignmentsWatcher(long watchId, TcAssignmentsWatcherSession watcher) {
+        tcAssignmentsWatchers.put(watchId, watcher);
+    }
+
+    public void removeTcAssignmentsWatcher(long watchId) {
+        tcAssignmentsWatchers.remove(watchId);
+    }
+
+    @Override
+    protected void handleCommandWatchTcAssignmentsUpdate(
+            org.apache.pulsar.common.api.proto.CommandWatchTcAssignmentsUpdate cmd) {
+        checkArgument(state == State.Ready);
+        long watchId = cmd.getWatchId();
+        log.debug().attr("watchId", watchId).log("Received WatchTcAssignmentsUpdate");
+
+        if (cmd.hasError()) {
+            TcAssignmentsWatcherSession session = tcAssignmentsWatchers.remove(watchId);
+            if (session != null) {
+                session.onError(cmd.getError(), cmd.hasMessage() ? cmd.getMessage() : null);
+            } else {
+                log.warn().attr("watchId", watchId)
+                        .log("Received TC-assignments watch error for unknown watcher");
+            }
+            return;
+        }
+
+        TcAssignmentsWatcherSession session = tcAssignmentsWatchers.get(watchId);
+        if (session == null) {
+            log.warn().attr("watchId", watchId)
+                    .log("Received TC-assignments watch update for unknown watcher");
+            return;
+        }
+        if (!cmd.hasSnapshot()) {
+            log.warn().attr("watchId", watchId).log("TC-assignments update with no snapshot payload");
+            return;
+        }
+        var snapshot = cmd.getSnapshot();
+        java.util.Map<Long, String[]> leaders = new java.util.HashMap<>();
+        for (int i = 0; i < snapshot.getAssignmentsCount(); i++) {
+            var a = snapshot.getAssignmentAt(i);
+            leaders.put(a.getTcId(), new String[] {
+                    a.hasBrokerServiceUrl() ? a.getBrokerServiceUrl() : null,
+                    a.hasBrokerServiceUrlTls() ? a.getBrokerServiceUrlTls() : null});
+        }
+        session.onSnapshot(snapshot.getParallelism(), leaders);
     }
 
     /**
@@ -1995,10 +2092,9 @@ public class ClientCnx extends PulsarHandler {
                 continue;
             }
             TimedCompletableFuture<?> requestFuture = pendingRequests.get(request.requestId);
-            if (requestFuture != null
-                    && !requestFuture.hasGotResponse()) {
-                pendingRequests.remove(request.requestId, requestFuture);
-                if (!requestFuture.isDone()) {
+            if (requestFuture != null && !requestFuture.hasGotResponse()) {
+                boolean removed = removePendingRequest(request.requestId, requestFuture);
+                if (removed) {
                     String timeoutMessage = request.requestType.getDescription() + " timeout";
                     if (requestFuture.completeExceptionally(new TimeoutException(timeoutMessage))) {
                         if (request.requestType == RequestType.Lookup) {
