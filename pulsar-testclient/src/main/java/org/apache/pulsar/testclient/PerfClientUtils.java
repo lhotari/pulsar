@@ -122,9 +122,8 @@ public class PerfClientUtils {
      *
      * <p>A few v4 settings have no direct V5 equivalent and are dropped here: {@code --stats-
      * interval-seconds} (V5 stats are OpenTelemetry-driven), {@code --max-lookup-request} (V5
-     * does not expose a public knob), {@code --ssl-factory-plugin*} (V5 does not have a pluggable
-     * SSL factory yet), and {@code --busy-wait} (no V5 equivalent). All other relevant flags map
-     * 1:1.
+     * does not expose a public knob), and {@code --busy-wait} (no V5 equivalent). All other
+     * relevant flags map 1:1.
      */
     public static PulsarClientBuilder createV5ClientBuilderFromArguments(PerformanceBaseArguments arguments)
             throws org.apache.pulsar.client.api.v5.PulsarClientException {

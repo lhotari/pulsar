@@ -58,9 +58,10 @@ public final class JcaProviders {
     }
 
     /**
-     * Get Bouncy Castle provider, and call Security.addProvider(provider) if success.
-     *  1. try get from classpath.
-     *  2. try get from Nar.
+     * Get the Bouncy Castle provider:
+     *  1. return the already-registered BC or BCFIPS provider, if any;
+     *  2. otherwise load it from the classpath (non-FIPS preferred, FIPS as fallback) and register it
+     *     via Security.addProvider.
      */
     public static Provider getProvider() {
         boolean isProviderInstalled =

@@ -1732,9 +1732,10 @@ public class BrokerService implements Closeable {
                                    String brokerClientTrustCertsFilePath,
                                    String brokerClientKeyFilePath, String brokerClientCertificateFilePath,
                                    boolean isTlsHostnameVerificationEnabled) {
-        // PIP-478: the PIP-337 sslFactoryPlugin config is removed. A stale broker-level key is rejected at
-        // config-file load by PulsarConfigurationLoader; the removed per-cluster ClusterData field is
-        // lenient-dropped on metadata read (the one place a stale value cannot fail loud). Broker-client
+        // PIP-478: the PIP-337 sslFactoryPlugin config is removed. A stale broker-level key with a
+        // non-default value is rejected at config-file load by PulsarConfigurationLoader; the removed
+        // per-cluster ClusterData field is lenient-dropped on metadata read (the one place a stale value
+        // cannot fail loud), so a stale custom per-cluster factory value is silently dropped. Broker-client
         // factory-class selection is broker-level (brokerClientTlsFactoryClassName).
         clientBuilder
                 .serviceUrl(serviceUrl)

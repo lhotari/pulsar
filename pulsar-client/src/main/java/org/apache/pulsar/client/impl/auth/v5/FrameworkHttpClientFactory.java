@@ -162,9 +162,13 @@ public final class FrameworkHttpClientFactory implements PulsarHttpClientFactory
         // Mirror org.apache.pulsar.client.impl.HttpClient's configuration approach.
         b.setCookieStore(null);
         b.setUseProxyProperties(true);
-        // Redirects are surfaced to the caller as-is (AHC >= 2.14.5 strips the Authorization header when it
-        // follows redirects itself); the plugin layer decides how to follow them.
-        b.setFollowRedirect(false);
+        // Let AHC follow redirects itself, as v4's OAuth2 client did: these instances serve auth-plugin
+        // traffic (OAuth2 IdP metadata / token requests) that carries no Authorization header, so the
+        // Authorization strip AHC >= 2.14.5 applies on cross-origin redirects (CVE-2026-40490 fix) has
+        // nothing to strip — unlike org.apache.pulsar.client.impl.HttpClient, which must follow redirects
+        // manually to re-authenticate per hop.
+        b.setFollowRedirect(true);
+        b.setMaxRedirects(5);
         b.setConnectTimeout(config.connectTimeout());
         b.setReadTimeout(config.readTimeout());
         b.setRequestTimeout(config.requestTimeout());

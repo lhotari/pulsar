@@ -36,6 +36,6 @@
  * the v5 client builder and the server-side components (and the sibling broker-side PIP) can consume
  * the same SPI without dragging in heavyweight dependencies. The default {@code PulsarTlsFactory}
  * implementation ({@code FileBasedTlsFactory} under {@code org.apache.pulsar.common.tls.impl}) and the
- * JDK-only hostname-verification helpers live in {@code pulsar-common}.
+ * JDK-only hostname-verification helpers ship in {@code pulsar-common}, not in this module.
  */
 package org.apache.pulsar.tls;

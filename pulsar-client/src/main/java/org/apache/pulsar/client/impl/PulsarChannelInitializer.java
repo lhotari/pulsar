@@ -166,29 +166,36 @@ public class PulsarChannelInitializer extends ChannelInitializer<SocketChannel> 
                         new TlsEndpoint(sniHost.getHostName(), sniHost.getPort()), tlsSynthesisSpec)
                 .thenCompose(optHandle -> {
                     CompletableFuture<Channel> future = new CompletableFuture<>();
-                    ch.eventLoop().execute(() -> {
-                        TlsHandle<SslContext> handle = null;
-                        try {
-                            handle = optHandle.orElseThrow(() -> new IllegalStateException(
-                                    "Client TLS factory supplied no Netty SslContext for purpose "
-                                            + TlsPurpose.CLIENT_DEFAULT));
-                            SslHandler handler = handle.get()
-                                    .newHandler(ch.alloc(), sniHost.getHostName(), sniHost.getPort());
-                            ch.pipeline().addFirst(TLS_HANDLER, handler);
-                            // Release the retained one-shot context when this connection closes.
-                            TlsHandle<SslContext> acquired = handle;
-                            ch.closeFuture().addListener(closeFuture -> acquired.dispose());
-                            future.complete(ch);
-                        } catch (Throwable t) {
-                            // Dispose the retained one-shot context if we acquired it but failed before wiring
-                            // the close-future disposal above, else it leaks its Netty ref. Reaching here
-                            // means the close-future listener was not registered, so there is no double dispose.
-                            if (handle != null) {
-                                handle.dispose();
+                    try {
+                        ch.eventLoop().execute(() -> {
+                            TlsHandle<SslContext> handle = null;
+                            try {
+                                handle = optHandle.orElseThrow(() -> new IllegalStateException(
+                                        "Client TLS factory supplied no Netty SslContext for purpose "
+                                                + TlsPurpose.CLIENT_DEFAULT));
+                                SslHandler handler = handle.get()
+                                        .newHandler(ch.alloc(), sniHost.getHostName(), sniHost.getPort());
+                                ch.pipeline().addFirst(TLS_HANDLER, handler);
+                                // Release the retained one-shot context when this connection closes.
+                                TlsHandle<SslContext> acquired = handle;
+                                ch.closeFuture().addListener(closeFuture -> acquired.dispose());
+                                future.complete(ch);
+                            } catch (Throwable t) {
+                                // Dispose the retained one-shot context if we acquired it but failed before wiring
+                                // the close-future disposal above, else it leaks its Netty ref. Reaching here
+                                // means the close-future listener was not registered, so there is no double dispose.
+                                if (handle != null) {
+                                    handle.dispose();
+                                }
+                                future.completeExceptionally(t);
                             }
-                            future.completeExceptionally(t);
-                        }
-                    });
+                        });
+                    } catch (Throwable rejected) {
+                        // A terminated event loop rejects the task synchronously; the runnable never ran, so
+                        // the acquired one-shot context must be disposed here or it leaks its Netty ref.
+                        optHandle.ifPresent(TlsHandle::dispose);
+                        future.completeExceptionally(rejected);
+                    }
                     return future;
                 });
     }

@@ -19,6 +19,7 @@
 package org.apache.pulsar.proxy.server;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
@@ -937,6 +938,16 @@ public class ProxyConnection extends PulsarHandler {
             // engine/provider silently defaults.
             clientConf.setSslProvider(proxyConfig.getBrokerClientSslProvider());
             clientConf.setJsseProvider(proxyConfig.getBrokerClientJsseProvider());
+            // PIP-478: propagate the broker-client custom TLS factory selection so resolveClientTlsFactory
+            // (run by ProxyService over the representative config built here) instantiates the named factory
+            // for the lookup path's shared CLIENT_DEFAULT factory instead of silently defaulting to the
+            // file-based one while the direct path honors it. Gated on a non-default (non-blank) class name —
+            // mirroring PulsarService.maybeApplyBrokerClientTlsFactory — so a brokerClient_tlsFactoryClassName
+            // / brokerClient_tlsFactoryConfig override applied above is not clobbered by blank defaults.
+            if (isNotBlank(proxyConfig.getBrokerClientTlsFactoryClassName())) {
+                clientConf.setTlsFactoryClassName(proxyConfig.getBrokerClientTlsFactoryClassName());
+                clientConf.setTlsFactoryConfig(proxyConfig.getBrokerClientTlsFactoryConfig());
+            }
             clientConf.setTlsFactory(service.getLookupClientTlsFactory());
         }
         return clientConf;

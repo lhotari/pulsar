@@ -207,38 +207,56 @@ public class PulsarClientTool implements CommandHook {
      * Translate the client.conf TLS settings onto the typed V5 {@link TlsPolicy}. V5 has no
      * untyped {@code loadConf}, so the conf-file keys that have no dedicated CLI flag
      * ({@code tlsAllowInsecureConnection}, {@code tlsEnableHostnameVerification}, the mTLS
-     * cert/key paths) are read from the properties here.
+     * cert/key paths, the {@code useKeyStoreTls} keystore keys) are read from the properties here.
      *
      * <p>TLS is enabled only when the service URL uses {@code pulsar+ssl://} or the conf sets
      * {@code useTls=true}; otherwise we leave the policy untouched so a plaintext broker is not
      * accidentally contacted over TLS (calling {@code tlsPolicy()} always flips {@code useTls}
-     * on). Keystore TLS has no V5 equivalent and is reported as unsupported.
+     * on). Per PIP-478 hostname verification defaults ON ({@link TlsPolicy}'s secure default);
+     * an explicit {@code tlsEnableHostnameVerification=false} in the conf still opts out. When
+     * {@code useKeyStoreTls=true}, the v4 keystore keys ({@code tlsTrustStorePath},
+     * {@code tlsKeyStorePath}, ...) map onto a {@link TlsPolicy.Format#KEYSTORE} policy instead
+     * of the PEM paths.
      */
-    private void applyTlsPolicy(PulsarClientBuilder clientBuilder, String serviceUrl, Properties properties) {
+    @VisibleForTesting
+    void applyTlsPolicy(PulsarClientBuilder clientBuilder, String serviceUrl, Properties properties) {
         boolean tlsByUrl = serviceUrl != null && serviceUrl.startsWith("pulsar+ssl://");
         boolean tlsByConf = Boolean.parseBoolean(properties.getProperty("useTls", "false"));
         if (!tlsByUrl && !tlsByConf) {
             return;
         }
-        if (Boolean.parseBoolean(properties.getProperty("useKeyStoreTls", "false"))) {
-            commander.getErr().println("Warning: keystore TLS (useKeyStoreTls) is not supported by the "
-                    + "V5-based pulsar-client; PEM trust/cert/key settings are used instead.");
-        }
         TlsPolicy.Builder tls = TlsPolicy.builder()
                 .allowInsecureConnection(
-                        Boolean.parseBoolean(properties.getProperty("tlsAllowInsecureConnection", "false")))
-                .enableHostnameVerification(
-                        Boolean.parseBoolean(properties.getProperty("tlsEnableHostnameVerification", "false")));
-        if (isNotBlank(rootParams.tlsTrustCertsFilePath)) {
-            tls.trustCertsFilePath(rootParams.tlsTrustCertsFilePath);
+                        Boolean.parseBoolean(properties.getProperty("tlsAllowInsecureConnection", "false")));
+        // Only an explicit conf value may override the builder's secure default (verification ON);
+        // an absent key must not silently disable it.
+        String hostnameVerification = properties.getProperty("tlsEnableHostnameVerification");
+        if (hostnameVerification != null) {
+            tls.enableHostnameVerification(Boolean.parseBoolean(hostnameVerification));
         }
-        String certFile = properties.getProperty("tlsCertificateFilePath");
-        if (isNotBlank(certFile)) {
-            tls.certificateFilePath(certFile);
-        }
-        String keyFile = properties.getProperty("tlsKeyFilePath");
-        if (isNotBlank(keyFile)) {
-            tls.keyFilePath(keyFile);
+        if (Boolean.parseBoolean(properties.getProperty("useKeyStoreTls", "false"))) {
+            // The store types default to JKS, matching the v4 client.conf semantics; TlsPolicy's
+            // null means KeyStore.getDefaultType() (PKCS12 on current JDKs), which would break
+            // existing confs that rely on the v4 JKS default.
+            tls.format(TlsPolicy.Format.KEYSTORE)
+                    .trustStorePath(properties.getProperty("tlsTrustStorePath"))
+                    .trustStorePassword(properties.getProperty("tlsTrustStorePassword"))
+                    .trustStoreType(properties.getProperty("tlsTrustStoreType", "JKS"))
+                    .keyStorePath(properties.getProperty("tlsKeyStorePath"))
+                    .keyStorePassword(properties.getProperty("tlsKeyStorePassword"))
+                    .keyStoreType(properties.getProperty("tlsKeyStoreType", "JKS"));
+        } else {
+            if (isNotBlank(rootParams.tlsTrustCertsFilePath)) {
+                tls.trustCertsFilePath(rootParams.tlsTrustCertsFilePath);
+            }
+            String certFile = properties.getProperty("tlsCertificateFilePath");
+            if (isNotBlank(certFile)) {
+                tls.certificateFilePath(certFile);
+            }
+            String keyFile = properties.getProperty("tlsKeyFilePath");
+            if (isNotBlank(keyFile)) {
+                tls.keyFilePath(keyFile);
+            }
         }
         clientBuilder.tlsPolicy(tls.build());
     }

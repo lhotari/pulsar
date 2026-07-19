@@ -348,7 +348,8 @@ tlsKeyFilePath:
 tlsTrustCertsFilePath:
 # Accept untrusted TLS certificate from client
 tlsAllowInsecureConnection: false
-# Whether server hostname must match the common name of the certificate.
+# Whether the server hostname is verified against the subject alternative names (SANs) of the
+# server certificate (RFC 2818/6125; CN matching is not supported).
 # Enabled by default since Pulsar 5.0 (PIP-478).
 tlsEnableHostnameVerification: true
 # Tls cert refresh duration in seconds (set 0 to check on every new connection)

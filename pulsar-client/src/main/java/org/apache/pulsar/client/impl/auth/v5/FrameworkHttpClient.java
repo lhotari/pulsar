@@ -32,7 +32,10 @@ import org.apache.pulsar.http.HttpResponse;
 import org.apache.pulsar.http.PulsarHttpClient;
 import org.apache.pulsar.http.PulsarHttpClientConfig;
 import org.apache.pulsar.tls.TlsHandle;
+import org.asynchttpclient.AsyncCompletionHandlerBase;
 import org.asynchttpclient.AsyncHttpClient;
+import org.asynchttpclient.HttpResponseBodyPart;
+import org.asynchttpclient.HttpResponseStatus;
 import org.asynchttpclient.RequestBuilder;
 import org.asynchttpclient.Response;
 
@@ -48,8 +51,11 @@ import org.asynchttpclient.Response;
  * cache are shared with the owning {@code PulsarClient} (mirroring {@code HttpClient}'s per-request
  * {@code setNameResolver}); when {@code null} (the legacy fallback) AsyncHttpClient uses its own resolver.
  *
- * <p>Responses are fully buffered. A body exceeding {@link PulsarHttpClientConfig#maxResponseBodyBytes()}
- * completes the returned future exceptionally with an {@link IOException} rather than silently truncating.
+ * <p>Responses are fully buffered, but accumulation is bounded while streaming: as soon as the received
+ * body exceeds {@link PulsarHttpClientConfig#maxResponseBodyBytes()} the exchange is aborted and the
+ * returned future completes exceptionally with an {@link IOException} — an oversized (or unbounded)
+ * response is never held in memory, and each response of an AHC-followed redirect chain is bounded
+ * independently.
  */
 @CustomLog
 public final class FrameworkHttpClient implements PulsarHttpClient {
@@ -83,9 +89,37 @@ public final class FrameworkHttpClient implements PulsarHttpClient {
         } catch (Throwable t) {
             return CompletableFuture.failedFuture(t);
         }
-        return asyncHttpClient.executeRequest(ahcRequest)
+        return asyncHttpClient.executeRequest(ahcRequest, new BoundedResponseHandler())
                 .toCompletableFuture()
                 .thenCompose(this::toHttpResponse);
+    }
+
+    /**
+     * Aggregates the response like AsyncHttpClient's default handler, but fails the exchange as soon as the
+     * accumulated body exceeds {@link PulsarHttpClientConfig#maxResponseBodyBytes()}: throwing from
+     * {@code onBodyPartReceived} aborts the connection and completes the future exceptionally, so the cap
+     * bounds memory rather than being checked after full aggregation.
+     */
+    private final class BoundedResponseHandler extends AsyncCompletionHandlerBase {
+        private long receivedBytes;
+
+        @Override
+        public State onStatusReceived(HttpResponseStatus status) throws Exception {
+            // A new response on this exchange restarts the accumulation, so each response of a redirect
+            // chain is bounded independently (matching the builder reset in the superclass).
+            receivedBytes = 0;
+            return super.onStatusReceived(status);
+        }
+
+        @Override
+        public State onBodyPartReceived(HttpResponseBodyPart content) throws Exception {
+            receivedBytes += content.length();
+            if (receivedBytes > config.maxResponseBodyBytes()) {
+                throw new IOException("HTTP response body exceeds the configured maximum of "
+                        + config.maxResponseBodyBytes() + " bytes");
+            }
+            return super.onBodyPartReceived(content);
+        }
     }
 
     private org.asynchttpclient.Request toAhcRequest(HttpRequest request) {
@@ -114,6 +148,7 @@ public final class FrameworkHttpClient implements PulsarHttpClient {
 
     private CompletableFuture<HttpResponse> toHttpResponse(Response response) {
         byte[] body = response.getResponseBodyAsBytes();
+        // Final guard only: BoundedResponseHandler already aborts the exchange while streaming.
         if (body != null && body.length > config.maxResponseBodyBytes()) {
             return CompletableFuture.failedFuture(new IOException(
                     "HTTP response body of " + body.length + " bytes exceeds the configured maximum of "

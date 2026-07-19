@@ -34,7 +34,7 @@ import java.util.Objects;
  *
  * <p>{@code TlsPolicy} describes material <em>locations</em>, not the loaded material, so it stays a
  * small serializable value; loading, caching, and rotation are the internal material source's job
- * inside the default {@code FileBasedTlsFactory}.
+ * inside the default {@code FileBasedTlsFactory}, which ships in {@code pulsar-common}.
  */
 public final class TlsPolicy {
 

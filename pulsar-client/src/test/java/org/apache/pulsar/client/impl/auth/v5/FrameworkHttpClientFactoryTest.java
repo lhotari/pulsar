@@ -46,7 +46,8 @@ import org.testng.annotations.Test;
 
 /**
  * Tests the framework AsyncHttpClient-backed {@link PulsarHttpClient} factory (PIP-478 stage 3c): request /
- * response mapping, the response-body cap, and the factory / client close semantics. TLS-by-purpose is
+ * response mapping, redirect following, the streaming response-body cap, and the factory / client close
+ * semantics. TLS-by-purpose is
  * exercised end-to-end by the OAuth2 gate; here the legacy (plaintext) path is used against a local server.
  */
 public class FrameworkHttpClientFactoryTest {
@@ -84,6 +85,30 @@ public class FrameworkHttpClientFactoryTest {
             exchange.sendResponseHeaders(200, body.length);
             try (var os = exchange.getResponseBody()) {
                 os.write(body);
+            }
+        });
+        server.createContext("/redirect", exchange -> {
+            exchange.getResponseHeaders().add("Location", baseUrl + "/echo-get");
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
+        });
+        server.createContext("/redirect-big", exchange -> {
+            exchange.getResponseHeaders().add("Location", baseUrl + "/big");
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
+        });
+        server.createContext("/unbounded", exchange -> {
+            // Chunked (unknown-length) response streamed until the client aborts at its response-body cap;
+            // the iteration bound is a safety net so an undetected abort cannot hang the test.
+            exchange.sendResponseHeaders(200, 0);
+            byte[] chunk = new byte[1024];
+            try (var os = exchange.getResponseBody()) {
+                for (int i = 0; i < 8 * 1024; i++) {
+                    os.write(chunk);
+                    os.flush();
+                }
+            } catch (IOException expected) {
+                // The client closed the connection mid-stream.
             }
         });
         server.start();
@@ -144,6 +169,50 @@ public class FrameworkHttpClientFactoryTest {
             HttpResponse response = client.execute(request).get(30, TimeUnit.SECONDS);
             assertThat(response.statusCode()).isEqualTo(201);
             assertThat(response.bodyAsString()).isEqualTo("posted:payload:ct=application/json");
+            client.close();
+        }
+    }
+
+    @Test
+    public void testRedirectIsFollowed() throws Exception {
+        try (FrameworkHttpClientFactory factory = newFactory()) {
+            PulsarHttpClient client = factory.newHttpClient(genericConfig().build());
+            HttpRequest request = HttpRequest.builder(
+                    HttpRequest.Method.GET, URI.create(baseUrl + "/redirect")).build();
+            // AHC follows the 302 itself (v4 parity); the caller sees the final response.
+            HttpResponse response = client.execute(request).get(30, TimeUnit.SECONDS);
+            assertThat(response.statusCode()).isEqualTo(200);
+            assertThat(response.bodyAsString()).isEqualTo("hello-get");
+            client.close();
+        }
+    }
+
+    @Test
+    public void testStreamingBodyAbortedAtCap() throws Exception {
+        try (FrameworkHttpClientFactory factory = newFactory()) {
+            PulsarHttpClient client = factory.newHttpClient(genericConfig().maxResponseBodyBytes(1024).build());
+            HttpRequest request = HttpRequest.builder(
+                    HttpRequest.Method.GET, URI.create(baseUrl + "/unbounded")).build();
+            // The chunked stream has no Content-Length, so only the streaming bound can stop it: the
+            // exchange is aborted at the cap instead of the (would-be multi-MiB) body being aggregated.
+            assertThatThrownBy(() -> client.execute(request).get(30, TimeUnit.SECONDS))
+                    .isInstanceOf(ExecutionException.class)
+                    .hasCauseInstanceOf(IOException.class)
+                    .cause().hasMessageContaining("exceeds the configured maximum of 1024 bytes");
+            client.close();
+        }
+    }
+
+    @Test
+    public void testRedirectedResponseEnforcesCap() throws Exception {
+        try (FrameworkHttpClientFactory factory = newFactory()) {
+            PulsarHttpClient client = factory.newHttpClient(genericConfig().maxResponseBodyBytes(1024).build());
+            HttpRequest request = HttpRequest.builder(
+                    HttpRequest.Method.GET, URI.create(baseUrl + "/redirect-big")).build();
+            assertThatThrownBy(() -> client.execute(request).get(30, TimeUnit.SECONDS))
+                    .isInstanceOf(ExecutionException.class)
+                    .hasCauseInstanceOf(IOException.class)
+                    .cause().hasMessageContaining("exceeds the configured maximum");
             client.close();
         }
     }

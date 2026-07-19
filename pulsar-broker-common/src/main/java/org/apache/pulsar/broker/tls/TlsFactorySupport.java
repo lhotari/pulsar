@@ -37,8 +37,9 @@ import org.apache.pulsar.tls.PulsarTlsFactory;
 import org.apache.pulsar.tls.TlsFactoryInitContext;
 
 /**
- * Shared scaffolding for wiring a server component onto the PIP-478 {@link PulsarTlsFactory} SPI — the only
- * server TLS path since the PIP-337 {@code PulsarSslFactory} removal. Server components (broker,
+ * Shared scaffolding for wiring a server component onto the PIP-478 {@link PulsarTlsFactory} SPI, which
+ * replaces the PIP-337 {@code PulsarSslFactory} path (removed at the end of the PIP-478 series, leaving
+ * this SPI the only server TLS path). Server components (broker,
  * proxy, websocket, functions-worker) call these helpers to instantiate and initialize the factory and parse
  * its parameters. A stale PIP-337 {@code sslFactoryPlugin} configuration key left in a config file is
  * rejected at config-file load by the removed-key validation in {@code PulsarConfigurationLoader}.
