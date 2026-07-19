@@ -31,6 +31,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.client.api.v5.PulsarClientException;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.auth.AuthenticationInitContext;
@@ -117,6 +118,19 @@ public class HttpAuthenticationDriverTest {
 
         assertThat(transport.callCount).isZero();
         assertThat(auth.respondCalls).isZero();
+    }
+
+    @Test
+    public void hangingTransportRoundIsBoundedByTheRemainingBudget() {
+        FakeChallengeAuth auth = new FakeChallengeAuth();
+        // A transport whose underlying client applies no read timeout: the future never completes.
+        HttpChallengeTransport hanging = (uri, headers, timeout) -> new CompletableFuture<>();
+
+        assertThatThrownBy(() -> new HttpAuthenticationDriver(auth, null, null)
+                .authenticateAsync(URI_A, hanging, Duration.ofMillis(200)).get(10, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(PulsarClientException.AuthenticationException.class)
+                .hasMessageContaining("timed out");
     }
 
     @Test

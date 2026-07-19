@@ -21,6 +21,9 @@ package org.apache.pulsar.client.impl.auth.v5;
 import java.net.URI;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.apache.pulsar.client.api.v5.PulsarClientException;
 import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.auth.BinaryAuthDataProvider;
@@ -165,8 +168,8 @@ public final class HttpAuthenticationDriver {
         }
         Duration remaining = Duration.ofNanos(remainingNanos);
         return handler.respondToHttpChallengeAsync(ctx)
-                .thenCompose(reqHeaders -> transport.get(uri,
-                        reqHeaders == null ? HttpAuthHeaders.empty() : reqHeaders, remaining))
+                .thenCompose(reqHeaders -> boundedGet(transport, uri,
+                        reqHeaders == null ? HttpAuthHeaders.empty() : reqHeaders, remaining, round))
                 .thenCompose(result -> {
                     int status = result.statusCode();
                     if (status == java.net.HttpURLConnection.HTTP_OK) {
@@ -186,6 +189,27 @@ public final class HttpAuthenticationDriver {
                     }
                     return CompletableFuture.failedFuture(new PulsarClientException.AuthenticationException(
                             "SASL over HTTP auth request failed with status " + status));
+                });
+    }
+
+    /**
+     * Issue one transport round bounded by the remaining exchange budget. The deadline check at the top of
+     * each round only fires <em>between</em> rounds; a transport whose underlying client applies no read
+     * timeout (the admin path's JAX-RS transport) would otherwise leave the exchange pending forever
+     * against a peer that accepts the connection but never responds.
+     */
+    private static CompletableFuture<HttpChallengeTransport.Result> boundedGet(HttpChallengeTransport transport,
+            URI uri, HttpAuthHeaders headers, Duration remaining, int round) {
+        return transport.get(uri, headers, remaining)
+                .orTimeout(remaining.toNanos(), TimeUnit.NANOSECONDS)
+                .exceptionallyCompose(t -> {
+                    Throwable cause = t instanceof CompletionException ? t.getCause() : t;
+                    if (cause instanceof TimeoutException) {
+                        return CompletableFuture.failedFuture(new PulsarClientException.AuthenticationException(
+                                "SASL over HTTP round " + round + " timed out after " + remaining.toMillis()
+                                        + " ms"));
+                    }
+                    return CompletableFuture.failedFuture(cause);
                 });
     }
 

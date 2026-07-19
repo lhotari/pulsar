@@ -163,8 +163,9 @@ public class AuthenticationSasl
      * A {@link HttpChallengeTransport} backed by this plugin's own JAX-RS {@link Client} (created in
      * {@link #start()}) — the faithful transport for the admin-path SASL warmup, matching what
      * {@code authenticationStage(...)} does today. Each round is a bodiless {@code GET} to the original URI.
-     * The per-request {@code timeout} is not applied to the JAX-RS request (the driver's overall
-     * timeout-budget guard bounds the exchange between rounds); the client's own connect/read timeouts apply.
+     * The per-request {@code timeout} is not applied to the JAX-RS request itself (the JAX-RS client is
+     * created with default, unbounded timeouts); the driver bounds each round's future with the remaining
+     * exchange budget, so a peer that accepts the connection but never responds cannot hang the exchange.
      */
     private final class JaxRsChallengeTransport implements HttpChallengeTransport {
         @Override
