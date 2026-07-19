@@ -39,8 +39,8 @@ import org.apache.pulsar.client.api.v5.PulsarClientBuilder;
 import org.apache.pulsar.client.api.v5.config.ConnectionPolicy;
 import org.apache.pulsar.client.api.v5.config.MemorySize;
 import org.apache.pulsar.client.api.v5.config.ProxyProtocol;
-import org.apache.pulsar.tls.TlsPolicy;
 import org.apache.pulsar.common.util.DirectMemoryUtils;
+import org.apache.pulsar.tls.TlsPolicy;
 
 /**
  * Utility for test clients.
