@@ -41,6 +41,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import lombok.CustomLog;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.PulsarVersion;
@@ -86,6 +87,7 @@ public class HttpClient implements Closeable {
     private final NameResolver<InetAddress> nameResolver;
     protected final Authentication authentication;
     protected final ClientConfigurationData clientConf;
+    private final Executor blockingAuthExecutor;
     // PIP-478 (new TLS path): a subscription to the CLIENT_DEFAULT SslContext whose callback
     // updates the volatile below on rotation; the AsyncHttpClient SslEngineFactory builds engines from it.
     private TlsHandle<SslContext> tlsSubscription;
@@ -94,6 +96,16 @@ public class HttpClient implements Closeable {
     protected HttpClient(ClientConfigurationData conf, EventLoopGroup eventLoopGroup, Timer timer,
                          NameResolver<InetAddress> nameResolver)
             throws PulsarClientException {
+        this(conf, eventLoopGroup, timer, nameResolver, null);
+    }
+
+    protected HttpClient(ClientConfigurationData conf, EventLoopGroup eventLoopGroup, Timer timer,
+                         NameResolver<InetAddress> nameResolver, Executor blockingAuthExecutor)
+            throws PulsarClientException {
+        // Direct execution when no offload executor is supplied (tests, standalone constructions): the
+        // production path (PulsarClientImpl -> HttpLookupService) always supplies the client's blocking
+        // auth executor, which computeAuthHeaders needs to keep v4 auth work off the event loop.
+        this.blockingAuthExecutor = blockingAuthExecutor != null ? blockingAuthExecutor : Runnable::run;
         this.authentication = conf.getAuthentication();
         this.clientConf = conf;
         this.serviceNameResolver = new PulsarServiceNameResolver(conf.getServiceUrlQuarantineInitDurationMs(),
@@ -352,6 +364,20 @@ public class HttpClient implements Closeable {
                             .thenApply(headers -> (headers == null || headers.isEmpty()) ? null : headers.asMap());
                 }
             }
+            // The deprecated v4 hooks may block: an OAuth2 shim's getAuthData() refreshes its token with a
+            // synchronous HTTP exchange served by this client's own shared event-loop group, and this method
+            // can run inside an AHC completion callback on a shared Netty IO thread (the manual-redirect
+            // path) — a self-deadlock that stalls the loop until the request timeout. Offload the whole v4
+            // composition to the client's blocking auth executor (PIP-478).
+            return CompletableFuture.supplyAsync(() -> v4AuthHeaders(uri), blockingAuthExecutor)
+                    .thenCompose(headers -> headers);
+        } catch (Throwable t) {
+            return CompletableFuture.failedFuture(t);
+        }
+    }
+
+    private CompletableFuture<Map<String, String>> v4AuthHeaders(URI uri) {
+        try {
             AuthenticationDataProvider authData = authentication.getAuthData(uri.getHost());
             if (!authData.hasDataForHttp()) {
                 return CompletableFuture.completedFuture(null);

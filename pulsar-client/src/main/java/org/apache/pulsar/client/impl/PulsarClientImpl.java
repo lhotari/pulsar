@@ -1607,7 +1607,8 @@ public class PulsarClientImpl implements PulsarClient {
     public LookupService createLookup(String url) throws PulsarClientException {
         LookupService lookupService;
         if (url.startsWith("http")) {
-            lookupService = new HttpLookupService(instrumentProvider, conf, eventLoopGroup, timer, getNameResolver());
+            lookupService = new HttpLookupService(instrumentProvider, conf, eventLoopGroup, timer, getNameResolver(),
+                    blockingAuthExecutor());
         } else {
             lookupService = new BinaryProtoLookupService(this, url, conf.getListenerName(), conf.isUseTls(),
                     this.scheduledExecutorProvider.getExecutor(), this.lookupExecutorProvider.getExecutor());
