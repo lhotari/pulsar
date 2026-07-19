@@ -253,13 +253,21 @@ public class FileBasedTlsFactoryTest {
                         .trustCertsFilePath(RSA_CA).enableHostnameVerification(false).build()),
                 FileBasedTlsFactorySettings.defaults());
 
-        SSLEngine verifyingEngine = ((SslContext) verifying.createInstance(TlsPurpose.CLIENT_DEFAULT, SslContext.class)
-                .join().get().get()).newEngine(ByteBufAllocator.DEFAULT);
-        SSLEngine plainEngine = ((SslContext) notVerifying.createInstance(TlsPurpose.CLIENT_DEFAULT, SslContext.class)
-                .join().get().get()).newEngine(ByteBufAllocator.DEFAULT);
+        SslContext verifyingContext = (SslContext) verifying.createInstance(TlsPurpose.CLIENT_DEFAULT,
+                SslContext.class).join().get().get();
+        SslContext plainContext = (SslContext) notVerifying.createInstance(TlsPurpose.CLIENT_DEFAULT,
+                SslContext.class).join().get().get();
+        SSLEngine verifyingEngine = verifyingContext.newEngine(ByteBufAllocator.DEFAULT);
+        SSLEngine plainEngine = plainContext.newEngine(ByteBufAllocator.DEFAULT);
+        // The peer-info variant matters independently: Netty 4.2 defaults client engines created with peer
+        // info to "HTTPS" endpoint identification, which the policy-off context build must clear.
+        SSLEngine verifyingPeerEngine = verifyingContext.newEngine(ByteBufAllocator.DEFAULT, "broker.example", 6651);
+        SSLEngine plainPeerEngine = plainContext.newEngine(ByteBufAllocator.DEFAULT, "broker.example", 6651);
 
         assertThat(verifyingEngine.getSSLParameters().getEndpointIdentificationAlgorithm()).isEqualTo("HTTPS");
         assertThat(plainEngine.getSSLParameters().getEndpointIdentificationAlgorithm()).isNullOrEmpty();
+        assertThat(verifyingPeerEngine.getSSLParameters().getEndpointIdentificationAlgorithm()).isEqualTo("HTTPS");
+        assertThat(plainPeerEngine.getSSLParameters().getEndpointIdentificationAlgorithm()).isNullOrEmpty();
         verifying.close();
         notVerifying.close();
     }

@@ -111,9 +111,10 @@ public final class TlsContexts {
             builder.keyManager(material.privateKey(), material.keyCertChainArray());
         }
         applyCiphersAndProtocols(builder, policy);
-        if (policy.enableHostnameVerification()) {
-            builder.endpointIdentificationAlgorithm("HTTPS");
-        }
+        // Netty 4.2 defaults client contexts to "HTTPS" endpoint identification, so the algorithm must be
+        // set explicitly both ways: hostname verification is the policy's decision alone, and an engine
+        // default must not verify hostnames when the policy disabled it.
+        builder.endpointIdentificationAlgorithm(policy.enableHostnameVerification() ? "HTTPS" : null);
         return builder.build();
     }
 
