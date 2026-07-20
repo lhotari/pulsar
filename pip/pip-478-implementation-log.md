@@ -241,3 +241,36 @@
     caught it; now async whenComplete like SynthesizingSubscription); WorkerServer factory-leak guard.
     Monolith tip 6719e525f0d. NEXT: re-cut v7 (fold round-2 fixes to their chunks; move the chunk-6 "CmdClusters
     CLI flags" clause to chunk-4 per the Fable restructure MINOR), gate, re-push, ROUND 3.
+
+72. **ROUND 3 — 9 real findings (mostly COMPLETIONS of my own round-1/2 fixes), Opus-verified (2026-07-20).**
+    Codex gpt-5.6-sol per-chunk (S2 clean/NONE 2nd round running) + Fable Opus panel (r2-regression, cross-cutting,
+    doc-vs-code). Every finding Opus-adversarially-verified before fixing; 1 refuted: S4-3 admin-OAuth2 ordering
+    (the framework factory's TLS comes from the conf::getTlsFactory supplier, bound before start() on the broker
+    admin path; a plain user admin uses platform-default IdP trust = v4 parity, so no regression). CONFIRMED+FIXED
+    in commit 14cbb8747ca (sanityCheck + 6 targeted suites green):
+    - JettyTlsFactory MAJOR (completes wave-2 C3 async redo): the async companion re-request lacked
+      SynthesizingSubscription's generation guard + last-good-baseline retention → out-of-order rotation
+      completions reinstall a stale context, transient companion failure downgrades client-auth/protocols. Ported
+      both via a shared JettyReloadCoordinator to server + client synthesized paths.
+    - Two-axis resolveJsseProvider MAJOR (completes C13): applied only to the broker in round 2; proxy
+      (ProxyTlsFactories server+brokerClient), websocket (ProxyServer WEB), functions (WorkerServer WEB) still
+      dropped a v4 keystore tlsProvider/brokerClientSslProvider JSSE-provider name. All 4 sites now route through
+      TlsFactorySupport.resolveJsseProvider.
+    - Multi-identity keystore MAJOR (v4 parity): TlsKeyStoreLoader collapsed RSA+EC / multi-CA keystores to the
+      first alias. TlsMaterial now carries List<KeyEntry>; keystore contexts build a KeyManagerFactory from the
+      whole store (multi-alias JSSE selection, provider-pinned); PEM keeps single-identity; rotation value-equality
+      preserved via alias sorting.
+    - V5ToV4AuthenticationAdapter MAJOR: v5 client over http(s):// with a token/bearer plugin omitted the
+      Authorization header on HTTP lookups (401 vs binary works). SynthesizedV4DataProvider now bridges the wrapped
+      plugin's HttpAuthHeadersProvider capability.
+    - PulsarClientImpl MAJOR x2 (OAuth2 IdP-TLS): CLIENT_OAUTH2 not composed on a plaintext broker
+      (setupClientTlsFactory early-returned on !useTls); failover OAuth2 swap started auth before rebuilding the
+      factory (used stale IdP TLS). Compose when the OAuth2 plugin carries IdP TLS material even on plaintext
+      (binary transport stays useTls-gated); rebuild the factory before start().
+    - AuthenticationSasl JaxRsChallengeTransport MAJOR: bound + cancel/close the underlying JAX-RS request on the
+      round timeout (admin-SASL socket leak vs a hung broker).
+    - pip-478.md MINOR: corrected the SSLParameters merge-order rule (2) endpoint-id mechanism wording.
+    LESSON: rounds keep COMPLETING prior fixes (Jetty guard, C13 propagation) — a fix in one component must be
+    swept across ALL peer components (broker/proxy/websocket/functions) and its async invariants (generation guard,
+    last-good retention) ported wherever the same hazard exists. Monolith 14cbb8747ca. NEXT: re-cut v8, re-push,
+    ROUND 4.
