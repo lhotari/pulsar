@@ -23,10 +23,13 @@ import io.opentelemetry.api.OpenTelemetry;
 import java.io.IOException;
 import java.io.NotSerializableException;
 import java.io.ObjectOutputStream;
+import java.net.URI;
 import java.time.Clock;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.PulsarClientException;
@@ -35,6 +38,9 @@ import org.apache.pulsar.client.api.v5.auth.Authentication;
 import org.apache.pulsar.client.api.v5.auth.AuthenticationCallContext;
 import org.apache.pulsar.client.api.v5.auth.AuthenticationInitContext;
 import org.apache.pulsar.client.api.v5.auth.BinaryAuthDataProvider;
+import org.apache.pulsar.client.api.v5.auth.HttpAuthCallContext;
+import org.apache.pulsar.client.api.v5.auth.HttpAuthHeaders;
+import org.apache.pulsar.client.api.v5.auth.HttpAuthHeadersProvider;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
 import org.apache.pulsar.client.impl.auth.v5.AuthMetrics;
@@ -136,7 +142,7 @@ public class V5ToV4AuthenticationAdapter
         AuthenticationExchange exchange = newAuthenticationExchange(brokerHostName);
         try {
             AuthData initial = exchange.getAuthDataAsync().get();
-            return new SynthesizedV4DataProvider(exchange, initial);
+            return new SynthesizedV4DataProvider(exchange, initial, v5, brokerHostName);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new PulsarClientException(e);
@@ -201,9 +207,14 @@ public class V5ToV4AuthenticationAdapter
      * {@link #authenticate(AuthData)} through the same exchange (and thus the same
      * {@link AuthenticationCallContext} state slot).
      *
-     * <p>This bridge only carries the binary-protocol command credential. HTTP auth headers are served
-     * through the v5 {@link org.apache.pulsar.client.api.v5.auth.HttpAuthHeadersProvider} capability via
-     * the dedicated HTTP auth path, not through this binary-protocol bridge.
+     * <p>It also bridges the single-pass HTTP transport: the v4 HTTP lookup path (which drives
+     * {@link #hasDataForHttp()} / {@link #getHttpHeaders()}) is served from the wrapped plugin's v5
+     * {@link HttpAuthHeadersProvider} capability, so a bearer/role credential (for example
+     * {@code Authorization: Bearer <jwt>}) is attached to the lookup {@code GET}. Multi-round
+     * SASL-over-HTTP challenge/response is out of scope here — it rides the framework HTTP challenge
+     * driver, not this bridge — so a plugin that exposes only an
+     * {@link org.apache.pulsar.client.api.v5.auth.HttpAuthChallengeHandler} contributes no static header
+     * and {@link #hasDataForHttp()} stays {@code false}.
      */
     private static final class SynthesizedV4DataProvider implements AuthenticationDataProvider {
 
@@ -211,10 +222,15 @@ public class V5ToV4AuthenticationAdapter
 
         private final transient AuthenticationExchange exchange;
         private final transient byte[] initialData;
+        private final transient Authentication v5;
+        private final transient String brokerHostName;
 
-        SynthesizedV4DataProvider(AuthenticationExchange exchange, AuthData initial) {
+        SynthesizedV4DataProvider(AuthenticationExchange exchange, AuthData initial, Authentication v5,
+                                  String brokerHostName) {
             this.exchange = exchange;
             this.initialData = initial == null || initial.getBytes() == null ? null : initial.getBytes();
+            this.v5 = v5;
+            this.brokerHostName = brokerHostName;
         }
 
         @Override
@@ -229,12 +245,31 @@ public class V5ToV4AuthenticationAdapter
 
         @Override
         public boolean hasDataForHttp() {
-            return false;
+            return v5.capability(HttpAuthHeadersProvider.class).isPresent();
         }
 
         @Override
-        public Set<Map.Entry<String, String>> getHttpHeaders() {
-            return null;
+        public Set<Map.Entry<String, String>> getHttpHeaders() throws Exception {
+            Optional<HttpAuthHeadersProvider> provider = v5.capability(HttpAuthHeadersProvider.class);
+            if (provider.isEmpty()) {
+                return null;
+            }
+            // Blocking .get() is intentional: this v4 hook runs on the client's blockingAuthExecutor
+            // (HttpClient.computeAuthHeaders offloads the whole v4 branch), never the event loop.
+            HttpAuthCallContext ctx = new SynthesizedHttpAuthCallContext(brokerHostName);
+            try {
+                HttpAuthHeaders headers = provider.get().getHttpHeadersAsync(ctx).get();
+                return headers == null || headers.isEmpty() ? null : headers.asMap().entrySet();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw e;
+            } catch (ExecutionException e) {
+                Throwable cause = BinaryAuthenticationExchange.unwrap(e);
+                if (cause instanceof Exception ex) {
+                    throw ex;
+                }
+                throw new PulsarClientException(cause);
+            }
         }
 
         /**
@@ -269,6 +304,48 @@ public class V5ToV4AuthenticationAdapter
                     cause == null ? null : cause.getMessage());
             e.initCause(cause);
             return e;
+        }
+    }
+
+    /**
+     * A single-pass {@link HttpAuthCallContext} for the v4 HTTP lookup path, which surfaces only the
+     * request host (from {@link org.apache.pulsar.client.api.Authentication#getAuthData(String)}) rather
+     * than a full request URI. The host is presented as an {@code https://<host>} URI; single-pass
+     * {@link HttpAuthHeadersProvider}s (token/Athenz/OAuth2) do not consult it. There is no prior server
+     * challenge on this path, so {@link #serverChallengeHeaders()} is always empty; the state slot exists
+     * to satisfy the contract but is not shared across requests.
+     */
+    private static final class SynthesizedHttpAuthCallContext implements HttpAuthCallContext {
+
+        private final URI requestUri;
+        private final Map<Class<?>, Object> state = new ConcurrentHashMap<>();
+
+        SynthesizedHttpAuthCallContext(String brokerHostName) {
+            this.requestUri = URI.create("https://" + (brokerHostName == null ? "" : brokerHostName));
+        }
+
+        @Override
+        public URI requestUri() {
+            return requestUri;
+        }
+
+        @Override
+        public Optional<HttpAuthHeaders> serverChallengeHeaders() {
+            return Optional.empty();
+        }
+
+        @Override
+        public <T> Optional<T> getStateObject(Class<T> clazz) {
+            return Optional.ofNullable(clazz.cast(state.get(clazz)));
+        }
+
+        @Override
+        public <T> void setStateObject(Class<T> clazz, T value) {
+            if (value == null) {
+                state.remove(clazz);
+            } else {
+                state.put(clazz, value);
+            }
         }
     }
 }

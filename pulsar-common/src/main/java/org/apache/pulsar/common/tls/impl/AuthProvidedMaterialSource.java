@@ -95,12 +95,15 @@ final class AuthProvidedMaterialSource implements MaterialSource {
         boolean useAuthKey = authKey != null && authChain != null && !authChain.isEmpty();
         PrivateKey privateKey = useAuthKey ? authKey : base.privateKey();
         List<X509Certificate> keyCertChain = useAuthKey ? authChain : base.keyCertChain();
+        // The authentication plugin supplies a single identity; when it overrides, drop the base keystore's
+        // multi-alias entries. Otherwise carry them through so a keystore base keeps JSSE alias selection.
+        List<TlsMaterial.KeyEntry> keyEntries = useAuthKey ? List.of() : base.keyEntries();
 
         List<X509Certificate> trustCerts = base.trustCerts();
         if (trustCerts.isEmpty() && authData != null) {
             trustCerts = resolveTrustFromAuth(authData);
         }
-        return new TlsMaterial(privateKey, keyCertChain, trustCerts);
+        return new TlsMaterial(privateKey, keyCertChain, trustCerts, keyEntries);
     }
 
     private static List<X509Certificate> resolveKeyCertChain(AuthenticationDataProvider authData) throws Exception {

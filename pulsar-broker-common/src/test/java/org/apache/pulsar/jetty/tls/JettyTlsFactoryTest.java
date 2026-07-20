@@ -37,10 +37,12 @@ import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -411,6 +413,151 @@ public class JettyTlsFactoryTest {
         }
     }
 
+    /**
+     * PIP-478 generation guard: two rotation companions that complete OUT OF ORDER must leave the NEWER
+     * rotation's context and baseline applied, never regressing to the older one. Each rotation captures a
+     * strictly increasing delivery generation; when the older rotation's companion completes last, its
+     * reload is dropped because a newer generation has already been published (mirroring
+     * {@code TlsContextAcquisition.SynthesizingSubscription}'s generation-guarded {@code publish}). Without the
+     * guard the stale companion would pin the synthesized {@link SslContextFactory.Server} to the older
+     * context/baseline until the next rotation.
+     */
+    @Test
+    public void serverRotationOutOfOrderCompanionKeepsNewerContextAndBaseline() throws Exception {
+        SSLContext initial = JdkSslContexts.createSslContext(false, CA, BROKER_CERT, BROKER_KEY, null);
+        SSLContext contextA = JdkSslContexts.createSslContext(false, CA, BROKER_CERT, BROKER_KEY, null);
+        SSLContext contextB = JdkSslContexts.createSslContext(false, CA, PROXY_CERT, PROXY_KEY, null);
+        ScriptableFactory factory = new ScriptableFactory(initial, null);
+
+        JettyTlsFactory.ReloadableServerTls reloadable = JettyTlsFactory.createReloadingServerFactory(
+                factory, TlsPurpose.WEB, null, false, false, null, null);
+        SslContextFactory.Server sslContextFactory = reloadable.sslContextFactory();
+        // Start standalone so the reload path (isStarted()) runs on each rotation delivery.
+        sslContextFactory.start();
+        try {
+            factory.deferCompanions();
+            // Two rotations: A (older, generation N) then B (newer, generation N+1).
+            factory.deliver(contextA);
+            factory.deliver(contextB);
+
+            SSLParameters baselineA = new SSLParameters();
+            baselineA.setProtocols(new String[] {"TLSv1.2"});
+            SSLParameters baselineB = new SSLParameters();
+            baselineB.setProtocols(new String[] {"TLSv1.3"});
+
+            // Complete the NEWER rotation's companion first, then the older one; the generation guard must
+            // drop the stale (older) result so the newer context/baseline stays applied.
+            factory.completeCompanion(1, baselineB);
+            factory.completeCompanion(0, baselineA);
+
+            Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                assertThat(sslContextFactory.getIncludeProtocols())
+                        .as("the newer rotation's baseline wins despite the older companion completing last")
+                        .containsExactly("TLSv1.3");
+                assertThat(sslContextFactory.getSslContext())
+                        .as("the newer rotation's context stays pinned")
+                        .isSameAs(contextB);
+            });
+        } finally {
+            sslContextFactory.stop();
+            reloadable.subscription().dispose();
+            factory.close();
+        }
+    }
+
+    /**
+     * PIP-478 last-good retention: a rotation whose companion re-request fails transiently must retain the
+     * last successfully-resolved baseline (seeded from the build-time companion) rather than downgrading to
+     * consumer defaults. Here the build companion pins TLSv1.2 and {@code needClientAuth}; the rotation's
+     * companion then fails, and the reload must still apply the rotated context while keeping client-auth and
+     * the protocol restriction — the guarantee {@code SynthesizingSubscription} provides via its retained
+     * {@code lastBaseline}. Without it, the failed companion would silently drop client-auth/protocols.
+     */
+    @Test
+    public void serverRotationCompanionFailureRetainsLastGoodBaseline() throws Exception {
+        SSLContext initial = JdkSslContexts.createSslContext(false, CA, BROKER_CERT, BROKER_KEY, null);
+        SSLContext rotated = JdkSslContexts.createSslContext(false, CA, PROXY_CERT, PROXY_KEY, null);
+        SSLParameters lastGood = new SSLParameters();
+        lastGood.setProtocols(new String[] {"TLSv1.2"});
+        lastGood.setNeedClientAuth(true);
+        ScriptableFactory factory = new ScriptableFactory(initial, lastGood);
+
+        JettyTlsFactory.ReloadableServerTls reloadable = JettyTlsFactory.createReloadingServerFactory(
+                factory, TlsPurpose.WEB, null, false, false, null, null);
+        SslContextFactory.Server sslContextFactory = reloadable.sslContextFactory();
+        sslContextFactory.start();
+        try {
+            // The build-time companion is authoritative and seeds the retained last-good baseline.
+            assertThat(sslContextFactory.getNeedClientAuth()).isTrue();
+            assertThat(sslContextFactory.getIncludeProtocols()).containsExactly("TLSv1.2");
+
+            factory.deferCompanions();
+            // Rotate material; the companion re-request for this rotation fails transiently.
+            factory.deliver(rotated);
+            factory.failCompanion(0, new IllegalStateException("companion temporarily unavailable"));
+
+            Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                assertThat(sslContextFactory.getSslContext())
+                        .as("the rotated context is applied even though the companion failed")
+                        .isSameAs(rotated);
+                assertThat(sslContextFactory.getNeedClientAuth())
+                        .as("a transient companion failure retains the last-good client-auth")
+                        .isTrue();
+                assertThat(sslContextFactory.getIncludeProtocols())
+                        .as("a transient companion failure retains the last-good protocol restriction")
+                        .containsExactly("TLSv1.2");
+            });
+        } finally {
+            sslContextFactory.stop();
+            reloadable.subscription().dispose();
+            factory.close();
+        }
+    }
+
+    /**
+     * PIP-478 generation guard, client path: the same shared reload coordinator drives the synthesized
+     * {@link SslContextFactory.Client}, so an out-of-order companion completion must likewise leave the newer
+     * rotation's context/protocols applied (client-auth is a server concept and is not mapped here).
+     */
+    @Test
+    public void clientRotationOutOfOrderCompanionKeepsNewerContextAndProtocols() throws Exception {
+        SSLContext initial = JdkSslContexts.createSslContext(false, CA, TRUSTED_CLIENT_CERT, TRUSTED_CLIENT_KEY, null);
+        SSLContext contextA = JdkSslContexts.createSslContext(false, CA, TRUSTED_CLIENT_CERT, TRUSTED_CLIENT_KEY, null);
+        SSLContext contextB = JdkSslContexts.createSslContext(false, CA, USER1_CLIENT_CERT, USER1_CLIENT_KEY, null);
+        ScriptableFactory factory = new ScriptableFactory(initial, null);
+
+        JettyTlsFactory.ReloadableClientTls reloadable = JettyTlsFactory.createReloadingClientFactory(
+                factory, TlsPurpose.BROKER_CLIENT, null, true);
+        SslContextFactory.Client clientFactory = reloadable.sslContextFactory();
+        clientFactory.start();
+        try {
+            factory.deferCompanions();
+            factory.deliver(contextA);
+            factory.deliver(contextB);
+
+            SSLParameters baselineA = new SSLParameters();
+            baselineA.setProtocols(new String[] {"TLSv1.2"});
+            SSLParameters baselineB = new SSLParameters();
+            baselineB.setProtocols(new String[] {"TLSv1.3"});
+
+            factory.completeCompanion(1, baselineB);
+            factory.completeCompanion(0, baselineA);
+
+            Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                assertThat(clientFactory.getIncludeProtocols())
+                        .as("the newer rotation's baseline wins despite the older companion completing last")
+                        .containsExactly("TLSv1.3");
+                assertThat(clientFactory.getSslContext())
+                        .as("the newer rotation's context stays pinned")
+                        .isSameAs(contextB);
+            });
+        } finally {
+            clientFactory.stop();
+            reloadable.subscription().dispose();
+            factory.close();
+        }
+    }
+
     // Rotate the WEB server material (cert.pem/key.pem) to the other certificate signed by the same CA
     // (broker<->proxy), with a future mtime so the file-based factory's poll observes the change and re-delivers
     // the SSLContext. Toggling on the current content guarantees each call is a real change.
@@ -683,6 +830,115 @@ public class JettyTlsFactoryTest {
         @Override
         public void close() {
             delegate.close();
+        }
+    }
+
+    /**
+     * A scriptable factory for the reload-ordering tests. It supplies the {@code SSLContext} subscription and
+     * the {@code SSLParameters} companion under full test control and no native Jetty factory (forcing the
+     * synthesized, self-reloading path). The build-time companion is resolved inline (seeding the coordinator's
+     * last-good baseline); after {@link #deferCompanions()} each rotation's companion re-request is parked as an
+     * incomplete future the test {@link #completeCompanion completes} — in any order — or {@link #failCompanion
+     * fails}, so out-of-order completion and transient failures are reproduced deterministically.
+     */
+    private static final class ScriptableFactory implements PulsarTlsFactory {
+        private final SSLContext initialContext;
+        private final SSLParameters buildCompanion;
+        private volatile Consumer<SSLContext> deliveryCallback;
+        private volatile boolean deferCompanions;
+        private final List<CompletableFuture<Optional<TlsHandle<SSLParameters>>>> pendingCompanions =
+                new CopyOnWriteArrayList<>();
+
+        ScriptableFactory(SSLContext initialContext, SSLParameters buildCompanion) {
+            this.initialContext = initialContext;
+            this.buildCompanion = buildCompanion;
+        }
+
+        // Start parking each rotation's companion re-request (build-time resolution has already happened inline).
+        void deferCompanions() {
+            deferCompanions = true;
+        }
+
+        // Simulate a poll delivery of rotated material on the (serial) delivery thread.
+        void deliver(SSLContext context) {
+            deliveryCallback.accept(context);
+        }
+
+        // Resolve the index-th parked rotation companion (in call order); null models the factory supplying none.
+        void completeCompanion(int index, SSLParameters baseline) {
+            pendingCompanions.get(index).complete(baseline == null ? Optional.empty()
+                    : Optional.of(companionHandle(baseline)));
+        }
+
+        // Fail the index-th parked rotation companion, reproducing a transient companion-fetch error.
+        void failCompanion(int index, Throwable error) {
+            pendingCompanions.get(index).completeExceptionally(error);
+        }
+
+        @Override
+        public CompletableFuture<Void> initialize(TlsFactoryInitContext context) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(TlsPurpose purpose,
+                                                                            Class<T> instanceClass) {
+            if (instanceClass == SSLParameters.class) {
+                if (deferCompanions) {
+                    CompletableFuture<Optional<TlsHandle<SSLParameters>>> pending = new CompletableFuture<>();
+                    pendingCompanions.add(pending);
+                    return (CompletableFuture<Optional<TlsHandle<T>>>) (CompletableFuture<?>) pending;
+                }
+                Optional<TlsHandle<SSLParameters>> companion = buildCompanion == null ? Optional.empty()
+                        : Optional.of(companionHandle(buildCompanion));
+                return CompletableFuture.completedFuture((Optional<TlsHandle<T>>) (Optional<?>) companion);
+            }
+            // No native Jetty factory: force the synthesized path.
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(
+                TlsPurpose purpose, Class<T> instanceClass, Consumer<T> onLoadOrReload) {
+            if (instanceClass == SSLContext.class) {
+                deliveryCallback = (Consumer<SSLContext>) onLoadOrReload;
+                // The first delivery fires synchronously during subscribe (before start), mirroring the SPI.
+                deliveryCallback.accept(initialContext);
+                return CompletableFuture.completedFuture(Optional.of((TlsHandle<T>) sslContextHandle()));
+            }
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+
+        private TlsHandle<SSLContext> sslContextHandle() {
+            return new TlsHandle<>() {
+                @Override
+                public SSLContext get() {
+                    return initialContext;
+                }
+
+                @Override
+                public void dispose() {
+                }
+            };
+        }
+
+        private static TlsHandle<SSLParameters> companionHandle(SSLParameters value) {
+            return new TlsHandle<>() {
+                @Override
+                public SSLParameters get() {
+                    return value;
+                }
+
+                @Override
+                public void dispose() {
+                }
+            };
+        }
+
+        @Override
+        public void close() {
         }
     }
 

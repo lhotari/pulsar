@@ -21,6 +21,9 @@ package org.apache.pulsar.common.tls.impl;
 import static org.apache.pulsar.common.tls.impl.TlsTestSupport.resource;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslProvider;
+import io.netty.util.ReferenceCountUtil;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,6 +47,9 @@ public class TlsMaterialSourceTest {
     private static final String BROKER_KEY = resource("certificate-authority/server-keys/broker.key-pk8.pem");
     private static final String PROXY_CERT = resource("certificate-authority/server-keys/proxy.cert.pem");
     private static final String PROXY_KEY = resource("certificate-authority/server-keys/proxy.key-pk8.pem");
+    // EC identity, so a keystore can hold two identities of different key types (RSA broker + EC client).
+    private static final String EC_CERT = resource("certificate-authority/ec/client.cert.pem");
+    private static final String EC_KEY = resource("certificate-authority/ec/client.key-pk8.pem");
 
     private static final char[] STORE_PW = "changeit".toCharArray();
 
@@ -179,6 +185,65 @@ public class TlsMaterialSourceTest {
         assertThatThrownBy(() ->
                 new TlsMaterialSource(mixedPolicy(pkcs12KeyStore, "NOSUCHTYPE", jksTrustStore, "JKS")).refresh())
                 .isInstanceOf(Exception.class);
+    }
+
+    /**
+     * A keystore with two identities (RSA + EC) loads every key entry into {@link TlsMaterial#keyEntries()}, so
+     * the context builders can preserve JSSE alias selection. The pre-fix loader kept only the first alias — the
+     * v4-parity regression this exercises — and {@link TlsMaterial#hasKeyMaterial()} still mirrors the first
+     * entry. A byte-for-byte re-read stays {@link TlsMaterial#equals(Object) equal} (rotation suppression).
+     */
+    @Test
+    public void keystoreWithTwoIdentitiesCarriesEveryEntry() throws Exception {
+        Path twoIdentityKeyStore = writeTwoIdentityPkcs12();
+        Path jksTrustStore = writeJksTrustStore();
+        TlsMaterialSource source = new TlsMaterialSource(
+                mixedPolicy(twoIdentityKeyStore, "PKCS12", jksTrustStore, "JKS"));
+
+        TlsMaterial material = source.refresh().material();
+        assertThat(material.keyEntries()).as("both keystore identities are carried").hasSize(2);
+        assertThat(material.keyEntries()).extracting(TlsMaterial.KeyEntry::alias)
+                .as("entries are ordered by alias").containsExactly("ec", "rsa");
+        assertThat(material.hasKeyStoreEntries()).isTrue();
+        assertThat(material.hasKeyMaterial()).as("first entry still mirrored for back-compat").isTrue();
+
+        // Re-reading identical content stays equal, so a touched-but-unchanged keystore suppresses a rebuild.
+        assertThat(new TlsMaterialSource(mixedPolicy(twoIdentityKeyStore, "PKCS12", jksTrustStore, "JKS"))
+                .refresh().material()).isEqualTo(material);
+    }
+
+    /**
+     * The full production build path (the same {@code TlsContexts} calls the factory makes) constructs the Netty
+     * server/client and JDK contexts from two-identity keystore material.
+     */
+    @Test
+    public void contextsBuildFromTwoIdentityKeystoreMaterial() throws Exception {
+        Path twoIdentityKeyStore = writeTwoIdentityPkcs12();
+        Path jksTrustStore = writeJksTrustStore();
+        TlsPolicy policy = mixedPolicy(twoIdentityKeyStore, "PKCS12", jksTrustStore, "JKS");
+        TlsMaterial material = new TlsMaterialSource(policy).refresh().material();
+
+        assertThat(TlsContexts.buildJdkContext(material, policy)).isNotNull();
+        SslContext server = TlsContexts.buildNettyServerContext(material, policy, SslProvider.JDK, true);
+        SslContext client = TlsContexts.buildNettyClientContext(material, policy, SslProvider.JDK);
+        assertThat(server).isNotNull();
+        assertThat(client).isNotNull();
+        ReferenceCountUtil.release(server);
+        ReferenceCountUtil.release(client);
+    }
+
+    private Path writeTwoIdentityPkcs12() throws Exception {
+        KeyStore ks = KeyStore.getInstance("PKCS12");
+        ks.load(null, null);
+        ks.setKeyEntry("rsa", PemReader.loadPrivateKeyFromPemFile(BROKER_KEY), STORE_PW,
+                PemReader.loadCertificatesFromPemFile(BROKER_CERT));
+        ks.setKeyEntry("ec", PemReader.loadPrivateKeyFromPemFile(EC_KEY), STORE_PW,
+                PemReader.loadCertificatesFromPemFile(EC_CERT));
+        Path path = dir.resolve("two-identity.p12");
+        try (OutputStream out = Files.newOutputStream(path)) {
+            ks.store(out, STORE_PW);
+        }
+        return path;
     }
 
     private static TlsPolicy mixedPolicy(Path keyStore, String keyStoreType, Path trustStore, String trustStoreType) {

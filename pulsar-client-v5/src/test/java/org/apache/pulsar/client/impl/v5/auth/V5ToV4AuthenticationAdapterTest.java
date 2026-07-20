@@ -24,6 +24,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.ByteArrayOutputStream;
 import java.io.NotSerializableException;
 import java.io.ObjectOutputStream;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
@@ -35,6 +37,9 @@ import org.apache.pulsar.client.api.v5.auth.BinaryAuthChallengeHandler;
 import org.apache.pulsar.client.api.v5.auth.BinaryAuthData;
 import org.apache.pulsar.client.api.v5.auth.BinaryAuthDataProvider;
 import org.apache.pulsar.client.api.v5.auth.ChallengeResponse;
+import org.apache.pulsar.client.api.v5.auth.HttpAuthCallContext;
+import org.apache.pulsar.client.api.v5.auth.HttpAuthHeaders;
+import org.apache.pulsar.client.api.v5.auth.HttpAuthHeadersProvider;
 import org.apache.pulsar.common.api.AuthData;
 import org.testng.annotations.Test;
 
@@ -137,6 +142,35 @@ public class V5ToV4AuthenticationAdapterTest {
     }
 
     @Test
+    public void bridgesSinglePassHttpHeadersFromV5Capability() throws Exception {
+        V5ToV4AuthenticationAdapter adapter = wrap(new HttpHeaderPlugin());
+        adapter.start();
+
+        AuthenticationDataProvider data = adapter.getAuthData("broker-1.example.com");
+
+        // Without this bridge the v4 HTTP lookup path attaches no Authorization header and an
+        // authenticated http:// lookup GET returns 401 (the PIP-478 regression this fix closes).
+        assertThat(data.hasDataForHttp()).isTrue();
+        Map<String, String> headers = new LinkedHashMap<>();
+        data.getHttpHeaders().forEach(entry -> headers.put(entry.getKey(), entry.getValue()));
+        // HttpAuthHeaders canonicalises header names to lower case.
+        assertThat(headers).containsEntry("authorization", "Bearer jwt-token");
+    }
+
+    @Test
+    public void reportsNoHttpDataWhenPluginHasNoHttpHeaderCapability() throws Exception {
+        // The mTLS plugin exposes only BinaryAuthDataProvider; it contributes no single-pass HTTP header,
+        // so the v4 HTTP path must report none rather than attaching an empty/absent credential.
+        V5ToV4AuthenticationAdapter adapter = wrap();
+        adapter.start();
+
+        AuthenticationDataProvider data = adapter.getAuthData("broker-1.example.com");
+
+        assertThat(data.hasDataForHttp()).isFalse();
+        assertThat(data.getHttpHeaders()).isNull();
+    }
+
+    @Test
     public void refusesSerializationWithActionableMessage() {
         assertThatThrownBy(() -> new ObjectOutputStream(new ByteArrayOutputStream()).writeObject(wrap()))
                 .isInstanceOf(NotSerializableException.class)
@@ -183,6 +217,34 @@ public class V5ToV4AuthenticationAdapterTest {
             counter.rounds++;
             return CompletableFuture.completedFuture(
                     new ChallengeResponse(("round-" + counter.rounds).getBytes(UTF_8)));
+        }
+    }
+
+    /**
+     * A fake v5 token-style plugin that serves the binary transport and a single-pass HTTP
+     * {@code Authorization: Bearer <jwt>} header through the {@link HttpAuthHeadersProvider} capability.
+     */
+    private static final class HttpHeaderPlugin
+            implements Authentication, BinaryAuthDataProvider, HttpAuthHeadersProvider {
+
+        @Override
+        public CompletableFuture<Void> initializeAsync(AuthenticationInitContext ctx) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public String authMethodName() {
+            return "token";
+        }
+
+        @Override
+        public CompletableFuture<BinaryAuthData> getAuthDataAsync(AuthenticationCallContext ctx) {
+            return CompletableFuture.completedFuture(new BinaryAuthData("jwt-token".getBytes(UTF_8)));
+        }
+
+        @Override
+        public CompletableFuture<HttpAuthHeaders> getHttpHeadersAsync(HttpAuthCallContext ctx) {
+            return CompletableFuture.completedFuture(HttpAuthHeaders.of("Authorization", "Bearer jwt-token"));
         }
     }
 }

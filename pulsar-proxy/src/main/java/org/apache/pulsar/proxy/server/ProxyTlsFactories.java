@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.proxy.server;
 
+import com.google.common.annotations.VisibleForTesting;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -83,14 +84,17 @@ final class ProxyTlsFactories {
         return new FileBasedTlsFactory(policies, settings, authSuppliers);
     }
 
-    private static TlsPolicy serverPolicy(ProxyConfiguration config, Set<String> ciphers, Set<String> protocols) {
+    @VisibleForTesting
+    static TlsPolicy serverPolicy(ProxyConfiguration config, Set<String> ciphers, Set<String> protocols) {
         TlsPolicy.Builder builder = TlsPolicy.builder()
                 .allowInsecureConnection(config.isTlsAllowInsecureConnection())
                 .enableHostnameVerification(config.isTlsHostnameVerificationEnabled())
                 .protocols(toList(protocols))
                 .ciphers(toList(ciphers))
                 // PIP-478: pin the JSSE (SSLContext) provider for the proxy's server-side (binary/web) material.
-                .jsseProvider(config.getJsseProvider());
+                // A non-engine tlsProvider value (e.g. Conscrypt) is also routed here for v4 keystore parity,
+                // mirroring the broker's two-axis split.
+                .jsseProvider(TlsFactorySupport.resolveJsseProvider(config.getJsseProvider(), config.getTlsProvider()));
         if (config.isTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
                     .keyStoreType(config.getTlsKeyStoreType())
@@ -108,14 +112,18 @@ final class ProxyTlsFactories {
         return builder.build();
     }
 
-    private static TlsPolicy brokerClientPolicy(ProxyConfiguration config) {
+    @VisibleForTesting
+    static TlsPolicy brokerClientPolicy(ProxyConfiguration config) {
         TlsPolicy.Builder builder = TlsPolicy.builder()
                 .allowInsecureConnection(config.isTlsAllowInsecureConnection())
                 .enableHostnameVerification(config.isTlsHostnameVerificationEnabled())
                 .protocols(toList(config.getBrokerClientTlsProtocols()))
                 .ciphers(toList(config.getBrokerClientTlsCiphers()))
                 // PIP-478: pin the JSSE (SSLContext) provider for the proxy's own outbound (proxy->broker) client TLS.
-                .jsseProvider(config.getBrokerClientJsseProvider());
+                // A non-engine brokerClientSslProvider value (e.g. Conscrypt) is also routed here for v4 keystore
+                // parity, mirroring the broker's two-axis split.
+                .jsseProvider(TlsFactorySupport.resolveJsseProvider(config.getBrokerClientJsseProvider(),
+                        config.getBrokerClientSslProvider()));
         if (config.isBrokerClientTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
                     .keyStoreType(config.getBrokerClientTlsKeyStoreType())

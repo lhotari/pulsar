@@ -21,12 +21,15 @@ package org.apache.pulsar.common.util.tls;
 import static org.assertj.core.api.Assertions.assertThat;
 import com.google.common.io.Resources;
 import java.io.File;
+import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.Provider;
 import java.security.Security;
 import java.security.cert.X509Certificate;
+import javax.net.ssl.KeyManager;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.X509KeyManager;
 import org.testng.annotations.Test;
 
 /**
@@ -43,6 +46,9 @@ public class JdkSslContextsTest {
     private static final String RSA_CA = resource("certificate-authority/certs/ca.cert.pem");
     private static final String BROKER_CERT = resource("certificate-authority/server-keys/broker.cert.pem");
     private static final String BROKER_KEY = resource("certificate-authority/server-keys/broker.key-pk8.pem");
+    // EC identity, so a two-entry keystore holds two distinct key types (RSA + EC).
+    private static final String EC_CERT = resource("certificate-authority/ec/client.cert.pem");
+    private static final String EC_KEY = resource("certificate-authority/ec/client.key-pk8.pem");
 
     // With a client key present (cert + key non-null) setupKeyManager builds a KeyManagerFactory; FIX 5 pins it
     // to the resolved provider. SunJSSE supplies the default KMF algorithm, so the build succeeds and the whole
@@ -110,5 +116,41 @@ public class JdkSslContextsTest {
         assertThat(JdkSslContexts.supportedAlgorithm(sunjsse, "KeyManagerFactory",
                 KeyManagerFactory.getDefaultAlgorithm(), "PKIX"))
                 .isEqualTo(KeyManagerFactory.getDefaultAlgorithm());
+    }
+
+    // PIP-478 (multi-alias FIX): a KeyManagerFactory built from a keystore that holds two identities of
+    // different key types (RSA + EC) must expose an alias for EACH, so JSSE can select one by the peer's
+    // requested key type / acceptable issuers. The pre-fix path extracted only the first alias, which fails
+    // whenever the peer requires the other identity.
+    @Test
+    public void keyManagerFactoryFromMultiEntryKeystoreExposesEveryKeyType() throws Exception {
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        keyStore.load(null, null);
+        keyStore.setKeyEntry("rsa", PemReader.loadPrivateKeyFromPemFile(BROKER_KEY), new char[0],
+                PemReader.loadCertificatesFromPemFile(BROKER_CERT));
+        keyStore.setKeyEntry("ec", PemReader.loadPrivateKeyFromPemFile(EC_KEY), new char[0],
+                PemReader.loadCertificatesFromPemFile(EC_CERT));
+
+        KeyManagerFactory kmf = JdkSslContexts.createKeyManagerFactory(keyStore, new char[0], null);
+        X509KeyManager km = firstX509KeyManager(kmf.getKeyManagers());
+
+        assertThat(km.getServerAliases("RSA", null)).as("RSA identity is selectable").isNotEmpty();
+        assertThat(km.getServerAliases("EC", null)).as("EC identity is selectable").isNotEmpty();
+        assertThat(km.getClientAliases("RSA", null)).as("RSA identity is selectable as a client").isNotEmpty();
+        assertThat(km.getClientAliases("EC", null)).as("EC identity is selectable as a client").isNotEmpty();
+
+        // The KeyManager[] overload assembles an SSLContext from the multi-alias key managers.
+        SSLContext ctx = JdkSslContexts.createSslContextWithProvider(false,
+                PemReader.loadCertificatesFromPemFile(RSA_CA), kmf.getKeyManagers(), null);
+        assertThat(ctx).isNotNull();
+    }
+
+    private static X509KeyManager firstX509KeyManager(KeyManager[] keyManagers) {
+        for (KeyManager keyManager : keyManagers) {
+            if (keyManager instanceof X509KeyManager x509KeyManager) {
+                return x509KeyManager;
+            }
+        }
+        throw new AssertionError("no X509KeyManager produced");
     }
 }

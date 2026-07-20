@@ -55,6 +55,8 @@ import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import javax.security.auth.login.LoginException;
 import lombok.CustomLog;
 import lombok.SneakyThrows;
@@ -163,9 +165,11 @@ public class AuthenticationSasl
      * A {@link HttpChallengeTransport} backed by this plugin's own JAX-RS {@link Client} (created in
      * {@link #start()}) — the faithful transport for the admin-path SASL warmup, matching what
      * {@code authenticationStage(...)} does today. Each round is a bodiless {@code GET} to the original URI.
-     * The per-request {@code timeout} is not applied to the JAX-RS request itself (the JAX-RS client is
-     * created with default, unbounded timeouts); the driver bounds each round's future with the remaining
-     * exchange budget, so a peer that accepts the connection but never responds cannot hang the exchange.
+     * The JAX-RS client itself is created with default, unbounded timeouts, so the per-request {@code timeout}
+     * is enforced here by bounding the returned future ({@link CompletableFuture#orTimeout}) AND cancelling the
+     * underlying JAX-RS {@link Future} on timeout/failure — the request is bounded, so a peer that accepts the
+     * connection but never responds cannot leak an in-flight request (fd/socket exhaustion) across retries. A
+     * response that arrives after the future already timed out is closed rather than leaked.
      */
     private final class JaxRsChallengeTransport implements HttpChallengeTransport {
         @Override
@@ -178,15 +182,27 @@ public class AuthenticationSasl
                 }
                 Builder builder = c.target(uri).request(MediaType.APPLICATION_JSON);
                 requestHeaders.asMap().forEach(builder::header);
-                builder.async().get(new InvocationCallback<Response>() {
+                Future<Response> responseFuture = builder.async().get(new InvocationCallback<Response>() {
                     @Override
                     public void completed(Response response) {
-                        future.complete(new Result(response.getStatus(), toHeaders(response)));
+                        // A late response (future already timed out/cancelled) would leak its connection; close it.
+                        if (!future.complete(new Result(response.getStatus(), toHeaders(response)))) {
+                            response.close();
+                        }
                     }
 
                     @Override
                     public void failed(Throwable throwable) {
                         future.completeExceptionally(throwable);
+                    }
+                });
+                if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
+                    future.orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS);
+                }
+                // Cancel the unbounded JAX-RS request on timeout/failure so its socket is released, not leaked.
+                future.whenComplete((result, throwable) -> {
+                    if (!responseFuture.isDone()) {
+                        responseFuture.cancel(true);
                     }
                 });
             } catch (Throwable t) {

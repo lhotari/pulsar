@@ -26,12 +26,13 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import java.security.KeyStore;
 import java.security.Provider;
-import java.security.cert.Certificate;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import lombok.CustomLog;
@@ -107,7 +108,12 @@ public final class TlsContexts {
         SslContextBuilder builder = SslContextBuilder.forClient();
         applyEngineProvider(builder, policy, provider);
         applyClientTrust(builder, material, policy);
-        if (material.hasKeyMaterial()) {
+        // Keystore material may hold several client identities (e.g. RSA + EC, or identities issued by
+        // different accepted CAs): hand the whole set to a KeyManagerFactory so JSSE selects one by the peer's
+        // requested key type / acceptable issuers. PEM material has a single identity (key + chain).
+        if (material.hasKeyStoreEntries()) {
+            builder.keyManager(buildKeyManagerFactory(material, policy));
+        } else if (material.hasKeyMaterial()) {
             builder.keyManager(material.privateKey(), material.keyCertChainArray());
         }
         applyCiphersAndProtocols(builder, policy);
@@ -130,7 +136,11 @@ public final class TlsContexts {
      */
     static SslContext buildNettyServerContext(TlsMaterial material, TlsPolicy policy, SslProvider provider,
                                               boolean requireTrustedClientCert) throws Exception {
-        SslContextBuilder builder = SslContextBuilder.forServer(material.privateKey(), material.keyCertChainArray());
+        // Keystore material builds the server identity from the whole keystore (multi-alias selection); PEM
+        // material has a single server key + chain.
+        SslContextBuilder builder = material.hasKeyStoreEntries()
+                ? SslContextBuilder.forServer(buildKeyManagerFactory(material, policy))
+                : SslContextBuilder.forServer(material.privateKey(), material.keyCertChainArray());
         applyEngineProvider(builder, policy, provider);
         applyServerTrust(builder, material, policy);
         applyCiphersAndProtocols(builder, policy);
@@ -149,11 +159,29 @@ public final class TlsContexts {
      */
     static SSLContext buildJdkContext(TlsMaterial material, TlsPolicy policy) throws Exception {
         warnInsecureModeOnce(policy);
-        Certificate[] keyCertChain = material.keyCertChainArray();
-        // Honor a pinned jsseProvider (a JSSE java.security.Provider) on the JDK-engine path (the web/Jetty and
-        // fallback consumers), so a FIPS JSSE provider (BCJSSE) builds the SSLContext too (Goal #5).
+        Provider jsseProvider = resolveJsseProvider(policy);
+        // Keystore material builds KeyManagers from the whole keystore so JSSE preserves multi-alias selection;
+        // PEM material has a single key + chain. Honor a pinned jsseProvider (a JSSE java.security.Provider) on
+        // the JDK-engine path (the web/Jetty and fallback consumers), so a FIPS JSSE provider (BCJSSE) builds the
+        // SSLContext — and the KeyManagerFactory — too (Goal #5).
+        if (material.hasKeyStoreEntries()) {
+            KeyManagerFactory kmf = buildKeyManagerFactory(material, policy);
+            return JdkSslContexts.createSslContextWithProvider(policy.allowInsecureConnection(),
+                    material.trustCertsArray(), kmf.getKeyManagers(), jsseProvider);
+        }
         return JdkSslContexts.createSslContextWithProvider(policy.allowInsecureConnection(),
-                material.trustCertsArray(), keyCertChain, material.privateKey(), resolveJsseProvider(policy));
+                material.trustCertsArray(), material.keyCertChainArray(), material.privateKey(), jsseProvider);
+    }
+
+    /**
+     * Build a {@link KeyManagerFactory} from keystore material's full key-entry set (multi-alias selection),
+     * reconstructing an in-memory keystore from the value-typed entries and honoring a pinned
+     * {@code jsseProvider} on the factory (the round-1 provider-negotiated algorithm selection).
+     */
+    private static KeyManagerFactory buildKeyManagerFactory(TlsMaterial material, TlsPolicy policy) throws Exception {
+        KeyStore keyStore = TlsKeyStoreLoader.toInMemoryKeyStore(material.keyEntries());
+        return JdkSslContexts.createKeyManagerFactory(keyStore, TlsKeyStoreLoader.IN_MEMORY_KEY_PASSWORD,
+                resolveJsseProvider(policy));
     }
 
     /**

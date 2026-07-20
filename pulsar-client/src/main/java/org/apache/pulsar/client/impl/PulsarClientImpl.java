@@ -79,6 +79,7 @@ import org.apache.pulsar.client.api.schema.SchemaInfoProvider;
 import org.apache.pulsar.client.api.transaction.TransactionBuilder;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
 import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
+import org.apache.pulsar.client.impl.auth.oauth2.AuthenticationOAuth2;
 import org.apache.pulsar.client.impl.auth.v5.DefaultClientAuthenticationServices;
 import org.apache.pulsar.client.impl.auth.v5.FrameworkHttpClientFactory;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
@@ -408,21 +409,26 @@ public class PulsarClientImpl implements PulsarClient {
     /**
      * Resolve the client-side TLS SPI factory (PIP-478) and stash it on the configuration so the connection
      * pool ({@code PulsarChannelInitializer}) and the HTTP lookup ({@code HttpClient}) build engines from it.
-     * This is the only client TLS path since the PIP-337 removal; it runs only when TLS is enabled
-     * (a plaintext client leaves {@code conf.getTlsFactory()} null, and its transports never request TLS). On
-     * the v5-builder path a fail-fast probe of {@code CLIENT_DEFAULT} runs, so a bad configuration fails the
-     * client build.
+     * This is the only client TLS path since the PIP-337 removal. It normally runs only when broker TLS is
+     * enabled (a plaintext client leaves {@code conf.getTlsFactory()} null, and its transports never request
+     * TLS), with one exception: an OAuth2 plugin whose HTTPS IdP carries its own TLS material still needs the
+     * factory composed so the framework HTTP client resolves the folded {@code CLIENT_OAUTH2} trust — the
+     * broker connection stays plaintext because binary-transport TLS is gated on {@code conf.isUseTls()}
+     * separately. On the v5-builder path a fail-fast probe of {@code CLIENT_DEFAULT} runs, so a
+     * bad configuration fails the client build.
      *
      * @throws PulsarClientException if the TLS factory cannot be built / initialized / probed
      */
     private void setupClientTlsFactory() throws PulsarClientException {
-        if (!conf.isUseTls()) {
-            return;
-        }
         // Rebuildable (PIP-478) only when the framework composes the default file-based factory from the
         // conf tls* fields; a v5-adopted custom factory or an explicit policy map self-manages its material and
-        // must not be rebuilt from the conf fields on an AutoClusterFailover material update.
+        // must not be rebuilt from the conf fields on an AutoClusterFailover material update. Determined even
+        // when no factory is composed now, so a later updateAuthentication that introduces OAuth2 IdP TLS
+        // material (a failover swap from a non-OAuth2 cluster) can still build one.
         this.clientTlsFactoryRebuildable = conf.getTlsFactory() == null && conf.getTlsPolicyMap() == null;
+        if (!conf.isUseTls() && !hasOAuth2IdpTlsMaterial()) {
+            return;
+        }
         try {
             ScheduledExecutorService executor = (ScheduledExecutorService) scheduledExecutorProvider.getExecutor();
             var factory = ClientTlsFactorySupport.resolveClientTlsFactory(conf, executor, executor,
@@ -434,6 +440,20 @@ public class PulsarClientImpl implements PulsarClient {
     }
 
     /**
+     * Whether the configured authentication is an OAuth2 plugin whose HTTPS IdP carries its own TLS material
+     * (private-CA trust or mTLS identity) folded into {@code CLIENT_OAUTH2}. When true the client TLS factory
+     * must be composed even on a plaintext broker connection, so the framework HTTP client that fetches IdP
+     * metadata / tokens honours that trust instead of the platform default (v4 ran an independent OAuth2 client
+     * that honoured IdP TLS regardless of broker TLS). The flow is created during {@code configure()} before
+     * construction, so {@code idpTlsPolicy()} is resolvable here and after an {@link #updateAuthentication} swap.
+     *
+     * @return whether OAuth2 IdP TLS material is present to fold
+     */
+    private boolean hasOAuth2IdpTlsMaterial() {
+        return conf.getAuthentication() instanceof AuthenticationOAuth2 oauth2 && oauth2.idpTlsPolicy().isPresent();
+    }
+
+    /**
      * Rebuild the client TLS factory from the current (just-mutated) {@link ClientConfigurationData} and swap
      * it into the binary connection pool so NEW connections pick up per-target trust roots / TLS identity
      * (PIP-478). Invoked when AutoClusterFailover updates the client's TLS material at runtime
@@ -441,16 +461,18 @@ public class PulsarClientImpl implements PulsarClient {
      * {@link #updateAuthentication}). This is the rebuild-not-mutate counterpart of the once-composed factory:
      * without it the mutation never reaches the transport (a v4-parity regression).
      *
-     * <p>No-op unless TLS is enabled and the factory is the framework-built default (a v5-adopted custom
-     * factory / policy map owns its own material). The superseded factory is retained until the client closes
-     * rather than closed here: existing binary connections keep their already-acquired contexts alive via their
-     * own refcount, and a shared HTTP-lookup subscription may still read the previous factory (the HTTP client's
-     * TLS was fixed at build in v4 too, so it keeps the old material — consistent behaviour). On a rebuild
-     * failure the previous factory is kept so the client stays usable; connections to the new target then fail
-     * loudly at handshake rather than silently using the wrong trust.
+     * <p>No-op unless the factory is the framework-built default (a v5-adopted custom factory / policy map owns
+     * its own material) and either broker TLS is enabled or an OAuth2 plugin carries IdP TLS material to fold —
+     * so a plaintext-broker OAuth2 swap (a different-CA issuer on cluster failover) still recomposes the folded
+     * {@code CLIENT_OAUTH2} trust for the framework HTTP client. The superseded factory is retained until the
+     * client closes rather than closed here: existing binary connections keep their already-acquired contexts
+     * alive via their own refcount, and a shared HTTP-lookup subscription may still read the previous factory
+     * (the HTTP client's TLS was fixed at build in v4 too, so it keeps the old material — consistent
+     * behaviour). On a rebuild failure the previous factory is kept so the client stays usable; connections to
+     * the new target then fail loudly at handshake rather than silently using the wrong trust.
      */
     private void rebuildClientTlsFactory() {
-        if (!conf.isUseTls() || !clientTlsFactoryRebuildable) {
+        if ((!conf.isUseTls() && !hasOAuth2IdpTlsMaterial()) || !clientTlsFactoryRebuildable) {
             return;
         }
         synchronized (tlsFactoryRebuildLock) {
@@ -1451,10 +1473,15 @@ public class PulsarClientImpl implements PulsarClient {
         conf.setAuthentication(authentication);
         // PIP-478: bind framework services into the swapped-in auth before starting it.
         bindAuthenticationServices(conf.getAuthentication());
-        conf.getAuthentication().start();
-        // PIP-478: a swapped-in auth may carry TLS client identity (e.g. AuthenticationTls), so rebuild the
-        // client TLS factory to fold the new identity into connections established after the update.
+        // PIP-478: a swapped-in auth may carry TLS client identity (e.g. AuthenticationTls) or OAuth2 IdP TLS
+        // material, so rebuild the client TLS factory to fold the new material BEFORE start(): start() may
+        // eagerly fetch IdP metadata over the framework HTTP client, which reads conf.getTlsFactory() — a
+        // stale factory would fetch under the OLD (wrong-CA) CLIENT_OAUTH2 trust and leave the new OAuth2 HTTP
+        // client subscribed to the superseded factory. This mirrors the construction path (setupClientTlsFactory
+        // runs before start()). rebuildClientTlsFactory folds idpTlsPolicy from the already-set new
+        // authentication and does not depend on the auth being started.
         rebuildClientTlsFactory();
+        conf.getAuthentication().start();
     }
 
     public void updateTlsTrustCertsFilePath(String tlsTrustCertsFilePath) {

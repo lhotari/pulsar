@@ -21,6 +21,7 @@ package org.apache.pulsar.common.tls.impl;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
+import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
@@ -102,10 +103,21 @@ final class TlsMaterialSource implements MaterialSource {
     }
 
     private TlsMaterial load() throws Exception {
-        PrivateKey privateKey = loadPrivateKey();
-        List<X509Certificate> keyCertChain = loadCertificateChain();
         List<X509Certificate> trustCerts = loadTrustCerts();
-        return new TlsMaterial(privateKey, keyCertChain, trustCerts);
+        // Keystore identity: load the whole store and carry every key entry, so a multi-identity keystore
+        // (e.g. RSA + EC) preserves JSSE alias selection at context build. The single privateKey/keyCertChain
+        // mirror the first entry, keeping hasKeyMaterial() and the value-equality rotation check meaningful.
+        if (StringUtils.isNotBlank(policy.keyStorePath())) {
+            KeyStore keyStore = TlsKeyStoreLoader.loadKeyStore(policy.keyStoreType(), policy.keyStorePath(),
+                    policy.keyStorePassword());
+            List<TlsMaterial.KeyEntry> entries =
+                    TlsKeyStoreLoader.extractKeyEntries(keyStore, policy.keyStorePassword());
+            TlsMaterial.KeyEntry first = entries.isEmpty() ? null : entries.get(0);
+            PrivateKey privateKey = first == null ? null : first.privateKey();
+            List<X509Certificate> keyCertChain = first == null ? List.of() : first.chain();
+            return new TlsMaterial(privateKey, keyCertChain, trustCerts, entries);
+        }
+        return new TlsMaterial(loadPemPrivateKey(), loadPemCertificateChain(), trustCerts);
     }
 
     private List<X509Certificate> loadTrustCerts() throws Exception {
@@ -120,22 +132,14 @@ final class TlsMaterialSource implements MaterialSource {
         return List.of();
     }
 
-    private PrivateKey loadPrivateKey() throws Exception {
-        if (StringUtils.isNotBlank(policy.keyStorePath())) {
-            return TlsKeyStoreLoader.extractPrivateKey(TlsKeyStoreLoader.loadKeyStore(policy.keyStoreType(),
-                    policy.keyStorePath(), policy.keyStorePassword()), policy.keyStorePassword());
-        }
+    private PrivateKey loadPemPrivateKey() throws Exception {
         if (StringUtils.isNotBlank(policy.keyFilePath())) {
             return PemReader.loadPrivateKeyFromPemFile(policy.keyFilePath());
         }
         return null;
     }
 
-    private List<X509Certificate> loadCertificateChain() throws Exception {
-        if (StringUtils.isNotBlank(policy.keyStorePath())) {
-            return TlsKeyStoreLoader.extractCertificateChain(TlsKeyStoreLoader.loadKeyStore(policy.keyStoreType(),
-                    policy.keyStorePath(), policy.keyStorePassword()));
-        }
+    private List<X509Certificate> loadPemCertificateChain() throws Exception {
         if (StringUtils.isNotBlank(policy.certificateFilePath())) {
             X509Certificate[] certs = PemReader.loadCertificatesFromPemFile(policy.certificateFilePath());
             return certs == null ? List.of() : List.of(certs);

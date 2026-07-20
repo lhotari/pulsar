@@ -20,6 +20,8 @@ package org.apache.pulsar.jetty.tls;
 
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
@@ -68,8 +70,17 @@ import org.eclipse.jetty.util.ssl.SslContextFactory;
  * <b>never joined on the delivery thread</b>. Joining there would self-deadlock a custom factory that dispatches
  * companion creation to the same single-thread scheduler that runs the poll delivery — the exact hazard
  * {@code TlsContextAcquisition.SynthesizingSubscription} avoids by composing the companion asynchronously.
- * Consumer defaults are re-applied first inside every {@code reload(...)} lambda, so a companion member dropped
- * by a later delivery (notably client-auth) reverts to the consumer default rather than staying stuck from the
+ *
+ * <p>Because those asynchronous re-requests complete on arbitrary threads and may finish out of order, the
+ * synthesized reload mirrors the two ordering guarantees of {@code SynthesizingSubscription} (see
+ * {@code JettyReloadCoordinator}): each delivery captures a strictly increasing <em>generation</em> and applies
+ * its {@code reload(...)} only while that generation is still the latest, so a companion superseded by a newer
+ * rotation is dropped rather than pinning the listener to a stale context/baseline; and the last
+ * successfully-resolved companion is <em>retained</em> (seeded from the build-time baseline) so a transient
+ * companion-fetch failure during rotation reloads with that last-good baseline rather than downgrading engine
+ * policy (protocols/ciphers and, server side, client-auth) to consumer defaults. Consumer defaults are still
+ * re-applied first inside every {@code reload(...)} lambda, so a companion member legitimately dropped by a
+ * newer delivery (notably client-auth) reverts to the consumer default rather than staying stuck from the
  * previous companion. {@code empty()} leaves the consumer's configuration in force, exactly as before.
  */
 @CustomLog
@@ -139,50 +150,33 @@ public final class JettyTlsFactory {
         }
 
         SslContextFactory.Server sslContextFactory = new SslContextFactory.Server();
-        // Consumer config plus the factory's engine-policy companion (if any), before start.
-        configureServerBaseline(sslContextFactory, factory, purpose, sslProviderString, requireTrustedClientCert,
-                allowInsecureConnection, ciphers, protocols);
+        // Consumer config plus the factory's engine-policy companion (if any), before start. The resolved
+        // companion seeds the coordinator's last-good baseline so a companion-fetch failure on the very first
+        // rotation retains it rather than downgrading to consumer defaults.
+        SSLParameters initialBaseline = configureServerBaseline(sslContextFactory, factory, purpose,
+                sslProviderString, requireTrustedClientCert, allowInsecureConnection, ciphers, protocols);
 
-        Consumer<SSLContext> onLoadOrReload = newContext -> {
-            if (sslContextFactory.isStarted()) {
-                // Rotation delivery. Re-request the companion so protocols, cipher suites, and the server
-                // client-auth mode rotate with material (pip-478.md:736), symmetric with the Netty path — but
-                // resolve it ASYNCHRONOUSLY, off this delivery thread. Joining here would self-deadlock a custom
-                // factory that dispatches companion creation to the same single-thread scheduler that runs this
-                // callback (the hazard TlsContextAcquisition.SynthesizingSubscription avoids). Only once the
-                // companion has resolved do we reload under Jetty's lock.
-                factory.createInstance(purpose, SSLParameters.class).whenComplete((companion, err) -> {
-                    SSLParameters baseline = err == null ? extractBaseline(companion) : null;
-                    try {
-                        sslContextFactory.reload(f -> {
-                            SslContextFactory.Server server = (SslContextFactory.Server) f;
-                            server.setSslContext(newContext);
-                            // Re-apply the consumer defaults first so a companion member dropped by this delivery
-                            // (notably client-auth) reverts to the consumer default rather than staying stuck from
-                            // the previous companion, then overlay the already-resolved companion.
-                            applyServerConfig(server, sslProviderString, requireTrustedClientCert,
-                                    allowInsecureConnection, ciphers, protocols);
-                            if (baseline != null) {
-                                applyServerBaseline(server, baseline);
-                            }
-                        });
-                    } catch (Exception e) {
-                        log.warn().attr("purpose", purpose).exception(e)
-                                .log("Failed to reload Jetty SslContextFactory; keeping the running context");
+        // Each rotation re-requests the companion asynchronously (off the delivery thread) and applies it under
+        // a generation guard so an out-of-order companion cannot pin a stale context, retaining the last-good
+        // baseline across a transient companion failure. See JettyReloadCoordinator.
+        JettyReloadCoordinator coordinator = new JettyReloadCoordinator(factory, purpose, sslContextFactory,
+                initialBaseline, (newContext, baseline) -> {
+                    sslContextFactory.setSslContext(newContext);
+                    // Re-apply the consumer defaults first so a companion member dropped by this delivery
+                    // (notably client-auth) reverts to the consumer default rather than staying stuck from the
+                    // previous companion, then overlay the generation-guarded, last-good companion.
+                    applyServerConfig(sslContextFactory, sslProviderString, requireTrustedClientCert,
+                            allowInsecureConnection, ciphers, protocols);
+                    if (baseline != null) {
+                        applyServerBaseline(sslContextFactory, baseline);
                     }
                 });
-            } else {
-                // Initial load (or a reload before the connector started): set directly before start. The initial
-                // companion was already overlaid at build (configureServerBaseline), so the built factory is ready
-                // before subscribe completes — mirroring SynthesizingSubscription's pre-fetched first delivery.
-                sslContextFactory.setSslContext(newContext);
-            }
-        };
 
-        TlsHandle<SSLContext> subscription = factory.createInstance(purpose, SSLContext.class, onLoadOrReload)
-                .join()
-                .orElseThrow(() -> new IllegalStateException(
-                        "TLS factory supplied no SSLContext for purpose " + purpose));
+        TlsHandle<SSLContext> subscription =
+                factory.createInstance(purpose, SSLContext.class, coordinator::onDelivery)
+                        .join()
+                        .orElseThrow(() -> new IllegalStateException(
+                                "TLS factory supplied no SSLContext for purpose " + purpose));
         return new ReloadableServerTls(sslContextFactory, subscription);
     }
 
@@ -227,8 +221,8 @@ public final class JettyTlsFactory {
             client.setProvider(sslProviderString);
         }
         // Pin the {TLSv1.3, TLSv1.2} floor and overlay the factory's engine-policy companion (if any), before
-        // start.
-        configureClientBaseline(client, factory, purpose);
+        // start; the resolved companion seeds the coordinator's last-good baseline (see the Server variant).
+        SSLParameters initialBaseline = configureClientBaseline(client, factory, purpose);
         // Hostname verification is a consumer (proxy) concern on the synthesized path: disable endpoint
         // identification when the consumer has it off (a native factory, handled above, owns this itself). This
         // is a per-consumer setting applied once at build, not part of the per-delivery companion overlay.
@@ -236,42 +230,25 @@ public final class JettyTlsFactory {
             client.setEndpointIdentificationAlgorithm(null);
         }
 
-        Consumer<SSLContext> onLoadOrReload = newContext -> {
-            if (client.isStarted()) {
-                // Rotation delivery. Re-request the companion so protocols/ciphers rotate with material
-                // (pip-478.md:736; client-auth is a server concept, endpoint identification stays as set at
-                // build) — but resolve it ASYNCHRONOUSLY, off this delivery thread, never joined here (the
-                // self-deadlock hazard, see the Server variant / SynthesizingSubscription). Only once the
-                // companion has resolved do we reload under Jetty's lock.
-                factory.createInstance(purpose, SSLParameters.class).whenComplete((companion, err) -> {
-                    SSLParameters baseline = err == null ? extractBaseline(companion) : null;
-                    try {
-                        client.reload(f -> {
-                            SslContextFactory.Client c = (SslContextFactory.Client) f;
-                            c.setSslContext(newContext);
-                            // Re-pin the {TLSv1.3, TLSv1.2} floor first (the consumer default), then overlay the
-                            // already-resolved companion so a dropped companion reverts to that floor.
-                            c.setIncludeProtocols(TlsContexts.DEFAULT_ENABLED_PROTOCOLS.toArray(new String[0]));
-                            if (baseline != null) {
-                                applyClientBaseline(c, baseline);
-                            }
-                        });
-                    } catch (Exception e) {
-                        log.warn().attr("purpose", purpose).exception(e)
-                                .log("Failed to reload Jetty client SslContextFactory; keeping the running context");
+        // Rotations re-request the companion asynchronously (off the delivery thread) and apply it under a
+        // generation guard, retaining the last-good baseline across a transient companion failure (client-auth
+        // is a server concept; endpoint identification stays as set at build). See JettyReloadCoordinator.
+        JettyReloadCoordinator coordinator = new JettyReloadCoordinator(factory, purpose, client, initialBaseline,
+                (newContext, baseline) -> {
+                    client.setSslContext(newContext);
+                    // Re-pin the {TLSv1.3, TLSv1.2} floor first (the consumer default), then overlay the
+                    // generation-guarded, last-good companion so a dropped companion reverts to that floor.
+                    client.setIncludeProtocols(TlsContexts.DEFAULT_ENABLED_PROTOCOLS.toArray(new String[0]));
+                    if (baseline != null) {
+                        applyClientBaseline(client, baseline);
                     }
                 });
-            } else {
-                // Initial load (or a reload before the client started): set directly before start. The initial
-                // companion was already overlaid at build (configureClientBaseline).
-                client.setSslContext(newContext);
-            }
-        };
 
-        TlsHandle<SSLContext> subscription = factory.createInstance(purpose, SSLContext.class, onLoadOrReload)
-                .join()
-                .orElseThrow(() -> new IllegalStateException(
-                        "TLS factory supplied no SSLContext for purpose " + purpose));
+        TlsHandle<SSLContext> subscription =
+                factory.createInstance(purpose, SSLContext.class, coordinator::onDelivery)
+                        .join()
+                        .orElseThrow(() -> new IllegalStateException(
+                                "TLS factory supplied no SSLContext for purpose " + purpose));
         return new ReloadableClientTls(client, subscription);
     }
 
@@ -279,31 +256,44 @@ public final class JettyTlsFactory {
      * Apply the consumer config, then overlay the factory's engine-policy companion, onto a synthesized server
      * factory — at build time only (off any event loop; the companion is joined here). Each subsequent rotation
      * delivery re-requests the companion asynchronously and re-applies it inside the {@code reload(...)} lambda
-     * (see {@code onLoadOrReload}), never joined on the delivery thread.
+     * (see {@link JettyReloadCoordinator}), never joined on the delivery thread.
+     *
+     * @return the resolved companion baseline, or {@code null} when the factory supplied none — used to seed the
+     *         coordinator's retained last-good baseline.
      */
-    private static void configureServerBaseline(SslContextFactory.Server sslContextFactory, PulsarTlsFactory factory,
-                                                TlsPurpose purpose, String sslProviderString,
-                                                boolean requireTrustedClientCert, boolean allowInsecureConnection,
-                                                Set<String> ciphers, Set<String> protocols) {
+    private static SSLParameters configureServerBaseline(SslContextFactory.Server sslContextFactory,
+                                                         PulsarTlsFactory factory, TlsPurpose purpose,
+                                                         String sslProviderString, boolean requireTrustedClientCert,
+                                                         boolean allowInsecureConnection, Set<String> ciphers,
+                                                         Set<String> protocols) {
         applyServerConfig(sslContextFactory, sslProviderString, requireTrustedClientCert, allowInsecureConnection,
                 ciphers, protocols);
-        resolveBaselineParameters(factory, purpose)
-                .ifPresent(baseline -> applyServerBaseline(sslContextFactory, baseline));
+        SSLParameters baseline = resolveBaselineParameters(factory, purpose).orElse(null);
+        if (baseline != null) {
+            applyServerBaseline(sslContextFactory, baseline);
+        }
+        return baseline;
     }
 
     /**
      * Pin the {@code {TLSv1.3, TLSv1.2}} floor, then overlay the factory companion's protocols/ciphers, onto a
      * synthesized client factory — at build time only (off any event loop; the companion is joined here). Each
      * subsequent rotation delivery re-requests the companion asynchronously and re-pins the floor + overlays it
-     * inside the {@code reload(...)} lambda (see {@code onLoadOrReload}), never joined on the delivery thread.
-     * Client-auth is a server concept and is not mapped here; endpoint identification is a per-consumer setting
-     * applied once at build.
+     * inside the {@code reload(...)} lambda (see {@link JettyReloadCoordinator}), never joined on the delivery
+     * thread. Client-auth is a server concept and is not mapped here; endpoint identification is a per-consumer
+     * setting applied once at build.
+     *
+     * @return the resolved companion baseline, or {@code null} when the factory supplied none — used to seed the
+     *         coordinator's retained last-good baseline.
      */
-    private static void configureClientBaseline(SslContextFactory.Client client, PulsarTlsFactory factory,
-                                                TlsPurpose purpose) {
+    private static SSLParameters configureClientBaseline(SslContextFactory.Client client, PulsarTlsFactory factory,
+                                                         TlsPurpose purpose) {
         client.setIncludeProtocols(TlsContexts.DEFAULT_ENABLED_PROTOCOLS.toArray(new String[0]));
-        resolveBaselineParameters(factory, purpose)
-                .ifPresent(baseline -> applyClientBaseline(client, baseline));
+        SSLParameters baseline = resolveBaselineParameters(factory, purpose).orElse(null);
+        if (baseline != null) {
+            applyClientBaseline(client, baseline);
+        }
+        return baseline;
     }
 
     private static void applyServerConfig(SslContextFactory.Server sslContextFactory, String sslProviderString,
@@ -369,7 +359,8 @@ public final class JettyTlsFactory {
      * Request the factory's optional {@code SSLParameters} companion for a purpose (one-shot) at factory-build
      * time, joining off any event loop, and return the supplied instance or {@link Optional#empty()} when the
      * factory supplies none. Rotation deliveries do NOT use this: they re-request the companion asynchronously
-     * inside {@code onLoadOrReload} (never joined on the delivery thread) and unwrap it via {@link #extractBaseline}.
+     * inside {@link JettyReloadCoordinator} (never joined on the delivery thread) and unwrap it via
+     * {@link #extractBaseline}.
      */
     private static Optional<SSLParameters> resolveBaselineParameters(PulsarTlsFactory factory, TlsPurpose purpose) {
         return Optional.ofNullable(extractBaseline(factory.createInstance(purpose, SSLParameters.class).join()));
@@ -379,7 +370,7 @@ public final class JettyTlsFactory {
      * Unwrap the factory's {@code SSLParameters} companion from its handle, disposing the handle afterwards (a
      * companion carries no reference-counted state). Returns {@code null} when the factory supplied none
      * ({@link Optional#empty()}). Used both by the build-time {@link #resolveBaselineParameters} and by the
-     * asynchronous per-rotation re-request in {@code onLoadOrReload}.
+     * asynchronous per-rotation re-request in {@link JettyReloadCoordinator}.
      */
     private static SSLParameters extractBaseline(Optional<TlsHandle<SSLParameters>> handle) {
         if (handle.isEmpty()) {
@@ -426,6 +417,97 @@ public final class JettyTlsFactory {
         }
         if (baseline.getCipherSuites() != null) {
             client.setIncludeCipherSuites(baseline.getCipherSuites());
+        }
+    }
+
+    /**
+     * Per-subscription reload coordinator for the synthesized Jetty paths. It ports the two ordering guarantees
+     * of {@code TlsContextAcquisition.SynthesizingSubscription} to Jetty's hot-reload API, which the naive
+     * "compose {@code createInstance(SSLParameters)} then {@code reload}" delivery lacked:
+     *
+     * <ul>
+     *   <li><b>Generation guard.</b> Each delivery captures a strictly increasing generation (deliveries are
+     *       serial per subscription, per the SPI contract). A rotation's companion re-request is composed
+     *       asynchronously and may complete on an arbitrary thread and out of order, so its {@code reload(...)}
+     *       is applied — under a lock — only while its generation is still the latest; a companion superseded
+     *       by a newer rotation is dropped rather than pinning the listener to a stale context/baseline.</li>
+     *   <li><b>Last-good baseline retention.</b> The last successfully-resolved companion is retained (seeded
+     *       from the build-time baseline). A transient companion-fetch failure during rotation reloads with that
+     *       last-good baseline rather than consumer defaults, so it cannot silently drop protocols/ciphers or
+     *       (server side) client-auth. The retained baseline is updated only for a successfully-resolved,
+     *       non-superseded companion, under the same lock.</li>
+     * </ul>
+     *
+     * <p>The companion is never joined on the delivery thread (the self-deadlock hazard described on the class
+     * javadoc); the initial delivery sets the already-overlaid context directly before start, mirroring
+     * {@code SynthesizingSubscription}'s pre-fetched first delivery.
+     */
+    private static final class JettyReloadCoordinator {
+
+        private final PulsarTlsFactory factory;
+        private final TlsPurpose purpose;
+        private final SslContextFactory target;
+        // Applies the rotated context + (nullable) companion baseline inside Jetty's reload lambda.
+        private final BiConsumer<SSLContext, SSLParameters> applyReload;
+        // Last successfully-resolved companion, seeded from the pre-fetched build-time baseline. Retained across
+        // a transient companion-fetch failure so a rotation cannot silently downgrade engine policy.
+        private volatile SSLParameters lastBaseline;
+        private final AtomicLong deliveryGeneration = new AtomicLong();
+        private long lastPublishedGeneration;
+
+        JettyReloadCoordinator(PulsarTlsFactory factory, TlsPurpose purpose, SslContextFactory target,
+                               SSLParameters initialBaseline, BiConsumer<SSLContext, SSLParameters> applyReload) {
+            this.factory = factory;
+            this.purpose = purpose;
+            this.target = target;
+            this.lastBaseline = initialBaseline;
+            this.applyReload = applyReload;
+        }
+
+        // Serial per subscription (SPI contract), so each delivery gets a strictly increasing generation.
+        void onDelivery(SSLContext newContext) {
+            long generation = deliveryGeneration.incrementAndGet();
+            if (!target.isStarted()) {
+                // Initial load (or a reload before the connector/client started): set directly before start. The
+                // initial companion was already overlaid at build and seeds lastBaseline, so the built factory is
+                // ready before subscribe completes — mirroring SynthesizingSubscription's pre-fetched first
+                // delivery.
+                target.setSslContext(newContext);
+                return;
+            }
+            // Rotation delivery. Re-request the companion so engine policy rotates WITH the material
+            // (pip-478.md:736), resolved ASYNCHRONOUSLY off this delivery thread and never joined here (the
+            // self-deadlock hazard). The generation guard in publish drops a superseded companion; the last-good
+            // baseline is maintained there, never here, so a superseded companion completing late cannot regress
+            // it.
+            factory.createInstance(purpose, SSLParameters.class).whenComplete((companion, err) ->
+                    publish(newContext, err != null ? null : extractBaseline(companion), generation, err == null));
+        }
+
+        // Apply the reload for `generation`, dropping a result already superseded by a newer delivery.
+        // Synchronized because rotation companions may complete on arbitrary threads and out of order; the guard
+        // keeps the applied context, the reload callback, AND the retained last-good baseline monotonic in
+        // delivery order.
+        private synchronized void publish(SSLContext newContext, SSLParameters baseline, long generation,
+                                          boolean baselineResolved) {
+            if (generation < lastPublishedGeneration) {
+                return;
+            }
+            lastPublishedGeneration = generation;
+            if (baselineResolved) {
+                lastBaseline = baseline;
+            } else {
+                // A transient companion-fetch failure must not downgrade engine policy: reload with the last-good
+                // baseline, read under the same guard so a stale companion can never have regressed it.
+                baseline = lastBaseline;
+            }
+            final SSLParameters effectiveBaseline = baseline;
+            try {
+                target.reload(f -> applyReload.accept(newContext, effectiveBaseline));
+            } catch (Exception e) {
+                log.warn().attr("purpose", purpose).exception(e)
+                        .log("Failed to reload Jetty SslContextFactory; keeping the running context");
+            }
         }
     }
 }

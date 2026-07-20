@@ -26,7 +26,6 @@ import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.Provider;
 import java.security.SecureRandom;
-import java.security.UnrecoverableKeyException;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import javax.net.ssl.KeyManager;
@@ -95,42 +94,82 @@ public final class JdkSslContexts {
                                                           Certificate[] trustCertficates, Certificate[] certificates,
                                                           PrivateKey privateKey, Provider provider)
             throws GeneralSecurityException {
+        KeyManager[] keyManagers = setupKeyManager(privateKey, certificates, provider);
+        return assembleSslContext(allowInsecureConnection, trustCertficates, keyManagers, provider);
+    }
+
+    /**
+     * Assemble a JDK {@link SSLContext} from already-built {@link KeyManager}s (the keystore multi-alias path):
+     * the caller has built the {@code KeyManager}s from a whole keystore via {@link #createKeyManagerFactory}
+     * so JSSE can select an alias by the peer's requested key type / acceptable issuers, rather than being
+     * pinned to a single private key. The trust side is set up exactly as the single-key overload.
+     *
+     * @param allowInsecureConnection whether to trust all certificates (insecure)
+     * @param trustCertficates        the trusted CA certificates (may be null/empty)
+     * @param keyManagers             the pre-built key managers (may be null when no client/server identity)
+     * @param provider                the resolved JSSE provider, or {@code null} for the platform default
+     * @return the assembled JDK {@link SSLContext}
+     * @throws GeneralSecurityException if the context cannot be assembled
+     */
+    public static SSLContext createSslContextWithProvider(boolean allowInsecureConnection,
+                                                          Certificate[] trustCertficates, KeyManager[] keyManagers,
+                                                          Provider provider)
+            throws GeneralSecurityException {
+        return assembleSslContext(allowInsecureConnection, trustCertficates, keyManagers, provider);
+    }
+
+    private static SSLContext assembleSslContext(boolean allowInsecureConnection, Certificate[] trustCertficates,
+                                                 KeyManager[] keyManagers, Provider provider)
+            throws GeneralSecurityException {
         KeyStoreHolder ksh = new KeyStoreHolder();
-
         TrustManager[] trustManagers = setupTrustCerts(ksh, allowInsecureConnection, trustCertficates, provider);
-        KeyManager[] keyManagers = setupKeyManager(ksh, privateKey, certificates, provider);
-
         SSLContext sslCtx = provider != null ? SSLContext.getInstance("TLS", provider)
                 : SSLContext.getInstance("TLS");
         sslCtx.init(keyManagers, trustManagers, new SecureRandom());
         return sslCtx;
     }
 
-    private static KeyManager[] setupKeyManager(KeyStoreHolder ksh, PrivateKey privateKey, Certificate[] certificates,
-                                                Provider provider)
-            throws KeyStoreException, NoSuchAlgorithmException, UnrecoverableKeyException {
-        KeyManager[] keyManagers = null;
-        if (certificates != null && privateKey != null) {
-            ksh.setPrivateKey("private", privateKey, certificates);
-            // Prefer a KeyManagerFactory from the resolved provider, so a configured jsseProvider (a FIPS
-            // JSSE provider such as BCJSSE) also backs the private-key side. The algorithm must be
-            // negotiated: BCJSSE registers X.509 (with X509/PKIX aliases) but NOT the JDK's default
-            // "SunX509", and a provider with no KeyManagerFactory service at all (e.g. Conscrypt) falls
-            // back to the platform default factory — the pinned provider still supplies the SSLContext,
-            // which consumes standard X509KeyManagers.
-            KeyManagerFactory kmf;
-            if (provider != null) {
-                String algorithm = supportedAlgorithm(provider, "KeyManagerFactory",
-                        KeyManagerFactory.getDefaultAlgorithm(), "PKIX");
-                kmf = algorithm != null ? KeyManagerFactory.getInstance(algorithm, provider)
-                        : KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-            } else {
-                kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-            }
-            kmf.init(ksh.getKeyStore(), "".toCharArray());
-            keyManagers = kmf.getKeyManagers();
+    /**
+     * Build a {@link KeyManagerFactory} from an initialized {@link KeyStore}, negotiating the algorithm against
+     * a pinned {@code jsseProvider}. Preferring the provider's factory keeps a configured FIPS JSSE provider
+     * (e.g. BCJSSE) backing the private-key side; the algorithm must be negotiated because BCJSSE registers
+     * X.509 (with X509/PKIX aliases) but NOT the JDK's default "SunX509", and a provider with no
+     * {@code KeyManagerFactory} service at all (e.g. Conscrypt) falls back to the platform default factory —
+     * the pinned provider still supplies the {@code SSLContext}, which consumes standard X509KeyManagers.
+     *
+     * <p>Because the whole keystore is handed to the factory, the resulting {@code KeyManager}s expose every
+     * alias, so JSSE selects an identity by the peer's requested key type / acceptable issuers instead of being
+     * pinned to a single entry.
+     *
+     * @param keyStore    the initialized keystore holding one or more key entries
+     * @param keyPassword the password the key entries are stored under
+     * @param provider    the resolved JSSE provider, or {@code null} for the platform default
+     * @return the initialized {@link KeyManagerFactory}
+     * @throws GeneralSecurityException if the factory cannot be built or initialized
+     */
+    public static KeyManagerFactory createKeyManagerFactory(KeyStore keyStore, char[] keyPassword, Provider provider)
+            throws GeneralSecurityException {
+        KeyManagerFactory kmf;
+        if (provider != null) {
+            String algorithm = supportedAlgorithm(provider, "KeyManagerFactory",
+                    KeyManagerFactory.getDefaultAlgorithm(), "PKIX");
+            kmf = algorithm != null ? KeyManagerFactory.getInstance(algorithm, provider)
+                    : KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        } else {
+            kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
         }
-        return keyManagers;
+        kmf.init(keyStore, keyPassword);
+        return kmf;
+    }
+
+    private static KeyManager[] setupKeyManager(PrivateKey privateKey, Certificate[] certificates, Provider provider)
+            throws GeneralSecurityException {
+        if (certificates == null || privateKey == null) {
+            return null;
+        }
+        KeyStoreHolder ksh = new KeyStoreHolder();
+        ksh.setPrivateKey("private", privateKey, certificates);
+        return createKeyManagerFactory(ksh.getKeyStore(), "".toCharArray(), provider).getKeyManagers();
     }
 
     /**
