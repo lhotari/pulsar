@@ -38,8 +38,9 @@ import org.apache.pulsar.tls.TlsPurpose;
  *
  * <p>It lives in {@code pulsar-broker-common} — which owns the Jetty integration and the broker
  * configuration — so that neither the SPI module nor {@code pulsar-common} carries broker-config
- * knowledge. The class only <em>composes</em> the map; wiring it into the broker/proxy/web services is
- * a later stage.
+ * knowledge. The factory is composed from a {@link ServiceConfiguration} (optionally folding the
+ * broker's broker-client authentication TLS material over the {@link TlsPurpose#BROKER_CLIENT} purpose)
+ * and consumed by the broker listener, web service and proxy.
  */
 public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
 

@@ -216,7 +216,9 @@ public class PulsarClientTool implements CommandHook {
      * an explicit {@code tlsEnableHostnameVerification=false} in the conf still opts out. When
      * {@code useKeyStoreTls=true}, the v4 keystore keys ({@code tlsTrustStorePath},
      * {@code tlsKeyStorePath}, ...) map onto a {@link TlsPolicy.Format#KEYSTORE} policy instead
-     * of the PEM paths.
+     * of the PEM paths. The {@code jsseProvider} conf key is honored in both formats so a
+     * FIPS/provider-specific endpoint (e.g. {@code BCJSSE}) is not silently served by the
+     * platform provider.
      */
     @VisibleForTesting
     void applyTlsPolicy(PulsarClientBuilder clientBuilder, String serviceUrl, Properties properties) {
@@ -257,6 +259,11 @@ public class PulsarClientTool implements CommandHook {
             if (isNotBlank(keyFile)) {
                 tls.keyFilePath(keyFile);
             }
+        }
+        // Format-independent: the JSSE (SSLContext) provider applies to both PEM and KEYSTORE.
+        String jsseProvider = properties.getProperty("jsseProvider");
+        if (isNotBlank(jsseProvider)) {
+            tls.jsseProvider(jsseProvider);
         }
         clientBuilder.tlsPolicy(tls.build());
     }

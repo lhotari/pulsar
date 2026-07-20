@@ -352,6 +352,15 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
         TlsPolicy.Builder b = copyFlags(base).format(TlsPolicy.Format.PEM);
         if (base != null && base.format() == TlsPolicy.Format.PEM) {
             b.trustCertsFilePath(base.trustCertsFilePath());
+        } else if (base != null && isNotBlank(base.trustStorePath())) {
+            // Cross-format fold: the tlsPolicy(...) carries a keystore truststore but the auth plugin's client
+            // identity is PEM. A PEM policy has no truststore field, so folding here would silently drop the
+            // configured trust anchors and fall back to the system trust store. Fail loud (matching
+            // TlsPolicy.build()'s fail-loud format validation) rather than silently broadening/breaking trust.
+            throw new IllegalArgumentException("Cross-format TLS material: tlsPolicy(...) configures a keystore "
+                    + "truststore (trustStorePath) but the authentication plugin supplies a PEM client "
+                    + "certificate/key. Folding these would silently drop the configured truststore. Configure the "
+                    + "trust material and the client identity in the same format (both PEM, or both keystore).");
         }
         return b;
     }
@@ -366,6 +375,16 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
             b.trustStorePath(base.trustStorePath())
                     .trustStorePassword(base.trustStorePassword())
                     .trustStoreType(base.trustStoreType());
+        } else if (base != null && isNotBlank(base.trustCertsFilePath())) {
+            // Cross-format fold: the tlsPolicy(...) carries a PEM truststore (trustCertsFilePath) but the auth
+            // plugin's client identity is a keystore. A keystore policy has no PEM trust field, so folding here
+            // would silently drop the configured trust anchors and fall back to the system trust store. Fail loud
+            // (matching TlsPolicy.build()'s fail-loud format validation) rather than silently broadening/breaking
+            // trust.
+            throw new IllegalArgumentException("Cross-format TLS material: tlsPolicy(...) configures a PEM "
+                    + "truststore (trustCertsFilePath) but the authentication plugin supplies a keystore client "
+                    + "certificate/key. Folding these would silently drop the configured truststore. Configure the "
+                    + "trust material and the client identity in the same format (both PEM, or both keystore).");
         }
         return b;
     }

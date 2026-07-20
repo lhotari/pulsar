@@ -134,6 +134,23 @@ public class HttpAuthenticationDriverTest {
     }
 
     @Test
+    public void hangingChallengeEvaluationIsBoundedByTheRemainingBudget() {
+        FakeChallengeAuth auth = new FakeChallengeAuth();
+        auth.hangOnRespond = true; // the plugin's challenge evaluation never completes
+        FakeTransport transport = new FakeTransport();
+        transport.always(ok("RT")); // the transport would answer instantly, but the round never reaches it
+
+        assertThatThrownBy(() -> new HttpAuthenticationDriver(auth, null, null)
+                .authenticateAsync(URI_A, transport, Duration.ofMillis(200)).get(10, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(PulsarClientException.AuthenticationException.class)
+                .hasMessageContaining("timed out");
+
+        // The GET is never issued: the hang is in the evaluation stage, before the transport is reached.
+        assertThat(transport.callCount).isZero();
+    }
+
+    @Test
     public void pluginFailurePropagatesWithoutRetry() {
         FakeChallengeAuth auth = new FakeChallengeAuth();
         auth.failOnRound = 2; // round 0 succeeds (-> 401), round 1's respond throws
@@ -206,6 +223,7 @@ public class HttpAuthenticationDriverTest {
             implements Authentication, HttpAuthChallengeHandler, HttpAuthHeadersProvider {
         int respondCalls;
         int failOnRound = -1;
+        boolean hangOnRespond;
         final List<String> serverStatesSeen = new ArrayList<>();
 
         private static final class Conversation {
@@ -220,6 +238,9 @@ public class HttpAuthenticationDriverTest {
         @Override
         public CompletableFuture<HttpAuthHeaders> respondToHttpChallengeAsync(HttpAuthCallContext ctx) {
             respondCalls++;
+            if (hangOnRespond) {
+                return new CompletableFuture<>(); // the challenge evaluation never completes
+            }
             Conversation conv = ctx.getStateObject(Conversation.class).orElse(null);
             if (conv == null) {
                 conv = new Conversation();

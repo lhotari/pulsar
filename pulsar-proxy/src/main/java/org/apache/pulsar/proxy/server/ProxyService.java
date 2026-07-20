@@ -365,8 +365,12 @@ public class ProxyService implements Closeable {
             // ProxyConnection stash it on each config. Built from a representative config; the factory itself is
             // still null at this point, so resolveClientTlsFactory takes the default (non-adopted) path.
             ClientConfigurationData lookupClientConf = ProxyConnection.createClientConfiguration(this);
+            // brokerClientPurpose=true: this lookup transport reuses tlsFactoryClassName to carry the
+            // brokerClientTlsFactoryClassName selection, so a custom by-name factory is wrapped to resolve the
+            // transport's CLIENT_DEFAULT request under the fixed BROKER_CLIENT purpose (matches the direct path
+            // above, which requests BROKER_CLIENT).
             this.lookupClientTlsFactory = ClientTlsFactorySupport.resolveClientTlsFactory(
-                    lookupClientConf, statsExecutor, statsExecutor, openTelemetry.getOpenTelemetry());
+                    lookupClientConf, statsExecutor, statsExecutor, openTelemetry.getOpenTelemetry(), true);
         }
 
         createMetricsServlet();

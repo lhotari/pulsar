@@ -344,6 +344,81 @@ public class JettyTlsFactoryTest {
     }
 
     /**
+     * PIP-478 (pip-478.md:736): the {@code SSLParameters} companion is re-requested on <em>every</em>
+     * {@code SSLContext} delivery, not just at build time — so engine policy (here the server client-auth mode)
+     * rotates with material. A companion that flips {@code needClientAuth} on rotation must be reflected in the
+     * synthesized Jetty {@link SslContextFactory.Server} after the reload, and dropping the companion must
+     * revert client-auth to the consumer default rather than leaving the prior value stuck.
+     */
+    @Test
+    public void serverCompanionClientAuthRotatesWithMaterialOnReload() throws Exception {
+        // Build-time companion: no client auth. This overrides the consumer default (optional client auth).
+        SSLParameters noClientAuth = new SSLParameters();
+        noClientAuth.setNeedClientAuth(false);
+
+        FileBasedTlsFactory delegate = new FileBasedTlsFactory(
+                Map.of(TlsPurpose.WEB, TlsPolicy.pem(tempDir.resolve("ca.pem").toString(),
+                        tempDir.resolve("cert.pem").toString(), tempDir.resolve("key.pem").toString())),
+                FileBasedTlsFactorySettings.builder().refreshIntervalSeconds(1).build());
+        CompanionFactory factory = new CompanionFactory(delegate, noClientAuth);
+        factory.initialize(initContext()).join();
+
+        JettyTlsFactory.ReloadableServerTls reloadable = JettyTlsFactory.createReloadingServerFactory(
+                factory, TlsPurpose.WEB, null, false, false, null, null);
+        SslContextFactory.Server sslContextFactory = reloadable.sslContextFactory();
+        // Start standalone (no full Jetty server needed) so the reload path (isStarted()) runs on delivery.
+        sslContextFactory.start();
+        try {
+            assertThat(sslContextFactory.getNeedClientAuth())
+                    .as("the build-time companion (needClientAuth=false) is authoritative")
+                    .isFalse();
+
+            // Flip the companion to require client auth, then rotate material to trigger an SSLContext delivery.
+            SSLParameters needClientAuth = new SSLParameters();
+            needClientAuth.setNeedClientAuth(true);
+            factory.setCompanion(needClientAuth);
+            rotateWebMaterial();
+
+            // The reload re-requests the companion and re-applies it under Jetty's lock, so the new
+            // needClientAuth takes effect on the synthesized factory.
+            Awaitility.await().atMost(Duration.ofSeconds(15)).until(sslContextFactory::getNeedClientAuth);
+            assertThat(sslContextFactory.getNeedClientAuth())
+                    .as("the companion is re-requested on delivery, so client-auth rotates with material")
+                    .isTrue();
+
+            // Drop the companion entirely and rotate again: client-auth must revert to the consumer default
+            // (optional client auth => wantClientAuth, needClientAuth cleared) instead of staying stuck at need.
+            factory.setCompanion(null);
+            rotateWebMaterial();
+            Awaitility.await().atMost(Duration.ofSeconds(15)).until(() -> !sslContextFactory.getNeedClientAuth());
+            assertThat(sslContextFactory.getNeedClientAuth())
+                    .as("dropping the companion reverts needClientAuth to the consumer default")
+                    .isFalse();
+            assertThat(sslContextFactory.getWantClientAuth())
+                    .as("the consumer default (optional client auth) is restored")
+                    .isTrue();
+        } finally {
+            sslContextFactory.stop();
+            reloadable.subscription().dispose();
+            factory.close();
+        }
+    }
+
+    // Rotate the WEB server material (cert.pem/key.pem) to the other certificate signed by the same CA
+    // (broker<->proxy), with a future mtime so the file-based factory's poll observes the change and re-delivers
+    // the SSLContext. Toggling on the current content guarantees each call is a real change.
+    private void rotateWebMaterial() throws Exception {
+        boolean toProxy = certSerial(tempDir.resolve("cert.pem").toString()).equals(certSerial(BROKER_CERT));
+        Files.copy(Paths.get(toProxy ? PROXY_CERT : BROKER_CERT), tempDir.resolve("cert.pem"),
+                StandardCopyOption.REPLACE_EXISTING);
+        Files.copy(Paths.get(toProxy ? PROXY_KEY : BROKER_KEY), tempDir.resolve("key.pem"),
+                StandardCopyOption.REPLACE_EXISTING);
+        long later = System.currentTimeMillis() + 5000;
+        Files.setLastModifiedTime(tempDir.resolve("cert.pem"), FileTime.fromMillis(later));
+        Files.setLastModifiedTime(tempDir.resolve("key.pem"), FileTime.fromMillis(later));
+    }
+
+    /**
      * With no configured protocols and no factory companion, the synthesized Jetty server/client factories
      * pin the {@code {TLSv1.3, TLSv1.2}} floor (matching the native Netty path) rather than deferring to the
      * provider default.
@@ -526,10 +601,15 @@ public class JettyTlsFactoryTest {
      */
     private static final class CompanionFactory implements PulsarTlsFactory {
         private final FileBasedTlsFactory delegate;
-        private final SSLParameters companion;
+        // Volatile so a test can flip the companion between deliveries and assert the reload re-requests it.
+        private volatile SSLParameters companion;
 
         CompanionFactory(FileBasedTlsFactory delegate, SSLParameters companion) {
             this.delegate = delegate;
+            this.companion = companion;
+        }
+
+        void setCompanion(SSLParameters companion) {
             this.companion = companion;
         }
 
@@ -543,7 +623,13 @@ public class JettyTlsFactoryTest {
         public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(TlsPurpose purpose,
                                                                             Class<T> instanceClass) {
             if (instanceClass == SSLParameters.class) {
-                return CompletableFuture.completedFuture(Optional.of((TlsHandle<T>) companionHandle()));
+                SSLParameters current = companion;
+                // A null companion models a factory that supplies none: return empty() so the consumer default
+                // applies (used by the reload rotation test to drop the companion mid-flight).
+                if (current == null) {
+                    return delegate.createInstance(purpose, instanceClass);
+                }
+                return CompletableFuture.completedFuture(Optional.of((TlsHandle<T>) companionHandle(current)));
             }
             return delegate.createInstance(purpose, instanceClass);
         }
@@ -554,11 +640,11 @@ public class JettyTlsFactoryTest {
             return delegate.createInstance(purpose, instanceClass, onLoadOrReload);
         }
 
-        private TlsHandle<SSLParameters> companionHandle() {
+        private TlsHandle<SSLParameters> companionHandle(SSLParameters value) {
             return new TlsHandle<>() {
                 @Override
                 public SSLParameters get() {
-                    return companion;
+                    return value;
                 }
 
                 @Override

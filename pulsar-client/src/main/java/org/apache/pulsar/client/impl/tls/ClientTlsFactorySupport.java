@@ -19,6 +19,7 @@
 package org.apache.pulsar.client.impl.tls;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.google.common.annotations.VisibleForTesting;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslProvider;
 import io.opentelemetry.api.OpenTelemetry;
@@ -30,10 +31,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.api.Authentication;
@@ -48,6 +51,7 @@ import org.apache.pulsar.common.tls.impl.TlsContextAcquisition;
 import org.apache.pulsar.common.tls.impl.TlsSynthesisSpec;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.tls.PulsarTlsFactory;
+import org.apache.pulsar.tls.TlsEndpoint;
 import org.apache.pulsar.tls.TlsFactoryInitContext;
 import org.apache.pulsar.tls.TlsHandle;
 import org.apache.pulsar.tls.TlsPolicy;
@@ -200,6 +204,28 @@ public final class ClientTlsFactorySupport {
     public static PulsarTlsFactory resolveClientTlsFactory(ClientConfigurationData conf,
             ScheduledExecutorService scheduler, Executor blockingExecutor, OpenTelemetry openTelemetry)
             throws Exception {
+        return resolveClientTlsFactory(conf, scheduler, blockingExecutor, openTelemetry, false);
+    }
+
+    /**
+     * As {@link #resolveClientTlsFactory(ClientConfigurationData, ScheduledExecutorService, Executor,
+     * OpenTelemetry)}, but for a server component's own outbound broker-client lookup transport
+     * ({@code brokerClientPurpose = true}) a custom by-name factory is wrapped so an incoming
+     * {@link TlsPurpose#CLIENT_DEFAULT} request from the client transport resolves under the fixed
+     * {@link TlsPurpose#BROKER_CLIENT} purpose (PIP-478). This is the proxy&rarr;broker binary lookup path,
+     * which reuses {@code tlsFactoryClassName} to carry the {@code brokerClientTlsFactoryClassName} selection:
+     * the transport hardcodes {@code CLIENT_DEFAULT}, but the stable-API contract resolves all server-component
+     * outbound Pulsar-client traffic under {@code BROKER_CLIENT}, so a compliant custom factory serving only
+     * {@code BROKER_CLIENT} would otherwise return empty for {@code CLIENT_DEFAULT}. A plain application client
+     * ({@code brokerClientPurpose = false}) keeps {@code CLIENT_DEFAULT} as its genuine default. Only the custom
+     * by-name factory is wrapped; the built-in file-based path already composes {@code CLIENT_DEFAULT} from the
+     * broker-client material.
+     *
+     * @param brokerClientPurpose whether the resolved factory serves a broker-client outbound transport
+     */
+    public static PulsarTlsFactory resolveClientTlsFactory(ClientConfigurationData conf,
+            ScheduledExecutorService scheduler, Executor blockingExecutor, OpenTelemetry openTelemetry,
+            boolean brokerClientPurpose) throws Exception {
         boolean v5BuilderPath = conf.getTlsFactory() != null || conf.getTlsPolicyMap() != null;
         PulsarTlsFactory factory;
         Map<String, String> initParams;
@@ -211,8 +237,10 @@ public final class ClientTlsFactorySupport {
             // PIP-478 v4 by-name successor: no v5-builder instance/policy map is set, and tlsFactoryClassName
             // names a custom PulsarTlsFactory. Instantiate it reflectively and parse tlsFactoryConfig JSON into
             // its init params (mirrors the server-side TlsFactorySupport). The factory self-sources material;
-            // the tls* file/keystore composition below does not apply.
-            factory = instantiateNamedFactory(conf.getTlsFactoryClassName(), "tlsFactoryClassName");
+            // the tls* file/keystore composition below does not apply. On a broker-client outbound transport the
+            // instance is wrapped so its transport-requested CLIENT_DEFAULT resolves under BROKER_CLIENT.
+            PulsarTlsFactory named = instantiateNamedFactory(conf.getTlsFactoryClassName(), "tlsFactoryClassName");
+            factory = brokerClientPurpose ? wrapBrokerClientPurpose(named) : named;
             initParams = parseFactoryConfig(conf.getTlsFactoryConfig());
         } else {
             // Fold the auth plugin's TLS identity (AuthenticationTls / AuthenticationKeyStoreTls) into
@@ -339,7 +367,11 @@ public final class ClientTlsFactorySupport {
      */
     public static PulsarTlsFactory brokerClientTlsFactory(ClientConfigurationData conf, String factoryClassName) {
         if (isCustomFactoryClass(factoryClassName)) {
-            return instantiateNamedFactory(factoryClassName, "brokerClientTlsFactoryClassName");
+            // The client transport (PulsarChannelInitializer) requests CLIENT_DEFAULT, but a custom broker-client
+            // factory resolves under the fixed BROKER_CLIENT purpose (PIP-478 stable-API contract), so wrap it to
+            // translate CLIENT_DEFAULT -> BROKER_CLIENT before delegating.
+            return wrapBrokerClientPurpose(
+                    instantiateNamedFactory(factoryClassName, "brokerClientTlsFactoryClassName"));
         }
         // Broker-client (server startup / replication client creation): register the broker-client TLS fold
         // when the plugin carries TLS material.
@@ -568,6 +600,71 @@ public final class ClientTlsFactorySupport {
                 return ot;
             }
         };
+    }
+
+    /**
+     * Wrap a custom broker-client {@link PulsarTlsFactory} so an incoming {@link TlsPurpose#CLIENT_DEFAULT}
+     * request — the purpose the outbound client transport hardcodes — is resolved under the fixed
+     * {@link TlsPurpose#BROKER_CLIENT} purpose the PIP-478 stable-API contract assigns to a server component's
+     * own outbound Pulsar-client traffic (geo-replication, proxy&rarr;broker, websocket&rarr;broker,
+     * functions-worker&rarr;broker). Without this a compliant custom factory serving only {@code BROKER_CLIENT}
+     * would return {@code empty()} for {@code CLIENT_DEFAULT} (hard connect failure), or mirror the default's
+     * unconfigured-client-purpose fallback and silently downgrade to a no-client-certificate handshake. Only
+     * custom factories are wrapped; the built-in file-based factory already maps the broker-client material to
+     * whatever purpose the transport requests.
+     *
+     * @param delegate the custom broker-client factory
+     * @return a factory translating {@code CLIENT_DEFAULT} to {@code BROKER_CLIENT}
+     */
+    @VisibleForTesting
+    static PulsarTlsFactory wrapBrokerClientPurpose(PulsarTlsFactory delegate) {
+        return new BrokerClientPurposeFactory(delegate);
+    }
+
+    /**
+     * Delegating {@link PulsarTlsFactory} that translates an incoming {@link TlsPurpose#CLIENT_DEFAULT} request
+     * to {@link TlsPurpose#BROKER_CLIENT} across all {@code createInstance} overloads before delegating, leaving
+     * every other purpose untouched; {@link #initialize} and {@link #close} pass through. See
+     * {@link #wrapBrokerClientPurpose} for why.
+     */
+    private static final class BrokerClientPurposeFactory implements PulsarTlsFactory {
+        private final PulsarTlsFactory delegate;
+
+        BrokerClientPurposeFactory(PulsarTlsFactory delegate) {
+            this.delegate = delegate;
+        }
+
+        private static TlsPurpose translate(TlsPurpose purpose) {
+            return TlsPurpose.CLIENT_DEFAULT.equals(purpose) ? TlsPurpose.BROKER_CLIENT : purpose;
+        }
+
+        @Override
+        public CompletableFuture<Void> initialize(TlsFactoryInitContext context) {
+            return delegate.initialize(context);
+        }
+
+        @Override
+        public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(
+                TlsPurpose purpose, Class<T> instanceClass) {
+            return delegate.createInstance(translate(purpose), instanceClass);
+        }
+
+        @Override
+        public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(
+                TlsPurpose purpose, TlsEndpoint endpoint, Class<T> instanceClass) {
+            return delegate.createInstance(translate(purpose), endpoint, instanceClass);
+        }
+
+        @Override
+        public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(
+                TlsPurpose purpose, Class<T> instanceClass, Consumer<T> onLoadOrReload) {
+            return delegate.createInstance(translate(purpose), instanceClass, onLoadOrReload);
+        }
+
+        @Override
+        public void close() {
+            delegate.close();
+        }
     }
 
     private static List<String> toList(Set<String> values) {

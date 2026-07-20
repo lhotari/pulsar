@@ -593,13 +593,28 @@ public class WebService implements AutoCloseable {
     private SslContextFactory.Server createTlsFactoryWebServer(ServiceConfiguration config) throws Exception {
         this.tlsFactory = TlsFactorySupport.createFactory(config.getTlsFactoryClassName(),
                 DefaultBrokerTlsFactory.class, () -> DefaultBrokerTlsFactory.fromServiceConfiguration(config));
-        TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
-                TlsFactorySupport.parseFactoryConfig(config.getTlsFactoryConfig()),
-                pulsar.getExecutor(), pulsar.getExecutor(), pulsar.getOpenTelemetry().getOpenTelemetry());
-        TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
-        this.reloadableServerTls = JettyTlsFactory.createReloadingServerFactory(this.tlsFactory, TlsPurpose.WEB,
-                config.getWebServiceTlsProvider(), config.isTlsRequireTrustedClientCertOnConnect(),
-                config.isTlsAllowInsecureConnection(), config.getTlsCiphers(), config.getTlsProtocols());
-        return this.reloadableServerTls.sslContextFactory();
+        // Once the factory is created it owns live resources (cert watchers, HSM sessions, reload work).
+        // A failure in any subsequent step rethrows out of the constructor without returning a WebService,
+        // so doClose() is never reachable — dispose/close the partial state here to avoid leaking it.
+        try {
+            TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
+                    TlsFactorySupport.parseFactoryConfig(config.getTlsFactoryConfig()),
+                    pulsar.getExecutor(), pulsar.getExecutor(), pulsar.getOpenTelemetry().getOpenTelemetry());
+            TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
+            this.reloadableServerTls = JettyTlsFactory.createReloadingServerFactory(this.tlsFactory, TlsPurpose.WEB,
+                    config.getWebServiceTlsProvider(), config.isTlsRequireTrustedClientCertOnConnect(),
+                    config.isTlsAllowInsecureConnection(), config.getTlsCiphers(), config.getTlsProtocols());
+            return this.reloadableServerTls.sslContextFactory();
+        } catch (Exception e) {
+            if (this.reloadableServerTls != null) {
+                this.reloadableServerTls.subscription().dispose();
+                this.reloadableServerTls = null;
+            }
+            if (this.tlsFactory != null) {
+                this.tlsFactory.close();
+                this.tlsFactory = null;
+            }
+            throw e;
+        }
     }
 }

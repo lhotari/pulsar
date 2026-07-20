@@ -4243,9 +4243,8 @@ public class ServiceConfiguration implements PulsarConfiguration {
 
     @FieldContext(
             category = CATEGORY_KEYSTORE_TLS,
-            doc = "Specify the TLS provider for the broker service: \n"
-                    + "When using TLS authentication with CACert, the valid value is either OPENSSL or JDK.\n"
-                    + "When using TLS authentication with KeyStore, available values can be SunJSSE, Conscrypt and etc."
+            doc = "Select the TLS engine for the broker service: either OPENSSL or JDK.\n"
+                    + "To pin a JSSE (SSLContext) provider such as BCJSSE or Conscrypt, use jsseProvider instead."
     )
     private String tlsProvider = null;
 

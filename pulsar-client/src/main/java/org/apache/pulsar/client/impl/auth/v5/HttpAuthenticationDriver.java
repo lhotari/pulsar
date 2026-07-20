@@ -167,9 +167,14 @@ public final class HttpAuthenticationDriver {
                     "SASL over HTTP exchange exceeded its timeout budget before round " + round));
         }
         Duration remaining = Duration.ofNanos(remainingNanos);
-        return handler.respondToHttpChallengeAsync(ctx)
+        // Bound the WHOLE round — the plugin's challenge evaluation (respondToHttpChallengeAsync, which for
+        // SASL/GSSAPI is the security-context step) AND the transport GET together — against the remaining
+        // deadline, so a hang in EITHER stage fails within the shared budget. boundedGet keeps its own inner
+        // per-transport bound; this outer bound also covers the evaluation that runs before the GET.
+        CompletableFuture<HttpChallengeTransport.Result> roundFuture = handler.respondToHttpChallengeAsync(ctx)
                 .thenCompose(reqHeaders -> boundedGet(transport, uri,
-                        reqHeaders == null ? HttpAuthHeaders.empty() : reqHeaders, remaining, round))
+                        reqHeaders == null ? HttpAuthHeaders.empty() : reqHeaders, remaining, round));
+        return boundedByRemaining(roundFuture, remaining, round)
                 .thenCompose(result -> {
                     int status = result.statusCode();
                     if (status == java.net.HttpURLConnection.HTTP_OK) {
@@ -196,11 +201,24 @@ public final class HttpAuthenticationDriver {
      * Issue one transport round bounded by the remaining exchange budget. The deadline check at the top of
      * each round only fires <em>between</em> rounds; a transport whose underlying client applies no read
      * timeout (the admin path's JAX-RS transport) would otherwise leave the exchange pending forever
-     * against a peer that accepts the connection but never responds.
+     * against a peer that accepts the connection but never responds. This is the inner, transport-only bound;
+     * {@link #challengeRound} additionally wraps the whole round (evaluation + GET) via
+     * {@link #boundedByRemaining}, so the plugin's challenge evaluation is covered too.
      */
     private static CompletableFuture<HttpChallengeTransport.Result> boundedGet(HttpChallengeTransport transport,
             URI uri, HttpAuthHeaders headers, Duration remaining, int round) {
-        return transport.get(uri, headers, remaining)
+        return boundedByRemaining(transport.get(uri, headers, remaining), remaining, round);
+    }
+
+    /**
+     * Bound {@code future} against the remaining exchange budget, surfacing a timeout as an
+     * {@link PulsarClientException.AuthenticationException} that names the round. Shared by the inner
+     * transport bound ({@link #boundedGet}) and the outer whole-round bound applied in
+     * {@link #challengeRound}.
+     */
+    private static CompletableFuture<HttpChallengeTransport.Result> boundedByRemaining(
+            CompletableFuture<HttpChallengeTransport.Result> future, Duration remaining, int round) {
+        return future
                 .orTimeout(remaining.toNanos(), TimeUnit.NANOSECONDS)
                 .exceptionallyCompose(t -> {
                     Throwable cause = t instanceof CompletionException ? t.getCause() : t;

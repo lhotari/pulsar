@@ -270,6 +270,103 @@ public class PulsarClientBuilderV5Test {
                 builder.authentication("com.example.NoSuchAuth", ""));
     }
 
+    /**
+     * PIP-478: a cross-format TLS-material fold must fail loud, not silently drop trust anchors. A PEM
+     * {@code tlsPolicy(...)} carrying a private-CA {@code trustCertsFilePath} combined with a keystore-format
+     * auth plugin ({@link org.apache.pulsar.client.impl.auth.AuthenticationKeyStoreTls}) would, if folded into a
+     * keystore policy, drop the PEM truststore and fall back to the system trust store. Reject it at build time
+     * (matching {@code TlsPolicy.build()}'s fail-loud format validation) and point at the remedy.
+     */
+    @Test
+    public void testCrossFormatFoldPemTrustWithKeyStoreIdentityFailsLoud() {
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        builder.tlsPolicy(TlsPolicy.pem("/path/to/private-ca.pem", null, null));
+        builder.authentication(LegacyV4AuthenticationAdapter.wrap(
+                new org.apache.pulsar.client.impl.auth.AuthenticationKeyStoreTls(
+                        "PKCS12", "/path/to/client-keystore.p12", "changeit")));
+
+        IllegalArgumentException e = assertThrowsIAE(builder::resolveAuthenticationForTest);
+        assertTrue(e.getMessage().contains("trustCertsFilePath"),
+                "the failure must name the dropped PEM truststore: " + e.getMessage());
+        assertTrue(e.getMessage().toLowerCase().contains("same format"),
+                "the failure must point at the same-format remedy: " + e.getMessage());
+    }
+
+    /**
+     * PIP-478: the reverse cross-format fold — a keystore {@code tlsPolicy(...)} carrying a private-CA
+     * {@code trustStorePath} combined with a PEM-format auth plugin
+     * ({@link org.apache.pulsar.client.impl.auth.AuthenticationTls}) — would drop the keystore truststore if
+     * folded into a PEM policy. It must fail loud for the same reason.
+     */
+    @Test
+    public void testCrossFormatFoldKeyStoreTrustWithPemIdentityFailsLoud() {
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        builder.tlsPolicy(TlsPolicy.keyStore("/path/to/truststore.jks", "changeit", null, null, "JKS"));
+        builder.authentication(LegacyV4AuthenticationAdapter.wrap(
+                new org.apache.pulsar.client.impl.auth.AuthenticationTls(
+                        "/path/to/client.cert", "/path/to/client.key")));
+
+        IllegalArgumentException e = assertThrowsIAE(builder::resolveAuthenticationForTest);
+        assertTrue(e.getMessage().contains("trustStorePath"),
+                "the failure must name the dropped keystore truststore: " + e.getMessage());
+        assertTrue(e.getMessage().toLowerCase().contains("same format"),
+                "the failure must point at the same-format remedy: " + e.getMessage());
+    }
+
+    /**
+     * PIP-478: a same-format fold is the supported case and must succeed with trust preserved. A PEM
+     * {@code tlsPolicy(...)} truststore combined with a PEM auth plugin folds the plugin's client identity into
+     * {@link TlsPurpose#CLIENT_DEFAULT} while keeping the configured {@code trustCertsFilePath}.
+     */
+    @Test
+    public void testSameFormatFoldPreservesPemTrust() {
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        builder.tlsPolicy(TlsPolicy.pem("/path/to/private-ca.pem", null, null));
+        builder.authentication(LegacyV4AuthenticationAdapter.wrap(
+                new org.apache.pulsar.client.impl.auth.AuthenticationTls(
+                        "/path/to/client.cert", "/path/to/client.key")));
+
+        builder.resolveAuthenticationForTest();
+
+        TlsPolicy applied = builder.getConfForTesting().getTlsPolicyMap().get(TlsPurpose.CLIENT_DEFAULT);
+        assertNotNull(applied, "the folded policy must land under CLIENT_DEFAULT");
+        assertEquals(applied.format(), TlsPolicy.Format.PEM);
+        assertEquals(applied.trustCertsFilePath(), "/path/to/private-ca.pem",
+                "the configured PEM trust must be preserved across the fold");
+        assertEquals(applied.certificateFilePath(), "/path/to/client.cert");
+        assertEquals(applied.keyFilePath(), "/path/to/client.key");
+    }
+
+    /**
+     * PIP-478: the same-format keystore fold likewise preserves the configured keystore truststore while
+     * folding the plugin's keystore client identity.
+     */
+    @Test
+    public void testSameFormatFoldPreservesKeyStoreTrust() {
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        builder.tlsPolicy(TlsPolicy.builder()
+                .format(TlsPolicy.Format.KEYSTORE)
+                .trustStorePath("/path/to/truststore.jks")
+                .trustStorePassword("changeit")
+                .trustStoreType("JKS")
+                .build());
+        builder.authentication(LegacyV4AuthenticationAdapter.wrap(
+                new org.apache.pulsar.client.impl.auth.AuthenticationKeyStoreTls(
+                        "PKCS12", "/path/to/client-keystore.p12", "keypw")));
+
+        builder.resolveAuthenticationForTest();
+
+        TlsPolicy applied = builder.getConfForTesting().getTlsPolicyMap().get(TlsPurpose.CLIENT_DEFAULT);
+        assertNotNull(applied, "the folded policy must land under CLIENT_DEFAULT");
+        assertEquals(applied.format(), TlsPolicy.Format.KEYSTORE);
+        assertEquals(applied.trustStorePath(), "/path/to/truststore.jks",
+                "the configured keystore trust must be preserved across the fold");
+        assertEquals(applied.trustStoreType(), "JKS",
+                "the configured truststore type must be preserved across the fold");
+        assertEquals(applied.keyStorePath(), "/path/to/client-keystore.p12");
+        assertEquals(applied.keyStoreType(), "PKCS12");
+    }
+
     /** A minimal generic (non-built-in) v4 TLS plugin for the fold tests. */
     @SuppressWarnings("deprecation")
     private static final class GenericTlsV4Auth implements org.apache.pulsar.client.api.Authentication {

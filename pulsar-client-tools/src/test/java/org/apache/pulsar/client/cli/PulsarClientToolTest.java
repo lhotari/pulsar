@@ -135,4 +135,28 @@ public class PulsarClientToolTest {
         assertThat(policy.keyStoreType()).isEqualTo("JKS");
         assertThat(policy.enableHostnameVerification()).isTrue();
     }
+
+    @Test
+    public void testJsseProviderConfKeyIsHonored() {
+        // A FIPS/provider-specific endpoint relies on the jsseProvider conf key reaching the
+        // typed policy; without it the CLI would silently use the platform provider.
+        Properties properties = new Properties();
+        properties.setProperty("useTls", "true");
+        properties.setProperty("jsseProvider", "BCJSSE");
+        TlsPolicy policy = capturePolicy("pulsar://localhost:6650", properties);
+        assertThat(policy.jsseProvider()).isEqualTo("BCJSSE");
+    }
+
+    @Test
+    public void testJsseProviderConfKeyIsHonoredForKeystoreFormat() {
+        // jsseProvider is format-independent: it must reach the policy in the KEYSTORE branch too.
+        Properties properties = new Properties();
+        properties.setProperty("useTls", "true");
+        properties.setProperty("useKeyStoreTls", "true");
+        properties.setProperty("tlsTrustStorePath", "/path/truststore.p12");
+        properties.setProperty("jsseProvider", "BCJSSE");
+        TlsPolicy policy = capturePolicy("pulsar://localhost:6650", properties);
+        assertThat(policy.format()).isEqualTo(TlsPolicy.Format.KEYSTORE);
+        assertThat(policy.jsseProvider()).isEqualTo("BCJSSE");
+    }
 }

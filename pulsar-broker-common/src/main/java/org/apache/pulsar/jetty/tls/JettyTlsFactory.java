@@ -61,9 +61,11 @@ import org.eclipse.jetty.util.ssl.SslContextFactory;
  * protocols ({@link SslContextFactory#setIncludeProtocols}) and cipher suites
  * ({@link SslContextFactory#setIncludeCipherSuites}), and (server side, merge rule 4) the authoritative
  * client-auth mode ({@link SslContextFactory.Server#setNeedClientAuth} /
- * {@link SslContextFactory.Server#setWantClientAuth}). The companion is requested one-shot (a
- * factory-supplied {@code SslContextFactory.Server} would reload internally, but this synthesized factory
- * applies protocols/ciphers/client-auth once at build time — they cannot change on a bare {@code reload});
+ * {@link SslContextFactory.Server#setWantClientAuth}). The companion is re-requested on <em>every</em>
+ * {@code SSLContext} delivery (not just at build time) and re-applied inside the {@code reload(...)} lambda
+ * under Jetty's lock, so engine policy rotates with material (pip-478.md), mirroring the Netty synthesis path.
+ * Consumer defaults are re-applied first on each delivery, so a companion member dropped by a later delivery
+ * (notably client-auth) reverts to the consumer default rather than staying stuck from the previous companion.
  * {@code empty()} leaves the consumer's configuration in force, exactly as before.
  */
 @CustomLog
@@ -133,16 +135,21 @@ public final class JettyTlsFactory {
         }
 
         SslContextFactory.Server sslContextFactory = new SslContextFactory.Server();
-        applyServerConfig(sslContextFactory, sslProviderString, requireTrustedClientCert, allowInsecureConnection,
-                ciphers, protocols);
-        // Merge the factory's engine-policy companion (if any) over the consumer config, before start.
-        resolveBaselineParameters(factory, purpose)
-                .ifPresent(baseline -> applyServerBaseline(sslContextFactory, baseline));
+        // Consumer config plus the factory's engine-policy companion (if any), before start.
+        configureServerBaseline(sslContextFactory, factory, purpose, sslProviderString, requireTrustedClientCert,
+                allowInsecureConnection, ciphers, protocols);
 
         Consumer<SSLContext> onLoadOrReload = newContext -> {
             if (sslContextFactory.isStarted()) {
                 try {
-                    sslContextFactory.reload(f -> ((SslContextFactory.Server) f).setSslContext(newContext));
+                    sslContextFactory.reload(f -> {
+                        SslContextFactory.Server server = (SslContextFactory.Server) f;
+                        server.setSslContext(newContext);
+                        // Re-request the companion on each delivery (pip-478.md): protocols, cipher suites, and
+                        // the server client-auth mode rotate with material, symmetric with the Netty path.
+                        configureServerBaseline(server, factory, purpose, sslProviderString,
+                                requireTrustedClientCert, allowInsecureConnection, ciphers, protocols);
+                    });
                 } catch (Exception e) {
                     log.warn().attr("purpose", purpose).exception(e)
                             .log("Failed to reload Jetty SslContextFactory; keeping the running context");
@@ -200,14 +207,12 @@ public final class JettyTlsFactory {
         if (StringUtils.isNotBlank(sslProviderString)) {
             client.setProvider(sslProviderString);
         }
-        // Pin the {TLSv1.3, TLSv1.2} floor, matching the native path; a factory companion overrides it below.
-        client.setIncludeProtocols(TlsContexts.DEFAULT_ENABLED_PROTOCOLS.toArray(new String[0]));
-        // Merge the factory's engine-policy companion (if any): protocols/ciphers only — client-auth is a
-        // server concept, and SNI/hostname verification stay per-connection.
-        resolveBaselineParameters(factory, purpose)
-                .ifPresent(baseline -> applyClientBaseline(client, baseline));
+        // Pin the {TLSv1.3, TLSv1.2} floor and overlay the factory's engine-policy companion (if any), before
+        // start.
+        configureClientBaseline(client, factory, purpose);
         // Hostname verification is a consumer (proxy) concern on the synthesized path: disable endpoint
-        // identification when the consumer has it off (a native factory, handled above, owns this itself).
+        // identification when the consumer has it off (a native factory, handled above, owns this itself). This
+        // is a per-consumer setting applied once at build, not part of the per-delivery companion overlay.
         if (!enableHostnameVerification) {
             client.setEndpointIdentificationAlgorithm(null);
         }
@@ -215,7 +220,13 @@ public final class JettyTlsFactory {
         Consumer<SSLContext> onLoadOrReload = newContext -> {
             if (client.isStarted()) {
                 try {
-                    client.reload(f -> ((SslContextFactory.Client) f).setSslContext(newContext));
+                    client.reload(f -> {
+                        SslContextFactory.Client c = (SslContextFactory.Client) f;
+                        c.setSslContext(newContext);
+                        // Re-request the companion on each delivery (pip-478.md): protocols/ciphers rotate with
+                        // material (client-auth is a server concept; endpoint identification stays as set above).
+                        configureClientBaseline(c, factory, purpose);
+                    });
                 } catch (Exception e) {
                     log.warn().attr("purpose", purpose).exception(e)
                             .log("Failed to reload Jetty client SslContextFactory; keeping the running context");
@@ -231,6 +242,35 @@ public final class JettyTlsFactory {
                 .orElseThrow(() -> new IllegalStateException(
                         "TLS factory supplied no SSLContext for purpose " + purpose));
         return new ReloadableClientTls(client, subscription);
+    }
+
+    /**
+     * Apply the consumer config, then overlay the factory's engine-policy companion, onto a synthesized server
+     * factory. Runs at build time and again inside every {@code reload(...)} lambda: the companion is
+     * re-requested per {@code SSLContext} delivery (pip-478.md), and the consumer defaults are re-applied first
+     * so a companion member dropped by a later delivery (notably client-auth) reverts rather than staying stuck.
+     */
+    private static void configureServerBaseline(SslContextFactory.Server sslContextFactory, PulsarTlsFactory factory,
+                                                TlsPurpose purpose, String sslProviderString,
+                                                boolean requireTrustedClientCert, boolean allowInsecureConnection,
+                                                Set<String> ciphers, Set<String> protocols) {
+        applyServerConfig(sslContextFactory, sslProviderString, requireTrustedClientCert, allowInsecureConnection,
+                ciphers, protocols);
+        resolveBaselineParameters(factory, purpose)
+                .ifPresent(baseline -> applyServerBaseline(sslContextFactory, baseline));
+    }
+
+    /**
+     * Pin the {@code {TLSv1.3, TLSv1.2}} floor, then overlay the factory companion's protocols/ciphers, onto a
+     * synthesized client factory. Runs at build time and again inside every {@code reload(...)} lambda so
+     * companion-driven protocol/cipher policy rotates with material (pip-478.md). Client-auth is a server
+     * concept and is not mapped here; endpoint identification is a per-consumer setting applied once at build.
+     */
+    private static void configureClientBaseline(SslContextFactory.Client client, PulsarTlsFactory factory,
+                                                TlsPurpose purpose) {
+        client.setIncludeProtocols(TlsContexts.DEFAULT_ENABLED_PROTOCOLS.toArray(new String[0]));
+        resolveBaselineParameters(factory, purpose)
+                .ifPresent(baseline -> applyClientBaseline(client, baseline));
     }
 
     private static void applyServerConfig(SslContextFactory.Server sslContextFactory, String sslProviderString,
@@ -266,6 +306,10 @@ public final class JettyTlsFactory {
             // Jetty builds the SSLContext itself, so it is inert on this setSslContext path; we still scope it
             // to the insecure flag so the two never disagree (defence in depth) rather than leaving the
             // inherited unconditional setTrustAll(true).
+            // Clear needClientAuth explicitly (not just rely on the fresh-factory default): this method is
+            // re-applied on each reload, so a prior companion delivery that set needClientAuth must be reset to
+            // the consumer default here before a later companion (or its absence) is overlaid.
+            sslContextFactory.setNeedClientAuth(false);
             sslContextFactory.setWantClientAuth(true);
             sslContextFactory.setTrustAll(allowInsecureConnection);
         }
@@ -290,8 +334,10 @@ public final class JettyTlsFactory {
 
     /**
      * Request the factory's optional {@code SSLParameters} companion for a purpose (one-shot), returning the
-     * supplied instance or {@link Optional#empty()} when the factory supplies none. Runs at factory-build time,
-     * off any event loop; the handle is disposed immediately (a companion carries no reference-counted state).
+     * supplied instance or {@link Optional#empty()} when the factory supplies none. Called at factory-build time
+     * and again inside every {@code reload(...)} lambda (the companion is re-requested per {@code SSLContext}
+     * delivery, pip-478.md) — both off any event loop; the handle is disposed immediately (a companion carries no
+     * reference-counted state).
      */
     private static Optional<SSLParameters> resolveBaselineParameters(PulsarTlsFactory factory, TlsPurpose purpose) {
         return factory.createInstance(purpose, SSLParameters.class)
