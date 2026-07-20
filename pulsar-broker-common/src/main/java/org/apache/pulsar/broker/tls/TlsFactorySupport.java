@@ -23,6 +23,7 @@ import io.netty.handler.ssl.SslProvider;
 import io.opentelemetry.api.OpenTelemetry;
 import java.time.Clock;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
@@ -225,6 +226,50 @@ public final class TlsFactorySupport {
             }
         }
         return SslProvider.JDK;
+    }
+
+    /**
+     * Resolve the JSSE (SSLContext) provider for a server or broker-client TLS policy across the two provider
+     * axes, mirroring {@code ClientTlsFactorySupport.resolveClientJsseProvider} for v4 parity. An explicit
+     * {@code jsseProvider} wins; otherwise a {@code tlsProvider}/{@code sslProvider} value that is NOT a Netty
+     * {@link SslProvider} engine literal (i.e. a JSSE provider name such as {@code Conscrypt} or {@code BCJSSE})
+     * is routed to the JSSE axis, restoring the v4 keystore behavior where {@code tlsProvider=Conscrypt} built
+     * the SSLContext with that provider. An engine literal ({@code JDK}/{@code OPENSSL}/{@code OPENSSL_REFCNT})
+     * stays on the engine axis ({@link #engineProvider(String)}) and yields {@code null} here.
+     *
+     * @param explicitJsseProvider the configured {@code jsseProvider} (may be null/blank)
+     * @param engineProviderString the configured {@code tlsProvider}/{@code sslProvider} (may be null/blank)
+     * @return the resolved JSSE provider name, or {@code null} for none
+     */
+    public static String resolveJsseProvider(String explicitJsseProvider, String engineProviderString) {
+        if (StringUtils.isNotBlank(explicitJsseProvider)) {
+            return explicitJsseProvider.trim();
+        }
+        if (StringUtils.isNotBlank(engineProviderString) && !isSslProviderEngineLiteral(engineProviderString)) {
+            return engineProviderString.trim();
+        }
+        return null;
+    }
+
+    /**
+     * Whether the provider string names a Netty {@link SslProvider} engine literal ({@code JDK} /
+     * {@code OPENSSL} / {@code OPENSSL_REFCNT}, case-insensitive) rather than a JSSE (SSLContext) provider name.
+     * Engine literals stay on the engine axis ({@link #engineProvider(String)} maps them to the Netty engine);
+     * only other values are routed to the {@code jsseProvider} axis by {@link #resolveJsseProvider}.
+     *
+     * @param providerString the configured provider string (may be null/blank)
+     * @return whether it is a Netty {@link SslProvider} engine literal
+     */
+    private static boolean isSslProviderEngineLiteral(String providerString) {
+        if (StringUtils.isBlank(providerString)) {
+            return false;
+        }
+        try {
+            SslProvider.valueOf(providerString.trim().toUpperCase(Locale.ROOT));
+            return true;
+        } catch (IllegalArgumentException notAnEngineLiteral) {
+            return false;
+        }
     }
 
     private static Exception asException(Throwable cause) {

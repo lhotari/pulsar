@@ -77,6 +77,23 @@ public class TlsFactorySupportTest {
     }
 
     @Test
+    public void resolveJsseProviderRoutesNonEngineValueAndHonorsExplicit() {
+        // An explicit jsseProvider always wins (trimmed).
+        assertThat(TlsFactorySupport.resolveJsseProvider("BCJSSE", "OPENSSL")).isEqualTo("BCJSSE");
+        assertThat(TlsFactorySupport.resolveJsseProvider(" BCJSSE ", null)).isEqualTo("BCJSSE");
+        // Absent an explicit value, a non-engine engineProviderString (a JSSE provider name) is routed here.
+        assertThat(TlsFactorySupport.resolveJsseProvider(null, "Conscrypt")).isEqualTo("Conscrypt");
+        assertThat(TlsFactorySupport.resolveJsseProvider("", " SunJSSE ")).isEqualTo("SunJSSE");
+        // Engine literals stay on the engine axis and yield null here (case-insensitive).
+        assertThat(TlsFactorySupport.resolveJsseProvider(null, "JDK")).isNull();
+        assertThat(TlsFactorySupport.resolveJsseProvider(null, "openssl")).isNull();
+        assertThat(TlsFactorySupport.resolveJsseProvider(null, "OPENSSL_REFCNT")).isNull();
+        // Both blank/null yields null.
+        assertThat(TlsFactorySupport.resolveJsseProvider(null, null)).isNull();
+        assertThat(TlsFactorySupport.resolveJsseProvider("  ", "  ")).isNull();
+    }
+
+    @Test
     public void initContextWiresServicesAndDefaultsOpenTelemetry() {
         TlsFactoryInitContext ctx = TlsFactorySupport.initContext(java.util.Map.of("k", "v"), null, null, null);
         assertThat(ctx.params()).containsEntry("k", "v");

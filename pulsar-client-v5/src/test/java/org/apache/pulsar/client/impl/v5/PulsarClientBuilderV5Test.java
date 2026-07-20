@@ -367,6 +367,33 @@ public class PulsarClientBuilderV5Test {
         assertEquals(applied.keyStoreType(), "PKCS12");
     }
 
+    /**
+     * PIP-478: the pinned JSSE (SSLContext) provider on a {@code tlsPolicy(...)} — as a FIPS deployment
+     * configures — must survive the bridged-v4 auth fold. The fold rebuilds the CLIENT_DEFAULT policy from the
+     * base flags; a PEM auth plugin folded on top must keep {@code jsseProvider} so the transport still pins the
+     * engine instead of falling back to the default JDK provider.
+     */
+    @Test
+    public void testFoldPreservesJsseProvider() {
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        builder.tlsPolicy(TlsPolicy.builder()
+                .trustCertsFilePath("/path/to/private-ca.pem")
+                .jsseProvider("BCJSSE")
+                .build());
+        builder.authentication(LegacyV4AuthenticationAdapter.wrap(
+                new org.apache.pulsar.client.impl.auth.AuthenticationTls(
+                        "/path/to/client.cert", "/path/to/client.key")));
+
+        builder.resolveAuthenticationForTest();
+
+        TlsPolicy applied = builder.getConfForTesting().getTlsPolicyMap().get(TlsPurpose.CLIENT_DEFAULT);
+        assertNotNull(applied, "the folded policy must land under CLIENT_DEFAULT");
+        assertEquals(applied.jsseProvider(), "BCJSSE",
+                "the pinned JSSE provider must be preserved across the fold");
+        assertEquals(applied.certificateFilePath(), "/path/to/client.cert");
+        assertEquals(applied.keyFilePath(), "/path/to/client.key");
+    }
+
     /** A minimal generic (non-built-in) v4 TLS plugin for the fold tests. */
     @SuppressWarnings("deprecation")
     private static final class GenericTlsV4Auth implements org.apache.pulsar.client.api.Authentication {

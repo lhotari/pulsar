@@ -134,6 +134,46 @@ public class DefaultBrokerTlsFactoryTest {
         factory.close();
     }
 
+    @Test
+    public void routesNonEngineTlsProviderToServerPolicyJsseProvider() {
+        // A JSSE (SSLContext) provider name available in the test JVM, set on the engine-axis field, must be
+        // routed to the policy jsseProvider so a v4 tlsProvider=Conscrypt keystore setup keeps building the
+        // SSLContext with that provider (the two-axis split mirrored from the client sslProvider handling).
+        ServiceConfiguration conf = new ServiceConfiguration();
+        conf.setTlsProvider("SunJSSE");
+        assertThat(DefaultBrokerTlsFactory.serverPolicy(conf).jsseProvider()).isEqualTo("SunJSSE");
+
+        conf.setBrokerClientSslProvider("SunJSSE");
+        assertThat(DefaultBrokerTlsFactory.brokerClientPolicy(conf).jsseProvider()).isEqualTo("SunJSSE");
+    }
+
+    @Test
+    public void keepsEngineLiteralTlsProviderOffJsseProvider() {
+        // Engine literals stay on the engine axis and must NOT be misrouted to a (non-existent) JSSE provider.
+        for (String engineLiteral : new String[] {"OPENSSL", "OPENSSL_REFCNT", "JDK"}) {
+            ServiceConfiguration conf = new ServiceConfiguration();
+            conf.setTlsProvider(engineLiteral);
+            conf.setBrokerClientSslProvider(engineLiteral);
+            assertThat(DefaultBrokerTlsFactory.serverPolicy(conf).jsseProvider())
+                    .as("serverPolicy jsseProvider for tlsProvider=" + engineLiteral).isNull();
+            assertThat(DefaultBrokerTlsFactory.brokerClientPolicy(conf).jsseProvider())
+                    .as("brokerClientPolicy jsseProvider for brokerClientSslProvider=" + engineLiteral).isNull();
+        }
+    }
+
+    @Test
+    public void explicitJsseProviderWinsOverEngineAxis() {
+        // An explicit jsseProvider takes precedence over the engine-axis field.
+        ServiceConfiguration conf = new ServiceConfiguration();
+        conf.setJsseProvider("SunJSSE");
+        conf.setTlsProvider("OPENSSL");
+        assertThat(DefaultBrokerTlsFactory.serverPolicy(conf).jsseProvider()).isEqualTo("SunJSSE");
+
+        conf.setBrokerClientJsseProvider("SunJSSE");
+        conf.setBrokerClientSslProvider("OPENSSL");
+        assertThat(DefaultBrokerTlsFactory.brokerClientPolicy(conf).jsseProvider()).isEqualTo("SunJSSE");
+    }
+
     private TlsFactoryInitContext initContext() {
         Executor direct = Runnable::run;
         return new TlsFactoryInitContext() {

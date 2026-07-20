@@ -334,15 +334,30 @@ public class WorkerServer {
     private SslContextFactory.Server createTlsFactoryWebServer(WorkerConfig config) throws Exception {
         this.tlsFactory = TlsFactorySupport.createFactory(config.getTlsFactoryClassName(), null,
                 () -> buildDefaultWebTlsFactory(config));
-        TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
-                TlsFactorySupport.parseFactoryConfig(config.getTlsFactoryConfig()),
-                scheduledExecutorService, scheduledExecutorService, workerOpenTelemetry());
-        TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
-        this.reloadableServerTls = JettyTlsFactory.createReloadingServerFactory(this.tlsFactory, TlsPurpose.WEB,
-                config.getTlsProvider(), config.isTlsRequireTrustedClientCertOnConnect(),
-                config.isTlsAllowInsecureConnection(), config.getWebServiceTlsCiphers(),
-                config.getWebServiceTlsProtocols());
-        return this.reloadableServerTls.sslContextFactory();
+        // Once the factory is created it owns live resources (cert watchers, reload work). A failure in any
+        // subsequent step rethrows out of init()/the constructor without returning a WorkerServer, so stop()
+        // is never reachable — dispose/close the partial state here to avoid leaking it.
+        try {
+            TlsFactoryInitContext initContext = TlsFactorySupport.initContext(
+                    TlsFactorySupport.parseFactoryConfig(config.getTlsFactoryConfig()),
+                    scheduledExecutorService, scheduledExecutorService, workerOpenTelemetry());
+            TlsFactorySupport.initializeBlocking(this.tlsFactory, initContext);
+            this.reloadableServerTls = JettyTlsFactory.createReloadingServerFactory(this.tlsFactory, TlsPurpose.WEB,
+                    config.getTlsProvider(), config.isTlsRequireTrustedClientCertOnConnect(),
+                    config.isTlsAllowInsecureConnection(), config.getWebServiceTlsCiphers(),
+                    config.getWebServiceTlsProtocols());
+            return this.reloadableServerTls.sslContextFactory();
+        } catch (Exception e) {
+            if (this.reloadableServerTls != null) {
+                this.reloadableServerTls.subscription().dispose();
+                this.reloadableServerTls = null;
+            }
+            if (this.tlsFactory != null) {
+                this.tlsFactory.close();
+                this.tlsFactory = null;
+            }
+            throw e;
+        }
     }
 
     private static PulsarTlsFactory buildDefaultWebTlsFactory(WorkerConfig config) {

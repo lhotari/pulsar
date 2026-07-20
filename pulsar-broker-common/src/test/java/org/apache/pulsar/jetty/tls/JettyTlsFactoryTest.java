@@ -349,6 +349,11 @@ public class JettyTlsFactoryTest {
      * rotates with material. A companion that flips {@code needClientAuth} on rotation must be reflected in the
      * synthesized Jetty {@link SslContextFactory.Server} after the reload, and dropping the companion must
      * revert client-auth to the consumer default rather than leaving the prior value stuck.
+     *
+     * <p>The companion is resolved on the <em>same single-thread scheduler</em> that runs the poll deliveries
+     * (see {@link CompanionFactory}'s executor): this reproduces the self-deadlock hazard a synchronous
+     * {@code join} on the delivery thread would hit. The reload path re-requests the companion asynchronously,
+     * so the rotation still applies (the assertions are awaited rather than read synchronously).
      */
     @Test
     public void serverCompanionClientAuthRotatesWithMaterialOnReload() throws Exception {
@@ -360,7 +365,9 @@ public class JettyTlsFactoryTest {
                 Map.of(TlsPurpose.WEB, TlsPolicy.pem(tempDir.resolve("ca.pem").toString(),
                         tempDir.resolve("cert.pem").toString(), tempDir.resolve("key.pem").toString())),
                 FileBasedTlsFactorySettings.builder().refreshIntervalSeconds(1).build());
-        CompanionFactory factory = new CompanionFactory(delegate, noClientAuth);
+        // Dispatch companion creation onto the shared scheduler (the delivery thread), so a join inside the
+        // reload callback would deadlock; the async re-request must keep the rotation working.
+        CompanionFactory factory = new CompanionFactory(delegate, noClientAuth, scheduler);
         factory.initialize(initContext()).join();
 
         JettyTlsFactory.ReloadableServerTls reloadable = JettyTlsFactory.createReloadingServerFactory(
@@ -603,10 +610,20 @@ public class JettyTlsFactoryTest {
         private final FileBasedTlsFactory delegate;
         // Volatile so a test can flip the companion between deliveries and assert the reload re-requests it.
         private volatile SSLParameters companion;
+        // When non-null, companion creation is dispatched onto this executor instead of completing inline. The
+        // rotation test passes the same single-thread scheduler that runs the poll deliveries, reproducing the
+        // self-deadlock hazard: a framework that joined on the companion from the delivery thread would wait on
+        // that thread itself. null leaves companion creation synchronous (the other companion tests).
+        private final Executor companionExecutor;
 
         CompanionFactory(FileBasedTlsFactory delegate, SSLParameters companion) {
+            this(delegate, companion, null);
+        }
+
+        CompanionFactory(FileBasedTlsFactory delegate, SSLParameters companion, Executor companionExecutor) {
             this.delegate = delegate;
             this.companion = companion;
+            this.companionExecutor = companionExecutor;
         }
 
         void setCompanion(SSLParameters companion) {
@@ -619,19 +636,29 @@ public class JettyTlsFactoryTest {
         }
 
         @Override
-        @SuppressWarnings("unchecked")
         public <T> CompletableFuture<Optional<TlsHandle<T>>> createInstance(TlsPurpose purpose,
                                                                             Class<T> instanceClass) {
             if (instanceClass == SSLParameters.class) {
-                SSLParameters current = companion;
-                // A null companion models a factory that supplies none: return empty() so the consumer default
-                // applies (used by the reload rotation test to drop the companion mid-flight).
-                if (current == null) {
-                    return delegate.createInstance(purpose, instanceClass);
+                if (companionExecutor != null) {
+                    // Resolve on the (shared, single-thread) executor so the future completes off the caller's
+                    // thread: a framework that joined on it from the delivery thread would deadlock.
+                    return CompletableFuture.supplyAsync(() -> resolveCompanion(purpose, instanceClass),
+                            companionExecutor);
                 }
-                return CompletableFuture.completedFuture(Optional.of((TlsHandle<T>) companionHandle(current)));
+                return CompletableFuture.completedFuture(resolveCompanion(purpose, instanceClass));
             }
             return delegate.createInstance(purpose, instanceClass);
+        }
+
+        @SuppressWarnings("unchecked")
+        private <T> Optional<TlsHandle<T>> resolveCompanion(TlsPurpose purpose, Class<T> instanceClass) {
+            SSLParameters current = companion;
+            // A null companion models a factory that supplies none: empty() so the consumer default applies
+            // (used by the reload rotation test to drop the companion mid-flight).
+            if (current == null) {
+                return delegate.createInstance(purpose, instanceClass).join();
+            }
+            return Optional.of((TlsHandle<T>) companionHandle(current));
         }
 
         @Override

@@ -395,7 +395,11 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
             b.allowInsecureConnection(base.allowInsecureConnection())
                     .enableHostnameVerification(base.enableHostnameVerification())
                     .protocols(base.protocols())
-                    .ciphers(base.ciphers());
+                    .ciphers(base.ciphers())
+                    // Preserve the pinned JSSE (SSLContext) provider across the fold. A FIPS deployment
+                    // pins it via tlsPolicy(...); dropping it here would let the transport fall back to
+                    // the default JDK engine, silently defeating the pin.
+                    .jsseProvider(base.jsseProvider());
         }
         return b;
     }

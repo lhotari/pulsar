@@ -41,6 +41,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.PrivateKey;
 import java.util.Map;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -174,7 +175,12 @@ public class AuthenticationAthenz
         try {
             return getAuthData().getCommandData();
         } catch (PulsarClientException e) {
-            throw new RuntimeException(e);
+            // Wrap in CompletionException, not a bare RuntimeException: on the async binary path this runs
+            // inside V5AuthContexts.supplyBlocking, and BinaryAuthenticationExchange strips exactly one
+            // CompletionException layer before mapping to the v4 exception type. A RuntimeException would
+            // survive that single unwrap and flatten a GettingAuthenticationDataException (transient
+            // credential-acquisition failure) into a generic PulsarClientException.
+            throw new CompletionException(e);
         }
     }
 
