@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.tls;
 
+import com.google.common.annotations.VisibleForTesting;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,8 +39,9 @@ import org.apache.pulsar.tls.TlsPurpose;
  *
  * <p>It lives in {@code pulsar-broker-common} — which owns the Jetty integration and the broker
  * configuration — so that neither the SPI module nor {@code pulsar-common} carries broker-config
- * knowledge. The class only <em>composes</em> the map; wiring it into the broker/proxy/web services is
- * a later stage.
+ * knowledge. The factory is composed from a {@link ServiceConfiguration} (optionally folding the
+ * broker's broker-client authentication TLS material over the {@link TlsPurpose#BROKER_CLIENT} purpose)
+ * and consumed by the broker listener, web service and proxy.
  */
 public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
 
@@ -116,12 +118,18 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
         return new DefaultBrokerTlsFactory(policies, settings, authSuppliers);
     }
 
-    private static TlsPolicy serverPolicy(ServiceConfiguration conf) {
+    @VisibleForTesting
+    static TlsPolicy serverPolicy(ServiceConfiguration conf) {
         TlsPolicy.Builder builder = TlsPolicy.builder()
                 .allowInsecureConnection(conf.isTlsAllowInsecureConnection())
                 .enableHostnameVerification(conf.isTlsHostnameVerificationEnabled())
                 .protocols(toList(conf.getTlsProtocols()))
-                .ciphers(toList(conf.getTlsCiphers()));
+                .ciphers(toList(conf.getTlsCiphers()))
+                // PIP-478: pin the JSSE (SSLContext) provider (e.g. BCJSSE for FIPS) for the listener/web
+                // material; when set it forces the JDK engine with this provider building the SSLContext
+                // (distinct from tlsProvider, the engine). A non-engine tlsProvider value (e.g. Conscrypt) is
+                // also routed here for v4 keystore parity, mirroring the client sslProvider two-axis split.
+                .jsseProvider(TlsFactorySupport.resolveJsseProvider(conf.getJsseProvider(), conf.getTlsProvider()));
         if (conf.isTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
                     .keyStoreType(conf.getTlsKeyStoreType())
@@ -139,13 +147,19 @@ public class DefaultBrokerTlsFactory extends FileBasedTlsFactory {
         return builder.build();
     }
 
-    private static TlsPolicy brokerClientPolicy(ServiceConfiguration conf) {
+    @VisibleForTesting
+    static TlsPolicy brokerClientPolicy(ServiceConfiguration conf) {
         // Outbound broker-client connections reuse the shared insecure/hostname-verification flags.
         TlsPolicy.Builder builder = TlsPolicy.builder()
                 .allowInsecureConnection(conf.isTlsAllowInsecureConnection())
                 .enableHostnameVerification(conf.isTlsHostnameVerificationEnabled())
                 .protocols(toList(conf.getBrokerClientTlsProtocols()))
-                .ciphers(toList(conf.getBrokerClientTlsCiphers()));
+                .ciphers(toList(conf.getBrokerClientTlsCiphers()))
+                // PIP-478: pin the JSSE (SSLContext) provider for the broker's own outbound (replication) client
+                // TLS. A non-engine brokerClientSslProvider value (e.g. Conscrypt) is also routed here for v4
+                // keystore parity, mirroring the client sslProvider two-axis split.
+                .jsseProvider(TlsFactorySupport.resolveJsseProvider(conf.getBrokerClientJsseProvider(),
+                        conf.getBrokerClientSslProvider()));
         if (conf.isBrokerClientTlsEnabledWithKeyStore()) {
             builder.format(TlsPolicy.Format.KEYSTORE)
                     .keyStoreType(conf.getBrokerClientTlsKeyStoreType())

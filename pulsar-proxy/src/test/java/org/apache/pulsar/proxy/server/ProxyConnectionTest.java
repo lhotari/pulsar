@@ -59,4 +59,67 @@ public class ProxyConnectionTest {
         clientConfiguration = proxyConnection.createClientConfiguration();
         assertEquals(clientConfiguration.getServiceUrl(), proxyUrl);
     }
+
+    // PIP-478 (FIX): the proxy's internal lookup client must carry the broker-client TLS engine (sslProvider)
+    // and JSSE (SSLContext) provider (jsseProvider) config — they were otherwise dropped (never copied into the
+    // ClientConfigurationData), silently defaulting the engine/provider on the proxy->broker connection.
+    @Test
+    public void testCreateClientConfigurationPropagatesTlsProviders() {
+        ProxyConfiguration proxyConfiguration = new ProxyConfiguration();
+        proxyConfiguration.setTlsEnabledWithBroker(true);
+        proxyConfiguration.setBrokerClientSslProvider("OPENSSL");
+        proxyConfiguration.setBrokerClientJsseProvider("BCJSSE");
+
+        ProxyService proxyService = mock(ProxyService.class);
+        doReturn(proxyConfiguration).when(proxyService).getConfiguration();
+        doReturn("pulsar+ssl://proxy:6651").when(proxyService).getServiceUrlTls();
+        doReturn("pulsar://proxy:6650").when(proxyService).getServiceUrl();
+
+        ProxyConnection proxyConnection = new ProxyConnection(proxyService, null);
+        ClientConfigurationData clientConfiguration = proxyConnection.createClientConfiguration();
+        assertEquals(clientConfiguration.getSslProvider(), "OPENSSL");
+        assertEquals(clientConfiguration.getJsseProvider(), "BCJSSE");
+    }
+
+    // PIP-478 (FIX): the proxy's internal lookup client config must carry the broker-client custom TLS factory
+    // selection (brokerClientTlsFactoryClassName / brokerClientTlsFactoryConfig) — otherwise the lookup path's
+    // shared CLIENT_DEFAULT factory resolves to the file-based default while the direct proxy path uses the
+    // configured custom factory.
+    @Test
+    public void testCreateClientConfigurationPropagatesTlsFactorySelection() {
+        ProxyConfiguration proxyConfiguration = new ProxyConfiguration();
+        proxyConfiguration.setTlsEnabledWithBroker(true);
+        proxyConfiguration.setBrokerClientTlsFactoryClassName("com.example.CustomTlsFactory");
+        proxyConfiguration.setBrokerClientTlsFactoryConfig("{\"vault\":\"pki\"}");
+
+        ProxyService proxyService = mock(ProxyService.class);
+        doReturn(proxyConfiguration).when(proxyService).getConfiguration();
+        doReturn("pulsar+ssl://proxy:6651").when(proxyService).getServiceUrlTls();
+        doReturn("pulsar://proxy:6650").when(proxyService).getServiceUrl();
+
+        ProxyConnection proxyConnection = new ProxyConnection(proxyService, null);
+        ClientConfigurationData clientConfiguration = proxyConnection.createClientConfiguration();
+        assertEquals(clientConfiguration.getTlsFactoryClassName(), "com.example.CustomTlsFactory");
+        assertEquals(clientConfiguration.getTlsFactoryConfig(), "{\"vault\":\"pki\"}");
+    }
+
+    // The blank-default brokerClientTlsFactoryClassName must not clobber a brokerClient_ property override.
+    @Test
+    public void testCreateClientConfigurationKeepsTlsFactoryOverrides() {
+        ProxyConfiguration proxyConfiguration = new ProxyConfiguration();
+        proxyConfiguration.setTlsEnabledWithBroker(true);
+        proxyConfiguration.getProperties().setProperty("brokerClient_tlsFactoryClassName",
+                "com.example.OverrideTlsFactory");
+        proxyConfiguration.getProperties().setProperty("brokerClient_tlsFactoryConfig", "{\"hsm\":\"slot0\"}");
+
+        ProxyService proxyService = mock(ProxyService.class);
+        doReturn(proxyConfiguration).when(proxyService).getConfiguration();
+        doReturn("pulsar+ssl://proxy:6651").when(proxyService).getServiceUrlTls();
+        doReturn("pulsar://proxy:6650").when(proxyService).getServiceUrl();
+
+        ProxyConnection proxyConnection = new ProxyConnection(proxyService, null);
+        ClientConfigurationData clientConfiguration = proxyConnection.createClientConfiguration();
+        assertEquals(clientConfiguration.getTlsFactoryClassName(), "com.example.OverrideTlsFactory");
+        assertEquals(clientConfiguration.getTlsFactoryConfig(), "{\"hsm\":\"slot0\"}");
+    }
 }
