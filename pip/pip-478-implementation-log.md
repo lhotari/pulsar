@@ -213,3 +213,31 @@
     docs + CN→SAN wording + comment corrections. Doc: merge-rule 2 states the explicit endpoint-id clear (477d223).
     NEXT: partition restructure (fold fixes+jsseProvider into introducing chunks; chunk-6 message must disclose
     config-removal+successor — Fable BLOCKER on message honesty), re-gate, re-push, CI, ROUND 2 to fixpoint.
+
+71. **ROUND 2 COMPLETE — Fable(brain)/Opus-4.8(exec)/Codex-gpt-5.6-sol(review), 2026-07-20.** User re-directed the
+    model split mid-round. Codex round-2: 5 per-chunk reviews → 13 distinct findings; Fable panel (Opus) added
+    fix-regression + restructure + server-integration dimensions. EVERY finding Opus-verified before fixing.
+    REFUTED (4, evidence-backed): C1 (Netty KMF/TMF not provider-pinned — but pip-478.md:860 documents
+    sslContextProvider-only, and it's MORE pinned than v4 which pinned nothing on the Netty path; BCJSSE/Conscrypt
+    consume standard X509KeyManagers — I had wrongly been confident C1 was real, verify-before-fix caught it), C2
+    (buildJdkContext omits engine policy for the SSLContext fallback — but every in-tree consumer applies policy
+    via Jetty setters or the synthesis wrapper; no consumer builds raw engines; and a JDK SSLContext has no API to
+    bake protocols anyway), C4 (broker jsseProvider IS wired — reviewed an intermediate), C10 (admin SASL inline —
+    Jersey async pool unbounded, no starvation). NON-DETERMINISM LESSON: C5/C11/C13 FLIPPED refuted→real between a
+    partial run and the full re-run — adjudicated each against the code MYSELF (Fable): all 3 real (copyFlags omits
+    jsseProvider; currentRoleToken flattens the v4 subtype via RuntimeException; v4 keystore path DID honor
+    tlsProvider=Conscrypt as the JSSE provider). Don't trust a single LLM verification pass on a flip — read the
+    code. CONFIRMED+FIXED (all gate-green, test-verified):
+    WAVE 1 (a0c840552fc): C12 MAJOR broker-client purpose delegate (BrokerClientPurposeFactory translates
+    CLIENT_DEFAULT→BROKER_CLIENT at both custom-factory sites + ProxyService wired brokerClientPurpose=true) — a
+    compliant BROKER_CLIENT-only custom factory was getting CLIENT_DEFAULT → empty/downgrade; C9 MAJOR (bug in my
+    round-1 SASL fix — orTimeout bounded only the GET not the GSSAPI eval; now whole-round); C6 MAJOR cross-format
+    trust-anchor silent drop → fail-loud; C7 MAJOR CLI reads jsseProvider; C3 MINOR Jetty companion rotation; C8
+    MINOR WebService factory leak; ServiceChannelInitializer cleanup; DefaultBrokerTls + ServiceConfig javadoc.
+    WAVE 2 (6719e525f0d): C5 MAJOR jsseProvider dropped in the v4-auth fold (copyFlags) → preserve it; C11 MINOR
+    Athenz exception subtype (RuntimeException→CompletionException); C13 MAJOR broker keystore Conscrypt parity
+    (two-axis resolveJsseProvider mirroring the client + pip-478.md update); C3-REDO MAJOR (wave-1's C3 fix
+    introduced a .join() self-deadlock on the Jetty reload delivery thread — the Fable server-integration reviewer
+    caught it; now async whenComplete like SynthesizingSubscription); WorkerServer factory-leak guard.
+    Monolith tip 6719e525f0d. NEXT: re-cut v7 (fold round-2 fixes to their chunks; move the chunk-6 "CmdClusters
+    CLI flags" clause to chunk-4 per the Fable restructure MINOR), gate, re-push, ROUND 3.
