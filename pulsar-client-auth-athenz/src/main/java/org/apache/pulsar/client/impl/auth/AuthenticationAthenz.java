@@ -41,6 +41,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.PrivateKey;
 import java.util.Map;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -51,14 +52,33 @@ import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.PulsarClientException.GettingAuthenticationDataException;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange;
 import org.apache.pulsar.client.api.url.URL;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServices;
+import org.apache.pulsar.client.api.v5.internal.ClientAuthenticationServicesAware;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
+import org.apache.pulsar.client.impl.auth.v5.AthenzAuthenticationV5;
+import org.apache.pulsar.client.impl.auth.v5.V5BinaryAuthenticationDriver;
 
-public class AuthenticationAthenz implements Authentication, EncodedAuthenticationParameterSupport {
+/**
+ * Athenz authentication provider.
+ *
+ * <p>The verbatim v4 synchronous surface ({@link #getAuthData()} / {@link AuthenticationDataAthenz}) is
+ * preserved; PIP-478 additionally exposes {@link AsyncAuthenticationDriver} so {@code ClientCnx} can drive
+ * the role-token credential over the non-blocking binary path via the v5-native
+ * {@link AthenzAuthenticationV5}. The ZTS role-token cache stays on this shim.
+ */
+public class AuthenticationAthenz
+        implements Authentication, EncodedAuthenticationParameterSupport, AsyncAuthenticationDriver,
+        ClientAuthenticationServicesAware {
 
     private static final long serialVersionUID = 1L;
 
     private static final String APPLICATION_X_PEM_FILE = "application/x-pem-file";
+
+    // PIP-478: the client's framework services, late-bound before start(); null until then.
+    private transient volatile ClientAuthenticationServices authServices;
 
     private transient KeyRefresher keyRefresher = null;
     private transient ZTSClient ztsClient = null;
@@ -133,6 +153,58 @@ public class AuthenticationAthenz implements Authentication, EncodedAuthenticati
         // Ensure we refresh the Athenz role token every 90 minutes to avoid using an expired
         // role token
         return (System.nanoTime() - cachedRoleTokenTimestamp) < TimeUnit.MINUTES.toNanos(cacheDurationInMinutes);
+    }
+
+    @Override
+    public void bindClientAuthenticationServices(ClientAuthenticationServices services) {
+        this.authServices = services;
+    }
+
+    @Override
+    public AuthenticationExchange newAuthenticationExchange(String brokerHostName) {
+        // PIP-478: drive the v5-native Athenz body on the async binary path. The ZTS role-token cache stays
+        // on this shim; the body reads the current role token through getAuthData(), so a broker-pushed
+        // REFRESH re-acquires an expired token here exactly as the synchronous path does. The bound blocking
+        // executor off-loads that (ZTS-blocking) fetch so it never runs on the Netty event loop.
+        return new V5BinaryAuthenticationDriver(new AthenzAuthenticationV5(new ShimRoleTokenProvider(this)),
+                authServices).newAuthenticationExchange(brokerHostName);
+    }
+
+    @SuppressWarnings("deprecation")
+    private String currentRoleToken() {
+        try {
+            return getAuthData().getCommandData();
+        } catch (PulsarClientException e) {
+            // Wrap in CompletionException, not a bare RuntimeException: on the async binary path this runs
+            // inside V5AuthContexts.supplyBlocking, and BinaryAuthenticationExchange strips exactly one
+            // CompletionException layer before mapping to the v4 exception type. A RuntimeException would
+            // survive that single unwrap and flatten a GettingAuthenticationDataException (transient
+            // credential-acquisition failure) into a generic PulsarClientException.
+            throw new CompletionException(e);
+        }
+    }
+
+    private String currentRoleHeaderName() {
+        return isNotBlank(roleHeader) ? roleHeader : ZTSClient.getHeader();
+    }
+
+    private static final class ShimRoleTokenProvider implements AthenzAuthenticationV5.RoleTokenProvider {
+        private static final long serialVersionUID = 1L;
+        private final AuthenticationAthenz shim;
+
+        ShimRoleTokenProvider(AuthenticationAthenz shim) {
+            this.shim = shim;
+        }
+
+        @Override
+        public String roleToken() {
+            return shim.currentRoleToken();
+        }
+
+        @Override
+        public String roleHeaderName() {
+            return shim.currentRoleHeaderName();
+        }
     }
 
     @Override
