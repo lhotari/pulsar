@@ -169,29 +169,6 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
                     + "used by the internal client to authenticate with Pulsar brokers"
     )
     private String brokerClientCertificateFilePath;
-    /**
-     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478). Retained in the cluster
-     *     metadata schema for wire/metadata compatibility, but a configured value is ignored with a WARN;
-     *     factory-class selection is broker-level ({@code brokerClientTlsFactoryClassName}).
-     */
-    @Deprecated
-    @Schema(
-            name = "brokerClientSslFactoryPlugin",
-            description = "Deprecated (PIP-478): removed in Pulsar 5.0. Retained for metadata compatibility but "
-                    + "ignored (with a WARN); factory selection is broker-level."
-    )
-    private String brokerClientSslFactoryPlugin;
-    /**
-     * @deprecated since 5.0.0: the PIP-337 SSL factory plugin is removed (PIP-478). Retained for metadata
-     *     compatibility but ignored.
-     */
-    @Deprecated
-    @Schema(
-            name = "brokerClientSslFactoryPluginParams",
-            description = "Deprecated (PIP-478): removed in Pulsar 5.0. Retained for metadata compatibility but "
-                    + "ignored."
-    )
-    private String brokerClientSslFactoryPluginParams;
     @Schema(
             name = "listenerName",
             description = "listenerName when client would like to connect to cluster",
@@ -227,8 +204,6 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
                 .brokerClientTrustCertsFilePath(brokerClientTrustCertsFilePath)
                 .brokerClientCertificateFilePath(brokerClientCertificateFilePath)
                 .brokerClientKeyFilePath(brokerClientKeyFilePath)
-                .brokerClientSslFactoryPlugin(brokerClientSslFactoryPlugin)
-                .brokerClientSslFactoryPluginParams(brokerClientSslFactoryPluginParams)
                 .listenerName(listenerName);
     }
 
@@ -255,8 +230,6 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
         private String brokerClientCertificateFilePath;
         private String brokerClientKeyFilePath;
         private String brokerClientTrustCertsFilePath;
-        private String brokerClientSslFactoryPlugin;
-        private String brokerClientSslFactoryPluginParams;
         private String listenerName;
 
         ClusterDataImplBuilder() {
@@ -372,20 +345,6 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
             return this;
         }
 
-        @Override
-        @Deprecated
-        public ClusterDataImplBuilder brokerClientSslFactoryPlugin(String sslFactoryPlugin) {
-            this.brokerClientSslFactoryPlugin = sslFactoryPlugin;
-            return this;
-        }
-
-        @Override
-        @Deprecated
-        public ClusterDataImplBuilder brokerClientSslFactoryPluginParams(String sslFactoryPluginParams) {
-            this.brokerClientSslFactoryPluginParams = sslFactoryPluginParams;
-            return this;
-        }
-
         public ClusterDataImplBuilder listenerName(String listenerName) {
             this.listenerName = listenerName;
             return this;
@@ -414,8 +373,6 @@ public final class ClusterDataImpl implements  ClusterData, Cloneable {
                     brokerClientTrustCertsFilePath,
                     brokerClientKeyFilePath,
                     brokerClientCertificateFilePath,
-                    brokerClientSslFactoryPlugin,
-                    brokerClientSslFactoryPluginParams,
                     listenerName);
         }
     }

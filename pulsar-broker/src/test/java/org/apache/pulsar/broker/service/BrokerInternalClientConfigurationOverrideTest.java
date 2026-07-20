@@ -96,6 +96,56 @@ public class BrokerInternalClientConfigurationOverrideTest extends BrokerTestBas
     }
 
     @Test
+    public void testBrokerServiceReplicationClientTlsProviderPropagation() {
+        // PIP-478 FIX A: the geo-replication client must inherit brokerClientSslProvider/brokerClientJsseProvider,
+        // otherwise it silently builds TLS with the default JDK provider (a FIPS/OpenSSL downgrade).
+        // The replication client builds its SSL context lazily (per connection), so arbitrary provider names are
+        // safe here — the test only asserts the config is carried, it never opens a TLS connection.
+        pulsar.getConfiguration().setBrokerClientSslProvider("JDK");
+        pulsar.getConfiguration().setBrokerClientJsseProvider("BCJSSE");
+        try {
+            ClusterData data = ClusterData.builder()
+                    .serviceUrlTls("https://localhost:8443")
+                    .brokerServiceUrlTls("pulsar+ssl://localhost:6651")
+                    .brokerClientTlsEnabled(true)
+                    .build();
+            PulsarClientImpl client = (PulsarClientImpl) pulsar.getBrokerService()
+                    .getReplicationClient("provider_propagation_repl_cluster", Optional.of(data));
+            ClientConfigurationData clientConf = client.getConfiguration();
+            Assert.assertEquals(clientConf.getSslProvider(), "JDK");
+            Assert.assertEquals(clientConf.getJsseProvider(), "BCJSSE");
+        } finally {
+            pulsar.getConfiguration().setBrokerClientSslProvider(null);
+            pulsar.getConfiguration().setBrokerClientJsseProvider(null);
+        }
+    }
+
+    @Test
+    public void testClusterPulsarAdminTlsProviderPropagation() {
+        // PIP-478 FIX A: the cross-cluster admin client must inherit the same providers. Unlike the replication
+        // client, PulsarAdminImpl builds the TLS context eagerly in its constructor, so the provider values must
+        // actually resolve on this JVM: "JDK" stays on the Netty engine axis and "SunJSSE" is a standard JSSE
+        // provider that supplies a "TLS" SSLContext. Insecure connection avoids needing trust-cert material.
+        pulsar.getConfiguration().setBrokerClientSslProvider("JDK");
+        pulsar.getConfiguration().setBrokerClientJsseProvider("SunJSSE");
+        try {
+            ClusterData data = ClusterData.builder()
+                    .serviceUrlTls("https://localhost:8443")
+                    .brokerClientTlsEnabled(true)
+                    .tlsAllowInsecureConnection(true)
+                    .build();
+            PulsarAdminImpl admin = (PulsarAdminImpl) pulsar.getBrokerService()
+                    .getClusterPulsarAdmin("provider_propagation_admin_cluster", Optional.of(data));
+            ClientConfigurationData clientConf = admin.getClientConfigData();
+            Assert.assertEquals(clientConf.getSslProvider(), "JDK");
+            Assert.assertEquals(clientConf.getJsseProvider(), "SunJSSE");
+        } finally {
+            pulsar.getConfiguration().setBrokerClientSslProvider(null);
+            pulsar.getConfiguration().setBrokerClientJsseProvider(null);
+        }
+    }
+
+    @Test
     public void testNamespaceServicePulsarClientConfiguration() {
         // This data only needs to have the service url for this test.
         ClusterDataImpl data = (ClusterDataImpl) ClusterData.builder().serviceUrl("http://localhost:8080").build();
