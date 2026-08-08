@@ -171,6 +171,40 @@ public class AuthenticationSasl
      * connection but never responds cannot leak an in-flight request (fd/socket exhaustion) across retries. A
      * response that arrives after the future already timed out is closed rather than leaked.
      */
+    /**
+     * Complete {@code future} from {@code response} and always close the response.
+     *
+     * <p>{@code InvocationCallback<Response>} hands the caller an unclosed response, and reading only its
+     * headers neither consumes the entity nor releases the connection — so completing without closing leaks
+     * one pooled connection per authentication round. The driver runs at least one round on every admin
+     * request (round 0 replays the cached role token), so the leak is per request, not per client. The late
+     * case — the future already timed out or was cancelled — must close too, which is the only case the
+     * original code handled.
+     *
+     * <p>Package-private (VisibleForTesting) so the close contract can be asserted on both branches.
+     *
+     * @param future   the future to complete
+     * @param response the JAX-RS response, always closed before returning
+     */
+
+    private static HttpAuthHeaders toHeaders(Response response) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        response.getStringHeaders().forEach((name, values) -> {
+            if (values != null && !values.isEmpty() && values.get(0) != null) {
+                headers.put(name, values.get(0));
+            }
+        });
+        return HttpAuthHeaders.of(headers);
+    }
+
+    static void completeAndClose(CompletableFuture<HttpChallengeTransport.Result> future, Response response) {
+        try {
+            future.complete(new HttpChallengeTransport.Result(response.getStatus(), toHeaders(response)));
+        } finally {
+            response.close();
+        }
+    }
+
     private final class JaxRsChallengeTransport implements HttpChallengeTransport {
         @Override
         public CompletableFuture<Result> get(URI uri, HttpAuthHeaders requestHeaders, Duration timeout) {
@@ -185,10 +219,7 @@ public class AuthenticationSasl
                 Future<Response> responseFuture = builder.async().get(new InvocationCallback<Response>() {
                     @Override
                     public void completed(Response response) {
-                        // A late response (future already timed out/cancelled) would leak its connection; close it.
-                        if (!future.complete(new Result(response.getStatus(), toHeaders(response)))) {
-                            response.close();
-                        }
+                        completeAndClose(future, response);
                     }
 
                     @Override
@@ -211,15 +242,6 @@ public class AuthenticationSasl
             return future;
         }
 
-        private HttpAuthHeaders toHeaders(Response response) {
-            Map<String, String> headers = new LinkedHashMap<>();
-            response.getStringHeaders().forEach((name, values) -> {
-                if (values != null && !values.isEmpty() && values.get(0) != null) {
-                    headers.put(name, values.get(0));
-                }
-            });
-            return HttpAuthHeaders.of(headers);
-        }
     }
 
     private static final class ShimSaslProviderFactory implements SaslAuthenticationV5.SaslProviderFactory {
@@ -310,8 +332,11 @@ public class AuthenticationSasl
         }
     }
 
-    private String saslRoleToken = null;
-    private Client client = null;
+    // PIP-478: written by start()/close() on the application thread and read from the HTTP challenge
+    // driver's continuation threads (Jersey async callbacks), so both need a happens-before edge —
+    // matching the volatile treatment already given to authServices / httpAuthenticationDriver.
+    private volatile String saslRoleToken = null;
+    private volatile Client client = null;
 
     // role token exists but expired return true
     private boolean isRoleTokenExpired(Map<String, String> responseHeaders) {

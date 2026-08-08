@@ -447,4 +447,82 @@ public class PulsarClientBuilderV5Test {
             return e;
         }
     }
+
+    @Test
+    public void aV4PluginDrivingItsOwnV5BodyRunsRawRatherThanWrapped() throws Exception {
+        // PIP-478: AuthenticationSasl / Token / Basic / OAuth2 / Athenz implement AsyncAuthenticationDriver and
+        // already drive a v5-native body. Wrapping one in V5ToV4AuthenticationAdapter re-drives its deprecated
+        // synchronous surface, and capability(...) reports only directly-implemented interfaces, so the HTTP
+        // capabilities vanish and every http:// lookup would go out unauthenticated.
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        builder.authentication(AsyncDrivingV4.class.getName(), "");
+
+        assertTrue(builder.resolveAuthenticationForTest() instanceof AsyncDrivingV4,
+                "a plugin driving its own v5 body must run raw, not wrapped");
+    }
+
+    @Test
+    public void aPlainV4PluginIsStillWrapped() throws Exception {
+        // The offload guarantee for genuinely-legacy plugins must not regress: one with no async driver is
+        // still adapted, so its credential work is off-loaded rather than run on the caller's thread.
+        PulsarClientBuilderV5 builder = new PulsarClientBuilderV5();
+        builder.authentication(PlainV4.class.getName(), "");
+
+        assertFalse(builder.resolveAuthenticationForTest() instanceof PlainV4,
+                "a legacy plugin must stay wrapped so its credential work is off-loaded");
+    }
+
+    /** A v4 plugin that drives its own v5 body, like the built-in shims. Public for by-name loading. */
+    public static final class AsyncDrivingV4
+            implements org.apache.pulsar.client.api.Authentication,
+            org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver {
+
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        public String getAuthMethodName() {
+            return "async-driving";
+        }
+
+        @Override
+        public void configure(java.util.Map<String, String> authParams) {
+        }
+
+        @Override
+        public void start() {
+        }
+
+        @Override
+        public void close() {
+        }
+
+        @Override
+        public org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver.AuthenticationExchange
+                newAuthenticationExchange(String brokerHostName) {
+            throw new UnsupportedOperationException("not driven in this test");
+        }
+    }
+
+    /** A genuinely-legacy v4 plugin with no async driver. Public for by-name loading. */
+    public static final class PlainV4 implements org.apache.pulsar.client.api.Authentication {
+
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        public String getAuthMethodName() {
+            return "plain-legacy";
+        }
+
+        @Override
+        public void configure(java.util.Map<String, String> authParams) {
+        }
+
+        @Override
+        public void start() {
+        }
+
+        @Override
+        public void close() {
+        }
+    }
 }

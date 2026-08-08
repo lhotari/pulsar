@@ -24,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.KeyStoreParams;
+import org.apache.pulsar.client.api.internal.AsyncAuthenticationDriver;
 import org.apache.pulsar.client.api.v5.PulsarClient;
 import org.apache.pulsar.client.api.v5.PulsarClientBuilder;
 import org.apache.pulsar.client.api.v5.PulsarClientException;
@@ -183,6 +184,14 @@ final class PulsarClientBuilderV5 implements PulsarClientBuilder {
             return true;
         }
         if (v4 instanceof AuthenticationDisabled) {
+            return true;
+        }
+        if (v4 instanceof AsyncAuthenticationDriver) {
+            // PIP-478: the plugin already drives a v5-native body and off-loads through the client services it
+            // is bound to. Wrapping it in V5ToV4AuthenticationAdapter would re-drive its deprecated synchronous
+            // surface and, because capability(...) only reports directly-implemented interfaces, drop its HTTP
+            // capabilities — leaving every http:// lookup unauthenticated. Run it raw: ClientCnx uses the
+            // AsyncAuthenticationDriver and HttpClient finds AsyncHttpAuthenticationProvider on it.
             return true;
         }
         return resolveGenericV4(v4, foldTls);
