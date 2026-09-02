@@ -3778,6 +3778,55 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
     }
 
     @Test(timeOut = 20000)
+    void hasOutstandingReadOperation() throws Exception {
+        ManagedLedger ledger = factory.open("hasOutstandingReadOperation",
+                new ManagedLedgerConfig().setMaxEntriesPerLedger(1));
+        ManagedCursor c1 = ledger.openCursor("c1");
+
+        // Nothing armed yet.
+        assertFalse(c1.hasOutstandingReadOperation());
+
+        // A read parked waiting for new entries is outstanding.
+        CountDownLatch waitingRead = new CountDownLatch(1);
+        c1.asyncReadEntriesOrWait(1, new ReadEntriesCallback() {
+            @Override
+            public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                entries.forEach(Entry::release);
+                waitingRead.countDown();
+            }
+
+            @Override
+            public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                waitingRead.countDown();
+            }
+        }, null, PositionFactory.LATEST);
+        assertTrue(c1.hasOutstandingReadOperation());
+
+        // Publishing wakes the parked read; once its callback has run the cursor owns nothing again.
+        ledger.addEntry("entry-1".getBytes(Encoding));
+        assertTrue(waitingRead.await(20, TimeUnit.SECONDS));
+        Awaitility.await().untilAsserted(() -> assertFalse(c1.hasOutstandingReadOperation()));
+
+        // Cancelling a parked read also releases it.
+        CountDownLatch cancelledRead = new CountDownLatch(1);
+        c1.asyncReadEntriesOrWait(1, new ReadEntriesCallback() {
+            @Override
+            public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                entries.forEach(Entry::release);
+                cancelledRead.countDown();
+            }
+
+            @Override
+            public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                cancelledRead.countDown();
+            }
+        }, null, PositionFactory.LATEST);
+        assertTrue(c1.hasOutstandingReadOperation());
+        assertTrue(c1.cancelPendingReadRequest());
+        assertFalse(c1.hasOutstandingReadOperation());
+    }
+
+    @Test(timeOut = 20000)
     public void testReopenMultipleTimes() throws Exception {
         ManagedLedger ledger = factory.open("testReopenMultipleTimes");
         ManagedCursor c1 = ledger.openCursor("c1");

@@ -2992,9 +2992,14 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 topicStatsHelper.aggMsgRateOut += subMsgRateOut;
                 topicStatsHelper.aggMsgThroughputOut += subMsgThroughputOut;
                 nsStats.msgBacklog += subscription.getNumberOfEntriesInBacklog(false);
-                // check stuck subscription
+                // check stuck subscription. Exactly one of these runs per interval: both consume the
+                // cursor's read-position sample. Unblocking a subscription the dispatcher believes is idle
+                // is a heuristic and stays opt-in, but repairing read state that contradicts the cursor is
+                // not: without it such a subscription never dispatches again. See #26454.
                 if (brokerService.getPulsar().getConfig().isUnblockStuckSubscriptionEnabled()) {
                     subscription.checkAndUnblockIfStuck();
+                } else {
+                    subscription.checkAndRepairInconsistentReadState();
                 }
             } catch (Exception e) {
                 log.error()

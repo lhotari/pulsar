@@ -1214,6 +1214,18 @@ public class ManagedCursorImpl implements ManagedCursor {
     }
 
     @Override
+    public boolean hasOutstandingReadOperation() {
+        // A read is owned by this cursor either while it waits in the waitingReadOp slot for new entries, or
+        // while it is counted in pendingReadOps because it has been handed to the managed ledger.
+        // Note that this is a sampled signal, not a lock: an op is momentarily invisible to both while a
+        // single thread moves it from the waiting slot to the in-flight count (checkForNewEntries and
+        // notifyEntriesAvailable increment pendingReadOps just after clearing waitingReadOp), and again
+        // between readOperationCompleted() and the callback being run. Callers must therefore treat a
+        // single false observation as inconclusive and confirm it over time.
+        return hasPendingReadRequest() || PENDING_READ_OPS_UPDATER.get(this) > 0;
+    }
+
+    @Override
     public boolean hasMoreEntries() {
         // If writer and reader are on the same ledger, we just need to compare the entry id to know if we have more
         // entries.
