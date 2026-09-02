@@ -52,7 +52,6 @@ import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.Consumer;
-import org.apache.pulsar.broker.service.Dispatcher;
 import org.apache.pulsar.broker.service.EntryBatchIndexesAcks;
 import org.apache.pulsar.broker.service.EntryBatchSizes;
 import org.apache.pulsar.broker.service.TransportCnx;
@@ -171,12 +170,7 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
         cursorProxy = mock(ManagedCursor.class,
                 withSettings().defaultAnswer(AdditionalAnswers.delegatesTo(realCursor)));
 
-        subscription = new PersistentSubscription(topic, "sub", realCursor, false) {
-            @Override
-            protected Dispatcher reuseOrCreateDispatcher(Dispatcher existingDispatcher, Consumer newConsumer) {
-                return PersistentDispatcherMultipleConsumersStuckReadTest.this.dispatcher;
-            }
-        };
+        subscription = new PersistentSubscription(topic, "sub", realCursor, false);
         dispatcher = new PersistentDispatcherMultipleConsumers(topic, cursorProxy, subscription);
 
         deliveries.clear();

@@ -145,11 +145,15 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     /**
      * Number of consecutive {@link #checkAndUnblockIfStuck()} calls that must observe
      * {@link #havePendingRead} set while the cursor owns no read before the flag is treated as stale.
-     * See {@link #checkAndClearStaleNormalRead()}.
+     * See {@link #clearStaleNormalRead()}.
      */
     private static final int STALE_NORMAL_READ_OBSERVATIONS_BEFORE_RECOVERY = 2;
-    /** Guarded by "this". See {@link #checkAndClearStaleNormalRead()}. */
-    private int staleNormalReadObservations;
+    /**
+     * Written only from the periodic stuck-subscription check, which is never concurrent with itself for a
+     * given dispatcher; volatile so a check running on a different stats thread than the previous one still
+     * sees the count. See {@link #clearStaleNormalRead()}.
+     */
+    private volatile int staleNormalReadObservations;
     protected enum ReadType {
         Normal, Replay
     }
@@ -1494,12 +1498,12 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         // Always sample, since this also updates the position the next call compares against.
         boolean readPositionChanged = cursor.checkAndUpdateReadPositionChanged();
         if (readPositionChanged || !isAtleastOneConsumerAvailable() || !cursor.hasBacklog(false)) {
-            resetStaleNormalReadObservations();
+            staleNormalReadObservations = 0;
             return false;
         }
         // consider dispatch is stuck if : dispatcher has backlog, available-permits and there is no pending read
         if (!havePendingReplayRead && !havePendingRead) {
-            resetStaleNormalReadObservations();
+            staleNormalReadObservations = 0;
             if (!unblockIdleDispatcher) {
                 return false;
             }
@@ -1507,34 +1511,11 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             readMoreEntriesAsync();
             return true;
         }
-        return checkAndClearStaleNormalRead();
-    }
-
-    private synchronized void resetStaleNormalReadObservations() {
-        staleNormalReadObservations = 0;
-    }
-
-    /**
-     * Repairs a {@link #havePendingRead} that no read will ever clear.
-     *
-     * <p>{@code havePendingRead} is the dispatcher's belief that a Normal read is outstanding, and it is
-     * cleared only by that read's completion callback. If a read is armed but never reaches the cursor, or
-     * its completion is lost, the flag stays set: {@link #readMoreEntries()} then rejects every subsequent
-     * read at its {@link #doesntHavePendingRead()} guard, and the subscription stops dispatching for good
-     * even though it has a backlog and consumers with free permits. That is the state reported in
-     * <a href="https://github.com/apache/pulsar/issues/26454">#26454</a>, where the cursor held neither a
-     * waiting read nor an in-flight one while the dispatcher believed one was pending.
-     *
-     * <p>The cursor is the authority on whether a read actually exists, but
-     * {@link ManagedCursor#hasOutstandingReadOperation()} is a sampled signal that dips to {@code false}
-     * for the moment a read is handed between the cursor's internal stages. The caller has already
-     * established that the read position has not moved since the previous stats interval, so requiring the
-     * inconsistency on {@value #STALE_NORMAL_READ_OBSERVATIONS_BEFORE_RECOVERY} consecutive checks means a
-     * genuine read would have had at least one full stats interval to complete and move that position.
-     *
-     * @return true if a stale flag was cleared and a read was issued
-     */
-    private synchronized boolean checkAndClearStaleNormalRead() {
+        // Detect a havePendingRead that no read will ever clear: the dispatcher believes a Normal read is
+        // outstanding while the cursor owns none. See #26454. hasOutstandingReadOperation() is a sampled
+        // signal that dips to false while a read moves between the cursor's internal stages, so require the
+        // inconsistency on consecutive checks; combined with the frozen read position established above,
+        // a genuine read would have had a full stats interval to complete and move that position.
         if (!havePendingRead || havePendingReplayRead || cursor.hasOutstandingReadOperation()) {
             staleNormalReadObservations = 0;
             return false;
@@ -1543,6 +1524,27 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             return false;
         }
         staleNormalReadObservations = 0;
+        return clearStaleNormalRead();
+    }
+
+    /**
+     * Clears a {@link #havePendingRead} that no read will ever clear, and resumes dispatching.
+     *
+     * <p>{@code havePendingRead} is the dispatcher's belief that a Normal read is outstanding, and it is
+     * cleared only by that read's completion callback. If a read is armed but never reaches the cursor, or
+     * its completion is lost, the flag stays set: {@link #readMoreEntries()} then rejects every subsequent
+     * read at its {@link #doesntHavePendingRead()} guard, and the subscription stops dispatching for good
+     * even though it has a backlog and consumers with free permits.
+     *
+     * <p>Taken under the dispatcher monitor, which is why the condition is re-checked here: the caller
+     * sampled it without the monitor, so the dispatcher may have made progress in the meantime.
+     *
+     * @return true if a stale flag was cleared and a read was issued
+     */
+    private synchronized boolean clearStaleNormalRead() {
+        if (!havePendingRead || havePendingReplayRead || cursor.hasOutstandingReadOperation()) {
+            return false;
+        }
         log.warn()
                 .attr("readPosition", cursor.getReadPosition())
                 .attr("markDeletePosition", cursor.getMarkDeletedPosition())
