@@ -1036,6 +1036,14 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     public synchronized void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
 
         ReadType readType = (ReadType) ctx;
+        // Release the read before anything that could throw: this is the read's only completion, so a
+        // throwable escaping below would leave the dispatcher believing it is still outstanding and it would
+        // never read again. See #26454. readEntriesComplete() clears its flag first for the same reason.
+        if (readType == ReadType.Normal) {
+            havePendingRead = false;
+        } else {
+            havePendingReplayRead = false;
+        }
         long waitTimeMillis = readFailureBackoff.next().toMillis();
 
         // Do not keep reading more entries if the cursor is already closed.
@@ -1078,14 +1086,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             cursor.rewind();
         }
 
-        if (readType == ReadType.Normal) {
-            havePendingRead = false;
-        } else {
-            havePendingReplayRead = false;
-            if (exception instanceof ManagedLedgerException.InvalidReplayPositionException) {
-                Position markDeletePosition = cursor.getMarkDeletedPosition();
-                redeliveryMessages.removeAllUpTo(markDeletePosition.getLedgerId(), markDeletePosition.getEntryId());
-            }
+        if (readType != ReadType.Normal
+                && exception instanceof ManagedLedgerException.InvalidReplayPositionException) {
+            Position markDeletePosition = cursor.getMarkDeletedPosition();
+            redeliveryMessages.removeAllUpTo(markDeletePosition.getLedgerId(), markDeletePosition.getEntryId());
         }
 
         readBatchSize = serviceConfig.getDispatcherMinReadBatchSize();

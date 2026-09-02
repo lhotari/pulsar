@@ -45,6 +45,7 @@ import lombok.CustomLog;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
+import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
@@ -397,6 +398,39 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
         for (int i = 0; i < 10; i++) {
             assertThat(repairCheck()).as("the repair must not force-issue reads").isFalse();
         }
+    }
+
+    /**
+     * {@code readEntriesFailed} is the failed read's only completion, so it must release the flag before
+     * anything that can throw. It previously cleared it near the end, after {@code cursor.hasBacklog},
+     * {@code checkAndApplyReachedEndOfTopicOrTopicMigration} and {@code cursor.rewind} -- a throwable from any
+     * of those left the dispatcher believing the failed read was still outstanding, i.e. the same permanent
+     * stall by a different route.
+     */
+    @Test
+    public void testPendingReadFlagIsClearedWhenFailureHandlingThrows() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        dispatcher.addConsumer(consumer).get();
+        dispatcher.readMoreEntries();
+        Awaitility.await("the first read should complete")
+                .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                .pollInterval(Duration.ofMillis(10))
+                .until(() -> !deliveries.isEmpty());
+
+        // Make the failure-handling body blow up, then deliver a read failure the way the managed ledger does.
+        doAnswer(inv -> {
+            throw new IllegalStateException("simulated failure while handling a failed read");
+        }).when(cursorProxy).hasBacklog(anyBoolean());
+
+        assertThatThrownBy(() -> dispatcher.readEntriesFailed(
+                new ManagedLedgerException.NoMoreEntriesToReadException("no more entries"),
+                PersistentDispatcherMultipleConsumers.ReadType.Normal))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(dispatcher.isHavePendingRead())
+                .as("a failed read must release the flag even when failure handling throws").isFalse();
     }
 
     /**
