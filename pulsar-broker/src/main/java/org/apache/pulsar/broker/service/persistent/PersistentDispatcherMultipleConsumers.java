@@ -149,9 +149,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
      */
     private static final int STALE_NORMAL_READ_OBSERVATIONS_BEFORE_RECOVERY = 2;
     /**
-     * Written only from the periodic stuck-subscription check, which is never concurrent with itself for a
-     * given dispatcher; volatile so a check running on a different stats thread than the previous one still
-     * sees the count. See {@link #clearStaleNormalRead()}.
+     * Consecutive observations of {@link #havePendingRead} set while the cursor owns no read. Only the
+     * periodic stuck-subscription check reads and writes it; volatile so the count carries across checks
+     * regardless of which thread runs them. Miscounting is harmless: the repair re-checks the condition
+     * under the monitor. See {@link #clearStaleNormalRead()}.
      */
     private volatile int staleNormalReadObservations;
     protected enum ReadType {
