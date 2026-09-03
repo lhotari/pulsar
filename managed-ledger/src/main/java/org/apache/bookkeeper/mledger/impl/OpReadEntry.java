@@ -135,9 +135,9 @@ class OpReadEntry implements ReadEntriesCallback {
     }
 
     private void internalReadEntriesFailed(ManagedLedgerException exception, Object ctx) {
+        cursor.readOperationCompleted();
         if (!entries.isEmpty()) {
             // There were already some entries that were read before, we can return them
-            cursor.readOperationCompleted();
             complete(ctx);
         } else if (!cursor.isClosed() && cursor.getConfig().isAutoSkipNonRecoverableData()
                 && exception instanceof NonRecoverableLedgerException) {
@@ -160,7 +160,6 @@ class OpReadEntry implements ReadEntriesCallback {
             }
             // fail callback if it couldn't find next valid ledger
             if (nexReadPosition == null) {
-                cursor.readOperationCompleted();
                 fail(exception, ctx);
                 return;
             }
@@ -170,8 +169,10 @@ class OpReadEntry implements ReadEntriesCallback {
             } else {
                 cursor.skipNonRecoverableEntries(readPosition, nexReadPosition);
             }
-            // checkReadCompletion() either continues this read operation or releases it, so it must not be
-            // released here as well: the count would drift negative and stay there for the cursor's life.
+            // This read operation does not end here after all: checkReadCompletion() either continues it or
+            // releases it when it does end. Take the release above back, or the second release drives
+            // pendingReadOps negative and it stays there for the life of the cursor.
+            cursor.readOperationResumed();
             checkReadCompletion();
         } else {
             if (!(exception instanceof TooManyRequestsException)) {
@@ -189,7 +190,6 @@ class OpReadEntry implements ReadEntriesCallback {
                         .log("Read throttled failed from ledger");
             }
 
-            cursor.readOperationCompleted();
             fail(exception, ctx);
         }
     }

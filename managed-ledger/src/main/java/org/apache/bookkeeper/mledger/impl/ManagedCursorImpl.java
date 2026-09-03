@@ -3754,6 +3754,15 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
     }
 
+    /**
+     * Re-acquires a read operation that {@link #readOperationCompleted()} has already released because it
+     * turned out not to be finished. Keeps {@code pendingReadOps} balanced, which
+     * {@link #hasOutstandingReadOperation()} depends on.
+     */
+    void readOperationResumed() {
+        PENDING_READ_OPS_UPDATER.incrementAndGet(this);
+    }
+
     void readOperationCompleted() {
         if (PENDING_READ_OPS_UPDATER.decrementAndGet(this) == 0) {
             synchronized (pendingMarkDeleteOps) {
