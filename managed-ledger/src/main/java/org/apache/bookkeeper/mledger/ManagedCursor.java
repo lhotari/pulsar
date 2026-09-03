@@ -345,8 +345,10 @@ public interface ManagedCursor {
      *
      * <p/>A read operation is outstanding from the moment one of the {@code asyncReadEntries} /
      * {@code asyncReadEntriesOrWait} methods accepts it until its {@link ReadEntriesCallback} has been
-     * scheduled. It covers both a read that is parked waiting for new entries to be published and a read
-     * that is currently in flight against the managed ledger.
+     * scheduled. It covers both a read that is parked waiting for new entries to be published -- the same
+     * read {@link #cancelPendingReadRequest()} cancels -- and a read that is currently in flight against the
+     * managed ledger, which cannot be cancelled. It is therefore broader than "there is a pending read
+     * request": a cursor with an in-flight read owns a read operation, but has no cancellable request.
      *
      * <p/>Callers use this as a liveness signal to detect that they believe a read is outstanding while
      * the cursor owns none. Implementations that don't track read operations must therefore report

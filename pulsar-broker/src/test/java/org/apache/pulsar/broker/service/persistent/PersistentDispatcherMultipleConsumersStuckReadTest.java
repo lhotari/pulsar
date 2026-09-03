@@ -105,12 +105,13 @@ import org.testng.annotations.Test;
  *       the inconsistency has been observed on consecutive checks with the cursor's read position frozen.</li>
  * </ol>
  *
- * <p><b>Fidelity.</b> The managed ledger, cursor, topic, subscription and dispatcher are real. The
- * dispatcher's {@code cursor} is a delegating proxy around the real {@link ManagedCursorImpl} so a single
- * call can be made to throw or to be swallowed, reproducing "the read never reached the cursor" without
- * touching the cursor's own state — every other call, including the {@code hasOutstandingReadOperation()}
- * that the repair consults, goes to the real cursor. Only the metadata-parsing filter step is stubbed,
- * because the published payloads are raw bytes rather than serialized Pulsar messages.
+ * <p><b>Fidelity.</b> The managed ledger, cursor, topic, subscription, dispatcher and the whole dispatch
+ * tail are real, and the published payloads are properly serialized Pulsar messages so the real
+ * metadata-parsing path runs. The only seam is the dispatcher's {@code cursor}: a Mockito proxy that
+ * delegates every call to the real {@link ManagedCursorImpl}, so a single call can be made to throw or to
+ * be swallowed. That reproduces "the read never reached the cursor" without touching the cursor's own
+ * state — including the {@code hasOutstandingReadOperation()} the repair consults, which reports the
+ * real cursor's state throughout.
  */
 @CustomLog
 public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBookKeeperTestCase {
@@ -431,6 +432,11 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
                 .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
                 .pollInterval(Duration.ofMillis(10))
                 .until(() -> !deliveries.isEmpty());
+
+        // Arm a read so the dispatcher genuinely believes one is outstanding when the failure arrives.
+        dispatcher.readMoreEntries();
+        assertThat(dispatcher.isHavePendingRead())
+                .as("precondition: a read must be outstanding for the failure to release").isTrue();
 
         // Make the failure-handling body blow up, then deliver a read failure the way the managed ledger does.
         doAnswer(inv -> {

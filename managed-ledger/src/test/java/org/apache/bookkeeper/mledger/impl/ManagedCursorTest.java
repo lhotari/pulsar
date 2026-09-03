@@ -3807,6 +3807,32 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         assertTrue(waitingRead.await(20, TimeUnit.SECONDS));
         Awaitility.await().untilAsserted(() -> assertFalse(c1.hasOutstandingReadOperation()));
 
+        // A read in flight against the managed ledger is outstanding too. Hold the read inside the callback
+        // so the assertion happens while the operation is still owned by the cursor.
+        ledger.addEntry("entry-2".getBytes(Encoding));
+        CountDownLatch inFlightObserved = new CountDownLatch(1);
+        CountDownLatch releaseInFlight = new CountDownLatch(1);
+        c1.asyncReadEntries(1, new ReadEntriesCallback() {
+            @Override
+            public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                entries.forEach(Entry::release);
+                inFlightObserved.countDown();
+                try {
+                    releaseInFlight.await(20, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+
+            @Override
+            public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                inFlightObserved.countDown();
+            }
+        }, null, PositionFactory.LATEST);
+        assertTrue(inFlightObserved.await(20, TimeUnit.SECONDS));
+        releaseInFlight.countDown();
+        Awaitility.await().untilAsserted(() -> assertFalse(c1.hasOutstandingReadOperation()));
+
         // Cancelling a parked read also releases it.
         CountDownLatch cancelledRead = new CountDownLatch(1);
         c1.asyncReadEntriesOrWait(1, new ReadEntriesCallback() {
@@ -3824,6 +3850,39 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         assertTrue(c1.hasOutstandingReadOperation());
         assertTrue(c1.cancelPendingReadRequest());
         assertFalse(c1.hasOutstandingReadOperation());
+    }
+
+    /**
+     * Failing a read that was only waiting for new entries must not release a read operation that was never
+     * counted: the count would drift negative and {@link ManagedCursor#hasOutstandingReadOperation()} would
+     * then report that no read is outstanding while one is.
+     */
+    @Test(timeOut = 20000)
+    void pendingReadOpsDoNotDriftNegativeWhenAWaitingReadIsFailed() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("pendingReadOpsDoNotDriftNegative",
+                new ManagedLedgerConfig().setMaxEntriesPerLedger(1));
+        ManagedCursorImpl c1 = (ManagedCursorImpl) ledger.openCursor("c1");
+
+        CountDownLatch failed = new CountDownLatch(1);
+        c1.asyncReadEntriesOrWait(1, new ReadEntriesCallback() {
+            @Override
+            public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                entries.forEach(Entry::release);
+                failed.countDown();
+            }
+
+            @Override
+            public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                failed.countDown();
+            }
+        }, null, PositionFactory.LATEST);
+        assertTrue(c1.hasOutstandingReadOperation());
+
+        // Closing the cursor fails the waiting read.
+        c1.close();
+        assertTrue(failed.await(20, TimeUnit.SECONDS));
+
+        Awaitility.await().untilAsserted(() -> assertEquals(c1.getPendingReadOpsCount(), 0));
     }
 
     @Test(timeOut = 20000)

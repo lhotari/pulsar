@@ -143,9 +143,9 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     protected boolean skipNextBackoff;
     private final Backoff retryBackoff;
     /**
-     * Number of consecutive {@link #checkAndUnblockIfStuck()} calls that must observe
-     * {@link #havePendingRead} set while the cursor owns no read before the flag is treated as stale.
-     * See {@link #clearStaleNormalRead()}.
+     * Number of consecutive periodic checks ({@link #checkAndUnblockIfStuck()} or
+     * {@link #checkAndRepairInconsistentReadState()}) that must observe {@link #havePendingRead} set while
+     * the cursor owns no read before the flag is treated as stale. See {@link #clearStaleNormalRead()}.
      */
     private static final int STALE_NORMAL_READ_OBSERVATIONS_BEFORE_RECOVERY = 2;
     /**
@@ -1539,6 +1539,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     }
 
     /**
+     * Runs the periodic stuck-subscription check. Callers must invoke this at most once per check interval
+     * (through exactly one of {@link #checkAndUnblockIfStuck()} or
+     * {@link #checkAndRepairInconsistentReadState()}), because it consumes the cursor's read-position sample.
+     *
      * @param unblockIdleDispatcher whether to also apply the {@code unblockStuckSubscriptionEnabled}
      *                              heuristic of force-issuing a read when the dispatcher believes no read is
      *                              outstanding
@@ -1588,6 +1592,13 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
      * <p>Taken under the dispatcher monitor, which is why the condition is re-checked here: the caller
      * sampled it without the monitor, so the dispatcher may have made progress in the meantime.
      *
+     * <p>This recovers any read the cursor does not own, whether it never reached the cursor or its
+     * completion was lost afterwards. It cannot recover a read the cursor still owns -- one genuinely in
+     * flight, or parked waiting for entries -- since those are indistinguishable from healthy operation;
+     * nor a subscription whose backlog is a single entry, because
+     * {@link ManagedCursor#checkAndUpdateReadPositionChanged()} counts a read position equal to the last
+     * confirmed entry as caught up and the caller bails out before reaching here.
+     *
      * @return true if a stale flag was cleared and a read was issued
      */
     private synchronized boolean clearStaleNormalRead() {
@@ -1597,9 +1608,9 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         log.warn()
                 .attr("readPosition", cursor.getReadPosition())
                 .attr("markDeletePosition", cursor.getMarkDeletedPosition())
-                .log("Dispatcher believes a read is pending while the cursor has none. Clearing the stale "
-                        + "state and issuing reads. Please report this at "
-                        + "https://github.com/apache/pulsar/issues/26454");
+                .log("Dispatcher believed a read was pending while the cursor had none. Clearing the stale "
+                        + "state and issuing reads. This should not happen; please report it with the "
+                        + "surrounding broker logs.");
         havePendingRead = false;
         // Disown the read we just gave up on: if its completion does turn up after all -- for instance
         // because it had merely been queued behind a stalled managed-ledger executor rather than lost -- it
