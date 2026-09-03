@@ -42,7 +42,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import lombok.CustomLog;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
@@ -113,7 +112,6 @@ import org.testng.annotations.Test;
  * state — including the {@code hasOutstandingReadOperation()} the repair consults, which reports the
  * real cursor's state throughout.
  */
-@CustomLog
 public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBookKeeperTestCase {
 
     private static final String TOPIC = "persistent://prop/ns/shared-stuck-read";
@@ -330,7 +328,7 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
      * The headline regression test for #26454: once {@code havePendingRead} is stranded, the subscription is
      * dead — and the periodic stuck check must bring it back.
      */
-    @Test
+    @Test(groups = "broker")
     public void testStuckCheckRecoversStrandedPendingRead() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
@@ -376,7 +374,7 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
      * {@code false}: unlike force-issuing a read on a dispatcher that believes it is idle, this state cannot
      * recover on its own, so gating it behind an opt-in flag would leave most brokers permanently stuck.
      */
-    @Test
+    @Test(groups = "broker")
     public void testStrandedPendingReadIsRepairedWithStuckSubscriptionUnblockingDisabled() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
@@ -399,7 +397,7 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
      * With the heuristic disabled, a dispatcher that merely believes it has no read outstanding must be left
      * alone: that is the opt-in {@code unblockStuckSubscriptionEnabled} behaviour, not an invariant repair.
      */
-    @Test
+    @Test(groups = "broker")
     public void testRepairCheckDoesNotApplyTheUnblockHeuristic() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
@@ -421,7 +419,7 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
      * of those left the dispatcher believing the failed read was still outstanding, i.e. the same permanent
      * stall by a different route.
      */
-    @Test
+    @Test(groups = "broker")
     public void testPendingReadFlagIsClearedWhenFailureHandlingThrows() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
@@ -461,7 +459,7 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
      * them on Key_Shared. Its entries must still be dispatched, since they sit at positions the cursor has
      * already passed.
      */
-    @Test
+    @Test(groups = "broker")
     public void testLateCompletionOfADisownedReadDoesNotClearTheNewReadsFlag() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
@@ -512,7 +510,7 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
      * {@code sendInProgress} guard while the disowned completion is dispatching, delegating the next read to
      * that dispatch. Suppressing the disowned read's trigger would strand the subscription for good.
      */
-    @Test
+    @Test(groups = "broker")
     public void testADisownedReadStillTriggersTheNextReadWhenNoneIsOutstanding() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
@@ -549,10 +547,42 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
     }
 
     /**
+     * The failure half of the epoch guard: a disowned read that ends in a failure must not release the
+     * replacement read either. Only {@code readEntriesComplete} is exercised above.
+     */
+    @Test(groups = "broker")
+    public void testLateFailureOfADisownedReadDoesNotClearTheNewReadsFlag() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        strandNextNormalRead();
+        dispatcher.addConsumer(consumer).get();
+
+        dispatcher.readMoreEntries();
+        Object disownedReadContext = capturedReadContext.get();
+        assertThat(disownedReadContext).isNotNull();
+
+        assertThat(stuckCheck()).isFalse();
+        assertThat(stuckCheck()).isFalse();
+        assertThat(stuckCheck()).as("the stale flag should be repaired").isTrue();
+        awaitDelivered(5);
+
+        Awaitility.await("a new read should be outstanding")
+                .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                .pollInterval(Duration.ofMillis(10))
+                .until(() -> dispatcher.isHavePendingRead() && realCursor.hasOutstandingReadOperation());
+
+        dispatcher.readEntriesFailed(new ManagedLedgerException("simulated late read failure"),
+                disownedReadContext);
+        assertThat(dispatcher.isHavePendingRead())
+                .as("a disowned read's failure must not release the newer read").isTrue();
+    }
+
+    /**
      * The repair must never fire while a read really is outstanding, or it would let the dispatcher run two
      * concurrent Normal reads.
      */
-    @Test
+    @Test(groups = "broker")
     public void testStuckCheckDoesNotClearAGenuinelyPendingRead() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
@@ -577,7 +607,7 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
      * A throwable escaping between {@code havePendingRead = true} and the cursor accepting the read must not
      * strand the dispatcher, and the read must be retried.
      */
-    @Test
+    @Test(groups = "broker")
     public void testPendingReadFlagIsRolledBackWhenArmingTheReadThrows() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
@@ -607,7 +637,7 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
      * The same rollback for the replay read: a stranded {@code havePendingReplayRead} blocks every later read
      * as well, because {@code calculateToRead} refuses to read while a replay is believed to be in flight.
      */
-    @Test
+    @Test(groups = "broker")
     public void testPendingReplayReadFlagIsRolledBackWhenArmingTheReplayThrows() throws Exception {
         List<Position> published = new ArrayList<>();
         for (int i = 0; i < 5; i++) {

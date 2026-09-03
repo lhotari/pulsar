@@ -411,9 +411,9 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         .attr("consumerCount", consumerList.size())
                         .log("Schedule replay of messages for consumers");
                 havePendingReplayRead = true;
-                updateMinReplayedPosition();
                 Set<? extends Position> deletedMessages;
                 try {
+                    updateMinReplayedPosition();
                     deletedMessages = topic.isDelayedDeliveryEnabled()
                             ? asyncReplayEntriesInOrder(messagesToReplayNow)
                             : asyncReplayEntries(messagesToReplayNow);
@@ -454,18 +454,17 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         .attr("consumersCount", consumerList.size())
                         .log("Schedule read of messages");
                 havePendingRead = true;
-                updateMinReplayedPosition();
-
-                messagesToRead = Math.min(messagesToRead, getMaxEntriesReadLimit());
                 try {
+                    updateMinReplayedPosition();
+                    messagesToRead = Math.min(messagesToRead, getMaxEntriesReadLimit());
                     cursor.asyncReadEntriesWithSkipOrWait(messagesToRead, bytesToRead, this,
                             new NormalReadContext(++normalReadEpoch),
                             topic.getMaxReadPosition(), createReadEntriesSkipConditionForNormalRead());
                 } catch (Throwable t) {
-                    // havePendingRead is set before the read is handed to the cursor. If anything between here
-                    // and the cursor accepting the read throws, no callback will ever arrive to clear the flag
-                    // and doesntHavePendingRead() stays false forever, so the subscription never reads again.
-                    // Roll the flag back and retry. See #26454.
+                    // havePendingRead is set before the read is handed to the cursor, and everything up to
+                    // the cursor accepting it may throw synchronously. If one of those throws, no callback
+                    // will ever arrive to clear the flag and doesntHavePendingRead() stays false forever, so
+                    // the subscription never reads again. Roll the flag back and retry. See #26454.
                     havePendingRead = false;
                     log.error().exception(t).log("Failed to schedule read, retrying");
                     reScheduleReadWithBackoff();
