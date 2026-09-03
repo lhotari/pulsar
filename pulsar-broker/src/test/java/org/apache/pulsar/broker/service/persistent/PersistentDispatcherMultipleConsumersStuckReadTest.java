@@ -506,6 +506,49 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
     }
 
     /**
+     * The other half of the disowned-read contract: a disowned completion must still be able to wake the
+     * subscription. If it arrives before the repair's replacement read has been armed, it is the only event
+     * left that can drive dispatch -- the repair's own {@code readMoreEntries()} bails out at the
+     * {@code sendInProgress} guard while the disowned completion is dispatching, delegating the next read to
+     * that dispatch. Suppressing the disowned read's trigger would strand the subscription for good.
+     */
+    @Test
+    public void testADisownedReadStillTriggersTheNextReadWhenNoneIsOutstanding() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        strandNextNormalRead();
+        dispatcher.addConsumer(consumer).get();
+
+        dispatcher.readMoreEntries();
+        Object disownedReadContext = capturedReadContext.get();
+        assertThat(disownedReadContext).isNotNull();
+
+        assertThat(stuckCheck()).isFalse();
+        assertThat(stuckCheck()).isFalse();
+        assertThat(stuckCheck()).as("the stale flag should be repaired").isTrue();
+        awaitDelivered(5);
+
+        // Park the subscription with no read outstanding: cancelling the tail-wait read leaves the
+        // dispatcher idle, and publishing more entries gives it a backlog that nothing is driving.
+        Awaitility.await("a tail-wait read should be armed")
+                .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                .pollInterval(Duration.ofMillis(10))
+                .until(() -> dispatcher.isHavePendingRead() && realCursor.hasPendingReadRequest());
+        dispatcher.cancelPendingRead();
+        assertThat(dispatcher.isHavePendingRead()).isFalse();
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+
+        // The disowned read's completion is now the only thing that can wake the subscription. It must not
+        // clear havePendingRead, but it must still trigger the next read -- suppressing that would strand
+        // the subscription whenever the repair's own read had bailed out at the sendInProgress guard.
+        dispatcher.readEntriesComplete(new ArrayList<>(), disownedReadContext);
+        awaitDelivered(10);
+    }
+
+    /**
      * The repair must never fire while a read really is outstanding, or it would let the dispatcher run two
      * concurrent Normal reads.
      */

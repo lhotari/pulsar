@@ -519,8 +519,12 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     /**
      * Tells whether a read completion belongs to a Normal read the dispatcher has given up on, i.e. one
      * whose {@link #havePendingRead} was cleared by {@link #clearStaleNormalRead()} before it completed.
-     * Such a completion must not clear the flag or trigger the next read: both belong to the read that was
-     * armed in its place.
+     * Such a completion must not clear the flag, which now belongs to the read armed in its place; letting
+     * two Normal reads run at once would duplicate deliveries on Shared and reorder them on Key_Shared.
+     *
+     * <p>It may still trigger the next read: {@link #readMoreEntries()} refuses to arm a second Normal read
+     * while one is outstanding, so the trigger is a no-op when the replacement read is still running and a
+     * necessary wakeup when it is not.
      */
     private synchronized boolean isDisownedNormalRead(Object ctx) {
         return ctx instanceof NormalReadContext normalRead && normalRead.epoch() != normalReadEpoch;
@@ -738,10 +742,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     @Override
     public final synchronized void readEntriesComplete(List<Entry> entries, Object ctx) {
         ReadType readType = readTypeOf(ctx);
-        // A disowned read is one the stale-read repair gave up on (see clearStaleNormalRead). Its entries are
-        // still dispatched -- they sit at positions the cursor has already passed, so dropping them would
-        // strand those messages -- but havePendingRead and the trigger for the next read now belong to the
-        // read the repair armed in its place.
+        // A disowned read is one the stale-read repair gave up on (see clearStaleNormalRead). It is handled
+        // like any other completion -- its entries are dispatched and it may trigger the next read, which
+        // readMoreEntries() ignores while a read is already armed -- except that it must not clear
+        // havePendingRead, which now belongs to the read the repair armed in its place.
         boolean disowned = isDisownedNormalRead(ctx);
         if (readType == ReadType.Normal) {
             if (!disowned) {
@@ -763,7 +767,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
         readFailureBackoff.reduceToHalf();
 
-        if (shouldRewindBeforeReadingOrReplaying && readType == ReadType.Normal && !disowned) {
+        if (shouldRewindBeforeReadingOrReplaying && readType == ReadType.Normal) {
             // All consumers got disconnected before the completion of the read operation
             entries.forEach(Entry::release);
             cursor.rewind();
@@ -788,19 +792,17 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             // in a separate thread, and we want to prevent more reads
             acquireSendInProgress();
             dispatchMessagesThread.execute(() -> {
-                handleSendingMessagesAndReadingMore(readType, entries, false, totalBytesSize, disowned);
+                handleSendingMessagesAndReadingMore(readType, entries, false, totalBytesSize);
             });
         } else {
-            handleSendingMessagesAndReadingMore(readType, entries, true, totalBytesSize, disowned);
+            handleSendingMessagesAndReadingMore(readType, entries, true, totalBytesSize);
         }
     }
 
     private synchronized void handleSendingMessagesAndReadingMore(ReadType readType, List<Entry> entries,
                                                                   boolean needAcquireSendInProgress,
-                                                                  long totalBytesSize,
-                                                                  boolean disownedRead) {
-        boolean triggerReadingMore = sendMessagesToConsumers(readType, entries, needAcquireSendInProgress)
-                && !disownedRead;
+                                                                  long totalBytesSize) {
+        boolean triggerReadingMore = sendMessagesToConsumers(readType, entries, needAcquireSendInProgress);
         int entriesProcessed = lastNumberOfEntriesProcessed;
         updatePendingBytesToDispatch(-totalBytesSize);
         boolean canReadMoreImmediately = false;
@@ -1077,7 +1079,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     public synchronized void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
 
         ReadType readType = readTypeOf(ctx);
-        // See readEntriesComplete: a disowned read no longer owns havePendingRead or the retry.
+        // See readEntriesComplete: a disowned read no longer owns havePendingRead.
         boolean disowned = isDisownedNormalRead(ctx);
         // Release the read before anything that could throw: this is the read's only completion, so a
         // throwable escaping below would leave the dispatcher believing it is still outstanding and it would
@@ -1139,7 +1141,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
         readBatchSize = serviceConfig.getDispatcherMinReadBatchSize();
         // Skip read if the waitTimeMillis is a nagetive value.
-        if (waitTimeMillis >= 0 && !disowned) {
+        if (waitTimeMillis >= 0) {
             scheduleReadEntriesWithDelay(exception, readType, waitTimeMillis);
         }
     }
@@ -1615,6 +1617,8 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         // Disown the read we just gave up on: if its completion does turn up after all -- for instance
         // because it had merely been queued behind a stalled managed-ledger executor rather than lost -- it
         // must not clear the flag of the read issued below, which would let two Normal reads run at once.
+        // It is otherwise handled normally, so it can still wake the subscription if the read below has
+        // already finished.
         normalReadEpoch++;
         readMoreEntriesAsync();
         return true;

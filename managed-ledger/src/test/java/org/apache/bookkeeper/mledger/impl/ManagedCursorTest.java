@@ -3853,6 +3853,46 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
     }
 
     /**
+     * The auto-skip path releases the read operation through {@code checkReadCompletion()}, so releasing it
+     * again up front would drive {@code pendingReadOps} negative and leave it there for the life of the
+     * cursor, making {@link ManagedCursor#hasOutstandingReadOperation()} report that no read is outstanding
+     * while one is.
+     */
+    @Test(timeOut = 20000)
+    void pendingReadOpsDoNotDriftNegativeWhenANonRecoverableReadIsSkipped() throws Exception {
+        ManagedLedgerConfig config = new ManagedLedgerConfig().setMaxEntriesPerLedger(1);
+        config.setAutoSkipNonRecoverableData(true);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("pendingReadOpsNonRecoverable", config);
+        ManagedCursorImpl c1 = (ManagedCursorImpl) ledger.openCursor("c1");
+        Position first = ledger.addEntry("entry-1".getBytes(Encoding));
+        ledger.addEntry("entry-2".getBytes(Encoding));
+        ledger.addEntry("entry-3".getBytes(Encoding));
+
+        // Lose the ledger the cursor is about to read, so the read fails non-recoverably and the cursor
+        // skips over it instead of failing the caller.
+        factory.getEntryCacheManager().clear();
+        bkc.deleteLedger(first.getLedgerId());
+
+        CountDownLatch done = new CountDownLatch(1);
+        c1.asyncReadEntries(1, new ReadEntriesCallback() {
+            @Override
+            public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                entries.forEach(Entry::release);
+                done.countDown();
+            }
+
+            @Override
+            public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                done.countDown();
+            }
+        }, null, PositionFactory.LATEST);
+        assertTrue(done.await(20, TimeUnit.SECONDS));
+
+        Awaitility.await().untilAsserted(() -> assertEquals(c1.getPendingReadOpsCount(), 0));
+        assertFalse(c1.hasOutstandingReadOperation());
+    }
+
+    /**
      * Failing a read that was only waiting for new entries must not release a read operation that was never
      * counted: the count would drift negative and {@link ManagedCursor#hasOutstandingReadOperation()} would
      * then report that no read is outstanding while one is.
