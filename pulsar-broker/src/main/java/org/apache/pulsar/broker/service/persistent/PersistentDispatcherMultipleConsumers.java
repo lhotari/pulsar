@@ -158,6 +158,22 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     protected enum ReadType {
         Normal, Replay
     }
+
+    /**
+     * Context handed to the cursor for a Normal read. It carries the read's identity so that a completion
+     * for a read the dispatcher has since disowned can be told apart from the one it currently owns; see
+     * {@link #clearStaleNormalRead()}. Replay reads pass {@link ReadType#Replay} itself as their context,
+     * since they are never disowned.
+     */
+    protected record NormalReadContext(long epoch) {
+    }
+
+    /**
+     * Identity of the Normal read that {@link #havePendingRead} currently refers to. Bumped under this
+     * monitor whenever a Normal read is armed, and again when the stale-read repair gives one up. Guarded
+     * by "this".
+     */
+    private long normalReadEpoch;
     private volatile long readMoreEntriesCallCount;
 
     public PersistentDispatcherMultipleConsumers(PersistentTopic topic, ManagedCursor cursor,
@@ -442,7 +458,8 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
                 messagesToRead = Math.min(messagesToRead, getMaxEntriesReadLimit());
                 try {
-                    cursor.asyncReadEntriesWithSkipOrWait(messagesToRead, bytesToRead, this, ReadType.Normal,
+                    cursor.asyncReadEntriesWithSkipOrWait(messagesToRead, bytesToRead, this,
+                            new NormalReadContext(++normalReadEpoch),
                             topic.getMaxReadPosition(), createReadEntriesSkipConditionForNormalRead());
                 } catch (Throwable t) {
                     // havePendingRead is set before the read is handed to the cursor. If anything between here
@@ -493,6 +510,20 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
      */
     protected boolean doesntHavePendingRead() {
         return !havePendingRead;
+    }
+
+    private ReadType readTypeOf(Object ctx) {
+        return ctx instanceof NormalReadContext ? ReadType.Normal : (ReadType) ctx;
+    }
+
+    /**
+     * Tells whether a read completion belongs to a Normal read the dispatcher has given up on, i.e. one
+     * whose {@link #havePendingRead} was cleared by {@link #clearStaleNormalRead()} before it completed.
+     * Such a completion must not clear the flag or trigger the next read: both belong to the read that was
+     * armed in its place.
+     */
+    private synchronized boolean isDisownedNormalRead(Object ctx) {
+        return ctx instanceof NormalReadContext normalRead && normalRead.epoch() != normalReadEpoch;
     }
 
     protected void handleNormalReadNotAllowed() {
@@ -706,9 +737,16 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     public final synchronized void readEntriesComplete(List<Entry> entries, Object ctx) {
-        ReadType readType = (ReadType) ctx;
+        ReadType readType = readTypeOf(ctx);
+        // A disowned read is one the stale-read repair gave up on (see clearStaleNormalRead). Its entries are
+        // still dispatched -- they sit at positions the cursor has already passed, so dropping them would
+        // strand those messages -- but havePendingRead and the trigger for the next read now belong to the
+        // read the repair armed in its place.
+        boolean disowned = isDisownedNormalRead(ctx);
         if (readType == ReadType.Normal) {
-            havePendingRead = false;
+            if (!disowned) {
+                havePendingRead = false;
+            }
         } else {
             havePendingReplayRead = false;
         }
@@ -725,7 +763,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
         readFailureBackoff.reduceToHalf();
 
-        if (shouldRewindBeforeReadingOrReplaying && readType == ReadType.Normal) {
+        if (shouldRewindBeforeReadingOrReplaying && readType == ReadType.Normal && !disowned) {
             // All consumers got disconnected before the completion of the read operation
             entries.forEach(Entry::release);
             cursor.rewind();
@@ -750,17 +788,19 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             // in a separate thread, and we want to prevent more reads
             acquireSendInProgress();
             dispatchMessagesThread.execute(() -> {
-                handleSendingMessagesAndReadingMore(readType, entries, false, totalBytesSize);
+                handleSendingMessagesAndReadingMore(readType, entries, false, totalBytesSize, disowned);
             });
         } else {
-            handleSendingMessagesAndReadingMore(readType, entries, true, totalBytesSize);
+            handleSendingMessagesAndReadingMore(readType, entries, true, totalBytesSize, disowned);
         }
     }
 
     private synchronized void handleSendingMessagesAndReadingMore(ReadType readType, List<Entry> entries,
                                                                   boolean needAcquireSendInProgress,
-                                                                  long totalBytesSize) {
-        boolean triggerReadingMore = sendMessagesToConsumers(readType, entries, needAcquireSendInProgress);
+                                                                  long totalBytesSize,
+                                                                  boolean disownedRead) {
+        boolean triggerReadingMore = sendMessagesToConsumers(readType, entries, needAcquireSendInProgress)
+                && !disownedRead;
         int entriesProcessed = lastNumberOfEntriesProcessed;
         updatePendingBytesToDispatch(-totalBytesSize);
         boolean canReadMoreImmediately = false;
@@ -1036,12 +1076,16 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     @Override
     public synchronized void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
 
-        ReadType readType = (ReadType) ctx;
+        ReadType readType = readTypeOf(ctx);
+        // See readEntriesComplete: a disowned read no longer owns havePendingRead or the retry.
+        boolean disowned = isDisownedNormalRead(ctx);
         // Release the read before anything that could throw: this is the read's only completion, so a
         // throwable escaping below would leave the dispatcher believing it is still outstanding and it would
         // never read again. See #26454. readEntriesComplete() clears its flag first for the same reason.
         if (readType == ReadType.Normal) {
-            havePendingRead = false;
+            if (!disowned) {
+                havePendingRead = false;
+            }
         } else {
             havePendingReplayRead = false;
         }
@@ -1095,7 +1139,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
         readBatchSize = serviceConfig.getDispatcherMinReadBatchSize();
         // Skip read if the waitTimeMillis is a nagetive value.
-        if (waitTimeMillis >= 0) {
+        if (waitTimeMillis >= 0 && !disowned) {
             scheduleReadEntriesWithDelay(exception, readType, waitTimeMillis);
         }
     }
@@ -1557,6 +1601,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         + "state and issuing reads. Please report this at "
                         + "https://github.com/apache/pulsar/issues/26454");
         havePendingRead = false;
+        // Disown the read we just gave up on: if its completion does turn up after all -- for instance
+        // because it had merely been queued behind a stalled managed-ledger executor rather than lost -- it
+        // must not clear the flag of the read issued below, which would let two Normal reads run at once.
+        normalReadEpoch++;
         readMoreEntriesAsync();
         return true;
     }

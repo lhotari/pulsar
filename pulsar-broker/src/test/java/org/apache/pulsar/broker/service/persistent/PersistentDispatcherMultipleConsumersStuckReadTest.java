@@ -41,12 +41,14 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import lombok.CustomLog;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
+import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
@@ -132,6 +134,8 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
     /** Positions the dispatcher handed to {@code Consumer#sendMessages}, in delivery order. */
     private final List<Position> deliveries = Collections.synchronizedList(new ArrayList<>());
     private final AtomicLong msgCounter = new AtomicLong();
+    /** The opaque context the dispatcher handed to the cursor for the read that got swallowed. */
+    private final AtomicReference<Object> capturedReadContext = new AtomicReference<>();
 
     @Override
     protected ManagedLedgerConfig initManagedLedgerConfig(ManagedLedgerConfig config) {
@@ -175,6 +179,7 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
         dispatcher = new PersistentDispatcherMultipleConsumers(topic, cursorProxy, subscription);
 
         deliveries.clear();
+        capturedReadContext.set(null);
         consumer = newMockConsumer("c1");
     }
 
@@ -243,19 +248,26 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
         return mockConsumer;
     }
 
-    /** Appends a properly serialized Pulsar message, so the real dispatch tail can parse its metadata. */
-    private Position publish() throws Exception {
+    /** Serializes a Pulsar message, so the real dispatch tail can parse its metadata. */
+    private ByteBuf serializeMessage(String value) {
         MessageMetadata metadata = new MessageMetadata()
                 .setSequenceId(msgCounter.incrementAndGet())
                 .setProducerName("testProducer")
                 .setPublishTime(System.currentTimeMillis());
-        ByteBuf payload = Unpooled.copiedBuffer(("m" + msgCounter.get()).getBytes(UTF_8));
-        ByteBuf message = Commands.serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, metadata, payload);
+        ByteBuf payload = Unpooled.copiedBuffer(value.getBytes(UTF_8));
+        try {
+            return Commands.serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, metadata, payload);
+        } finally {
+            payload.release();
+        }
+    }
+
+    private Position publish() throws Exception {
+        ByteBuf message = serializeMessage("m" + (msgCounter.get() + 1));
         try {
             return ledger.addEntry(ByteBufUtil.getBytes(message));
         } finally {
             message.release();
-            payload.release();
         }
     }
 
@@ -276,6 +288,7 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
         doAnswer(inv -> {
             if (swallowed.compareAndSet(false, true)) {
                 // Drop the read on the floor: no op registered at the cursor, no callback, ever.
+                capturedReadContext.set(inv.getArgument(3));
                 return null;
             }
             return delegateReadToRealCursor(inv);
@@ -431,6 +444,59 @@ public class PersistentDispatcherMultipleConsumersStuckReadTest extends MockedBo
 
         assertThat(dispatcher.isHavePendingRead())
                 .as("a failed read must release the flag even when failure handling throws").isFalse();
+    }
+
+    /**
+     * The repair's escape hatch: even if it fires while a completed read's callback is merely queued -- the
+     * managed ledger decrements {@code pendingReadOps} and advances the read position <i>before</i> handing
+     * the callback to its pinned executor, so a stalled executor makes a live read look exactly like the
+     * #26454 corpse -- that late completion must not clear the flag of the read the repair armed in its
+     * place. Otherwise two Normal reads would run at once, duplicating deliveries on Shared and reordering
+     * them on Key_Shared. Its entries must still be dispatched, since they sit at positions the cursor has
+     * already passed.
+     */
+    @Test
+    public void testLateCompletionOfADisownedReadDoesNotClearTheNewReadsFlag() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        strandNextNormalRead();
+        dispatcher.addConsumer(consumer).get();
+
+        // Arm the read the repair will give up on, and capture the context the cursor was handed so we can
+        // deliver its completion later, exactly as a stalled managed-ledger executor would.
+        dispatcher.readMoreEntries();
+        assertThat(dispatcher.isHavePendingRead()).isTrue();
+        Object disownedReadContext = capturedReadContext.get();
+        assertThat(disownedReadContext).as("the swallowed read's context").isNotNull();
+
+        assertThat(stuckCheck()).isFalse();
+        assertThat(stuckCheck()).isFalse();
+        assertThat(stuckCheck()).as("the stale flag should be repaired").isTrue();
+        awaitDelivered(5);
+
+        // A fresh read is now outstanding. Deliver the disowned read's completion.
+        Awaitility.await("a new read should be outstanding")
+                .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                .pollInterval(Duration.ofMillis(10))
+                .until(() -> dispatcher.isHavePendingRead() && realCursor.hasOutstandingReadOperation());
+
+        int deliveredBefore = deliveries.size();
+        ByteBuf lateMessage = serializeMessage("late");
+        Entry lateEntry;
+        try {
+            lateEntry = EntryImpl.create(realCursor.getMarkDeletedPosition().getLedgerId(), 9999, lateMessage);
+        } finally {
+            lateMessage.release();
+        }
+        dispatcher.readEntriesComplete(new ArrayList<>(List.of(lateEntry)), disownedReadContext);
+
+        Awaitility.await("a disowned read's entries must still be dispatched")
+                .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                .pollInterval(Duration.ofMillis(10))
+                .until(() -> deliveries.size() > deliveredBefore);
+        assertThat(dispatcher.isHavePendingRead())
+                .as("a disowned read's completion must not release the newer read").isTrue();
     }
 
     /**
