@@ -3933,6 +3933,50 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         assertFalse(c1.hasOutstandingReadOperation());
     }
 
+    /**
+     * The auto-skip path re-acquires the read operation and then hands it to {@code checkReadCompletion()}.
+     * If that throws, the caller turns it into a plain failure, which releases nothing, so the operation has
+     * to be given back on the way out or the count stays high for the life of the cursor.
+     */
+    @Test(timeOut = 20000)
+    void pendingReadOpsAreReleasedWhenTheSkippedReadFailsToComplete() throws Exception {
+        ManagedLedgerConfig config = new ManagedLedgerConfig().setMaxEntriesPerLedger(1);
+        config.setAutoSkipNonRecoverableData(true);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("pendingReadOpsSkipFailsToComplete", config);
+        ManagedCursorImpl c1 = (ManagedCursorImpl) ledger.openCursor("c1");
+        ledger.addEntry("entry-1".getBytes(Encoding));
+        ledger.addEntry("entry-2".getBytes(Encoding));
+        ledger.addEntry("entry-3".getBytes(Encoding));
+
+        // checkReadCompletion() compares maxPosition against the read position. Blowing up there stands in
+        // for anything that can fail once the skip has been made -- a RejectedExecutionException from the
+        // managed ledger executor while it is shutting down, for instance.
+        Position explodingMaxPosition = mock(Position.class);
+        when(explodingMaxPosition.compareTo(any())).thenThrow(new IllegalStateException("simulated"));
+
+        CountDownLatch failed = new CountDownLatch(1);
+        OpReadEntry op = OpReadEntry.create(c1, c1.getReadPosition(), 1, new ReadEntriesCallback() {
+            @Override
+            public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                entries.forEach(Entry::release);
+            }
+
+            @Override
+            public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                failed.countDown();
+            }
+        }, null, explodingMaxPosition, null, false);
+        // Count the operation the way the managed ledger does before it starts reading.
+        c1.readOperationResumed();
+        assertTrue(c1.hasOutstandingReadOperation());
+
+        op.readEntriesFailed(new ManagedLedgerException.NonRecoverableLedgerException("simulated"), null);
+
+        assertTrue(failed.await(20, TimeUnit.SECONDS));
+        assertEquals(c1.getPendingReadOpsCount(), 0);
+        assertFalse(c1.hasOutstandingReadOperation());
+    }
+
     @Test(timeOut = 20000)
     public void testReopenMultipleTimes() throws Exception {
         ManagedLedger ledger = factory.open("testReopenMultipleTimes");
