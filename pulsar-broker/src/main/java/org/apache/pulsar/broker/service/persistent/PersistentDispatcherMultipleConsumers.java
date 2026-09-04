@@ -96,8 +96,15 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     private volatile Optional<DelayedDeliveryTracker> delayedDeliveryTracker = Optional.empty();
 
-    protected volatile boolean havePendingRead = false;
-    protected volatile boolean havePendingReplayRead = false;
+    /**
+     * The Normal read that currently owns its slot, or {@code null}. Written only under this dispatcher's
+     * monitor; volatile so the stats API can sample it without taking that monitor.
+     */
+    private volatile ReadContext normalRead;
+    /** The Replay read that currently owns its slot, or {@code null}. See {@link #normalRead}. */
+    private volatile ReadContext replayRead;
+    /** Allocates read ids. Guarded by "this". */
+    private long nextReadId;
     protected volatile Position minReplayedPosition = null;
     protected boolean shouldRewindBeforeReadingOrReplaying = false;
     protected final String name;
@@ -142,6 +149,18 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     protected int lastNumberOfEntriesProcessed;
     protected boolean skipNextBackoff;
     private final Backoff retryBackoff;
+    /**
+     * Number of consecutive periodic checks that must find a reserved read slot with no matching cursor read
+     * operation before the slot is treated as stale. See {@link #recoverStaleRead()}.
+     */
+    private static final int STALE_READ_OBSERVATIONS_BEFORE_RECOVERY = 2;
+    /**
+     * Consecutive observations of a reserved slot the cursor knows nothing about. Only the periodic
+     * stuck-subscription check reads and writes it; volatile so the count carries across checks regardless
+     * of which thread runs them. Miscounting is harmless: {@link #recoverStaleRead()} re-checks under the
+     * monitor.
+     */
+    private volatile int staleReadObservations;
     protected enum ReadType {
         Normal, Replay
     }
@@ -192,7 +211,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             return CompletableFuture.completedFuture(null);
         }
         if (consumerList.isEmpty()) {
-            if (havePendingRead || havePendingReplayRead) {
+            if (hasAnyOutstandingRead()) {
                 // There is a pending read from previous run. We must wait for it to complete and then rewind
                 shouldRewindBeforeReadingOrReplaying = true;
             } else {
@@ -381,18 +400,34 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         .attr("messagesToReplay", messagesToReplayNow.size())
                         .attr("consumerCount", consumerList.size())
                         .log("Schedule replay of messages for consumers");
-                havePendingReplayRead = true;
-                updateMinReplayedPosition();
-                Set<? extends Position> deletedMessages = topic.isDelayedDeliveryEnabled()
-                        ? asyncReplayEntriesInOrder(messagesToReplayNow)
-                        : asyncReplayEntries(messagesToReplayNow);
+                ReadContext replayReadContext = reserveRead(ReadType.Replay);
+                if (replayReadContext == null) {
+                    // A read already owns the slot. Only Key_Shared reaches this, where one slot is shared by
+                    // both read types; that read's completion triggers another attempt.
+                    log.debug("Skipping replay read, a read is already outstanding");
+                    return;
+                }
+                Set<? extends Position> deletedMessages;
+                try {
+                    updateMinReplayedPosition();
+                    deletedMessages = topic.isDelayedDeliveryEnabled()
+                            ? asyncReplayEntriesInOrder(messagesToReplayNow, replayReadContext)
+                            : asyncReplayEntries(messagesToReplayNow, replayReadContext);
+                } catch (Throwable t) {
+                    // The read never reached the cursor, so no callback will arrive to release the slot.
+                    // Leaving it reserved would block every later read. See #26454.
+                    releaseIfCurrent(replayReadContext);
+                    log.error().exception(t).log("Failed to schedule replay read, retrying");
+                    reScheduleReadWithBackoff();
+                    throw t;
+                }
                 // clear already acked positions from replay bucket
                 deletedMessages.forEach(position -> redeliveryMessages.remove(position.getLedgerId(),
                         position.getEntryId()));
                 // if all the entries are acked-entries and cleared up from redeliveryMessages, try to read
                 // next entries as readCompletedEntries-callback was never called
                 if ((messagesToReplayNow.size() - deletedMessages.size()) == 0) {
-                    havePendingReplayRead = false;
+                    releaseIfCurrent(replayReadContext);
                     readMoreEntriesAsync();
                 }
             } else if (BLOCKED_DISPATCHER_ON_UNACKMSG_UPDATER.get(this) == TRUE) {
@@ -413,12 +448,25 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         .attr("messagesToRead", messagesToRead)
                         .attr("consumersCount", consumerList.size())
                         .log("Schedule read of messages");
-                havePendingRead = true;
-                updateMinReplayedPosition();
-
-                messagesToRead = Math.min(messagesToRead, getMaxEntriesReadLimit());
-                cursor.asyncReadEntriesWithSkipOrWait(messagesToRead, bytesToRead, this, ReadType.Normal,
-                        topic.getMaxReadPosition(), createReadEntriesSkipConditionForNormalRead());
+                ReadContext normalReadContext = reserveRead(ReadType.Normal);
+                if (normalReadContext == null) {
+                    log.debug("Cannot schedule next read until previous one is done");
+                    return;
+                }
+                try {
+                    updateMinReplayedPosition();
+                    messagesToRead = Math.min(messagesToRead, getMaxEntriesReadLimit());
+                    cursor.asyncReadEntriesWithSkipOrWait(messagesToRead, bytesToRead, this, normalReadContext,
+                            topic.getMaxReadPosition(), createReadEntriesSkipConditionForNormalRead());
+                } catch (Throwable t) {
+                    // The slot is reserved before the read is handed to the cursor, and everything up to the
+                    // cursor accepting it may throw synchronously. If one of those throws, no callback will
+                    // arrive to release the slot and the subscription never reads again. See #26454.
+                    releaseIfCurrent(normalReadContext);
+                    log.error().exception(t).log("Failed to schedule read, retrying");
+                    reScheduleReadWithBackoff();
+                    throw t;
+                }
             } else {
                 log.debug("Cannot schedule next read until previous one is done");
             }
@@ -457,7 +505,94 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
      * @return true if there's a pending read operation
      */
     protected boolean doesntHavePendingRead() {
-        return !havePendingRead;
+        return canReserveRead(ReadType.Normal);
+    }
+
+    /**
+     * Identifies one read the dispatcher has issued. It is handed to the cursor as that read's context and
+     * comes back with its completion, so a callback can be matched against the slot it reserved: only the
+     * read still holding a slot may release it or act on its own completion.
+     *
+     * @param id monotonically allocated, never reused while the read is outstanding
+     * @param type which kind of read this is, which also selects the slot it occupies
+     */
+    protected record ReadContext(long id, ReadType type) {
+    }
+
+    /**
+     * Returns the read occupying the slot that a read of {@code type} would use, or {@code null} if that
+     * slot is free. It is not necessarily a read of that type: {@link
+     * PersistentStickyKeyDispatcherMultipleConsumers} maps both types onto a single slot, because ordered
+     * delivery cannot tolerate two cursor operations at once.
+     *
+     * <p>Ordinary Shared subscriptions keep one slot per type, so an explicit redelivery can be fetched
+     * while a sequential read is outstanding.
+     */
+    protected ReadContext readSlot(ReadType type) {
+        return type == ReadType.Normal ? normalRead : replayRead;
+    }
+
+    /** Stores {@code readContext} (or {@code null}) in the slot a read of {@code type} uses. */
+    protected void setReadSlot(ReadType type, ReadContext readContext) {
+        if (type == ReadType.Normal) {
+            normalRead = readContext;
+        } else {
+            replayRead = readContext;
+        }
+    }
+
+    /** The outstanding read of exactly this type, or {@code null}. */
+    protected final ReadContext outstandingRead(ReadType type) {
+        ReadContext current = readSlot(type);
+        return current != null && current.type() == type ? current : null;
+    }
+
+    /** Whether a read of exactly this type is outstanding. */
+    protected final boolean hasOutstandingRead(ReadType type) {
+        return outstandingRead(type) != null;
+    }
+
+    /** Whether any read is outstanding, of either type. */
+    protected final boolean hasAnyOutstandingRead() {
+        return readSlot(ReadType.Normal) != null || readSlot(ReadType.Replay) != null;
+    }
+
+    /** Whether a read of this type could be reserved right now. */
+    protected final boolean canReserveRead(ReadType type) {
+        return readSlot(type) == null;
+    }
+
+    /**
+     * Reserves the slot for a read of the given type. Callers must hold this dispatcher's monitor and must
+     * hand the returned context to the cursor, so that its completion can release the slot again.
+     *
+     * @return the reserved read, or {@code null} if the slot is already taken
+     */
+    protected final synchronized ReadContext reserveRead(ReadType type) {
+        if (!canReserveRead(type)) {
+            return null;
+        }
+        ReadContext readContext = new ReadContext(++nextReadId, type);
+        setReadSlot(type, readContext);
+        return readContext;
+    }
+
+    /** Whether this read still owns the slot it reserved. */
+    protected final synchronized boolean isCurrentRead(ReadContext readContext) {
+        return readContext != null && readContext.equals(readSlot(readContext.type()));
+    }
+
+    /**
+     * Releases the slot this read reserved, if it still owns it.
+     *
+     * @return true if the slot was released, false if the read had already been superseded
+     */
+    protected final synchronized boolean releaseIfCurrent(ReadContext readContext) {
+        if (!isCurrentRead(readContext)) {
+            return false;
+        }
+        setReadSlot(readContext.type(), null);
+        return true;
     }
 
     protected void handleNormalReadNotAllowed() {
@@ -559,7 +694,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             }
         }
 
-        if (havePendingReplayRead) {
+        if (hasOutstandingRead(ReadType.Replay)) {
             log.debug("Skipping replay while awaiting previous read to complete");
             return Pair.of(-1, -1L);
         }
@@ -570,12 +705,14 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         return Pair.of(messagesToRead, bytesToRead);
     }
 
-    protected Set<? extends Position> asyncReplayEntries(Set<? extends Position> positions) {
-        return cursor.asyncReplayEntries(positions, this, ReadType.Replay);
+    protected Set<? extends Position> asyncReplayEntries(Set<? extends Position> positions,
+                                                        ReadContext readContext) {
+        return cursor.asyncReplayEntries(positions, this, readContext);
     }
 
-    protected Set<? extends Position> asyncReplayEntriesInOrder(Set<? extends Position> positions) {
-        return cursor.asyncReplayEntries(positions, this, ReadType.Replay, true);
+    protected Set<? extends Position> asyncReplayEntriesInOrder(Set<? extends Position> positions,
+                                                               ReadContext readContext) {
+        return cursor.asyncReplayEntries(positions, this, readContext, true);
     }
 
     @Override
@@ -642,9 +779,12 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     }
 
     @Override
-    protected void cancelPendingRead() {
-        if (havePendingRead && cursor.cancelPendingReadRequest()) {
-            havePendingRead = false;
+    protected synchronized void cancelPendingRead() {
+        // Only a Normal read can be parked in the cursor's waiting slot, and cancelling it is the only way a
+        // read ends without a callback, so the slot must be released here.
+        ReadContext normalReadContext = outstandingRead(ReadType.Normal);
+        if (normalReadContext != null && cursor.cancelPendingReadRequest()) {
+            releaseIfCurrent(normalReadContext);
         }
     }
 
@@ -671,11 +811,22 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     public final synchronized void readEntriesComplete(List<Entry> entries, Object ctx) {
-        ReadType readType = (ReadType) ctx;
-        if (readType == ReadType.Normal) {
-            havePendingRead = false;
-        } else {
-            havePendingReplayRead = false;
+        ReadContext readContext = (ReadContext) ctx;
+        ReadType readType = readContext.type();
+        // Release the slot before anything that could throw: this completion is the read's only chance to
+        // release it, and a throwable escaping below would leave the dispatcher believing the read is still
+        // outstanding, so it would never read again. See #26454.
+        if (!releaseIfCurrent(readContext)) {
+            // This read was superseded by the stale-read repair, which rewinds the cursor before arming its
+            // replacement, so these entries are read again by that replacement. Dispatching them here would
+            // duplicate the delivery and, on Key_Shared, deliver a key out of order.
+            log.debug()
+                    .attr("readId", readContext.id())
+                    .attr("readType", readType)
+                    .attr("entryCount", entries.size())
+                    .log("Discarding the result of a superseded read");
+            entries.forEach(Entry::release);
+            return;
         }
 
         if (readBatchSize < serviceConfig.getDispatcherMaxReadBatchSize()) {
@@ -1001,7 +1152,18 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     @Override
     public synchronized void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
 
-        ReadType readType = (ReadType) ctx;
+        ReadContext readContext = (ReadContext) ctx;
+        ReadType readType = readContext.type();
+        // Release the slot before anything that could throw, for the same reason as readEntriesComplete.
+        if (!releaseIfCurrent(readContext)) {
+            // Superseded by the stale-read repair: the replacement read owns the slot and the retry.
+            log.debug()
+                    .attr("readId", readContext.id())
+                    .attr("readType", readType)
+                    .exceptionMessage(exception)
+                    .log("Ignoring the failure of a superseded read");
+            return;
+        }
         long waitTimeMillis = readFailureBackoff.next().toMillis();
 
         // Do not keep reading more entries if the cursor is already closed.
@@ -1044,14 +1206,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             cursor.rewind();
         }
 
-        if (readType == ReadType.Normal) {
-            havePendingRead = false;
-        } else {
-            havePendingReplayRead = false;
-            if (exception instanceof ManagedLedgerException.InvalidReplayPositionException) {
-                Position markDeletePosition = cursor.getMarkDeletedPosition();
-                redeliveryMessages.removeAllUpTo(markDeletePosition.getLedgerId(), markDeletePosition.getEntryId());
-            }
+        if (readType == ReadType.Replay
+                && exception instanceof ManagedLedgerException.InvalidReplayPositionException) {
+            Position markDeletePosition = cursor.getMarkDeletedPosition();
+            redeliveryMessages.removeAllUpTo(markDeletePosition.getLedgerId(), markDeletePosition.getEntryId());
         }
 
         readBatchSize = serviceConfig.getDispatcherMinReadBatchSize();
@@ -1068,14 +1226,14 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                 // If it's a replay read we need to retry even if there's already
                 // another scheduled read, otherwise we'd be stuck until
                 // more messages are published.
-                if (!havePendingRead || readType == ReadType.Replay) {
+                if (!hasOutstandingRead(ReadType.Normal) || readType == ReadType.Replay) {
                     log.info("Retrying read operation");
                     readMoreEntries();
                 } else {
                     log.info()
-                            .attr("havePendingRead", havePendingRead)
+                            .attr("readType", readType)
                             .exception(e)
-                            .log("Skipping read retry: havePendingRead");
+                            .log("Skipping read retry: a read is already outstanding");
                 }
             }
         }, waitTimeMillis, TimeUnit.MILLISECONDS);
@@ -1447,17 +1605,86 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     public boolean checkAndUnblockIfStuck() {
-        if (cursor.checkAndUpdateReadPositionChanged()) {
+        return checkStuckDispatcher(true);
+    }
+
+    @Override
+    public boolean checkAndRepairInconsistentReadState() {
+        return checkStuckDispatcher(false);
+    }
+
+    /**
+     * Runs the periodic stuck-subscription check. Callers must invoke this at most once per check interval,
+     * through exactly one of {@link #checkAndUnblockIfStuck()} or
+     * {@link #checkAndRepairInconsistentReadState()}, because it consumes the cursor's read-position sample.
+     *
+     * @param unblockIdleDispatcher whether to also apply the {@code unblockStuckSubscriptionEnabled}
+     *                              heuristic of force-issuing a read when the dispatcher holds no read
+     */
+    private boolean checkStuckDispatcher(boolean unblockIdleDispatcher) {
+        // Always sample, since this also updates the position the next call compares against.
+        boolean readPositionChanged = cursor.checkAndUpdateReadPositionChanged();
+        if (readPositionChanged || !isAtleastOneConsumerAvailable() || !cursor.hasBacklog(false)) {
+            staleReadObservations = 0;
             return false;
         }
         // consider dispatch is stuck if : dispatcher has backlog, available-permits and there is no pending read
-        if (isAtleastOneConsumerAvailable() && !havePendingReplayRead && !havePendingRead
-                && cursor.hasBacklog(false)) {
+        if (!hasAnyOutstandingRead()) {
+            staleReadObservations = 0;
+            if (!unblockIdleDispatcher) {
+                return false;
+            }
             log.warn("Dispatcher is stuck and unblocking by issuing reads");
             readMoreEntriesAsync();
             return true;
         }
-        return false;
+        // The dispatcher holds a read slot. If the cursor owns no read operation, no completion is coming and
+        // nothing will ever release that slot, so the subscription is dead. See #26454.
+        if (cursor.hasOutstandingReadOperation()) {
+            staleReadObservations = 0;
+            return false;
+        }
+        // hasOutstandingReadOperation() is a sampled signal that dips to false while the cursor moves a read
+        // between its internal stages, so one observation proves nothing. Requiring it on consecutive checks,
+        // with the read position frozen since the previous one, gives a genuine read a full stats interval to
+        // complete and move that position.
+        if (++staleReadObservations < STALE_READ_OBSERVATIONS_BEFORE_RECOVERY) {
+            return false;
+        }
+        staleReadObservations = 0;
+        return recoverStaleRead();
+    }
+
+    /**
+     * Recovers a read slot that no completion will ever release, by rewinding the cursor and arming a
+     * replacement read.
+     *
+     * <p>The rewind is what makes the recovery safe. It is the reason a completion that turns up later --
+     * because it had merely been queued behind a stalled managed-ledger executor rather than lost -- can
+     * have its entries released rather than dispatched: everything the rewind exposes is read again. The
+     * caller has already established that the cursor owns no read operation, and a read only advances the
+     * cursor's read position while it is counted as one, so no surviving operation can undo the rewind.
+     *
+     * @return true if a stale slot was released and a read was issued
+     */
+    private synchronized boolean recoverStaleRead() {
+        // Re-check under the monitor: the caller sampled the condition without it.
+        if (!hasAnyOutstandingRead() || cursor.hasOutstandingReadOperation()) {
+            return false;
+        }
+        log.warn()
+                .attr("readPosition", cursor.getReadPosition())
+                .attr("markDeletePosition", cursor.getMarkDeletedPosition())
+                .log("Dispatcher held a read the cursor knows nothing about. Rewinding and issuing reads. "
+                        + "This should not happen; please report it with the surrounding broker logs.");
+        setReadSlot(ReadType.Normal, null);
+        setReadSlot(ReadType.Replay, null);
+        // Rewind so nothing the abandoned read had already consumed is skipped, and so its result can be
+        // discarded if it does arrive after all.
+        cursor.rewind();
+        shouldRewindBeforeReadingOrReplaying = false;
+        readMoreEntriesAsync();
+        return true;
     }
 
     public PersistentTopic getTopic() {
@@ -1500,11 +1727,11 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     public boolean isHavePendingRead() {
-        return havePendingRead;
+        return hasOutstandingRead(ReadType.Normal);
     }
 
     @Override
     public boolean isHavePendingReplayRead() {
-        return havePendingReplayRead;
+        return hasOutstandingRead(ReadType.Replay);
     }
 }

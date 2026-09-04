@@ -193,7 +193,8 @@ public class PersistentTopicTest extends BrokerTestBase {
         consumer2.close();
 
         // block sub to read messages
-        sharedDispatcher.havePendingRead = true;
+        PersistentDispatcherMultipleConsumers.ReadContext sharedRead =
+                sharedDispatcher.reserveRead(PersistentDispatcherMultipleConsumers.ReadType.Normal);
         failOverDispatcher.havePendingRead = true;
 
         producer.newMessage().value("test").eventTime(5).send();
@@ -209,7 +210,7 @@ public class PersistentTopicTest extends BrokerTestBase {
         assertNull(msg);
 
         // allow reads but dispatchers are still blocked
-        sharedDispatcher.havePendingRead = false;
+        sharedDispatcher.releaseIfCurrent(sharedRead);
         failOverDispatcher.havePendingRead = false;
 
         // run task to unblock stuck dispatcher: first iteration sets the lastReadPosition and next iteration will

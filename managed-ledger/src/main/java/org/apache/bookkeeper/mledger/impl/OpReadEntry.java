@@ -170,6 +170,10 @@ class OpReadEntry implements ReadEntriesCallback {
             } else {
                 cursor.skipNonRecoverableEntries(readPosition, nexReadPosition);
             }
+            // This read operation does not end here after all: checkReadCompletion() either continues it or
+            // releases it when it does end. Take the release at the top of this method back, or that second
+            // release drives pendingReadOps negative and it stays there for the life of the cursor.
+            cursor.readOperationResumed();
             checkReadCompletion();
         } else {
             if (!(exception instanceof TooManyRequestsException)) {
