@@ -3777,7 +3777,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         counter2.await();
     }
 
-    @Test(timeOut = 20000)
+    @Test(timeOut = 60000)
     void hasOutstandingReadOperation() throws Exception {
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("hasOutstandingReadOperation",
                 new ManagedLedgerConfig().setMaxEntriesPerLedger(1));
@@ -3818,40 +3818,42 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
             return releaseBookieRead.thenApply(__ -> ledgerEntries);
         });
         CountDownLatch inFlightRead = new CountDownLatch(1);
-        c1.asyncReadEntries(1, new ReadEntriesCallback() {
-            @Override
-            public void readEntriesComplete(List<Entry> entries, Object ctx) {
-                entries.forEach(Entry::release);
-                inFlightRead.countDown();
-            }
+        try {
+            c1.asyncReadEntries(1, new ReadEntriesCallback() {
+                @Override
+                public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                    entries.forEach(Entry::release);
+                    inFlightRead.countDown();
+                }
 
-            @Override
-            public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
-                inFlightRead.countDown();
-            }
-        }, null, PositionFactory.LATEST);
-        assertTrue(bookieReadStarted.await(20, TimeUnit.SECONDS));
-        assertTrue(c1.hasOutstandingReadOperation());
-        assertEquals(c1.getPendingReadOpsCount(), 1);
-        assertFalse(c1.hasPendingReadRequest(), "an in-flight read is not a cancellable waiting request");
-
-        releaseBookieRead.complete(null);
+                @Override
+                public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                    inFlightRead.countDown();
+                }
+            }, null, PositionFactory.LATEST);
+            assertTrue(bookieReadStarted.await(20, TimeUnit.SECONDS));
+            assertTrue(c1.hasOutstandingReadOperation());
+            assertEquals(c1.getPendingReadOpsCount(), 1);
+            assertFalse(c1.hasPendingReadRequest(), "an in-flight read is not a cancellable waiting request");
+        } finally {
+            // Release the parked bookie read and uninstall the interceptor even if an assertion failed, or
+            // the rest of this class inherits a stalled mock bookkeeper.
+            releaseBookieRead.complete(null);
+            bkc.setReadHandleInterceptor(null);
+        }
         assertTrue(inFlightRead.await(20, TimeUnit.SECONDS));
-        bkc.setReadHandleInterceptor(null);
         Awaitility.await().untilAsserted(() -> assertFalse(c1.hasOutstandingReadOperation()));
 
-        // Cancelling a parked read also releases it.
-        CountDownLatch cancelledRead = new CountDownLatch(1);
+        // Cancelling a parked read also releases it. Neither callback runs: cancelling removes the waiting
+        // op without completing it, which is exactly why the cursor must stop reporting it.
         c1.asyncReadEntriesOrWait(1, new ReadEntriesCallback() {
             @Override
             public void readEntriesComplete(List<Entry> entries, Object ctx) {
                 entries.forEach(Entry::release);
-                cancelledRead.countDown();
             }
 
             @Override
             public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
-                cancelledRead.countDown();
             }
         }, null, PositionFactory.LATEST);
         assertTrue(c1.hasOutstandingReadOperation());

@@ -195,6 +195,7 @@ public class PersistentTopicTest extends BrokerTestBase {
         // block sub to read messages
         PersistentDispatcherMultipleConsumers.ReadContext sharedRead =
                 sharedDispatcher.reserveRead(PersistentDispatcherMultipleConsumers.ReadType.Normal);
+        assertNotNull(sharedRead, "the read slot must have been free, or the subscription is not blocked");
         failOverDispatcher.havePendingRead = true;
 
         producer.newMessage().value("test").eventTime(5).send();
@@ -210,7 +211,7 @@ public class PersistentTopicTest extends BrokerTestBase {
         assertNull(msg);
 
         // allow reads but dispatchers are still blocked
-        sharedDispatcher.releaseIfCurrent(sharedRead);
+        assertTrue(sharedDispatcher.releaseIfCurrent(sharedRead));
         failOverDispatcher.havePendingRead = false;
 
         // run task to unblock stuck dispatcher: first iteration sets the lastReadPosition and next iteration will

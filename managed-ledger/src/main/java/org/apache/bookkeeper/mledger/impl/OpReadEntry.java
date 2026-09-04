@@ -148,6 +148,11 @@ class OpReadEntry implements ReadEntriesCallback {
                     .attr("readPosition", readPosition)
                     .exceptionMessage(exception)
                     .log("Read failed from ledger");
+            // This read operation does not end here after all: it skips ahead and continues, and
+            // checkReadCompletion() releases it when it really ends. Take the release at the top of this
+            // method back before anything below advances the cursor's read position, so the cursor never
+            // reports that no operation is outstanding while one can still move that position.
+            cursor.readOperationResumed();
             final ManagedLedgerImpl ledger = (ManagedLedgerImpl) cursor.getManagedLedger();
             Position nexReadPosition;
             Long lostLedger = null;
@@ -161,6 +166,7 @@ class OpReadEntry implements ReadEntriesCallback {
             }
             // fail callback if it couldn't find next valid ledger
             if (nexReadPosition == null) {
+                cursor.readOperationCompleted();
                 fail(exception, ctx);
                 return;
             }
@@ -170,10 +176,6 @@ class OpReadEntry implements ReadEntriesCallback {
             } else {
                 cursor.skipNonRecoverableEntries(readPosition, nexReadPosition);
             }
-            // This read operation does not end here after all: checkReadCompletion() either continues it or
-            // releases it when it does end. Take the release at the top of this method back, or that second
-            // release drives pendingReadOps negative and it stays there for the life of the cursor.
-            cursor.readOperationResumed();
             checkReadCompletion();
         } else {
             if (!(exception instanceof TooManyRequestsException)) {

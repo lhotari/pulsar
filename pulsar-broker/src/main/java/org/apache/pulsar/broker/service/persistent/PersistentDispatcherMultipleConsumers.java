@@ -155,11 +155,12 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
      */
     private static final int STALE_READ_OBSERVATIONS_BEFORE_RECOVERY = 2;
     /**
-     * Consecutive observations of a reserved slot the cursor knows nothing about. Only the periodic
-     * stuck-subscription check reads and writes it; volatile so the count carries across checks regardless
-     * of which thread runs them. Miscounting is harmless: {@link #recoverStaleRead()} re-checks under the
-     * monitor.
+     * The Normal read the periodic check has seen without a matching cursor read operation, and how many
+     * consecutive checks have seen that same read. Only that check reads and writes them; volatile so they
+     * carry across checks regardless of which thread runs them. Miscounting is harmless:
+     * {@link #recoverStaleRead(ReadContext)} re-checks under the monitor.
      */
+    private volatile ReadContext staleReadCandidate;
     private volatile int staleReadObservations;
     protected enum ReadType {
         Normal, Replay
@@ -403,8 +404,18 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                 ReadContext replayReadContext = reserveRead(ReadType.Replay);
                 if (replayReadContext == null) {
                     // A read already owns the slot. Only Key_Shared reaches this, where one slot is shared by
-                    // both read types; that read's completion triggers another attempt.
-                    log.debug("Skipping replay read, a read is already outstanding");
+                    // both read types. A read parked waiting for new entries would never free the slot on its
+                    // own -- nothing new may ever be published -- so cancel it. That is what keeps a
+                    // redelivery, or a delayed message that has come due, dispatchable on a caught-up
+                    // subscription. A read already in flight cannot be cancelled and frees the slot when it
+                    // completes.
+                    cancelPendingRead();
+                    replayReadContext = reserveRead(ReadType.Replay);
+                }
+                if (replayReadContext == null) {
+                    // The outstanding read is in flight; its completion calls readMoreEntries() again, which
+                    // picks the replay up then. The positions stay in redeliveryMessages meanwhile.
+                    log.debug("Skipping replay read, a read is already in flight");
                     return;
                 }
                 Set<? extends Position> deletedMessages;
@@ -816,17 +827,16 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         // Release the slot before anything that could throw: this completion is the read's only chance to
         // release it, and a throwable escaping below would leave the dispatcher believing the read is still
         // outstanding, so it would never read again. See #26454.
+        // A superseded read is one the stale-read recovery gave up on. Its entries are still dispatched --
+        // they sit at positions the cursor has already passed, and the replacement read starts after them,
+        // so dropping them would strand those messages -- but the slot now belongs to the replacement and
+        // only that read may release it.
         if (!releaseIfCurrent(readContext)) {
-            // This read was superseded by the stale-read repair, which rewinds the cursor before arming its
-            // replacement, so these entries are read again by that replacement. Dispatching them here would
-            // duplicate the delivery and, on Key_Shared, deliver a key out of order.
             log.debug()
                     .attr("readId", readContext.id())
                     .attr("readType", readType)
                     .attr("entryCount", entries.size())
-                    .log("Discarding the result of a superseded read");
-            entries.forEach(Entry::release);
-            return;
+                    .log("Dispatching the result of a superseded read without releasing the slot");
         }
 
         if (readBatchSize < serviceConfig.getDispatcherMaxReadBatchSize()) {
@@ -1154,15 +1164,15 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
         ReadContext readContext = (ReadContext) ctx;
         ReadType readType = readContext.type();
-        // Release the slot before anything that could throw, for the same reason as readEntriesComplete.
+        // Release the slot before anything that could throw, for the same reason as readEntriesComplete. A
+        // superseded read no longer owns it; everything else below still applies, and the retry it may
+        // schedule is harmless because readMoreEntries() refuses to arm a second read of the same type.
         if (!releaseIfCurrent(readContext)) {
-            // Superseded by the stale-read repair: the replacement read owns the slot and the retry.
             log.debug()
                     .attr("readId", readContext.id())
                     .attr("readType", readType)
                     .exceptionMessage(exception)
-                    .log("Ignoring the failure of a superseded read");
-            return;
+                    .log("Handling the failure of a superseded read without releasing the slot");
         }
         long waitTimeMillis = readFailureBackoff.next().toMillis();
 
@@ -1638,51 +1648,62 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             readMoreEntriesAsync();
             return true;
         }
-        // The dispatcher holds a read slot. If the cursor owns no read operation, no completion is coming and
-        // nothing will ever release that slot, so the subscription is dead. See #26454.
-        if (cursor.hasOutstandingReadOperation()) {
-            staleReadObservations = 0;
+        // Only a Normal read can be checked against the cursor. A replay read reads positions individually
+        // through ManagedLedger and registers nothing the cursor counts, so an in-flight replay is
+        // indistinguishable from an abandoned one and must never be recovered.
+        ReadContext normalReadContext = outstandingRead(ReadType.Normal);
+        if (normalReadContext == null || hasOutstandingRead(ReadType.Replay)
+                || cursor.hasOutstandingReadOperation()) {
+            forgetStaleRead();
             return false;
         }
         // hasOutstandingReadOperation() is a sampled signal that dips to false while the cursor moves a read
-        // between its internal stages, so one observation proves nothing. Requiring it on consecutive checks,
-        // with the read position frozen since the previous one, gives a genuine read a full stats interval to
-        // complete and move that position.
+        // between its internal stages, so one observation proves nothing. Requiring the same read on
+        // consecutive checks, with the read position frozen since the previous one, gives a genuine read a
+        // full stats interval to complete and move that position.
+        if (!normalReadContext.equals(staleReadCandidate)) {
+            staleReadCandidate = normalReadContext;
+            staleReadObservations = 1;
+            return false;
+        }
         if (++staleReadObservations < STALE_READ_OBSERVATIONS_BEFORE_RECOVERY) {
             return false;
         }
+        forgetStaleRead();
+        return recoverStaleRead(normalReadContext);
+    }
+
+    private void forgetStaleRead() {
+        staleReadCandidate = null;
         staleReadObservations = 0;
-        return recoverStaleRead();
     }
 
     /**
-     * Recovers a read slot that no completion will ever release, by rewinding the cursor and arming a
+     * Recovers a Normal read slot that no completion will ever release, by releasing it and arming a
      * replacement read.
      *
-     * <p>The rewind is what makes the recovery safe. It is the reason a completion that turns up later --
-     * because it had merely been queued behind a stalled managed-ledger executor rather than lost -- can
-     * have its entries released rather than dispatched: everything the rewind exposes is read again. The
-     * caller has already established that the cursor owns no read operation, and a read only advances the
-     * cursor's read position while it is counted as one, so no surviving operation can undo the rewind.
+     * <p>The cursor's read position is not touched. If the read was never handed to the cursor -- the state
+     * reported in <a href="https://github.com/apache/pulsar/issues/26454">#26454</a> -- the position never
+     * moved, so the replacement reads exactly what the abandoned read would have. If the read had in fact
+     * completed and only its callback was delayed, the position already moved past its entries, so the
+     * replacement reads what comes after them and that completion still dispatches its own, which is why a
+     * superseded completion is delivered rather than discarded.
      *
      * @return true if a stale slot was released and a read was issued
      */
-    private synchronized boolean recoverStaleRead() {
+    private synchronized boolean recoverStaleRead(ReadContext staleRead) {
         // Re-check under the monitor: the caller sampled the condition without it.
-        if (!hasAnyOutstandingRead() || cursor.hasOutstandingReadOperation()) {
+        if (!isCurrentRead(staleRead) || hasOutstandingRead(ReadType.Replay)
+                || cursor.hasOutstandingReadOperation()) {
             return false;
         }
         log.warn()
+                .attr("readId", staleRead.id())
                 .attr("readPosition", cursor.getReadPosition())
                 .attr("markDeletePosition", cursor.getMarkDeletedPosition())
-                .log("Dispatcher held a read the cursor knows nothing about. Rewinding and issuing reads. "
+                .log("Dispatcher held a read the cursor knows nothing about. Releasing it and issuing reads. "
                         + "This should not happen; please report it with the surrounding broker logs.");
         setReadSlot(ReadType.Normal, null);
-        setReadSlot(ReadType.Replay, null);
-        // Rewind so nothing the abandoned read had already consumed is skipped, and so its result can be
-        // discarded if it does arrive after all.
-        cursor.rewind();
-        shouldRewindBeforeReadingOrReplaying = false;
         readMoreEntriesAsync();
         return true;
     }

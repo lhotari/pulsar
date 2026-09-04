@@ -369,9 +369,28 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         when(cursor.getName()).thenReturn("cursor");
         Subscription subscription = mock(Subscription.class);
         when(subscription.getName()).thenReturn("sub");
-        AbstractPersistentDispatcherMultipleConsumers dispatcher =
+        when(subscription.getTopic()).thenReturn(topic);
+        PersistentDispatcherMultipleConsumers dispatcher =
                 new PersistentDispatcherMultipleConsumers(topic, cursor, subscription);
-        dispatcher.readEntriesFailed(new ManagedLedgerException.InvalidCursorPositionException("failed"), null);
+        // A consumer with permits, so the dispatcher actually issues a read.
+        TransportCnx cnx = mock(TransportCnx.class);
+        when(cnx.isActive()).thenReturn(true);
+        Consumer readConsumer = mock(Consumer.class);
+        when(readConsumer.cnx()).thenReturn(cnx);
+        when(readConsumer.getAvailablePermits()).thenReturn(10);
+        when(readConsumer.isWritable()).thenReturn(true);
+        when(readConsumer.isBlocked()).thenReturn(false);
+        when(readConsumer.getAvgMessagesPerEntry()).thenReturn(1);
+        dispatcher.addConsumer(readConsumer).join();
+        // Fail the read with the context the dispatcher handed to the cursor, as the real read path does.
+        doAnswer(inv -> {
+            AbstractPersistentDispatcherMultipleConsumers readCallback = inv.getArgument(2);
+            readCallback.readEntriesFailed(new ManagedLedgerException.InvalidCursorPositionException("failed"),
+                    inv.getArgument(3));
+            return null;
+        }).when(cursor).asyncReadEntriesWithSkipOrWait(anyInt(), anyLong(), any(), any(), any(), any());
+
+        dispatcher.readMoreEntries();
         verify(topic, atLeast(1)).getBrokerService();
     }
 

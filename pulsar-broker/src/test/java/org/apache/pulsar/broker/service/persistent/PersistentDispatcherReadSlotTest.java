@@ -54,6 +54,7 @@ import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.Consumer;
+import org.apache.pulsar.broker.service.Dispatcher;
 import org.apache.pulsar.broker.service.EntryBatchIndexesAcks;
 import org.apache.pulsar.broker.service.EntryBatchSizes;
 import org.apache.pulsar.broker.service.TransportCnx;
@@ -88,10 +89,12 @@ import org.testng.annotations.Test;
  * sequential read runs; {@link PersistentStickyKeyDispatcherMultipleConsumers} maps both types onto one slot,
  * because ordered delivery cannot tolerate two cursor operations at once.
  *
- * <p><b>Recovery.</b> The periodic subscription check notices a reserved slot the cursor knows nothing
- * about, rewinds the cursor and arms a replacement. The rewind is what makes it safe: a completion that
+ * <p><b>Recovery.</b> The periodic subscription check notices a Normal slot the cursor knows nothing about,
+ * releases it and arms a replacement, leaving the cursor's read position alone. Only a Normal read can be
+ * checked this way: a replay read reads positions individually through ManagedLedger and registers nothing
+ * the cursor counts, so an in-flight replay is indistinguishable from an abandoned one. A completion that
  * turns up afterwards -- because it had merely been queued behind a stalled managed-ledger executor rather
- * than lost -- can have its entries released, since the rewind guarantees they are read again.
+ * than lost -- still dispatches its entries; it just may not release the replacement's slot.
  *
  * <p><b>Fidelity.</b> The managed ledger, cursor, topic, subscription, dispatcher and the whole dispatch tail
  * are real, and the published payloads are properly serialized Pulsar messages. The only seam is the
@@ -160,7 +163,14 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         cursorProxy = mock(ManagedCursor.class,
                 withSettings().defaultAnswer(AdditionalAnswers.delegatesTo(realCursor)));
 
-        subscription = new PersistentSubscription(topic, "sub", realCursor, false);
+        // Hand the subscription this dispatcher, so the delegation PersistentTopic.updateRates relies on can
+        // be exercised end to end.
+        subscription = new PersistentSubscription(topic, "sub", realCursor, false) {
+            @Override
+            protected Dispatcher reuseOrCreateDispatcher(Dispatcher existingDispatcher, Consumer newConsumer) {
+                return PersistentDispatcherReadSlotTest.this.dispatcher;
+            }
+        };
         dispatcher = new PersistentDispatcherMultipleConsumers(topic, cursorProxy, subscription);
 
         deliveries.clear();
@@ -170,6 +180,13 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
 
     @AfterMethod(alwaysRun = true)
     public void tearDownFixture() {
+        try {
+            if (dispatcher != null) {
+                dispatcher.close();
+            }
+        } catch (Exception ignore) {
+            // best-effort cleanup
+        }
         try {
             if (realCursor != null && !realCursor.isClosed()) {
                 realCursor.close();
@@ -196,6 +213,10 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         ledger = null;
         brokerService = null;
         pulsarTestContext = null;
+        dispatcher = null;
+        subscription = null;
+        topic = null;
+        consumer = null;
     }
 
     private Consumer newMockConsumer(String consumerName) {
@@ -433,7 +454,10 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         // Without the rollback the replay slot would stay reserved and calculateToRead() would refuse every
         // later read.
         awaitDelivered(5);
-        assertThat(dispatcher.isHavePendingReplayRead()).isFalse();
+        Awaitility.await("the replay slot should be free again")
+                .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                .pollInterval(Duration.ofMillis(10))
+                .untilAsserted(() -> assertThat(dispatcher.isHavePendingReplayRead()).isFalse());
     }
 
     @Test(groups = "broker")
@@ -461,6 +485,29 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
 
         assertThat(dispatcher.isHavePendingRead())
                 .as("a failed read releases its slot even when failure handling throws").isFalse();
+    }
+
+    @Test(groups = "broker")
+    public void testNormalSlotIsReleasedWhenDispatchThrows() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        dispatcher.addConsumer(consumer).get();
+        ReadContext read = reserveNormalRead();
+        assertThat(dispatcher.isHavePendingRead()).isTrue();
+
+        // Make the body of readEntriesComplete blow up after the release point, by handing it an entry whose
+        // size cannot be measured. The slot must already be free: this completion is the read's only chance
+        // to release it.
+        Entry unmeasurable = mock(Entry.class);
+        doAnswer(inv -> {
+            throw new IllegalStateException("simulated failure while dispatching a completed read");
+        }).when(unmeasurable).getLength();
+
+        assertThatThrownBy(() -> dispatcher.readEntriesComplete(new ArrayList<>(List.of(unmeasurable)), read))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(dispatcher.isHavePendingRead())
+                .as("a completed read releases its slot even when dispatch throws").isFalse();
     }
 
     /** Takes over the Normal slot, standing in for the read that is currently outstanding. */
@@ -525,6 +572,26 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
     }
 
     @Test(groups = "broker")
+    public void testRecoveryReachesTheDispatcherThroughTheSubscription() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        swallowNextNormalRead();
+        // Go through the subscription, which is what PersistentTopic.updateRates calls on a stock broker
+        // (unblockStuckSubscriptionEnabled defaults to false).
+        subscription.addConsumer(consumer).get();
+        dispatcher.readMoreEntries();
+        assertThat(dispatcher.isHavePendingRead()).isTrue();
+
+        assertThat(subscription.checkAndRepairInconsistentReadState()).isFalse();
+        assertThat(subscription.checkAndRepairInconsistentReadState()).isFalse();
+        assertThat(subscription.checkAndRepairInconsistentReadState())
+                .as("the dead slot should be recovered through the subscription").isTrue();
+
+        awaitDelivered(5);
+    }
+
+    @Test(groups = "broker")
     public void testRecoveryDoesNotApplyTheUnblockHeuristic() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
@@ -560,16 +627,13 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
     }
 
     @Test(groups = "broker")
-    public void testRecoveryRewindsTheCursorSoDiscardedEntriesAreReadAgain() throws Exception {
+    public void testRecoveryLeavesTheCursorReadPositionAlone() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
         }
         dispatcher.addConsumer(consumer).get();
         dispatcher.readMoreEntries();
         awaitDelivered(5);
-        // Nothing was acknowledged, so the mark-delete position is still behind everything delivered.
-        Position firstUnacked = ledger.getNextValidPosition(realCursor.getMarkDeletedPosition());
-        assertThat(realCursor.getReadPosition()).isGreaterThan(firstUnacked);
 
         // Park the subscription with no read outstanding, then give it a backlog nothing is driving.
         Awaitility.await("a tail-wait read should be armed")
@@ -587,22 +651,74 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         dispatcher.readMoreEntries();
         assertThat(dispatcher.isHavePendingRead()).isTrue();
         assertThat(realCursor.hasOutstandingReadOperation()).isFalse();
+        Position readPositionBefore = realCursor.getReadPosition();
 
         deliveries.clear();
         assertThat(stuckCheck()).isFalse();
         assertThat(stuckCheck()).isFalse();
         assertThat(stuckCheck()).as("the dead slot should be recovered").isTrue();
 
-        // The rewind is what lets a superseded completion release its entries: everything still unacked is
-        // read again, starting from just after the mark-delete position.
-        awaitDelivered(10);
+        // The recovery must not rewind: consumers are connected and holding delivered-but-unacked entries,
+        // so re-reading from the mark-delete position would deliver them all a second time.
+        awaitDelivered(5);
         assertThat(deliveries.get(0))
-                .as("delivery resumes from just after the mark-delete position")
-                .isEqualTo(firstUnacked);
+                .as("delivery resumes where the abandoned read would have started")
+                .isEqualTo(readPositionBefore);
     }
 
     @Test(groups = "broker")
-    public void testASupersededCompletionIsDiscardedInsteadOfDispatched() throws Exception {
+    public void testRecoveryDoesNotFireWhileAReplayReadIsOutstanding() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        swallowNextNormalRead();
+        dispatcher.addConsumer(consumer).get();
+        dispatcher.readMoreEntries();
+        assertThat(dispatcher.isHavePendingRead()).isTrue();
+
+        // A replay read registers nothing the cursor counts, so an in-flight one looks exactly like an
+        // abandoned read. The recovery must therefore stand down while a replay slot is held.
+        ReadContext replay = dispatcher.reserveRead(ReadType.Replay);
+        assertThat(replay).isNotNull();
+
+        for (int i = 0; i < 10; i++) {
+            assertThat(stuckCheck()).as("no recovery while a replay read is outstanding").isFalse();
+        }
+        assertThat(dispatcher.isHavePendingRead()).isTrue();
+
+        // Once the replay completes, the Normal slot can be recovered again. The loop above already
+        // primed the read-position sample, so the first check here is the first observation of this read.
+        dispatcher.releaseIfCurrent(replay);
+        assertThat(stuckCheck()).as("first observation of the stranded read").isFalse();
+        assertThat(stuckCheck()).as("the dead slot should be recovered").isTrue();
+        awaitDelivered(5);
+    }
+
+    @Test(groups = "broker")
+    public void testRecoveryRequiresTheSameReadOnConsecutiveChecks() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        swallowNextNormalRead();
+        dispatcher.addConsumer(consumer).get();
+        dispatcher.readMoreEntries();
+
+        assertThat(stuckCheck()).as("first check only samples the read position").isFalse();
+        assertThat(stuckCheck()).as("first observation of this read").isFalse();
+
+        // A different read must restart the count: two short-lived reads seen once each are not one read
+        // that has been stuck for a full stats interval.
+        ReadContext stranded = dispatcher.readSlot(ReadType.Normal);
+        dispatcher.releaseIfCurrent(stranded);
+        ReadContext replacement = dispatcher.reserveRead(ReadType.Normal);
+        assertThat(replacement).isNotNull();
+
+        assertThat(stuckCheck()).as("a new read starts the count again").isFalse();
+        assertThat(stuckCheck()).as("second observation of the new read").isTrue();
+    }
+
+    @Test(groups = "broker")
+    public void testASupersededCompletionIsDispatchedWithoutReleasingTheReplacement() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
         }
@@ -623,8 +739,8 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
                 .pollInterval(Duration.ofMillis(10))
                 .until(() -> dispatcher.isHavePendingRead() && realCursor.hasOutstandingReadOperation());
 
-        // The superseded read turns up after all. Its entries were re-read by the replacement after the
-        // rewind, so dispatching them here would duplicate the delivery.
+        // The superseded read turns up after all. Its entries sit at positions the cursor has already
+        // passed, so dropping them would strand those messages -- but it must not release the replacement.
         int deliveredBefore = deliveries.size();
         ByteBuf lateMessage = serializeMessage("late");
         Entry lateEntry;
@@ -635,10 +751,12 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         }
         dispatcher.readEntriesComplete(new ArrayList<>(List.of(lateEntry)), supersededRead);
 
+        Awaitility.await("a superseded completion must still dispatch its entries")
+                .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                .pollInterval(Duration.ofMillis(10))
+                .until(() -> deliveries.size() > deliveredBefore);
         assertThat(dispatcher.isHavePendingRead())
                 .as("a superseded completion must not release the replacement read").isTrue();
-        assertThat(deliveries.size())
-                .as("a superseded completion must not dispatch").isEqualTo(deliveredBefore);
     }
 
     @Test(groups = "broker")
