@@ -183,7 +183,7 @@ class OpReadEntry implements ReadEntriesCallback {
                 cursor.readOperationCompleted();
                 throw t;
             }
-            checkReadCompletion();
+            checkReadCompletion(true);
         } else {
             if (!(exception instanceof TooManyRequestsException)) {
                 log.warn()
@@ -210,22 +210,44 @@ class OpReadEntry implements ReadEntriesCallback {
     }
 
     void checkReadCompletion() {
-        // op readPosition is smaller or equals maxPosition then can read again
-        if (entries.size() < count && cursor.hasMoreEntries()
-                && maxPosition.compareTo(readPosition) > 0) {
+        checkReadCompletion(false);
+    }
 
-            // We still have more entries to read from the next ledger, schedule a new async operation
-            cursor.ledger.getExecutor().execute(() -> {
-                readPosition = cursor.ledger.startReadOperationOnLedger(nextReadPosition);
-                cursor.ledger.asyncReadEntries(OpReadEntry.this);
-            });
-        } else {
-            // The reading was already completed, release resources and trigger callback
-            try {
-                cursor.readOperationCompleted();
-            } finally {
-                complete(ctx);
+    /**
+     * @param releaseOnFailure when true the caller cannot give back the read operation it holds at the
+     *                        cursor, so a failure here has to release it. Only the auto-skip path in
+     *                        {@link #internalReadEntriesFailed} is in that position: it has re-acquired the
+     *                        operation through {@link ManagedCursorImpl#readOperationResumed()}, and its
+     *                        caller turns a throw into a plain failure that releases nothing.
+     */
+    private void checkReadCompletion(boolean releaseOnFailure) {
+        boolean released = false;
+        try {
+            // op readPosition is smaller or equals maxPosition then can read again
+            if (entries.size() < count && cursor.hasMoreEntries()
+                    && maxPosition.compareTo(readPosition) > 0) {
+
+                // We still have more entries to read from the next ledger, schedule a new async operation
+                cursor.ledger.getExecutor().execute(() -> {
+                    readPosition = cursor.ledger.startReadOperationOnLedger(nextReadPosition);
+                    cursor.ledger.asyncReadEntries(OpReadEntry.this);
+                });
+            } else {
+                // The reading was already completed, release resources and trigger callback. The release is
+                // recorded before the call because it decrements first: a throw from the flush it triggers
+                // must not be compensated a second time below.
+                released = true;
+                try {
+                    cursor.readOperationCompleted();
+                } finally {
+                    complete(ctx);
+                }
             }
+        } catch (Throwable t) {
+            if (releaseOnFailure && !released) {
+                cursor.readOperationCompleted();
+            }
+            throw t;
         }
     }
 

@@ -62,6 +62,8 @@ import org.apache.pulsar.broker.service.persistent.PersistentDispatcherMultipleC
 import org.apache.pulsar.broker.service.persistent.PersistentDispatcherMultipleConsumers.ReadType;
 import org.apache.pulsar.broker.testcontext.PulsarTestContext;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
+import org.apache.pulsar.common.api.proto.KeySharedMeta;
+import org.apache.pulsar.common.api.proto.KeySharedMode;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.policies.data.stats.ConsumerStatsImpl;
 import org.apache.pulsar.common.protocol.Commands;
@@ -424,8 +426,7 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
     private PersistentStickyKeyDispatcherMultipleConsumers keySharedDispatcher() {
         return new PersistentStickyKeyDispatcherMultipleConsumers(topic, cursorProxy, subscription,
                 brokerService.pulsar().getConfiguration(),
-                new org.apache.pulsar.common.api.proto.KeySharedMeta()
-                        .setKeySharedMode(org.apache.pulsar.common.api.proto.KeySharedMode.AUTO_SPLIT));
+                new KeySharedMeta().setKeySharedMode(KeySharedMode.AUTO_SPLIT));
     }
 
     // -----------------------------------------------------------------------------------------------
@@ -438,8 +439,10 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
             publish();
         }
         AtomicBoolean thrown = new AtomicBoolean();
+        AtomicReference<ReadContext> armedRead = new AtomicReference<>();
         doAnswer(inv -> {
             if (thrown.compareAndSet(false, true)) {
+                armedRead.set(inv.getArgument(3));
                 throw new IllegalStateException("simulated failure while arming the read");
             }
             return delegateReadToRealCursor(inv);
@@ -450,10 +453,12 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("simulated failure while arming the read");
 
-        assertThat(dispatcher.isHavePendingRead())
-                .as("the slot must be released when the read never reached the cursor").isFalse();
-        // The rescheduled read drains the backlog without any further nudging.
+        // Sampling the slot right here would race the retry the catch block schedules, so let the retry run
+        // and then check that the read which never reached the cursor is not the one holding the slot.
+        // Without the rollback that read owns the slot for good and nothing is ever delivered.
         awaitDelivered(5);
+        assertThat(dispatcher.isCurrentRead(armedRead.get()))
+                .as("the read that never reached the cursor must not still own the slot").isFalse();
     }
 
     @Test(groups = "broker")
@@ -511,6 +516,10 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
 
         ReadContext read = reserveNormalRead();
         assertThat(dispatcher.isHavePendingRead()).isTrue();
+        // Mockito stubbing is not safe against a concurrent invocation. The test holds the only slot, so the
+        // dispatcher cannot start another read; dropping the parked tail-wait read leaves nothing in flight
+        // that could call the shared proxy while it is being re-stubbed.
+        realCursor.cancelPendingReadRequest();
         // Make the failure-handling body blow up, then deliver a read failure the way the cursor does.
         doAnswer(inv -> {
             throw new IllegalStateException("simulated failure while handling a failed read");
@@ -791,6 +800,24 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
     }
 
     @Test(groups = "broker")
+    public void testRecoveryRequiresTheSameReadPositionOnConsecutiveChecks() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        swallowNextNormalRead();
+        dispatcher.addConsumer(consumer).get();
+        dispatcher.readMoreEntries();
+
+        assertThat(stuckCheck()).as("first observation of this read").isFalse();
+
+        // A read position that moved means something is still making progress, so the count restarts even
+        // though the slot still holds the same read.
+        realCursor.seek(ledger.getNextValidPosition(realCursor.getReadPosition()));
+        assertThat(stuckCheck()).as("a moved read position restarts the count").isFalse();
+        assertThat(stuckCheck()).as("second observation at the same position").isTrue();
+    }
+
+    @Test(groups = "broker")
     public void testASupersededCompletionIsDispatchedWithoutReleasingTheReplacement() throws Exception {
         for (int i = 0; i < 5; i++) {
             publish();
@@ -829,6 +856,76 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
                 .until(() -> deliveries.size() > deliveredBefore);
         assertThat(dispatcher.isHavePendingRead())
                 .as("a superseded completion must not release the replacement read").isTrue();
+    }
+
+    /**
+     * The rewind owed to {@code shouldRewindBeforeReadingOrReplaying} belongs to the read that still owns
+     * the slot. A superseded completion consuming it would move the cursor out from under the replacement
+     * read the recovery has already armed.
+     */
+    @Test(groups = "broker")
+    public void testASupersededCompletionDoesNotConsumeTheOwedRewind() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        swallowNextNormalRead();
+        dispatcher.addConsumer(consumer).get();
+        dispatcher.readMoreEntries();
+        ReadContext supersededRead = swallowedRead.get();
+        assertThat(supersededRead).isNotNull();
+
+        assertThat(stuckCheck()).isFalse();
+        assertThat(stuckCheck()).as("the dead slot should be recovered").isTrue();
+        awaitDelivered(5);
+
+        // A rewind is owed, and a replacement read is outstanding.
+        Awaitility.await("a replacement read should be outstanding")
+                .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                .pollInterval(Duration.ofMillis(10))
+                .until(() -> dispatcher.isHavePendingRead() && realCursor.hasOutstandingReadOperation());
+        dispatcher.shouldRewindBeforeReadingOrReplaying = true;
+        Position readPositionBefore = realCursor.getReadPosition();
+
+        dispatcher.readEntriesComplete(new ArrayList<>(), supersededRead);
+
+        assertThat(dispatcher.shouldRewindBeforeReadingOrReplaying)
+                .as("the owed rewind belongs to the read that owns the slot").isTrue();
+        assertThat(realCursor.getReadPosition())
+                .as("a superseded completion must not rewind the cursor").isEqualTo(readPositionBefore);
+        dispatcher.shouldRewindBeforeReadingOrReplaying = false;
+    }
+
+    /** The failure-side twin of {@link #testASupersededCompletionDoesNotConsumeTheOwedRewind()}. */
+    @Test(groups = "broker")
+    public void testASupersededFailureDoesNotConsumeTheOwedRewind() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        swallowNextNormalRead();
+        dispatcher.addConsumer(consumer).get();
+        dispatcher.readMoreEntries();
+        ReadContext supersededRead = swallowedRead.get();
+        assertThat(supersededRead).isNotNull();
+
+        assertThat(stuckCheck()).isFalse();
+        assertThat(stuckCheck()).as("the dead slot should be recovered").isTrue();
+        awaitDelivered(5);
+
+        Awaitility.await("a replacement read should be outstanding")
+                .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                .pollInterval(Duration.ofMillis(10))
+                .until(() -> dispatcher.isHavePendingRead() && realCursor.hasOutstandingReadOperation());
+        dispatcher.shouldRewindBeforeReadingOrReplaying = true;
+        Position readPositionBefore = realCursor.getReadPosition();
+
+        dispatcher.readEntriesFailed(
+                new ManagedLedgerException.NoMoreEntriesToReadException("no more entries"), supersededRead);
+
+        assertThat(dispatcher.shouldRewindBeforeReadingOrReplaying)
+                .as("the owed rewind belongs to the read that owns the slot").isTrue();
+        assertThat(realCursor.getReadPosition())
+                .as("a superseded failure must not rewind the cursor").isEqualTo(readPositionBefore);
+        dispatcher.shouldRewindBeforeReadingOrReplaying = false;
     }
 
     @Test(groups = "broker")
