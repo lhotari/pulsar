@@ -384,6 +384,43 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         }
     }
 
+    /**
+     * The single Key_Shared slot needs one escape hatch to stay live: a Normal read parked waiting for
+     * entries would never free the slot on its own, so a replay cancels it. Without that, a caught-up
+     * Key_Shared subscription could never dispatch a redelivery or a delayed message that had come due --
+     * nothing new would ever be published to complete the parked read.
+     */
+    @Test(groups = "broker")
+    public void testKeySharedReplayCancelsAParkedNormalRead() throws Exception {
+        List<Position> published = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            published.add(publish());
+        }
+        PersistentStickyKeyDispatcherMultipleConsumers keyShared = keySharedDispatcher();
+        try {
+            keyShared.addConsumer(consumer).get();
+            keyShared.readMoreEntries();
+            // Drain the backlog so the next read parks at the tail, holding the single slot.
+            Awaitility.await("the subscription should catch up and park a read at the tail")
+                    .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                    .pollInterval(Duration.ofMillis(10))
+                    .until(() -> keyShared.isHavePendingRead() && realCursor.hasPendingReadRequest());
+
+            // A redelivery arrives with nothing left to publish. The parked read must be cancelled so the
+            // replay can take the slot.
+            int deliveredBefore = deliveries.size();
+            keyShared.redeliverUnacknowledgedMessages(consumer, List.of(published.get(0)));
+
+            Awaitility.await("the redelivered position should be dispatched")
+                    .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                    .pollInterval(Duration.ofMillis(10))
+                    .until(() -> deliveries.size() > deliveredBefore);
+            assertThat(deliveries.get(deliveries.size() - 1)).isEqualTo(published.get(0));
+        } finally {
+            keyShared.close();
+        }
+    }
+
     private PersistentStickyKeyDispatcherMultipleConsumers keySharedDispatcher() {
         return new PersistentStickyKeyDispatcherMultipleConsumers(topic, cursorProxy, subscription,
                 brokerService.pulsar().getConfiguration(),
@@ -542,8 +579,6 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         dispatcher.readMoreEntries();
         assertThat(deliveries).as("a dispatcher holding a dead slot delivers nothing").isEmpty();
 
-        // First call only primes the cursor's read-position sample.
-        assertThat(stuckCheck()).as("first check only samples the read position").isFalse();
         // One observation is not enough: hasOutstandingReadOperation() dips to false while the cursor moves
         // a read between its internal stages.
         assertThat(stuckCheck()).as("a single observation must not be acted on").isFalse();
@@ -564,8 +599,8 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         dispatcher.readMoreEntries();
         assertThat(dispatcher.isHavePendingRead()).isTrue();
 
-        assertThat(repairCheck()).isFalse();
-        assertThat(repairCheck()).isFalse();
+        // The repair does not consume the cursor's read-position sample, so it needs no priming call.
+        assertThat(repairCheck()).as("first observation of this read").isFalse();
         assertThat(repairCheck()).as("the dead slot should be recovered").isTrue();
 
         awaitDelivered(5);
@@ -584,11 +619,52 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         assertThat(dispatcher.isHavePendingRead()).isTrue();
 
         assertThat(subscription.checkAndRepairInconsistentReadState()).isFalse();
-        assertThat(subscription.checkAndRepairInconsistentReadState()).isFalse();
         assertThat(subscription.checkAndRepairInconsistentReadState())
                 .as("the dead slot should be recovered through the subscription").isTrue();
 
         awaitDelivered(5);
+    }
+
+    /**
+     * A caught-up subscription must be recoverable too. The heuristic's staleness gate reports "changed" for
+     * any subscription whose read position has reached the tail, so gating the repair on it would leave a
+     * dead slot unrecoverable there until something new was published -- and on Key_Shared, where one slot
+     * serves both read types, that also blocks every redelivery and every delayed message that comes due.
+     */
+    @Test(groups = "broker")
+    public void testRecoveryWorksOnACaughtUpSubscription() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            publish();
+        }
+        dispatcher.addConsumer(consumer).get();
+        dispatcher.readMoreEntries();
+        awaitDelivered(5);
+
+        // Nothing was acknowledged, so there is still a backlog, but the read position has reached the tail.
+        Awaitility.await("a tail-wait read should be armed")
+                .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                .pollInterval(Duration.ofMillis(10))
+                .until(() -> dispatcher.isHavePendingRead() && realCursor.hasPendingReadRequest());
+        assertThat(realCursor.hasBacklog(false)).isTrue();
+        assertThat(ledger.getLastConfirmedEntry())
+                .as("the cursor has caught up with the tail")
+                .isLessThan(realCursor.getReadPosition());
+
+        // Strand a slot with the cursor idle.
+        dispatcher.cancelPendingRead();
+        swallowNextNormalRead();
+        dispatcher.readMoreEntries();
+        assertThat(dispatcher.isHavePendingRead()).isTrue();
+        assertThat(realCursor.hasOutstandingReadOperation()).isFalse();
+
+        assertThat(repairCheck()).as("first observation of this read").isFalse();
+        assertThat(repairCheck()).as("a caught-up subscription must still be recoverable").isTrue();
+
+        // The dispatcher is alive again: it arms a real read at the cursor.
+        Awaitility.await("a real read should be armed at the cursor")
+                .atMost(Duration.ofSeconds(DELIVERY_TIMEOUT_SECONDS))
+                .pollInterval(Duration.ofMillis(10))
+                .until(() -> realCursor.hasOutstandingReadOperation());
     }
 
     @Test(groups = "broker")
@@ -654,8 +730,7 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         Position readPositionBefore = realCursor.getReadPosition();
 
         deliveries.clear();
-        assertThat(stuckCheck()).isFalse();
-        assertThat(stuckCheck()).isFalse();
+        assertThat(stuckCheck()).as("first observation of this read").isFalse();
         assertThat(stuckCheck()).as("the dead slot should be recovered").isTrue();
 
         // The recovery must not rewind: consumers are connected and holding delivered-but-unacked entries,
@@ -686,8 +761,7 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         }
         assertThat(dispatcher.isHavePendingRead()).isTrue();
 
-        // Once the replay completes, the Normal slot can be recovered again. The loop above already
-        // primed the read-position sample, so the first check here is the first observation of this read.
+        // Once the replay completes, the Normal slot can be recovered again.
         dispatcher.releaseIfCurrent(replay);
         assertThat(stuckCheck()).as("first observation of the stranded read").isFalse();
         assertThat(stuckCheck()).as("the dead slot should be recovered").isTrue();
@@ -703,7 +777,6 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         dispatcher.addConsumer(consumer).get();
         dispatcher.readMoreEntries();
 
-        assertThat(stuckCheck()).as("first check only samples the read position").isFalse();
         assertThat(stuckCheck()).as("first observation of this read").isFalse();
 
         // A different read must restart the count: two short-lived reads seen once each are not one read
@@ -729,8 +802,7 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         ReadContext supersededRead = swallowedRead.get();
         assertThat(supersededRead).as("the swallowed read's context").isNotNull();
 
-        assertThat(stuckCheck()).isFalse();
-        assertThat(stuckCheck()).isFalse();
+        assertThat(stuckCheck()).as("first observation of this read").isFalse();
         assertThat(stuckCheck()).as("the dead slot should be recovered").isTrue();
         awaitDelivered(5);
 
@@ -771,8 +843,7 @@ public class PersistentDispatcherReadSlotTest extends MockedBookKeeperTestCase {
         ReadContext supersededRead = swallowedRead.get();
         assertThat(supersededRead).isNotNull();
 
-        assertThat(stuckCheck()).isFalse();
-        assertThat(stuckCheck()).isFalse();
+        assertThat(stuckCheck()).as("first observation of this read").isFalse();
         assertThat(stuckCheck()).as("the dead slot should be recovered").isTrue();
         awaitDelivered(5);
 

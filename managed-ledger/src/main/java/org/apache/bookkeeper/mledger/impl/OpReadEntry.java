@@ -153,28 +153,35 @@ class OpReadEntry implements ReadEntriesCallback {
             // method back before anything below advances the cursor's read position, so the cursor never
             // reports that no operation is outstanding while one can still move that position.
             cursor.readOperationResumed();
-            final ManagedLedgerImpl ledger = (ManagedLedgerImpl) cursor.getManagedLedger();
-            Position nexReadPosition;
-            Long lostLedger = null;
-            if (exception instanceof ManagedLedgerException.LedgerNotExistException) {
-                // try to find and move to next valid ledger
-                nexReadPosition = cursor.getNextLedgerPosition(readPosition.getLedgerId());
-                lostLedger = readPosition.getLedgerId();
-            } else {
-                // Skip this read operation
-                nexReadPosition = ledger.getValidPositionAfterSkippedEntries(readPosition, count);
-            }
-            // fail callback if it couldn't find next valid ledger
-            if (nexReadPosition == null) {
+            try {
+                final ManagedLedgerImpl ledger = (ManagedLedgerImpl) cursor.getManagedLedger();
+                Position nexReadPosition;
+                Long lostLedger = null;
+                if (exception instanceof ManagedLedgerException.LedgerNotExistException) {
+                    // try to find and move to next valid ledger
+                    nexReadPosition = cursor.getNextLedgerPosition(readPosition.getLedgerId());
+                    lostLedger = readPosition.getLedgerId();
+                } else {
+                    // Skip this read operation
+                    nexReadPosition = ledger.getValidPositionAfterSkippedEntries(readPosition, count);
+                }
+                // fail callback if it couldn't find next valid ledger
+                if (nexReadPosition == null) {
+                    cursor.readOperationCompleted();
+                    fail(exception, ctx);
+                    return;
+                }
+                updateReadPosition(nexReadPosition);
+                if (lostLedger != null) {
+                    cursor.getManagedLedger().skipNonRecoverableLedger(lostLedger);
+                } else {
+                    cursor.skipNonRecoverableEntries(readPosition, nexReadPosition);
+                }
+            } catch (Throwable t) {
+                // The caller turns this into a plain failure, which does not release a read operation. Give
+                // back what was re-acquired above, or the count leaks for the life of the cursor.
                 cursor.readOperationCompleted();
-                fail(exception, ctx);
-                return;
-            }
-            updateReadPosition(nexReadPosition);
-            if (lostLedger != null) {
-                cursor.getManagedLedger().skipNonRecoverableLedger(lostLedger);
-            } else {
-                cursor.skipNonRecoverableEntries(readPosition, nexReadPosition);
+                throw t;
             }
             checkReadCompletion();
         } else {
