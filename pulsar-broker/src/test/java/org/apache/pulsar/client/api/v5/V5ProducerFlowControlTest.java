@@ -67,6 +67,26 @@ public class V5ProducerFlowControlTest extends V5ClientBaseTest {
                 "V5 sendTimeout must propagate to the per-segment v4 ProducerImpl");
     }
 
+    /**
+     * The V5 default, which {@link ProducerBuilder#blockIfQueueFull(boolean)} documents as
+     * {@code true}. It is carried on a v4 configuration that defaults the other way, so nothing but
+     * this test says which of the two a V5 producer that never calls the setter actually gets.
+     */
+    @Test
+    public void testBlockIfQueueFullDefaultsToTrue() throws Exception {
+        String topic = newScalableTopic(1);
+
+        @Cleanup
+        Producer<String> producer = v5Client.newProducer(Schema.string())
+                .topic(topic)
+                .create();
+        producer.newMessage().value("warm-up").send();
+
+        ProducerConfigurationData conf = readV4ProducerConf(producer);
+        assertTrue(conf.isBlockIfQueueFull(),
+                "a V5 producer must wait for room on a full queue unless asked not to");
+    }
+
     @Test
     public void testBlockIfQueueFullTrue() throws Exception {
         String topic = newScalableTopic(1);
