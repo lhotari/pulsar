@@ -534,6 +534,11 @@ final class ScalableQueueConsumer<T> implements QueueConsumerImpl<T>, DagWatchCl
             if (dlqProducerFuture == null) {
                 dlqProducerFuture = client.newProducer(Schema.bytes())
                         .topic(dlqTopic)
+                        // The forward runs on the thread that completed the receive — one of the
+                        // client's own internal executors — so this producer must never wait for
+                        // room. A dead letter that cannot be written is dropped and logged, which
+                        // is what the failure handler below already does.
+                        .blockIfQueueFull(false)
                         .createAsync();
             }
             return dlqProducerFuture;
