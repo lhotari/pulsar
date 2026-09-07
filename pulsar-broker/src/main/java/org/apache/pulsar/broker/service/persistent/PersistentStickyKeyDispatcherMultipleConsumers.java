@@ -77,6 +77,12 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
 
     private final RescheduleReadHandler rescheduleReadHandler;
 
+    /**
+     * The single read slot shared by both read types. Written only under this dispatcher's monitor; volatile
+     * so the stats API can sample it without taking that monitor. See {@link #readSlot(ReadType)}.
+     */
+    private volatile ReadContext activeRead;
+
     PersistentStickyKeyDispatcherMultipleConsumers(PersistentTopic topic, ManagedCursor cursor,
             Subscription subscription, ServiceConfiguration conf, KeySharedMeta ksm) {
         this(topic, cursor, subscription, conf, ksm, createSelector(ksm, conf),
@@ -102,7 +108,8 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
                 drainingHashesRequired ? new DrainingHashesTracker(this.getName(), this::stickyKeyHashUnblocked) : null;
         this.rescheduleReadHandler = new RescheduleReadHandler(conf::getKeySharedUnblockingIntervalMs,
                 topic.getBrokerService().executor(), this::cancelPendingRead, () -> reScheduleReadInMs(0),
-                () -> havePendingRead, this::getReadMoreEntriesCallCount, () -> !redeliveryMessages.isEmpty());
+                () -> hasOutstandingRead(ReadType.Normal), this::getReadMoreEntriesCallCount,
+                () -> !redeliveryMessages.isEmpty());
         this.selector = selector;
     }
 
@@ -748,13 +755,23 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
     }
 
     /**
-     * For Key_Shared subscription, the dispatcher will not read more entries while there are pending reads
-     * or pending replay reads.
-     * @return true if there are no pending reads or pending replay reads
+     * For Key_Shared subscription both read types share a single slot, so the dispatcher never has more than
+     * one read outstanding. Ordered delivery cannot tolerate two cursor operations at once: managed-ledger
+     * reads are not an ordered per-cursor completion stream, and a replay read can advance the same
+     * {@code readPosition} that a normal read is walking.
+     *
+     * <p>The base class keeps a slot per read type instead, which lets an explicit redelivery be fetched
+     * while a sequential read is outstanding -- correct for Shared, where there is no per-key ordering
+     * guarantee, but not here.
      */
     @Override
-    protected boolean doesntHavePendingRead() {
-        return !havePendingRead && !havePendingReplayRead;
+    protected ReadContext readSlot(ReadType type) {
+        return activeRead;
+    }
+
+    @Override
+    protected void setReadSlot(ReadType type, ReadContext readContext) {
+        activeRead = readContext;
     }
 
     /**
@@ -805,8 +822,9 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
     }
 
     @Override
-    protected Set<? extends Position> asyncReplayEntries(Set<? extends Position> positions) {
-        return cursor.asyncReplayEntries(positions, this, ReadType.Replay, true);
+    protected Set<? extends Position> asyncReplayEntries(Set<? extends Position> positions,
+                                                        ReadContext readContext) {
+        return cursor.asyncReplayEntries(positions, this, readContext, true);
     }
 
     public KeySharedMode getKeySharedMode() {

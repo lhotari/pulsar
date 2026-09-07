@@ -1214,6 +1214,20 @@ public class ManagedCursorImpl implements ManagedCursor {
     }
 
     @Override
+    public boolean hasOutstandingReadOperation() {
+        // A read is owned by this cursor either while it waits in the waitingReadOp slot for new entries, or
+        // while it is counted in pendingReadOps because it has been handed to the managed ledger. An
+        // operation only advances the read position while it is counted, so once both are empty no operation
+        // started earlier can move it.
+        // Note that this is a sampled signal, not a lock: an op is momentarily invisible to both while a
+        // single thread moves it from the waiting slot to the in-flight count (checkForNewEntries and
+        // notifyEntriesAvailable increment pendingReadOps just after clearing waitingReadOp), and again
+        // between readOperationCompleted() and the callback being run. Callers must therefore treat a single
+        // false observation as inconclusive and confirm it over time.
+        return hasPendingReadRequest() || PENDING_READ_OPS_UPDATER.get(this) != 0;
+    }
+
+    @Override
     public boolean hasMoreEntries() {
         // If writer and reader are on the same ledger, we just need to compare the entry id to know if we have more
         // entries.
@@ -3104,8 +3118,19 @@ public class ManagedCursorImpl implements ManagedCursor {
         OpReadEntry opReadEntry = WAITING_READ_OP_UPDATER.getAndSet(this,
                 OpReadEntry.WAITING_READ_OP_FOR_CLOSED_CURSOR);
         if (opReadEntry != null && opReadEntry != OpReadEntry.WAITING_READ_OP_FOR_CLOSED_CURSOR) {
-            opReadEntry.readEntriesFailed(new CursorAlreadyClosedException("Cursor is closing"), opReadEntry.ctx);
+            failWaitingReadOp(opReadEntry, new CursorAlreadyClosedException("Cursor is closing"));
         }
+    }
+
+    /**
+     * Fails a read operation that was only ever waiting for new entries, so it was never counted in
+     * {@code pendingReadOps}. {@link OpReadEntry#readEntriesFailed} unconditionally releases a read
+     * operation, so the count has to be taken out first or it drifts negative -- and a negative count would
+     * make {@link #hasOutstandingReadOperation()} report that no read is outstanding while one is.
+     */
+    private void failWaitingReadOp(OpReadEntry waitingReadOp, ManagedLedgerException exception) {
+        PENDING_READ_OPS_UPDATER.incrementAndGet(this);
+        waitingReadOp.readEntriesFailed(exception, waitingReadOp.ctx);
     }
 
     /**
@@ -3686,8 +3711,8 @@ public class ManagedCursorImpl implements ManagedCursor {
             if (isClosed()) {
                 // If the cursor is closed, we should not read any more entries
                 log.debug("Cursor is already closed, ignoring notification");
-                opReadEntry.readEntriesFailed(new ManagedLedgerException.CursorAlreadyClosedException(
-                        "Cursor was already closed"), opReadEntry.ctx);
+                failWaitingReadOp(opReadEntry,
+                        new ManagedLedgerException.CursorAlreadyClosedException("Cursor was already closed"));
                 return;
             }
             PENDING_READ_OPS_UPDATER.incrementAndGet(this);
@@ -3729,6 +3754,15 @@ public class ManagedCursorImpl implements ManagedCursor {
                 createNewMetadataLedger();
             }
         }
+    }
+
+    /**
+     * Re-acquires a read operation that {@link #readOperationCompleted()} has already released because it
+     * turned out not to be finished. Keeps {@code pendingReadOps} balanced, which
+     * {@link #hasOutstandingReadOperation()} depends on.
+     */
+    void readOperationResumed() {
+        PENDING_READ_OPS_UPDATER.incrementAndGet(this);
     }
 
     void readOperationCompleted() {

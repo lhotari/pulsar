@@ -143,8 +143,9 @@ public class PersistentDispatcherMultipleConsumersTest extends SharedPulsarBaseT
         // Mock the readEntriesOrWait(...) to simulate the cursor is closed.
         Mockito.doAnswer(inv -> {
             AbstractPersistentDispatcherMultipleConsumers dispatcher1 = inv.getArgument(2);
+            // Fail the read with the context the dispatcher handed to the cursor, as the real read path does.
             dispatcher1.readEntriesFailed(new ManagedLedgerException.CursorAlreadyClosedException("cursor closed"),
-                    null);
+                    inv.getArgument(3));
             return null;
         }).when(cursor).asyncReadEntriesWithSkipOrWait(Mockito.anyInt(), Mockito.anyLong(), Mockito.eq(dispatcher),
                 Mockito.any(), Mockito.any(), Mockito.any());

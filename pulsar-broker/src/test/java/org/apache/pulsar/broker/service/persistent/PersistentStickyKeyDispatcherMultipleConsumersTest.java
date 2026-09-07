@@ -294,7 +294,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
 
         try {
             persistentDispatcher.readEntriesComplete(copyEntries(entries),
-                    PersistentStickyKeyDispatcherMultipleConsumers.ReadType.Normal);
+                    reserveNormalRead(persistentDispatcher));
         } catch (Exception e) {
             fail("Failed to readEntriesComplete.", e);
         }
@@ -350,7 +350,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         try {
             //Should success,see issue #8960
             persistentDispatcher.readEntriesComplete(copyEntries(entries),
-                    PersistentStickyKeyDispatcherMultipleConsumers.ReadType.Normal);
+                    reserveNormalRead(persistentDispatcher));
         } catch (Exception e) {
             fail("Failed to readEntriesComplete.", e);
         }
@@ -796,7 +796,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
 
         // call "readEntriesComplete" directly to test the retry behavior
         List<Entry> entries = List.of(createEntry(1, 1, "message1", 1));
-        dispatcher.readEntriesComplete(new ArrayList<>(entries), PersistentDispatcherMultipleConsumers.ReadType.Normal);
+        dispatcher.readEntriesComplete(new ArrayList<>(entries), reserveNormalRead(dispatcher));
         Awaitility.await().untilAsserted(() -> {
                     assertEquals(retryDelays.size(), 1);
                     assertEquals(retryDelays.get(0), 10, "Initial retry delay should be 10ms");
@@ -805,7 +805,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         // test the second retry delay
         entries = List.of(createEntry(1, 1, "message1", 1));
         dispatcher.readEntriesComplete(new ArrayList<>(entries),
-                PersistentDispatcherMultipleConsumers.ReadType.Normal);
+                reserveNormalRead(dispatcher));
         Awaitility.await().untilAsserted(() -> {
                     assertEquals(retryDelays.size(), 2);
                     double delay = retryDelays.get(1);
@@ -816,7 +816,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         for (int i = 0; i < 100; i++) {
             entries = List.of(createEntry(1, 1, "message1", 1));
             dispatcher.readEntriesComplete(new ArrayList<>(entries),
-                    PersistentDispatcherMultipleConsumers.ReadType.Normal);
+                    reserveNormalRead(dispatcher));
         }
         Awaitility.await().untilAsserted(() -> {
                     assertEquals(retryDelays.size(), 102);
@@ -828,14 +828,14 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         consumerMockAvailablePermits.set(1000);
         entries = List.of(createEntry(1, 2, "message2", 1, "key2"));
         dispatcher.readEntriesComplete(new ArrayList<>(entries),
-                PersistentDispatcherMultipleConsumers.ReadType.Normal);
+                reserveNormalRead(dispatcher));
         // wait that the possibly async handling has completed
         Awaitility.await().untilAsserted(() -> assertFalse(dispatcher.isSendInProgress()));
 
         // now block again to check the next retry delay so verify it was reset
         consumerMockAvailablePermits.set(0);
         entries = List.of(createEntry(1, 3, "message3", 1, "key3"));
-        dispatcher.readEntriesComplete(new ArrayList<>(entries), PersistentDispatcherMultipleConsumers.ReadType.Normal);
+        dispatcher.readEntriesComplete(new ArrayList<>(entries), reserveNormalRead(dispatcher));
         Awaitility.await().untilAsserted(() -> {
                     assertEquals(retryDelays.size(), 103);
                     assertEquals(retryDelays.get(0), 10, "Resetted retry delay should be 10ms");
@@ -883,7 +883,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         // call "readEntriesComplete" directly to test the retry behavior
         List<Entry> entries = List.of(createEntry(1, 1, "message1", 1));
         dispatcher.readEntriesComplete(new ArrayList<>(entries),
-                PersistentDispatcherMultipleConsumers.ReadType.Normal);
+                reserveNormalRead(dispatcher));
         Awaitility.await().untilAsserted(() -> {
                     assertEquals(retryDelays.size(), 1);
                     assertEquals(retryDelays.get(0), 0, "Initial retry delay should be 0ms");
@@ -892,7 +892,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         // test the second retry delay
         entries = List.of(createEntry(1, 1, "message1", 1));
         dispatcher.readEntriesComplete(new ArrayList<>(entries),
-                PersistentDispatcherMultipleConsumers.ReadType.Normal);
+                reserveNormalRead(dispatcher));
         Awaitility.await().untilAsserted(() -> {
                     assertEquals(retryDelays.size(), 2);
                     double delay = retryDelays.get(1);
@@ -903,7 +903,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         for (int i = 0; i < 100; i++) {
             entries = List.of(createEntry(1, 1, "message1", 1));
             dispatcher.readEntriesComplete(new ArrayList<>(entries),
-                    PersistentDispatcherMultipleConsumers.ReadType.Normal);
+                    reserveNormalRead(dispatcher));
         }
         Awaitility.await().untilAsserted(() -> {
                     assertEquals(retryDelays.size(), 102);
@@ -915,7 +915,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         consumerMockAvailablePermits.set(1000);
         entries = List.of(createEntry(1, 2, "message2", 1, "key2"));
         dispatcher.readEntriesComplete(new ArrayList<>(entries),
-                PersistentDispatcherMultipleConsumers.ReadType.Normal);
+                reserveNormalRead(dispatcher));
         // wait that the possibly async handling has completed
         Awaitility.await().untilAsserted(() -> assertFalse(dispatcher.isSendInProgress()));
 
@@ -923,7 +923,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         consumerMockAvailablePermits.set(0);
         entries = List.of(createEntry(1, 3, "message3", 1, "key3"));
         dispatcher.readEntriesComplete(new ArrayList<>(entries),
-                PersistentDispatcherMultipleConsumers.ReadType.Normal);
+                reserveNormalRead(dispatcher));
         Awaitility.await().untilAsserted(() -> {
                     assertEquals(retryDelays.size(), 103);
                     assertEquals(retryDelays.get(0), 0, "Resetted retry delay should be 0ms");
@@ -996,7 +996,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         dispatcher.addConsumer(consumerMock).join();
 
         List<Entry> entries = new ArrayList<>(List.of(createEntry(1, 1, "message1", 1)));
-        dispatcher.readEntriesComplete(entries, PersistentDispatcherMultipleConsumers.ReadType.Normal);
+        dispatcher.readEntriesComplete(entries, reserveNormalRead(dispatcher));
         Awaitility.await().untilAsserted(() -> {
             assertEquals(reScheduleReadInMsCalled.get(), 0, "reScheduleReadInMs should not be called");
             assertTrue(readMoreEntriesCalled.get() >= 1);
@@ -1084,5 +1084,25 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
                 messageMetadata, payload);
         payload.release();
         return byteBuf;
+    }
+
+    /**
+     * Takes over the Normal read slot and returns its context, so a test can deliver a completion the way
+     * the real read path does: a completion only takes effect while it still owns the slot it reserved.
+     * Any read the dispatcher armed in the meantime is stood down, since the test is standing in for the
+     * outstanding read.
+     */
+    private static PersistentDispatcherMultipleConsumers.ReadContext reserveNormalRead(
+            AbstractPersistentDispatcherMultipleConsumers dispatcher) {
+        PersistentDispatcherMultipleConsumers multipleConsumers =
+                (PersistentDispatcherMultipleConsumers) dispatcher;
+        PersistentDispatcherMultipleConsumers.ReadType normal =
+                PersistentDispatcherMultipleConsumers.ReadType.Normal;
+        // Take over and reserve atomically, under the same monitor the dispatcher reserves on, so a read the
+        // dispatcher arms concurrently cannot slip in between.
+        synchronized (multipleConsumers) {
+            multipleConsumers.releaseIfCurrent(multipleConsumers.readSlot(normal));
+            return multipleConsumers.reserveRead(normal);
+        }
     }
 }
