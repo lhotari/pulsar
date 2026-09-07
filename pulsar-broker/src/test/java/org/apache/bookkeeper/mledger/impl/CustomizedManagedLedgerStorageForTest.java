@@ -713,6 +713,11 @@ public class CustomizedManagedLedgerStorageForTest extends ManagedLedgerClientFa
         }
 
         @Override
+        public boolean hasOutstandingReadOperation() {
+            return delegate.hasOutstandingReadOperation();
+        }
+
+        @Override
         public void updateLastActive() {
             delegate.updateLastActive();
         }

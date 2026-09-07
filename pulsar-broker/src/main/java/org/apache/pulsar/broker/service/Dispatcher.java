@@ -152,6 +152,18 @@ public interface Dispatcher {
     }
 
     /**
+     * Repairs dispatcher read state that has become inconsistent with the cursor's, if any.
+     *
+     * <p>Unlike {@link #checkAndUnblockIfStuck()}, which force-issues a read on a heuristic and is therefore
+     * gated behind {@code unblockStuckSubscriptionEnabled}, this only acts on a state that is provably
+     * broken and from which the subscription cannot recover on its own, so it always runs. Callers must
+     * invoke exactly one of the two per check interval: both consume the cursor's read-position sample.
+     */
+    default boolean checkAndRepairInconsistentReadState() {
+        return false;
+    }
+
+    /**
      * A callback hook after acknowledge messages.
      * @param exOfDeletion the ex of {@link org.apache.bookkeeper.mledger.ManagedCursor#asyncDelete},
      *              {@link ManagedCursor#asyncClearBacklog} or {@link ManagedCursor#asyncSkipEntries)}.

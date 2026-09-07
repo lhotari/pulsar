@@ -142,9 +142,38 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     protected int lastNumberOfEntriesProcessed;
     protected boolean skipNextBackoff;
     private final Backoff retryBackoff;
+    /**
+     * Number of consecutive periodic checks ({@link #checkAndUnblockIfStuck()} or
+     * {@link #checkAndRepairInconsistentReadState()}) that must observe {@link #havePendingRead} set while
+     * the cursor owns no read before the flag is treated as stale. See {@link #clearStaleNormalRead()}.
+     */
+    private static final int STALE_NORMAL_READ_OBSERVATIONS_BEFORE_RECOVERY = 2;
+    /**
+     * Consecutive observations of {@link #havePendingRead} set while the cursor owns no read. Only the
+     * periodic stuck-subscription check reads and writes it; volatile so the count carries across checks
+     * regardless of which thread runs them. Miscounting is harmless: the repair re-checks the condition
+     * under the monitor. See {@link #clearStaleNormalRead()}.
+     */
+    private volatile int staleNormalReadObservations;
     protected enum ReadType {
         Normal, Replay
     }
+
+    /**
+     * Context handed to the cursor for a Normal read. It carries the read's identity so that a completion
+     * for a read the dispatcher has since disowned can be told apart from the one it currently owns; see
+     * {@link #clearStaleNormalRead()}. Replay reads pass {@link ReadType#Replay} itself as their context,
+     * since they are never disowned.
+     */
+    protected record NormalReadContext(long epoch) {
+    }
+
+    /**
+     * Identity of the Normal read that {@link #havePendingRead} currently refers to. Bumped under this
+     * monitor whenever a Normal read is armed, and again when the stale-read repair gives one up. Guarded
+     * by "this".
+     */
+    private long normalReadEpoch;
     private volatile long readMoreEntriesCallCount;
 
     public PersistentDispatcherMultipleConsumers(PersistentTopic topic, ManagedCursor cursor,
@@ -382,10 +411,21 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         .attr("consumerCount", consumerList.size())
                         .log("Schedule replay of messages for consumers");
                 havePendingReplayRead = true;
-                updateMinReplayedPosition();
-                Set<? extends Position> deletedMessages = topic.isDelayedDeliveryEnabled()
-                        ? asyncReplayEntriesInOrder(messagesToReplayNow)
-                        : asyncReplayEntries(messagesToReplayNow);
+                Set<? extends Position> deletedMessages;
+                try {
+                    updateMinReplayedPosition();
+                    deletedMessages = topic.isDelayedDeliveryEnabled()
+                            ? asyncReplayEntriesInOrder(messagesToReplayNow)
+                            : asyncReplayEntries(messagesToReplayNow);
+                } catch (Throwable t) {
+                    // The replay read was never handed to the cursor, so no callback will ever arrive to clear
+                    // the flag. Leaving it set would block every later read: calculateToRead() returns (-1, -1)
+                    // while a replay read is believed to be in flight. See #26454.
+                    havePendingReplayRead = false;
+                    log.error().exception(t).log("Failed to schedule replay read, retrying");
+                    reScheduleReadWithBackoff();
+                    throw t;
+                }
                 // clear already acked positions from replay bucket
                 deletedMessages.forEach(position -> redeliveryMessages.remove(position.getLedgerId(),
                         position.getEntryId()));
@@ -414,11 +454,22 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         .attr("consumersCount", consumerList.size())
                         .log("Schedule read of messages");
                 havePendingRead = true;
-                updateMinReplayedPosition();
-
-                messagesToRead = Math.min(messagesToRead, getMaxEntriesReadLimit());
-                cursor.asyncReadEntriesWithSkipOrWait(messagesToRead, bytesToRead, this, ReadType.Normal,
-                        topic.getMaxReadPosition(), createReadEntriesSkipConditionForNormalRead());
+                try {
+                    updateMinReplayedPosition();
+                    messagesToRead = Math.min(messagesToRead, getMaxEntriesReadLimit());
+                    cursor.asyncReadEntriesWithSkipOrWait(messagesToRead, bytesToRead, this,
+                            new NormalReadContext(++normalReadEpoch),
+                            topic.getMaxReadPosition(), createReadEntriesSkipConditionForNormalRead());
+                } catch (Throwable t) {
+                    // havePendingRead is set before the read is handed to the cursor, and everything up to
+                    // the cursor accepting it may throw synchronously. If one of those throws, no callback
+                    // will ever arrive to clear the flag and doesntHavePendingRead() stays false forever, so
+                    // the subscription never reads again. Roll the flag back and retry. See #26454.
+                    havePendingRead = false;
+                    log.error().exception(t).log("Failed to schedule read, retrying");
+                    reScheduleReadWithBackoff();
+                    throw t;
+                }
             } else {
                 log.debug("Cannot schedule next read until previous one is done");
             }
@@ -458,6 +509,24 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
      */
     protected boolean doesntHavePendingRead() {
         return !havePendingRead;
+    }
+
+    private ReadType readTypeOf(Object ctx) {
+        return ctx instanceof NormalReadContext ? ReadType.Normal : (ReadType) ctx;
+    }
+
+    /**
+     * Tells whether a read completion belongs to a Normal read the dispatcher has given up on, i.e. one
+     * whose {@link #havePendingRead} was cleared by {@link #clearStaleNormalRead()} before it completed.
+     * Such a completion must not clear the flag, which now belongs to the read armed in its place; letting
+     * two Normal reads run at once would duplicate deliveries on Shared and reorder them on Key_Shared.
+     *
+     * <p>It may still trigger the next read: {@link #readMoreEntries()} refuses to arm a second Normal read
+     * while one is outstanding, so the trigger is a no-op when the replacement read is still running and a
+     * necessary wakeup when it is not.
+     */
+    private synchronized boolean isDisownedNormalRead(Object ctx) {
+        return ctx instanceof NormalReadContext normalRead && normalRead.epoch() != normalReadEpoch;
     }
 
     protected void handleNormalReadNotAllowed() {
@@ -671,9 +740,16 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     public final synchronized void readEntriesComplete(List<Entry> entries, Object ctx) {
-        ReadType readType = (ReadType) ctx;
+        ReadType readType = readTypeOf(ctx);
+        // A disowned read is one the stale-read repair gave up on (see clearStaleNormalRead). It is handled
+        // like any other completion -- its entries are dispatched and it may trigger the next read, which
+        // readMoreEntries() ignores while a read is already armed -- except that it must not clear
+        // havePendingRead, which now belongs to the read the repair armed in its place.
+        boolean disowned = isDisownedNormalRead(ctx);
         if (readType == ReadType.Normal) {
-            havePendingRead = false;
+            if (!disowned) {
+                havePendingRead = false;
+            }
         } else {
             havePendingReplayRead = false;
         }
@@ -1001,7 +1077,19 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     @Override
     public synchronized void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
 
-        ReadType readType = (ReadType) ctx;
+        ReadType readType = readTypeOf(ctx);
+        // See readEntriesComplete: a disowned read no longer owns havePendingRead.
+        boolean disowned = isDisownedNormalRead(ctx);
+        // Release the read before anything that could throw: this is the read's only completion, so a
+        // throwable escaping below would leave the dispatcher believing it is still outstanding and it would
+        // never read again. See #26454. readEntriesComplete() clears its flag first for the same reason.
+        if (readType == ReadType.Normal) {
+            if (!disowned) {
+                havePendingRead = false;
+            }
+        } else {
+            havePendingReplayRead = false;
+        }
         long waitTimeMillis = readFailureBackoff.next().toMillis();
 
         // Do not keep reading more entries if the cursor is already closed.
@@ -1044,14 +1132,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             cursor.rewind();
         }
 
-        if (readType == ReadType.Normal) {
-            havePendingRead = false;
-        } else {
-            havePendingReplayRead = false;
-            if (exception instanceof ManagedLedgerException.InvalidReplayPositionException) {
-                Position markDeletePosition = cursor.getMarkDeletedPosition();
-                redeliveryMessages.removeAllUpTo(markDeletePosition.getLedgerId(), markDeletePosition.getEntryId());
-            }
+        if (readType != ReadType.Normal
+                && exception instanceof ManagedLedgerException.InvalidReplayPositionException) {
+            Position markDeletePosition = cursor.getMarkDeletedPosition();
+            redeliveryMessages.removeAllUpTo(markDeletePosition.getLedgerId(), markDeletePosition.getEntryId());
         }
 
         readBatchSize = serviceConfig.getDispatcherMinReadBatchSize();
@@ -1447,17 +1531,96 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     public boolean checkAndUnblockIfStuck() {
-        if (cursor.checkAndUpdateReadPositionChanged()) {
+        return checkStuckDispatcher(true);
+    }
+
+    @Override
+    public boolean checkAndRepairInconsistentReadState() {
+        return checkStuckDispatcher(false);
+    }
+
+    /**
+     * Runs the periodic stuck-subscription check. Callers must invoke this at most once per check interval
+     * (through exactly one of {@link #checkAndUnblockIfStuck()} or
+     * {@link #checkAndRepairInconsistentReadState()}), because it consumes the cursor's read-position sample.
+     *
+     * @param unblockIdleDispatcher whether to also apply the {@code unblockStuckSubscriptionEnabled}
+     *                              heuristic of force-issuing a read when the dispatcher believes no read is
+     *                              outstanding
+     */
+    private boolean checkStuckDispatcher(boolean unblockIdleDispatcher) {
+        // Always sample, since this also updates the position the next call compares against.
+        boolean readPositionChanged = cursor.checkAndUpdateReadPositionChanged();
+        if (readPositionChanged || !isAtleastOneConsumerAvailable() || !cursor.hasBacklog(false)) {
+            staleNormalReadObservations = 0;
             return false;
         }
         // consider dispatch is stuck if : dispatcher has backlog, available-permits and there is no pending read
-        if (isAtleastOneConsumerAvailable() && !havePendingReplayRead && !havePendingRead
-                && cursor.hasBacklog(false)) {
+        if (!havePendingReplayRead && !havePendingRead) {
+            staleNormalReadObservations = 0;
+            if (!unblockIdleDispatcher) {
+                return false;
+            }
             log.warn("Dispatcher is stuck and unblocking by issuing reads");
             readMoreEntriesAsync();
             return true;
         }
-        return false;
+        // Detect a havePendingRead that no read will ever clear: the dispatcher believes a Normal read is
+        // outstanding while the cursor owns none. See #26454. hasOutstandingReadOperation() is a sampled
+        // signal that dips to false while a read moves between the cursor's internal stages, so require the
+        // inconsistency on consecutive checks; combined with the frozen read position established above,
+        // a genuine read would have had a full stats interval to complete and move that position.
+        if (!havePendingRead || havePendingReplayRead || cursor.hasOutstandingReadOperation()) {
+            staleNormalReadObservations = 0;
+            return false;
+        }
+        if (++staleNormalReadObservations < STALE_NORMAL_READ_OBSERVATIONS_BEFORE_RECOVERY) {
+            return false;
+        }
+        staleNormalReadObservations = 0;
+        return clearStaleNormalRead();
+    }
+
+    /**
+     * Clears a {@link #havePendingRead} that no read will ever clear, and resumes dispatching.
+     *
+     * <p>{@code havePendingRead} is the dispatcher's belief that a Normal read is outstanding, and it is
+     * cleared only by that read's completion callback. If a read is armed but never reaches the cursor, or
+     * its completion is lost, the flag stays set: {@link #readMoreEntries()} then rejects every subsequent
+     * read at its {@link #doesntHavePendingRead()} guard, and the subscription stops dispatching for good
+     * even though it has a backlog and consumers with free permits.
+     *
+     * <p>Taken under the dispatcher monitor, which is why the condition is re-checked here: the caller
+     * sampled it without the monitor, so the dispatcher may have made progress in the meantime.
+     *
+     * <p>This recovers any read the cursor does not own, whether it never reached the cursor or its
+     * completion was lost afterwards. It cannot recover a read the cursor still owns -- one genuinely in
+     * flight, or parked waiting for entries -- since those are indistinguishable from healthy operation;
+     * nor a subscription whose backlog is a single entry, because
+     * {@link ManagedCursor#checkAndUpdateReadPositionChanged()} counts a read position equal to the last
+     * confirmed entry as caught up and the caller bails out before reaching here.
+     *
+     * @return true if a stale flag was cleared and a read was issued
+     */
+    private synchronized boolean clearStaleNormalRead() {
+        if (!havePendingRead || havePendingReplayRead || cursor.hasOutstandingReadOperation()) {
+            return false;
+        }
+        log.warn()
+                .attr("readPosition", cursor.getReadPosition())
+                .attr("markDeletePosition", cursor.getMarkDeletedPosition())
+                .log("Dispatcher believed a read was pending while the cursor had none. Clearing the stale "
+                        + "state and issuing reads. This should not happen; please report it with the "
+                        + "surrounding broker logs.");
+        havePendingRead = false;
+        // Disown the read we just gave up on: if its completion does turn up after all -- for instance
+        // because it had merely been queued behind a stalled managed-ledger executor rather than lost -- it
+        // must not clear the flag of the read issued below, which would let two Normal reads run at once.
+        // It is otherwise handled normally, so it can still wake the subscription if the read below has
+        // already finished.
+        normalReadEpoch++;
+        readMoreEntriesAsync();
+        return true;
     }
 
     public PersistentTopic getTopic() {

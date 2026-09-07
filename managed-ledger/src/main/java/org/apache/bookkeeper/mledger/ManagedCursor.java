@@ -341,6 +341,31 @@ public interface ManagedCursor {
     boolean cancelPendingReadRequest();
 
     /**
+     * Tells whether this cursor currently owns a read operation that has not completed yet.
+     *
+     * <p/>A read operation is outstanding from the moment one of the {@code asyncReadEntries} /
+     * {@code asyncReadEntriesOrWait} methods accepts it until its {@link ReadEntriesCallback} has been
+     * scheduled. It covers both a read that is parked waiting for new entries to be published -- the same
+     * read {@link #cancelPendingReadRequest()} cancels -- and a read that is currently in flight against the
+     * managed ledger, which cannot be cancelled. It is therefore broader than "there is a pending read
+     * request": a cursor with an in-flight read owns a read operation, but has no cancellable request.
+     *
+     * <p/>Callers use this as a liveness signal to detect that they believe a read is outstanding while
+     * the cursor owns none. Implementations that don't track read operations must therefore report
+     * {@code true} so such callers never act on a false negative. The signal is sampled rather than
+     * locked, so an implementation may briefly report {@code false} while it hands a read from one
+     * internal stage to the next; callers must confirm a {@code false} observation over time instead of
+     * acting on a single sample.
+     *
+     * <p/>This method is not blocking.
+     *
+     * @return true if this cursor owns a read operation that has not completed yet
+     */
+    default boolean hasOutstandingReadOperation() {
+        return true;
+    }
+
+    /**
      * Tells whether this cursor has already consumed all the available entries.
      *
      * <p/>This method is not blocking.
