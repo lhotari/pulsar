@@ -24,8 +24,16 @@ import org.apache.pulsar.client.api.v5.Producer;
 /**
  * Asynchronous view of a {@link Producer}.
  *
- * <p>All operations return {@link CompletableFuture} and never block.
- * Obtained via {@link Producer#async()}.
+ * <p>All operations return {@link CompletableFuture}. Obtained via {@link Producer#async()}.
+ *
+ * <p>The one thing that can hold up a caller is a full send queue. A producer left at the default
+ * {@link org.apache.pulsar.client.api.v5.ProducerBuilder#blockIfQueueFull(boolean)} waits for room
+ * before accepting a send, which is the only backpressure an application that never looks at the
+ * returned futures would feel. Build the producer with {@code blockIfQueueFull(false)} for a send
+ * that fails with {@link org.apache.pulsar.client.api.v5.PulsarClientException.MemoryBufferIsFullException}
+ * instead of waiting. A send issued from one of the client's own IO threads — a send chained onto
+ * the future of a previous one, say — never waits either way, since waiting there would stall the
+ * acknowledgements that drain the queue.
  *
  * @param <T> the type of message values this producer sends
  */

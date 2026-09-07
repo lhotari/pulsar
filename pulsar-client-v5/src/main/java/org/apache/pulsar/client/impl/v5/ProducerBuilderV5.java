@@ -48,6 +48,10 @@ final class ProducerBuilderV5<T> implements ProducerBuilder<T> {
     ProducerBuilderV5(PulsarClientV5 client, Schema<T> v5Schema) {
         this.client = client;
         this.v5Schema = v5Schema;
+        // The V5 default is to wait for room rather than fail the send, as
+        // ProducerBuilder#blockIfQueueFull documents. The v4 configuration this is carried on
+        // defaults the other way, so it has to be set rather than inherited.
+        conf.setBlockIfQueueFull(true);
     }
 
     @Override

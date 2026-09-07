@@ -191,7 +191,12 @@ public interface PulsarClientBuilder {
     PulsarClientBuilder openTelemetry(OpenTelemetry openTelemetry);
 
     /**
-     * Maximum amount of direct memory the client can use for pending messages.
+     * Maximum amount of memory the client holds for messages that have been handed to a producer
+     * but not yet acknowledged by the broker — their payloads and the per-message bookkeeping that
+     * carries them. It is the producers' backpressure: once the budget is exhausted, a send waits
+     * for room or fails, depending on
+     * {@link ProducerBuilder#blockIfQueueFull(boolean)}. Setting it to zero removes the budget, and
+     * with it the only bound the producers have.
      *
      * @param size the memory limit for pending messages across all producers
      * @return this builder instance for chaining

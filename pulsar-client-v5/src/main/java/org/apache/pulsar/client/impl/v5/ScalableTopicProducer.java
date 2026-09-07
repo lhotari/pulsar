@@ -26,6 +26,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import org.apache.pulsar.client.api.ProducerAccessMode;
 import org.apache.pulsar.client.api.v5.MessageBuilder;
 import org.apache.pulsar.client.api.v5.MessageId;
@@ -34,6 +35,7 @@ import org.apache.pulsar.client.api.v5.PulsarClientException;
 import org.apache.pulsar.client.api.v5.async.AsyncProducer;
 import org.apache.pulsar.client.api.v5.schema.Schema;
 import org.apache.pulsar.client.impl.EntryBucketBatcherBuilder;
+import org.apache.pulsar.client.impl.MemoryLimitController;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
 import org.apache.pulsar.client.impl.conf.ProducerConfigurationData;
 import org.apache.pulsar.client.impl.v5.SegmentRouter.ActiveSegment;
@@ -55,6 +57,29 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
     private static final int SEND_RETRY_MAX_ATTEMPTS = 10;
     /** Cap on the per-attempt backoff while waiting for the new layout. */
     private static final long SEND_RETRY_MAX_BACKOFF_MS = 500L;
+
+    /**
+     * What one in-flight async send costs in client memory on top of its payload, from the moment
+     * the application hands the message over until the broker acknowledges it: the
+     * {@code MessageMetadata}, the {@code MessageImpl} and its buffers, the v4 {@code OpSendMsg}
+     * and its send callback, and the chain of {@code CompletableFuture} stages that carries the
+     * result back to the caller. Roughly 2 KiB, measured on a heap dump of a producer that had
+     * 1.3M sends outstanding.
+     *
+     * <p>Charging it is what ties the number of outstanding sends to the memory limit. Counting
+     * payload bytes alone — all the per-segment producers do — under-counts a small message by
+     * more than an order of magnitude: a 200 MiB limit admits 1.6M pending 128-byte messages, some
+     * 3 GiB of heap. Against the same limit this admits ~100k, which is what that memory buys.
+     */
+    static final int PENDING_SEND_MEMORY_OVERHEAD_BYTES = 2048;
+
+    /**
+     * Pending-send budget to fall back on when the application has turned the client memory limit
+     * off. The V5 API exposes no message-count knob, so there would otherwise be nothing left to
+     * bound the send path at all. Mirrors the v4 client's no-memory-limit
+     * {@code maxPendingMessages} default of 1000 messages.
+     */
+    static final int NO_MEMORY_LIMIT_MAX_PENDING_SENDS = 1000;
 
     private final Logger log;
 
@@ -106,6 +131,22 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
     private final Set<CompletableFuture<MessageId>> inFlightSends =
             ConcurrentHashMap.newKeySet();
 
+    /**
+     * Budget the async send path draws on, charged {@link #PENDING_SEND_MEMORY_OVERHEAD_BYTES} for
+     * every send from the moment it is accepted until the caller's future completes. Normally the
+     * client-wide budget sized from the memory limit; a budget of this producer's own only when
+     * the application disabled that limit.
+     *
+     * <p>Without it the async path has no backpressure whatsoever: handing a message to the
+     * per-segment dispatch chain is a pure allocation that always succeeds, so a caller in a send
+     * loop runs away from the broker until the heap is gone. Everything downstream — the dispatch
+     * chain, {@link #inFlightSends}, the per-segment pending queues — is bounded through this.
+     */
+    private final MemoryLimitController sendBudget;
+
+    /** Whether a caller that finds {@link #sendBudget} exhausted waits, or is failed right away. */
+    private final boolean blockIfQueueFull;
+
     // Current active segments (volatile for visibility across threads)
     private volatile List<ActiveSegment> activeSegments = List.of();
 
@@ -126,6 +167,12 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
         this.topicName = dagWatch.topicName().toString();
         this.log = LOG.with().attr("topic", topicName).build();
         this.asyncView = new AsyncProducerV5<>(this);
+        this.blockIfQueueFull = producerConf.isBlockIfQueueFull();
+        MemoryLimitController clientBudget = client.producerSendBudget();
+        this.sendBudget = clientBudget != null
+                ? clientBudget
+                : new MemoryLimitController(
+                        (long) NO_MEMORY_LIMIT_MAX_PENDING_SENDS * PENDING_SEND_MEMORY_OVERHEAD_BYTES);
 
         // Register for layout changes
         dagWatch.setListener(this);
@@ -281,12 +328,77 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
             java.util.List<String> replicationClusters,
             org.apache.pulsar.client.api.v5.Transaction txn) {
 
+        try {
+            if (!acquireSendBudget()) {
+                return CompletableFuture.failedFuture(new PulsarClientException.MemoryBufferIsFullException(
+                        "Client memory buffer is full"));
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return CompletableFuture.failedFuture(
+                    new PulsarClientException("Interrupted while waiting for send budget", e));
+        }
+
         CompletableFuture<MessageId> userFuture = new CompletableFuture<>();
         inFlightSends.add(userFuture);
-        userFuture.whenComplete((__, ___) -> inFlightSends.remove(userFuture));
+        userFuture.whenComplete((__, ___) -> {
+            inFlightSends.remove(userFuture);
+            sendBudget.releaseMemory(PENDING_SEND_MEMORY_OVERHEAD_BYTES);
+        });
+        // A send accepted after close would rebuild the very segment producers close just tore
+        // down, since dispatching one creates them on demand.
+        if (closed) {
+            userFuture.completeExceptionally(
+                    new PulsarClientException.AlreadyClosedException("Producer is already closed"));
+            return userFuture;
+        }
         dispatchSendAttempt(userFuture, key, value, properties, eventTime, sequenceId,
                 deliverAfter, deliverAt, replicationClusters, txn, 0);
         return userFuture;
+    }
+
+    /**
+     * Reserve one send's worth of {@link #sendBudget} for a message about to be accepted. Returns
+     * false when the budget is exhausted and the producer is configured to fail rather than wait.
+     *
+     * <p>This runs on the caller's thread before anything is queued, which is the only place the
+     * application can be made to feel the queue filling up: the rest of the async path hands the
+     * message to a dispatch chain and returns, so every bound further downstream is invisible to
+     * the caller.
+     *
+     * <p>Waiting is skipped on a thread the client's own send path runs on, even when the producer
+     * is configured to block on a full queue — see
+     * {@link PulsarClientV5#onClientOwnedThread()}. A send chained onto the future of a previous
+     * one runs on exactly such a thread, since the v4 producer completes send futures on the
+     * connection's event loop. Those callers get the buffer-full error instead of a deadlock.
+     */
+    private boolean acquireSendBudget() throws InterruptedException {
+        if (sendBudget.tryReserveMemory(PENDING_SEND_MEMORY_OVERHEAD_BYTES)) {
+            return true;
+        }
+        if (!blockIfQueueFull || client.onClientOwnedThread()) {
+            return false;
+        }
+        sendBudget.reserveMemory(PENDING_SEND_MEMORY_OVERHEAD_BYTES);
+        return true;
+    }
+
+    /** Number of async sends accepted but not yet completed. Package-private for tests. */
+    int inFlightSendCount() {
+        return inFlightSends.size();
+    }
+
+    /** Number of segments this producer holds a v4 producer for. Package-private for tests. */
+    int segmentProducerCount() {
+        return segmentProducers.size();
+    }
+
+    /**
+     * Sends that may be in flight at once before {@link #acquireSendBudget()} pushes back, when
+     * nothing else is drawing on the budget. Package-private for tests.
+     */
+    long maxPendingSends() {
+        return sendBudget.memoryLimit() / PENDING_SEND_MEMORY_OVERHEAD_BYTES;
     }
 
     private void dispatchSendAttempt(
@@ -366,13 +478,36 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
      * If the chain itself fails (e.g., segment producer creation failed),
      * {@code onCreateFailure} is invoked so the caller can retry (when the segment
      * is merely gone) or fail the user-visible future.
+     *
+     * <p>A caller on a thread the client's own send path runs on hands the whole append to a
+     * dispatch thread rather than doing it here. Two things in {@link #appendUnderLock} wait: the
+     * lock itself, and — once the chain has caught up and the link runs inline — the v4 producer
+     * when its queue is full. Waiting for either on an IO thread waits for an acknowledgement that
+     * same thread has to deliver. Sends from one thread stay in order either way, since a thread
+     * is either one of the client's own or it is not, and the dispatch executor for a topic is
+     * single-threaded.
      */
     private void appendToDispatchChain(long segmentId,
                                        Consumer<org.apache.pulsar.client.api.Producer<T>> dispatchOp,
                                        Consumer<Throwable> onCreateFailure) {
+        if (client.onClientOwnedThread()) {
+            client.producerDispatchExecutor(topicName)
+                    .execute(() -> appendUnderLock(segmentId, dispatchOp, onCreateFailure));
+        } else {
+            appendUnderLock(segmentId, dispatchOp, onCreateFailure);
+        }
+    }
+
+    private void appendUnderLock(long segmentId,
+                                 Consumer<org.apache.pulsar.client.api.Producer<T>> dispatchOp,
+                                 Consumer<Throwable> onCreateFailure) {
         synchronized (dispatchLock) {
-            var prev = dispatchChains.computeIfAbsent(segmentId,
-                    id -> getOrCreateSegmentProducerAsync(id));
+            var prev = dispatchChains.computeIfAbsent(segmentId, this::newDispatchChainHead);
+            // The tail has to be the stage the JDK completes for us. Publishing a future of our
+            // own and completing it from inside the handler would make each link's completion a
+            // fresh nested postComplete instead of the JDK's trampoline, and a chain thousands of
+            // links long would then overflow the stack mid-cascade — silently stranding every
+            // link behind it, since nothing completes their futures afterwards.
             var next = prev.thenApply(producer -> {
                 dispatchOp.accept(producer);
                 return producer;
@@ -384,6 +519,25 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
             });
             dispatchChains.put(segmentId, next);
         }
+    }
+
+    /**
+     * Head of a segment's dispatch chain: the segment-producer-creation future, moved off the
+     * netty IO thread.
+     *
+     * <p>Links appended while the head is still pending run on whichever thread completes it, and
+     * every link after them runs inline on that same thread as the chain cascades. For the raw
+     * creation future that thread is the connection's IO thread — which must not be the one
+     * calling the v4 {@code sendAsync}: a producer that blocks on a full queue blocks there, and
+     * the acknowledgements that would free the queue are delivered by that very thread. One hop at
+     * the head keeps the whole cascade on a dispatch thread instead, where waiting for the queue
+     * to drain costs nothing but this client's producer dispatch. Links appended once the chain
+     * has caught up still run inline on the caller's thread, so the steady-state path is
+     * unchanged.
+     */
+    private CompletableFuture<org.apache.pulsar.client.api.Producer<T>> newDispatchChainHead(long segmentId) {
+        return getOrCreateSegmentProducerAsync(segmentId)
+                .thenApplyAsync(Function.identity(), client.producerDispatchExecutor(topicName));
     }
 
     private org.apache.pulsar.client.api.TypedMessageBuilder<T> buildV4Message(
