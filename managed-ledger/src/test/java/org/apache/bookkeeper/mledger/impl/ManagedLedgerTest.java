@@ -41,7 +41,6 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertNotSame;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
@@ -124,6 +123,7 @@ import org.apache.bookkeeper.mledger.AsyncCallbacks.OpenLedgerCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
 import org.apache.bookkeeper.mledger.Entry;
+import org.apache.bookkeeper.mledger.EntryMessageMetadataSupplier;
 import org.apache.bookkeeper.mledger.LedgerOffloader;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedCursor.IndividualDeletedEntries;
@@ -1915,20 +1915,40 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
                 Unpooled.copiedBuffer("payload", StandardCharsets.UTF_8));
     }
 
-    private static Position addEntry(ManagedLedgerImpl ledger, ByteBuf headersAndPayload,
-                                     MessageMetadata messageMetadata) throws Exception {
+    /**
+     * A ctx that supplies message metadata to the entry cache the way {@code Producer.MessagePublishContext}
+     * does, and records whether the managed ledger asked for it.
+     */
+    private static class RecordingMetadataSupplier implements EntryMessageMetadataSupplier {
+        private final MessageMetadata metadata;
+        private int callCount;
+
+        RecordingMetadataSupplier(MessageMetadata metadata) {
+            this.metadata = metadata;
+        }
+
+        @Override
+        public MessageMetadata getMessageMetadataForEntryCache(ByteBuf entryData) {
+            callCount++;
+            metadata.materialize();
+            return metadata;
+        }
+    }
+
+    private static Position addEntry(ManagedLedgerImpl ledger, ByteBuf headersAndPayload, Object ctx)
+            throws Exception {
         CompletableFuture<Position> added = new CompletableFuture<>();
-        ledger.asyncAddEntry(headersAndPayload, 1, messageMetadata, new AddEntryCallback() {
+        ledger.asyncAddEntry(headersAndPayload, 1, new AddEntryCallback() {
             @Override
-            public void addComplete(Position position, ByteBuf entryData, Object ctx) {
+            public void addComplete(Position position, ByteBuf entryData, Object callbackCtx) {
                 added.complete(position);
             }
 
             @Override
-            public void addFailed(ManagedLedgerException exception, Object ctx) {
+            public void addFailed(ManagedLedgerException exception, Object callbackCtx) {
                 added.completeExceptionally(exception);
             }
-        }, null);
+        }, ctx);
         return added.get();
     }
 
@@ -1936,15 +1956,16 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
     public void testCachedEntryReusesTheMessageMetadataPassedToAsyncAddEntry() throws Exception {
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("test_add_entry_reuses_message_metadata");
         ManagedCursor cursor = ledger.openCursor("c1");
-        assertTrue(ledger.canReuseParsedMessageMetadata());
 
         ByteBuf headersAndPayload = serializeMessage("producer");
         MessageMetadata parsedByTheCaller = new MessageMetadata();
         Commands.peekMessageMetadata(headersAndPayload, parsedByTheCaller);
+        RecordingMetadataSupplier ctx = new RecordingMetadataSupplier(parsedByTheCaller);
 
-        addEntry(ledger, headersAndPayload, parsedByTheCaller);
+        addEntry(ledger, headersAndPayload, ctx);
         headersAndPayload.release();
 
+        assertEquals(ctx.callCount, 1);
         List<Entry> entries = cursor.readEntries(1);
         assertEquals(entries.size(), 1);
         // the entry read out of the cache carries the very instance the caller parsed, so the same bytes were
@@ -1964,12 +1985,36 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) cacheDisabledFactory.open("test_cache_disabled");
         ledger.openCursor("c1");
 
+        ByteBuf headersAndPayload = serializeMessage("producer");
+        MessageMetadata metadata = new MessageMetadata();
+        Commands.peekMessageMetadata(headersAndPayload, metadata);
+        RecordingMetadataSupplier ctx = new RecordingMetadataSupplier(metadata);
+
+        addEntry(ledger, headersAndPayload, ctx);
+        headersAndPayload.release();
+
         // there are active cursors, but nothing can be stored, so parsing the metadata would be wasted work
-        assertFalse(ledger.canReuseParsedMessageMetadata());
+        assertEquals(ctx.callCount, 0);
     }
 
     @Test
-    public void testCachedEntryReparsesMetadataWhenAnInterceptorReplacesTheBuffer() throws Exception {
+    public void testParsedMessageMetadataIsNotAskedForWhenThereAreNoActiveCursors() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("test_no_active_cursors");
+
+        ByteBuf headersAndPayload = serializeMessage("producer");
+        MessageMetadata metadata = new MessageMetadata();
+        Commands.peekMessageMetadata(headersAndPayload, metadata);
+        RecordingMetadataSupplier ctx = new RecordingMetadataSupplier(metadata);
+
+        addEntry(ledger, headersAndPayload, ctx);
+        headersAndPayload.release();
+
+        // nothing is caching added entries, so the metadata would only be thrown away
+        assertEquals(ctx.callCount, 0);
+    }
+
+    @Test
+    public void testCachedEntryMetadataSurvivesAnInterceptorReplacingTheBuffer() throws Exception {
         // the real BrokerEntryMetadata interceptor: for payloads up to 16 KB it copies into a new buffer and
         // releases the one the caller parsed its metadata from
         ManagedLedgerInterceptor interceptor = new ManagedLedgerInterceptor() {
@@ -1997,28 +2042,24 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         ManagedLedgerImpl ledger =
                 (ManagedLedgerImpl) factory.open("test_add_entry_metadata_dropped_on_replace", config);
         ManagedCursor cursor = ledger.openCursor("c1");
-        // nothing should even ask for the metadata when it cannot be reused
-        assertFalse(ledger.canReuseParsedMessageMetadata());
 
-        ByteBuf headersAndPayload = serializeMessage("in-buffer");
-        // deliberately disagrees with the buffer, so that the assertion below cannot pass by accident
-        MessageMetadata suppliedByTheCaller = new MessageMetadata()
-                .setProducerName("from-publish-path")
-                .setSequenceId(1)
-                .setPublishTime(1L);
+        ByteBuf headersAndPayload = serializeMessage("producer");
+        MessageMetadata parsedByTheCaller = new MessageMetadata();
+        Commands.peekMessageMetadata(headersAndPayload, parsedByTheCaller);
+        RecordingMetadataSupplier ctx = new RecordingMetadataSupplier(parsedByTheCaller);
 
-        addEntry(ledger, headersAndPayload, suppliedByTheCaller);
+        addEntry(ledger, headersAndPayload, ctx);
         // the interceptor released the reference the managed ledger took, this releases the test's own one
         headersAndPayload.release();
         assertEquals(headersAndPayload.refCnt(), 0);
 
         List<Entry> entries = cursor.readEntries(1);
         assertEquals(entries.size(), 1);
-        // the caller's instance decodes its fields lazily from a buffer the interceptor already released, so it
-        // must have been dropped and the metadata re-parsed from the buffer that backs the entry
+        // the supplier detached the metadata from the buffer, so it is still the caller's instance and its
+        // lazily decoded fields are still readable even though that buffer is long gone
         MessageMetadata cachedMetadata = entries.get(0).getMessageMetadata();
-        assertNotSame(cachedMetadata, suppliedByTheCaller);
-        assertEquals(cachedMetadata.getProducerName(), "in-buffer");
+        assertSame(cachedMetadata, parsedByTheCaller);
+        assertEquals(cachedMetadata.getProducerName(), "producer");
         entries.forEach(Entry::release);
     }
 

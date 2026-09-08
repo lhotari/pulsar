@@ -26,7 +26,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doAnswer;
@@ -326,12 +325,11 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
 
         doAnswer(invocationOnMock -> {
             final ByteBuf payload = (ByteBuf) invocationOnMock.getArguments()[0];
-            final AddEntryCallback callback = (AddEntryCallback) invocationOnMock.getArguments()[3];
-            final Topic.PublishContext ctx = (Topic.PublishContext) invocationOnMock.getArguments()[4];
+            final AddEntryCallback callback = (AddEntryCallback) invocationOnMock.getArguments()[2];
+            final Topic.PublishContext ctx = (Topic.PublishContext) invocationOnMock.getArguments()[3];
             callback.addComplete(PositionFactory.LATEST, payload, ctx);
             return null;
-        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), nullable(MessageMetadata.class),
-                any(AddEntryCallback.class), any());
+        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), any(AddEntryCallback.class), any());
 
         PersistentTopic topic = new PersistentTopic(successTopicName, ledgerMock, brokerService);
         long lastMaxReadPositionMovedForwardTimestamp = topic.getLastMaxReadPositionMovedForwardTimestamp();
@@ -410,11 +408,10 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
 
         // override asyncAddEntry callback to return error
         doAnswer((Answer<Object>) invocationOnMock -> {
-            ((AddEntryCallback) invocationOnMock.getArguments()[3]).addFailed(
-                    new ManagedLedgerException("Managed ledger failure"), invocationOnMock.getArguments()[4]);
+            ((AddEntryCallback) invocationOnMock.getArguments()[2]).addFailed(
+                    new ManagedLedgerException("Managed ledger failure"), invocationOnMock.getArguments()[3]);
             return null;
-        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), nullable(MessageMetadata.class),
-                any(AddEntryCallback.class), any());
+        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), any(AddEntryCallback.class), any());
 
         topic.publishMessage(payload, (exception, ledgerId, entryId) -> {
             if (exception == null) {
@@ -427,18 +424,13 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         assertTrue(latch.await(1, TimeUnit.SECONDS));
     }
 
+    /**
+     * The entry cache keeps the metadata for as long as the entry stays cached, which is long after the publish
+     * buffer has been released. A parsed {@link MessageMetadata} decodes its string and bytes fields lazily out
+     * of that buffer, so what the publish context hands over has to be detached from it.
+     */
     @Test
-    public void testPublishPassesParsedMessageMetadataToTheManagedLedger() throws Exception {
-        AtomicReference<MessageMetadata> handedOver = new AtomicReference<>();
-        doAnswer(invocation -> {
-            handedOver.set((MessageMetadata) invocation.getArguments()[2]);
-            ((AddEntryCallback) invocation.getArguments()[3]).addComplete(PositionFactory.LATEST, null,
-                    invocation.getArguments()[4]);
-            return null;
-        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), nullable(MessageMetadata.class),
-                any(AddEntryCallback.class), any());
-
-        PersistentTopic topic = new PersistentTopic(successTopicName, ledgerMock, brokerService);
+    public void testMessageMetadataHandedToTheEntryCacheIsDetachedFromThePublishBuffer() throws Exception {
         MessageMetadata metadata = new MessageMetadata()
                 .setProducerName("prod-name")
                 .setSequenceId(1)
@@ -446,18 +438,27 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         ByteBuf headersAndPayload = Commands.serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, metadata,
                 Unpooled.copiedBuffer("content", StandardCharsets.UTF_8));
 
-        // nothing to reuse: the managed ledger says a parsed instance would be discarded
-        doReturn(false).when(ledgerMock).canReuseParsedMessageMetadata();
-        topic.publishMessage(headersAndPayload, (e, ledgerId, entryId) -> { });
-        assertThat(handedOver.get()).isNull();
+        Topic topicMock = mock(Topic.class);
+        doReturn(true).when(topicMock).isPersistent();
+        AtomicReference<Topic.PublishContext> published = new AtomicReference<>();
+        doAnswer(invocation -> {
+            published.set((Topic.PublishContext) invocation.getArguments()[1]);
+            return null;
+        }).when(topicMock).publishMessage(any(ByteBuf.class), any(Topic.PublishContext.class));
 
-        // the entry will be cached, so the metadata parsed for the publish checks is handed along
-        doReturn(true).when(ledgerMock).canReuseParsedMessageMetadata();
-        topic.publishMessage(headersAndPayload, (e, ledgerId, entryId) -> { });
-        assertThat(handedOver.get()).isNotNull();
-        assertEquals(handedOver.get().getProducerName(), "prod-name");
+        Producer producer = new Producer(topicMock, serverCnx, 1 /* producer id */, "prod-name",
+                "role", false, null, SchemaVersion.Latest, 0, false,
+                ProducerAccessMode.Shared, Optional.empty(), true);
+        producer.publishMessage(1 /* producer id */, 1 /* sequence id */, headersAndPayload, 1, false, false, null);
 
+        assertThat(published.get()).isNotNull();
+        MessageMetadata handedOver = published.get().getMessageMetadataForEntryCache(headersAndPayload);
+        assertThat(handedOver).isNotNull();
+
+        // the publish buffer goes away as soon as the write completes; the metadata must not depend on it
         headersAndPayload.release();
+        assertEquals(handedOver.getProducerName(), "prod-name");
+        assertEquals(handedOver.getSequenceId(), 1L);
     }
 
     /**
@@ -1545,12 +1546,11 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
 
         // call addComplete on ledger asyncAddEntry
         doAnswer(invocationOnMock -> {
-            ((AddEntryCallback) invocationOnMock.getArguments()[3]).addComplete(PositionFactory.create(1, 1),
+            ((AddEntryCallback) invocationOnMock.getArguments()[2]).addComplete(PositionFactory.create(1, 1),
                     null,
-                    invocationOnMock.getArguments()[4]);
+                    invocationOnMock.getArguments()[3]);
             return null;
-        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), nullable(MessageMetadata.class),
-                any(AddEntryCallback.class), any());
+        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), any(AddEntryCallback.class), any());
 
         // call openCursorComplete on cursor asyncOpen
         doAnswer(invocationOnMock -> {

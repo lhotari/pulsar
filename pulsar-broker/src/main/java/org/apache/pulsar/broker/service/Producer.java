@@ -492,6 +492,17 @@ public class Producer {
             return messageMetadata;
         }
 
+        @Override
+        public MessageMetadata getMessageMetadataForEntryCache(ByteBuf entryData) {
+            MessageMetadata metadata = getMessageMetadata(entryData);
+            // The cached entry keeps this instance long after entryData has been released, and a parsed
+            // MessageMetadata decodes its string and bytes fields lazily out of the buffer it was parsed from,
+            // so detach it. Doing it here, before the entry is handed over, also means the fields are resolved
+            // once on this thread instead of racily on each dispatcher thread that first reads them.
+            metadata.materialize();
+            return metadata;
+        }
+
         /**
          * Drops the memoized metadata so that the next {@link #getMessageMetadata(ByteBuf)} parses the buffer
          * again. Called after a {@link BrokerInterceptor}, which is handed the mutable {@code headersAndPayload},

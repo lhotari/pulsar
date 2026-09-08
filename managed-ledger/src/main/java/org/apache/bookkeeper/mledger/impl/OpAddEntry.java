@@ -67,10 +67,10 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
     ByteBuf data;
     private int dataLength;
     /**
-     * Message metadata that the caller already parsed from {@link #data}, used to spare the entry cache a second
-     * parse of the same bytes. A {@link MessageMetadata} decodes its string and bytes fields lazily from the
-     * buffer it was parsed from, so this is only usable while {@link #data} is still that very buffer, which is
-     * why {@link #setData(ByteBuf)} drops it.
+     * Message metadata that the caller already parsed, used to spare the entry cache a second parse of the same
+     * bytes. It is detached from the buffer it was parsed from, per the
+     * {@link org.apache.bookkeeper.mledger.EntryMessageMetadataSupplier} contract, so it stays valid even when an
+     * interceptor replaces or rewrites {@link #data}.
      */
     private MessageMetadata messageMetadata;
     private ManagedLedgerInterceptor.PayloadProcessorHandle payloadProcessorHandle = null;
@@ -285,13 +285,9 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
                 expectedReadCount = ml.getActiveCursors().size();
             }
             EntryImpl entry = EntryImpl.create(ledgerId, entryId, data, expectedReadCount);
-            // Reuse the metadata the caller parsed from this very buffer instead of parsing it again when the
-            // entry is inserted into the cache. An interceptor may have replaced the buffer, or rewritten the
-            // payload in place through the duplicate it got in processPayloadBeforeLedgerWrite, and the latter
-            // leaves no trace here, so drop the metadata whenever an interceptor is configured at all.
-            if (ml.getManagedLedgerInterceptor() == null) {
-                entry.setMessageMetadata(messageMetadata);
-            }
+            // Reuse the metadata the caller already parsed, instead of parsing it again when the entry is
+            // inserted into the cache
+            entry.setMessageMetadata(messageMetadata);
             entry.setDecreaseReadCountOnRelease(false);
             // EntryCache.insert: duplicates entry by allocating new entry and data. so, recycle entry after calling
             // insert
@@ -400,7 +396,6 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
         STATE_UPDATER.set(OpAddEntry.this, State.CLOSED);
         OpAddEntry duplicate =
                 OpAddEntry.createNoRetainBuffer(ml, data, getNumberOfMessages(), callback, ctx, timeoutTriggered);
-        // the replacement writes the very same buffer, so the metadata parsed from it is still usable
         duplicate.setMessageMetadata(messageMetadata);
         return duplicate;
     }
@@ -428,10 +423,6 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
     public void setData(ByteBuf data) {
         this.dataLength = data.readableBytes();
         this.data = data;
-        // The metadata was parsed from the buffer being replaced here, which may already have been released, so
-        // it can no longer describe this operation. Note that run() drops it for any configured interceptor
-        // anyway, since a payload processor can rewrite the payload in place without going through setData.
-        this.messageMetadata = null;
     }
 
     void setMessageMetadata(MessageMetadata messageMetadata) {

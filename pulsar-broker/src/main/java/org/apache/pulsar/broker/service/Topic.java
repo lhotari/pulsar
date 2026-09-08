@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import org.apache.bookkeeper.mledger.EntryMessageMetadataSupplier;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.broker.service.persistent.DispatchRateLimiter;
 import org.apache.pulsar.broker.service.persistent.SubscribeRateLimiter;
@@ -52,7 +53,19 @@ import org.apache.pulsar.utils.StatsOutputStream;
 
 public interface Topic {
 
-    interface PublishContext {
+    interface PublishContext extends EntryMessageMetadataSupplier {
+
+        /**
+         * {@inheritDoc}
+         *
+         * <p>Returns null by default, so that a context which doesn't keep the parsed metadata around doesn't
+         * pay for a parse that would only be thrown away. Implementations that do keep it must hand over an
+         * instance detached from {@code entryData}, since the entry cache outlives the publish.
+         */
+        @Override
+        default MessageMetadata getMessageMetadataForEntryCache(ByteBuf entryData) {
+            return null;
+        }
 
         default String getProducerName() {
             return null;

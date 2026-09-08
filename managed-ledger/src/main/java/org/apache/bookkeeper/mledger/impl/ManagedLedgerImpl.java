@@ -97,6 +97,7 @@ import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.TerminateCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.UpdatePropertiesCallback;
 import org.apache.bookkeeper.mledger.Entry;
+import org.apache.bookkeeper.mledger.EntryMessageMetadataSupplier;
 import org.apache.bookkeeper.mledger.LedgerOffloader;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedger;
@@ -837,16 +838,12 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     @Override
     public void asyncAddEntry(ByteBuf buffer, int numberOfMessages, AddEntryCallback callback, Object ctx) {
-        asyncAddEntry(buffer, numberOfMessages, null, callback, ctx);
-    }
-
-    @Override
-    public void asyncAddEntry(ByteBuf buffer, int numberOfMessages, MessageMetadata messageMetadata,
-                              AddEntryCallback callback, Object ctx) {
         log.debug().attr("size", buffer.readableBytes()).attr("state", state).log("asyncAddEntry");
 
         // retain buffer in this thread
         buffer.retain();
+
+        MessageMetadata messageMetadata = messageMetadataForEntryCache(buffer, ctx);
 
         // Jump to specific thread to avoid contention from writers writing from different threads
         executor.execute(() -> {
@@ -857,16 +854,24 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         });
     }
 
-    @Override
-    public boolean canReuseParsedMessageMetadata() {
-        // An interceptor is free to replace the entry buffer, or to rewrite the payload in place through the
-        // duplicate it gets in processPayloadBeforeLedgerWrite, and a copying entry cache stores the payload in
-        // a buffer of its own. In all of those cases the cached entry has to parse the metadata from its own
-        // buffer anyway, so parsing it up front would only add a second parse.
-        return managedLedgerInterceptor == null
-                && !factory.getConfig().isCopyEntriesInCache()
-                && entryCache.isEnabled()
-                && shouldCacheAddedEntry();
+    /**
+     * Asks the caller for the message metadata it has already parsed, so that the entry cache doesn't have to
+     * parse the same bytes again. Only worth asking when the entry is going to be cached, since that is the only
+     * thing the metadata would be used for. Runs on the caller's thread, while the buffer is still intact.
+     */
+    private MessageMetadata messageMetadataForEntryCache(ByteBuf buffer, Object ctx) {
+        if (!(ctx instanceof EntryMessageMetadataSupplier supplier)
+                || !entryCache.isEnabled() || !shouldCacheAddedEntry()) {
+            return null;
+        }
+        try {
+            return supplier.getMessageMetadataForEntryCache(buffer);
+        } catch (Throwable t) {
+            // This is only an optimization, so an entry whose metadata cannot be parsed is still added. The
+            // entry cache logs the same failure if it ends up parsing the entry itself.
+            log.debug().exception(t).log("Failed to get the message metadata for the entry cache");
+            return null;
+        }
     }
 
     protected synchronized void internalAsyncAddEntry(OpAddEntry addOperation) {

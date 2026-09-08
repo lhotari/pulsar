@@ -37,7 +37,6 @@ import org.apache.bookkeeper.mledger.AsyncCallbacks.TerminateCallback;
 import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
 import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.InitialPosition;
-import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.policies.data.ManagedLedgerInternalStats;
 import org.jspecify.annotations.Nullable;
 
@@ -203,54 +202,6 @@ public interface ManagedLedger {
      *            opaque context
      */
     void asyncAddEntry(ByteBuf buffer, int numberOfMessages, AddEntryCallback callback, Object ctx);
-
-    /**
-     * Append a new entry asynchronously, passing along the message metadata that the caller has already parsed
-     * from {@code buffer}, so that the entry cache doesn't have to parse the same bytes again.
-     *
-     * <p/>The metadata is only used when the entry is added to the entry cache, and it is used on a best effort
-     * basis: it is silently ignored whenever it cannot be proven to stay valid for the lifetime of the cached
-     * entry, in which case the cache parses the metadata itself. Callers must therefore never rely on the
-     * metadata being attached to the entry that readers get back.
-     *
-     * <p/>A {@link MessageMetadata} instance decodes its string and bytes fields lazily from the buffer it was
-     * parsed from, so {@code messageMetadata} must have been parsed from {@code buffer} and must not be an
-     * instance that is shared or reused for other messages, such as the thread local one returned by
-     * {@code Commands.parseMessageMetadata(ByteBuf)}.
-     *
-     * @see #asyncAddEntry(ByteBuf, int, AddEntryCallback, Object)
-     * @see #canReuseParsedMessageMetadata()
-     * @param buffer
-     *            buffer with the data entry
-     * @param numberOfMessages
-     *            numberOfMessages for data entry
-     * @param messageMetadata
-     *            message metadata parsed from {@code buffer}, or null when it isn't available
-     * @param callback
-     *            callback object
-     * @param ctx
-     *            opaque context
-     */
-    default void asyncAddEntry(ByteBuf buffer, int numberOfMessages, @Nullable MessageMetadata messageMetadata,
-                               AddEntryCallback callback, Object ctx) {
-        asyncAddEntry(buffer, numberOfMessages, callback, ctx);
-    }
-
-    /**
-     * Returns true when message metadata passed to
-     * {@link #asyncAddEntry(ByteBuf, int, MessageMetadata, AddEntryCallback, Object)} would currently be put to
-     * use, which requires both that added entries are being cached for tailing readers and that this managed
-     * ledger keeps the very buffer the metadata was parsed from.
-     *
-     * <p/>Callers that would have to parse the metadata just to pass it along should check this first, so that
-     * they don't pay for a parse whose result is going to be discarded. The answer changes as readers come and
-     * go, so it is a hint, never a guarantee about any individual entry.
-     *
-     * @return true if parsed message metadata can currently be reused
-     */
-    default boolean canReuseParsedMessageMetadata() {
-        return false;
-    }
 
     /**
      * Open a ManagedCursor in this ManagedLedger.
