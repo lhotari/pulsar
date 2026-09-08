@@ -732,8 +732,29 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     }
 
     private void asyncAddEntry(ByteBuf headersAndPayload, PublishContext publishContext) {
-        ledger.asyncAddEntry(headersAndPayload,
-            (int) publishContext.getNumberOfMessages(), this, publishContext);
+        ledger.asyncAddEntry(headersAndPayload, (int) publishContext.getNumberOfMessages(),
+                messageMetadataForEntryCache(headersAndPayload, publishContext), this, publishContext);
+    }
+
+    /**
+     * Returns the parsed message metadata to hand over to the entry cache, or null when it isn't worth parsing.
+     *
+     * <p>Only entries that are added to the cache benefit from this, so on a topic without tailing readers the
+     * parse would be pure overhead. When the metadata was already parsed for one of the publish checks, this
+     * simply reuses that instance, so a published message is parsed at most once.
+     */
+    private MessageMetadata messageMetadataForEntryCache(ByteBuf headersAndPayload, PublishContext publishContext) {
+        if (!ledger.canReuseParsedMessageMetadata()) {
+            return null;
+        }
+        try {
+            return publishContext.getMessageMetadata(headersAndPayload);
+        } catch (Throwable t) {
+            // A message that the broker cannot parse is still published. Leave the metadata out and let the
+            // entry cache deal with the failure the same way it does for entries read back from storage.
+            log.debug().exception(t).log("Failed to parse message metadata while publishing");
+            return null;
+        }
     }
 
     public void asyncReadEntry(Position position, AsyncCallbacks.ReadEntryCallback callback, Object ctx) {

@@ -38,6 +38,7 @@ import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 
 
 /**
@@ -65,6 +66,13 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
     @SuppressWarnings("unused")
     ByteBuf data;
     private int dataLength;
+    /**
+     * Message metadata that the caller already parsed from {@link #data}, used to spare the entry cache a second
+     * parse of the same bytes. A {@link MessageMetadata} decodes its string and bytes fields lazily from the
+     * buffer it was parsed from, so this is only usable while {@link #data} is still that very buffer, which is
+     * why {@link #setData(ByteBuf)} drops it.
+     */
+    private MessageMetadata messageMetadata;
     private ManagedLedgerInterceptor.PayloadProcessorHandle payloadProcessorHandle = null;
 
     private static final AtomicReferenceFieldUpdater<OpAddEntry, OpAddEntry.State> STATE_UPDATER =
@@ -112,6 +120,7 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
         op.entryId = -1;
         op.startTime = System.nanoTime();
         op.state = State.OPEN;
+        op.messageMetadata = null;
         op.payloadProcessorHandle = null;
         op.timeoutTriggered = timeoutTriggered;
         ml.mbean.addAddEntrySample(op.dataLength);
@@ -276,6 +285,13 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
                 expectedReadCount = ml.getActiveCursors().size();
             }
             EntryImpl entry = EntryImpl.create(ledgerId, entryId, data, expectedReadCount);
+            // Reuse the metadata the caller parsed from this very buffer instead of parsing it again when the
+            // entry is inserted into the cache. An interceptor may have replaced the buffer, or rewritten the
+            // payload in place through the duplicate it got in processPayloadBeforeLedgerWrite, and the latter
+            // leaves no trace here, so drop the metadata whenever an interceptor is configured at all.
+            if (ml.getManagedLedgerInterceptor() == null) {
+                entry.setMessageMetadata(messageMetadata);
+            }
             entry.setDecreaseReadCountOnRelease(false);
             // EntryCache.insert: duplicates entry by allocating new entry and data. so, recycle entry after calling
             // insert
@@ -384,6 +400,8 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
         STATE_UPDATER.set(OpAddEntry.this, State.CLOSED);
         OpAddEntry duplicate =
                 OpAddEntry.createNoRetainBuffer(ml, data, getNumberOfMessages(), callback, ctx, timeoutTriggered);
+        // the replacement writes the very same buffer, so the metadata parsed from it is still usable
+        duplicate.setMessageMetadata(messageMetadata);
         return duplicate;
     }
 
@@ -410,6 +428,14 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
     public void setData(ByteBuf data) {
         this.dataLength = data.readableBytes();
         this.data = data;
+        // The metadata was parsed from the buffer being replaced here, which may already have been released, so
+        // it can no longer describe this operation. Note that run() drops it for any configured interceptor
+        // anyway, since a payload processor can rewrite the payload in place without going through setData.
+        this.messageMetadata = null;
+    }
+
+    void setMessageMetadata(MessageMetadata messageMetadata) {
+        this.messageMetadata = messageMetadata;
     }
 
     private final Handle<OpAddEntry> recyclerHandle;
@@ -429,6 +455,7 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
         ml = null;
         ledger = null;
         data = null;
+        messageMetadata = null;
         numberOfMessages = 0;
         dataLength = -1;
         callback = null;

@@ -139,6 +139,7 @@ import org.apache.bookkeeper.net.BookieId;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.InitialPosition;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.policies.data.EnsemblePlacementPolicyConfig;
 import org.apache.pulsar.common.policies.data.ManagedLedgerInternalStats;
 import org.apache.pulsar.common.policies.data.OffloadPolicies;
@@ -836,6 +837,12 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     @Override
     public void asyncAddEntry(ByteBuf buffer, int numberOfMessages, AddEntryCallback callback, Object ctx) {
+        asyncAddEntry(buffer, numberOfMessages, null, callback, ctx);
+    }
+
+    @Override
+    public void asyncAddEntry(ByteBuf buffer, int numberOfMessages, MessageMetadata messageMetadata,
+                              AddEntryCallback callback, Object ctx) {
         log.debug().attr("size", buffer.readableBytes()).attr("state", state).log("asyncAddEntry");
 
         // retain buffer in this thread
@@ -845,8 +852,20 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         executor.execute(() -> {
             OpAddEntry addOperation = OpAddEntry.createNoRetainBuffer(this, buffer, numberOfMessages, callback, ctx,
                     currentLedgerTimeoutTriggered);
+            addOperation.setMessageMetadata(messageMetadata);
             internalAsyncAddEntry(addOperation);
         });
+    }
+
+    @Override
+    public boolean canReuseParsedMessageMetadata() {
+        // An interceptor is free to replace the entry buffer, or to rewrite the payload in place through the
+        // duplicate it gets in processPayloadBeforeLedgerWrite, and a copying entry cache stores the payload in
+        // a buffer of its own. In all of those cases the cached entry has to parse the metadata from its own
+        // buffer anyway, so parsing it up front would only add a second parse.
+        return managedLedgerInterceptor == null
+                && !factory.getConfig().isCopyEntriesInCache()
+                && shouldCacheAddedEntry();
     }
 
     protected synchronized void internalAsyncAddEntry(OpAddEntry addOperation) {

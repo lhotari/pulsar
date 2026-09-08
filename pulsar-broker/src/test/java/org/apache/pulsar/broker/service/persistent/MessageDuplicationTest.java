@@ -23,6 +23,7 @@ import static org.apache.pulsar.common.protocol.Commands.serializeMetadataAndPay
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -294,7 +295,8 @@ public class MessageDuplicationTest extends BrokerTestBase {
 
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         persistentTopic.addComplete(PositionFactory.create(0, 1), null, publishContext1);
-        verify(managedLedger, times(1)).asyncAddEntry(any(ByteBuf.class), anyInt(), any(), any());
+        verify(managedLedger, times(1)).asyncAddEntry(any(ByteBuf.class), anyInt(),
+                nullable(MessageMetadata.class), any(), any());
         Long lastSequenceIdPushed = messageDeduplication.highestSequencedPushed.get(producerName1);
         assertNotNull(lastSequenceIdPushed);
         assertEquals(lastSequenceIdPushed.longValue(), 0);
@@ -304,7 +306,8 @@ public class MessageDuplicationTest extends BrokerTestBase {
 
         persistentTopic.publishMessage(byteBuf2, publishContext2);
         persistentTopic.addComplete(PositionFactory.create(0, 2), null, publishContext2);
-        verify(managedLedger, times(2)).asyncAddEntry(any(ByteBuf.class), anyInt(), any(), any());
+        verify(managedLedger, times(2)).asyncAddEntry(any(ByteBuf.class), anyInt(),
+                nullable(MessageMetadata.class), any(), any());
         lastSequenceIdPushed = messageDeduplication.highestSequencedPushed.get(producerName2);
         assertNotNull(lastSequenceIdPushed);
         assertEquals(lastSequenceIdPushed.longValue(), 1);
@@ -319,7 +322,8 @@ public class MessageDuplicationTest extends BrokerTestBase {
         publishContext1 = getPublishContext(producerName1, 1);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         persistentTopic.addComplete(PositionFactory.create(0, 3), null, publishContext1);
-        verify(managedLedger, times(3)).asyncAddEntry(any(ByteBuf.class), anyInt(), any(), any());
+        verify(managedLedger, times(3)).asyncAddEntry(any(ByteBuf.class), anyInt(),
+                nullable(MessageMetadata.class), any(), any());
         lastSequenceIdPushed = messageDeduplication.highestSequencedPushed.get(producerName1);
         assertNotNull(lastSequenceIdPushed);
         assertEquals(lastSequenceIdPushed.longValue(), 1);
@@ -332,7 +336,8 @@ public class MessageDuplicationTest extends BrokerTestBase {
         publishContext1 = getPublishContext(producerName1, 5);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         persistentTopic.addComplete(PositionFactory.create(0, 4), null, publishContext1);
-        verify(managedLedger, times(4)).asyncAddEntry(any(ByteBuf.class), anyInt(), any(), any());
+        verify(managedLedger, times(4)).asyncAddEntry(any(ByteBuf.class), anyInt(),
+                nullable(MessageMetadata.class), any(), any());
         lastSequenceIdPushed = messageDeduplication.highestSequencedPushed.get(producerName1);
         assertNotNull(lastSequenceIdPushed);
         assertEquals(lastSequenceIdPushed.longValue(), 5);
@@ -345,7 +350,8 @@ public class MessageDuplicationTest extends BrokerTestBase {
         byteBuf1 = getMessage(producerName1, 0);
         publishContext1 = getPublishContext(producerName1, 0);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
-        verify(managedLedger, times(4)).asyncAddEntry(any(ByteBuf.class), anyInt(), any(), any());
+        verify(managedLedger, times(4)).asyncAddEntry(any(ByteBuf.class), anyInt(),
+                nullable(MessageMetadata.class), any(), any());
         lastSequenceIdPushed = messageDeduplication.highestSequencedPushed.get(producerName1);
         assertNotNull(lastSequenceIdPushed);
         assertEquals(lastSequenceIdPushed.longValue(), 5);
@@ -357,7 +363,8 @@ public class MessageDuplicationTest extends BrokerTestBase {
         publishContext1 = getPublishContext(producerName1, 6);
         // don't complete message
         persistentTopic.publishMessage(byteBuf1, publishContext1);
-        verify(managedLedger, times(5)).asyncAddEntry(any(ByteBuf.class), anyInt(), any(), any());
+        verify(managedLedger, times(5)).asyncAddEntry(any(ByteBuf.class), anyInt(),
+                nullable(MessageMetadata.class), any(), any());
         lastSequenceIdPushed = messageDeduplication.highestSequencedPushed.get(producerName1);
         assertNotNull(lastSequenceIdPushed);
         assertEquals(lastSequenceIdPushed.longValue(), 6);
@@ -370,7 +377,8 @@ public class MessageDuplicationTest extends BrokerTestBase {
         byteBuf1 = getMessage(producerName1, 6);
         publishContext1 = getPublishContext(producerName1, 6);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
-        verify(managedLedger, times(5)).asyncAddEntry(any(ByteBuf.class), anyInt(), any(), any());
+        verify(managedLedger, times(5)).asyncAddEntry(any(ByteBuf.class), anyInt(),
+                nullable(MessageMetadata.class), any(), any());
         verify(publishContext1, times(1))
                 .completed(any(MessageDeduplication.MessageDupUnknownException.class), eq(-1L), eq(-1L));
 
@@ -382,7 +390,8 @@ public class MessageDuplicationTest extends BrokerTestBase {
         byteBuf1 = getMessage(producerName1, 7);
         publishContext1 = getPublishContext(producerName1, 7);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
-        verify(managedLedger, times(6)).asyncAddEntry(any(ByteBuf.class), anyInt(), any(), any());
+        verify(managedLedger, times(6)).asyncAddEntry(any(ByteBuf.class), anyInt(),
+                nullable(MessageMetadata.class), any(), any());
 
         persistentTopic.addFailed(new ManagedLedgerException("test"), publishContext1);
         // check highestSequencedPushed is reset
@@ -403,7 +412,8 @@ public class MessageDuplicationTest extends BrokerTestBase {
         byteBuf1 = getMessage(producerName1, 6);
         publishContext1 = getPublishContext(producerName1, 6);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
-        verify(managedLedger, times(6)).asyncAddEntry(any(ByteBuf.class), anyInt(), any(), any());
+        verify(managedLedger, times(6)).asyncAddEntry(any(ByteBuf.class), anyInt(),
+                nullable(MessageMetadata.class), any(), any());
         verify(publishContext1, times(1)).completed(eq(null), eq(-1L), eq(-1L));
         lastSequenceIdPushed = messageDeduplication.highestSequencedPushed.get(producerName1);
         assertNotNull(lastSequenceIdPushed);
@@ -414,7 +424,8 @@ public class MessageDuplicationTest extends BrokerTestBase {
         byteBuf1 = getMessage(producerName1, 8);
         publishContext1 = getPublishContext(producerName1, 8);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
-        verify(managedLedger, times(7)).asyncAddEntry(any(ByteBuf.class), anyInt(), any(), any());
+        verify(managedLedger, times(7)).asyncAddEntry(any(ByteBuf.class), anyInt(),
+                nullable(MessageMetadata.class), any(), any());
         persistentTopic.addComplete(PositionFactory.create(0, 5), null, publishContext1);
         lastSequenceIdPushed = messageDeduplication.highestSequencedPushed.get(producerName1);
         assertNotNull(lastSequenceIdPushed);

@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doAnswer;
@@ -57,6 +58,7 @@ import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -77,6 +79,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import lombok.Cleanup;
 import lombok.CustomLog;
@@ -102,6 +105,7 @@ import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.broker.intercept.MockBrokerInterceptor;
 import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.broker.namespace.TopicExistsInfo;
 import org.apache.pulsar.broker.service.persistent.AbstractPersistentDispatcherMultipleConsumers;
@@ -141,6 +145,7 @@ import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.TopicPolicies;
 import org.apache.pulsar.common.policies.data.stats.SubscriptionStatsImpl;
 import org.apache.pulsar.common.protocol.ByteBufPair;
+import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.schema.SchemaVersion;
 import org.apache.pulsar.common.semaphore.AsyncDualMemoryLimiter;
 import org.apache.pulsar.common.util.Codec;
@@ -321,11 +326,12 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
 
         doAnswer(invocationOnMock -> {
             final ByteBuf payload = (ByteBuf) invocationOnMock.getArguments()[0];
-            final AddEntryCallback callback = (AddEntryCallback) invocationOnMock.getArguments()[2];
-            final Topic.PublishContext ctx = (Topic.PublishContext) invocationOnMock.getArguments()[3];
+            final AddEntryCallback callback = (AddEntryCallback) invocationOnMock.getArguments()[3];
+            final Topic.PublishContext ctx = (Topic.PublishContext) invocationOnMock.getArguments()[4];
             callback.addComplete(PositionFactory.LATEST, payload, ctx);
             return null;
-        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), any(AddEntryCallback.class), any());
+        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), nullable(MessageMetadata.class),
+                any(AddEntryCallback.class), any());
 
         PersistentTopic topic = new PersistentTopic(successTopicName, ledgerMock, brokerService);
         long lastMaxReadPositionMovedForwardTimestamp = topic.getLastMaxReadPositionMovedForwardTimestamp();
@@ -404,10 +410,11 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
 
         // override asyncAddEntry callback to return error
         doAnswer((Answer<Object>) invocationOnMock -> {
-            ((AddEntryCallback) invocationOnMock.getArguments()[2]).addFailed(
-                    new ManagedLedgerException("Managed ledger failure"), invocationOnMock.getArguments()[3]);
+            ((AddEntryCallback) invocationOnMock.getArguments()[3]).addFailed(
+                    new ManagedLedgerException("Managed ledger failure"), invocationOnMock.getArguments()[4]);
             return null;
-        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), any(AddEntryCallback.class), any());
+        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), nullable(MessageMetadata.class),
+                any(AddEntryCallback.class), any());
 
         topic.publishMessage(payload, (exception, ledgerId, entryId) -> {
             if (exception == null) {
@@ -418,6 +425,64 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         });
 
         assertTrue(latch.await(1, TimeUnit.SECONDS));
+    }
+
+    /**
+     * A {@link BrokerInterceptor} is handed the mutable {@code headersAndPayload} of the message being
+     * published, so any metadata the publish context parsed before it ran describes the wrong bytes. That
+     * matters beyond the publish checks now that the parsed instance is handed to the entry cache, where it
+     * would be served to every reader of the entry.
+     */
+    @Test
+    public void testMessageMetadataIsReparsedAfterAnInterceptorRewritesThePayload() throws Exception {
+        // sequenceId is decoded eagerly by parseFrom, unlike the string fields which are decoded lazily out of
+        // the buffer and would therefore follow an in place rewrite even from a stale instance
+        MessageMetadata beforeIntercept = new MessageMetadata()
+                .setProducerName("prod-name")
+                .setSequenceId(1)
+                .setPublishTime(1L);
+        beforeIntercept.addEncryptionKey().setKey("key").setValue(new byte[]{1});
+        MessageMetadata afterIntercept = new MessageMetadata()
+                .setProducerName("prod-name")
+                .setSequenceId(2)
+                .setPublishTime(1L);
+        afterIntercept.addEncryptionKey().setKey("key").setValue(new byte[]{1});
+        ByteBuf payload = Unpooled.copiedBuffer("content", StandardCharsets.UTF_8);
+        ByteBuf headersAndPayload =
+                Commands.serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, beforeIntercept, payload.slice());
+        ByteBuf rewritten =
+                Commands.serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, afterIntercept, payload.slice());
+        // both serialize to the same length, so the interceptor can overwrite the bytes in place
+        assertEquals(rewritten.readableBytes(), headersAndPayload.readableBytes());
+
+        doReturn(new MockBrokerInterceptor() {
+            @Override
+            public void onMessagePublish(Producer producer, ByteBuf headersAndPayload,
+                                         Topic.PublishContext publishContext) {
+                headersAndPayload.setBytes(headersAndPayload.readerIndex(), rewritten.nioBuffer());
+            }
+        }).when(brokerService).getInterceptor();
+
+        Topic topicMock = mock(Topic.class);
+        doReturn(true).when(topicMock).isEncryptionRequired();
+        doReturn(true).when(topicMock).isPersistent();
+        Producer producer = new Producer(topicMock, serverCnx, 1 /* producer id */, "prod-name",
+                "role", false, null, SchemaVersion.Latest, 0, false,
+                ProducerAccessMode.Shared, Optional.empty(), true);
+
+        AtomicReference<Topic.PublishContext> published = new AtomicReference<>();
+        doAnswer(invocation -> {
+            published.set((Topic.PublishContext) invocation.getArguments()[1]);
+            return null;
+        }).when(topicMock).publishMessage(any(ByteBuf.class), any(Topic.PublishContext.class));
+
+        producer.publishMessage(1 /* producer id */, 1 /* sequence id */, headersAndPayload, 1, false, false, null);
+
+        assertThat(published.get()).isNotNull();
+        assertEquals(published.get().getMessageMetadata(headersAndPayload).getSequenceId(), 2L);
+        headersAndPayload.release();
+        rewritten.release();
+        payload.release();
     }
 
     @Test
@@ -1442,11 +1507,12 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
 
         // call addComplete on ledger asyncAddEntry
         doAnswer(invocationOnMock -> {
-            ((AddEntryCallback) invocationOnMock.getArguments()[2]).addComplete(PositionFactory.create(1, 1),
+            ((AddEntryCallback) invocationOnMock.getArguments()[3]).addComplete(PositionFactory.create(1, 1),
                     null,
-                    invocationOnMock.getArguments()[3]);
+                    invocationOnMock.getArguments()[4]);
             return null;
-        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), any(AddEntryCallback.class), any());
+        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), nullable(MessageMetadata.class),
+                any(AddEntryCallback.class), any());
 
         // call openCursorComplete on cursor asyncOpen
         doAnswer(invocationOnMock -> {

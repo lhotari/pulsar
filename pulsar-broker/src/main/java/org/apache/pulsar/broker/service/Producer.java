@@ -299,10 +299,28 @@ public class Producer {
     }
 
     private void publishMessageToTopic(ByteBuf headersAndPayload, MessagePublishContext messagePublishContext) {
-        if (brokerInterceptor != null) {
-            brokerInterceptor.onMessagePublish(this, headersAndPayload, messagePublishContext);
-        }
+        onMessagePublishIntercepted(headersAndPayload, messagePublishContext);
         topic.publishMessage(headersAndPayload, messagePublishContext);
+    }
+
+    /**
+     * Runs the broker interceptor over the message being published, if there is one. The interceptor is handed
+     * the mutable {@code headersAndPayload}, so afterwards anything derived from it is dropped: the memoized
+     * metadata may describe the bytes as they were before, and a reader index left behind by the interceptor
+     * would truncate the entry that gets persisted.
+     */
+    private void onMessagePublishIntercepted(ByteBuf headersAndPayload,
+                                             MessagePublishContext messagePublishContext) {
+        if (brokerInterceptor == null) {
+            return;
+        }
+        int readerIndex = headersAndPayload.readerIndex();
+        try {
+            brokerInterceptor.onMessagePublish(this, headersAndPayload, messagePublishContext);
+        } finally {
+            headersAndPayload.readerIndex(readerIndex);
+            messagePublishContext.clearMessageMetadata();
+        }
     }
 
     private boolean verifyChecksum(ByteBuf headersAndPayload) {
@@ -401,6 +419,12 @@ public class Producer {
         private long originalHighestSequenceId;
 
         private long entryTimestamp;
+        /**
+         * Metadata of the message being published, parsed on first use. The instance is handed to the entry
+         * cache and stays readable for as long as the entry is cached, which is long after this context has
+         * been recycled, so it must be released by nulling the reference: never clear it, pool it, or share one
+         * instance between messages.
+         */
         private MessageMetadata messageMetadata;
 
         @Override
@@ -460,10 +484,21 @@ public class Producer {
         @Override
         public MessageMetadata getMessageMetadata(ByteBuf headersAndPayload) {
             if (messageMetadata == null) {
-                messageMetadata = new MessageMetadata();
-                Commands.peekMessageMetadata(headersAndPayload, messageMetadata);
+                MessageMetadata parsed = new MessageMetadata();
+                // assign only once the parse succeeded, so that a failure doesn't memoize a half parsed instance
+                Commands.peekMessageMetadata(headersAndPayload, parsed);
+                messageMetadata = parsed;
             }
             return messageMetadata;
+        }
+
+        /**
+         * Drops the memoized metadata so that the next {@link #getMessageMetadata(ByteBuf)} parses the buffer
+         * again. Called after a {@link BrokerInterceptor}, which is handed the mutable {@code headersAndPayload},
+         * has run.
+         */
+        void clearMessageMetadata() {
+            messageMetadata = null;
         }
 
         @Override
@@ -881,9 +916,7 @@ public class Producer {
             messagePublishContext.recycle();
             return;
         }
-        if (brokerInterceptor != null) {
-            brokerInterceptor.onMessagePublish(this, headersAndPayload, messagePublishContext);
-        }
+        onMessagePublishIntercepted(headersAndPayload, messagePublishContext);
         topic.publishTxnMessage(txnID, headersAndPayload, messagePublishContext);
     }
 
