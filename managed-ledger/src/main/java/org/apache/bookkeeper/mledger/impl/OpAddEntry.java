@@ -69,8 +69,9 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
     /**
      * Message metadata that the caller already parsed, used to spare the entry cache a second parse of the same
      * bytes. It is detached from the buffer it was parsed from, per the
-     * {@link org.apache.bookkeeper.mledger.EntryMessageMetadataSupplier} contract, so it stays valid even when an
-     * interceptor replaces or rewrites {@link #data}.
+     * {@link org.apache.bookkeeper.mledger.EntryMessageMetadataSupplier} contract, so it stays readable when an
+     * interceptor replaces or releases {@link #data}. It is dropped in {@link #initiate()} when a payload
+     * processor runs, since that one can change what the entry holds rather than merely where it lives.
      */
     private MessageMetadata messageMetadata;
     private ManagedLedgerInterceptor.PayloadProcessorHandle payloadProcessorHandle = null;
@@ -168,6 +169,10 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
                 }
                 if (payloadProcessorHandle != null) {
                     duplicateBuffer = payloadProcessorHandle.getProcessedPayload();
+                    // A processor is handed a duplicate that shares memory with data, so it may have rewritten
+                    // the payload in place. Metadata parsed before it ran would then describe bytes the entry no
+                    // longer holds, and unlike a released buffer that is not something detaching can fix.
+                    messageMetadata = null;
                     // If data len of entry changes, correct "dataLength" and "currentLedgerSize".
                     if (originalDataLen != duplicateBuffer.readableBytes()) {
                         this.dataLength = duplicateBuffer.readableBytes();

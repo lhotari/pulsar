@@ -70,7 +70,7 @@ public class EntryCacheDisabled implements EntryCache {
     }
 
     @Override
-    public boolean isEnabled() {
+    public boolean canUseSuppliedMessageMetadata() {
         return false;
     }
 

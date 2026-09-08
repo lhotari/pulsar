@@ -129,6 +129,13 @@ public class RangeEntryCacheImpl implements EntryCache {
     }
 
     @Override
+    public boolean canUseSuppliedMessageMetadata() {
+        // A copied entry is backed by a buffer of the cache's own, and a MessageMetadata may only be attached to
+        // an entry it can be read from, so the copy has to be parsed here either way.
+        return !copyEntries;
+    }
+
+    @Override
     public String getName() {
         return ml.getName();
     }

@@ -861,7 +861,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
      */
     private MessageMetadata messageMetadataForEntryCache(ByteBuf buffer, Object ctx) {
         if (!(ctx instanceof EntryMessageMetadataSupplier supplier)
-                || !entryCache.isEnabled() || !shouldCacheAddedEntry()) {
+                || !entryCache.canUseSuppliedMessageMetadata() || !shouldCacheAddedEntry()) {
             return null;
         }
         try {

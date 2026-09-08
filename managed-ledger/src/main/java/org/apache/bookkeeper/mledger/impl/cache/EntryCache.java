@@ -48,13 +48,14 @@ public interface EntryCache {
     boolean insert(Entry entry);
 
     /**
-     * Returns whether this cache can store entries at all, so that callers can skip work that would only be
-     * useful for a cached entry. A false answer is permanent for the lifetime of this cache; a true answer
-     * says nothing about whether any individual {@link #insert(Entry)} succeeds.
+     * Returns whether message metadata supplied along with an added entry would actually be put to use by this
+     * cache, so that callers can skip preparing it otherwise. False when the cache stores nothing, and also when
+     * it copies the payload into a buffer of its own, since the cached entry then has to parse the metadata from
+     * that copy regardless. The answer is fixed for the lifetime of the cache.
      *
-     * @return true unless the cache is disabled
+     * @return true if supplied message metadata can be reused
      */
-    default boolean isEnabled() {
+    default boolean canUseSuppliedMessageMetadata() {
         return true;
     }
 

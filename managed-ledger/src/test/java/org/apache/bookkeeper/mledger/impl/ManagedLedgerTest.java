@@ -1998,6 +1998,29 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
     }
 
     @Test
+    public void testParsedMessageMetadataIsNotAskedForWhenTheCacheCopiesEntries() throws Exception {
+        ManagedLedgerFactoryConfig factoryConfig = new ManagedLedgerFactoryConfig();
+        factoryConfig.setCopyEntriesInCache(true);
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl copyingFactory =
+                new ManagedLedgerFactoryImpl(metadataStore, bkc, factoryConfig);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) copyingFactory.open("test_cache_copies_entries");
+        ledger.openCursor("c1");
+
+        ByteBuf headersAndPayload = serializeMessage("producer");
+        MessageMetadata metadata = new MessageMetadata();
+        Commands.peekMessageMetadata(headersAndPayload, metadata);
+        RecordingMetadataSupplier ctx = new RecordingMetadataSupplier(metadata);
+
+        addEntry(ledger, headersAndPayload, ctx);
+        headersAndPayload.release();
+
+        // the cached entry is backed by the cache's own copy, so it parses the metadata from that copy and a
+        // supplied instance would only be thrown away
+        assertEquals(ctx.callCount, 0);
+    }
+
+    @Test
     public void testParsedMessageMetadataIsNotAskedForWhenThereAreNoActiveCursors() throws Exception {
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("test_no_active_cursors");
 
@@ -2040,7 +2063,7 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         ManagedLedgerConfig config = new ManagedLedgerConfig();
         config.setManagedLedgerInterceptor(interceptor);
         ManagedLedgerImpl ledger =
-                (ManagedLedgerImpl) factory.open("test_add_entry_metadata_dropped_on_replace", config);
+                (ManagedLedgerImpl) factory.open("test_add_entry_metadata_survives_replace", config);
         ManagedCursor cursor = ledger.openCursor("c1");
 
         ByteBuf headersAndPayload = serializeMessage("producer");

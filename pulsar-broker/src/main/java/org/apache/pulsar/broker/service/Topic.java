@@ -105,11 +105,10 @@ public interface Topic {
          * {@code headersAndPayload} when it isn't available yet.
          *
          * <p>Implementations may memoize the result for the duration of a single publish, but the returned
-         * instance must be owned by this publish: it is handed to the entry cache and may be read for as long as
-         * the entry stays cached, so it must never be an instance that is shared or reused across messages, such
-         * as the thread local one returned by {@link Commands#parseMessageMetadata(ByteBuf)}. It must also be
-         * parsed from {@code headersAndPayload}, since a {@link MessageMetadata} decodes its string and bytes
-         * fields lazily from the buffer it was parsed from.
+         * instance must be owned by this publish and must never be one that is shared or reused across messages,
+         * such as the thread local returned by {@link Commands#parseMessageMetadata(ByteBuf)}: an implementation
+         * of {@link #getMessageMetadataForEntryCache(ByteBuf)} may hand it to the entry cache, which reads it for
+         * as long as the entry stays cached.
          *
          * @param headersAndPayload the buffer holding the message being published
          * @return the parsed message metadata
