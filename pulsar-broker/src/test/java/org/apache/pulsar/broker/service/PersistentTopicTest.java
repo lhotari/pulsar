@@ -427,6 +427,39 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         assertTrue(latch.await(1, TimeUnit.SECONDS));
     }
 
+    @Test
+    public void testPublishPassesParsedMessageMetadataToTheManagedLedger() throws Exception {
+        AtomicReference<MessageMetadata> handedOver = new AtomicReference<>();
+        doAnswer(invocation -> {
+            handedOver.set((MessageMetadata) invocation.getArguments()[2]);
+            ((AddEntryCallback) invocation.getArguments()[3]).addComplete(PositionFactory.LATEST, null,
+                    invocation.getArguments()[4]);
+            return null;
+        }).when(ledgerMock).asyncAddEntry(any(ByteBuf.class), anyInt(), nullable(MessageMetadata.class),
+                any(AddEntryCallback.class), any());
+
+        PersistentTopic topic = new PersistentTopic(successTopicName, ledgerMock, brokerService);
+        MessageMetadata metadata = new MessageMetadata()
+                .setProducerName("prod-name")
+                .setSequenceId(1)
+                .setPublishTime(1L);
+        ByteBuf headersAndPayload = Commands.serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, metadata,
+                Unpooled.copiedBuffer("content", StandardCharsets.UTF_8));
+
+        // nothing to reuse: the managed ledger says a parsed instance would be discarded
+        doReturn(false).when(ledgerMock).canReuseParsedMessageMetadata();
+        topic.publishMessage(headersAndPayload, (e, ledgerId, entryId) -> { });
+        assertThat(handedOver.get()).isNull();
+
+        // the entry will be cached, so the metadata parsed for the publish checks is handed along
+        doReturn(true).when(ledgerMock).canReuseParsedMessageMetadata();
+        topic.publishMessage(headersAndPayload, (e, ledgerId, entryId) -> { });
+        assertThat(handedOver.get()).isNotNull();
+        assertEquals(handedOver.get().getProducerName(), "prod-name");
+
+        headersAndPayload.release();
+    }
+
     /**
      * A {@link BrokerInterceptor} is handed the mutable {@code headersAndPayload} of the message being
      * published, so any metadata the publish context parsed before it ran describes the wrong bytes. That
