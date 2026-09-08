@@ -1955,6 +1955,20 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
     }
 
     @Test
+    public void testParsedMessageMetadataIsNotAskedForWhenTheEntryCacheIsDisabled() throws Exception {
+        ManagedLedgerFactoryConfig factoryConfig = new ManagedLedgerFactoryConfig();
+        factoryConfig.setMaxCacheSize(0);
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl cacheDisabledFactory =
+                new ManagedLedgerFactoryImpl(metadataStore, bkc, factoryConfig);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) cacheDisabledFactory.open("test_cache_disabled");
+        ledger.openCursor("c1");
+
+        // there are active cursors, but nothing can be stored, so parsing the metadata would be wasted work
+        assertFalse(ledger.canReuseParsedMessageMetadata());
+    }
+
+    @Test
     public void testCachedEntryReparsesMetadataWhenAnInterceptorReplacesTheBuffer() throws Exception {
         // the real BrokerEntryMetadata interceptor: for payloads up to 16 KB it copies into a new buffer and
         // releases the one the caller parsed its metadata from
@@ -1994,6 +2008,9 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
                 .setPublishTime(1L);
 
         addEntry(ledger, headersAndPayload, suppliedByTheCaller);
+        // the interceptor released the reference the managed ledger took, this releases the test's own one
+        headersAndPayload.release();
+        assertEquals(headersAndPayload.refCnt(), 0);
 
         List<Entry> entries = cursor.readEntries(1);
         assertEquals(entries.size(), 1);

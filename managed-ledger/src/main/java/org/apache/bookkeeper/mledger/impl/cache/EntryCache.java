@@ -48,6 +48,17 @@ public interface EntryCache {
     boolean insert(Entry entry);
 
     /**
+     * Returns whether this cache can store entries at all, so that callers can skip work that would only be
+     * useful for a cached entry. A false answer is permanent for the lifetime of this cache; a true answer
+     * says nothing about whether any individual {@link #insert(Entry)} succeeds.
+     *
+     * @return true unless the cache is disabled
+     */
+    default boolean isEnabled() {
+        return true;
+    }
+
+    /**
      * Remove from cache all the entries related to a ledger up to lastPosition excluded.
      *
      * @param lastPosition

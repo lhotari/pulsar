@@ -70,6 +70,11 @@ public class EntryCacheDisabled implements EntryCache {
     }
 
     @Override
+    public boolean isEnabled() {
+        return false;
+    }
+
+    @Override
     public void invalidateEntries(Position lastPosition) {
     }
 

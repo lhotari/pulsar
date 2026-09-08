@@ -460,6 +460,9 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
             public void onMessagePublish(Producer producer, ByteBuf headersAndPayload,
                                          Topic.PublishContext publishContext) {
                 headersAndPayload.setBytes(headersAndPayload.readerIndex(), rewritten.nioBuffer());
+                // an interceptor that reads through the buffer leaves the reader index behind it; the entry
+                // that gets persisted is copied from readerIndex(), so it must not stay advanced
+                headersAndPayload.readerIndex(headersAndPayload.readerIndex() + 4);
             }
         }).when(brokerService).getInterceptor();
 
@@ -476,10 +479,12 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
             return null;
         }).when(topicMock).publishMessage(any(ByteBuf.class), any(Topic.PublishContext.class));
 
+        int readerIndexBeforePublish = headersAndPayload.readerIndex();
         producer.publishMessage(1 /* producer id */, 1 /* sequence id */, headersAndPayload, 1, false, false, null);
 
         assertThat(published.get()).isNotNull();
         assertEquals(published.get().getMessageMetadata(headersAndPayload).getSequenceId(), 2L);
+        assertEquals(headersAndPayload.readerIndex(), readerIndexBeforePublish);
         headersAndPayload.release();
         rewritten.release();
         payload.release();

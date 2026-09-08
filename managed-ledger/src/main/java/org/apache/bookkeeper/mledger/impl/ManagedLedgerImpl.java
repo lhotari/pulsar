@@ -865,6 +865,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         // buffer anyway, so parsing it up front would only add a second parse.
         return managedLedgerInterceptor == null
                 && !factory.getConfig().isCopyEntriesInCache()
+                && entryCache.isEnabled()
                 && shouldCacheAddedEntry();
     }
 
