@@ -38,6 +38,7 @@ import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 
 
 /**
@@ -65,6 +66,14 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
     @SuppressWarnings("unused")
     ByteBuf data;
     private int dataLength;
+    /**
+     * Message metadata that the caller already parsed, used to spare the entry cache a second parse of the same
+     * bytes. It is detached from the buffer it was parsed from, per the
+     * {@link org.apache.bookkeeper.mledger.EntryMessageMetadataSupplier} contract, so it stays readable when an
+     * interceptor replaces or releases {@link #data}. It is dropped in {@link #initiate()} when a payload
+     * processor runs, since that one can change what the entry holds rather than merely where it lives.
+     */
+    private MessageMetadata messageMetadata;
     private ManagedLedgerInterceptor.PayloadProcessorHandle payloadProcessorHandle = null;
 
     private static final AtomicReferenceFieldUpdater<OpAddEntry, OpAddEntry.State> STATE_UPDATER =
@@ -112,6 +121,7 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
         op.entryId = -1;
         op.startTime = System.nanoTime();
         op.state = State.OPEN;
+        op.messageMetadata = null;
         op.payloadProcessorHandle = null;
         op.timeoutTriggered = timeoutTriggered;
         ml.mbean.addAddEntrySample(op.dataLength);
@@ -159,6 +169,10 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
                 }
                 if (payloadProcessorHandle != null) {
                     duplicateBuffer = payloadProcessorHandle.getProcessedPayload();
+                    // A processor is handed a duplicate that shares memory with data, so it may have rewritten
+                    // the payload in place. Metadata parsed before it ran would then describe bytes the entry no
+                    // longer holds, and unlike a released buffer that is not something detaching can fix.
+                    messageMetadata = null;
                     // If data len of entry changes, correct "dataLength" and "currentLedgerSize".
                     if (originalDataLen != duplicateBuffer.readableBytes()) {
                         this.dataLength = duplicateBuffer.readableBytes();
@@ -276,6 +290,9 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
                 expectedReadCount = ml.getActiveCursors().size();
             }
             EntryImpl entry = EntryImpl.create(ledgerId, entryId, data, expectedReadCount);
+            // Reuse the metadata the caller already parsed, instead of parsing it again when the entry is
+            // inserted into the cache
+            entry.setMessageMetadata(messageMetadata);
             entry.setDecreaseReadCountOnRelease(false);
             // EntryCache.insert: duplicates entry by allocating new entry and data. so, recycle entry after calling
             // insert
@@ -384,6 +401,7 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
         STATE_UPDATER.set(OpAddEntry.this, State.CLOSED);
         OpAddEntry duplicate =
                 OpAddEntry.createNoRetainBuffer(ml, data, getNumberOfMessages(), callback, ctx, timeoutTriggered);
+        duplicate.setMessageMetadata(messageMetadata);
         return duplicate;
     }
 
@@ -412,6 +430,10 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
         this.data = data;
     }
 
+    void setMessageMetadata(MessageMetadata messageMetadata) {
+        this.messageMetadata = messageMetadata;
+    }
+
     private final Handle<OpAddEntry> recyclerHandle;
 
     private OpAddEntry(Handle<OpAddEntry> recyclerHandle) {
@@ -429,6 +451,7 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
         ml = null;
         ledger = null;
         data = null;
+        messageMetadata = null;
         numberOfMessages = 0;
         dataLength = -1;
         callback = null;

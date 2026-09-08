@@ -48,6 +48,18 @@ public interface EntryCache {
     boolean insert(Entry entry);
 
     /**
+     * Returns whether message metadata supplied along with an added entry would actually be put to use by this
+     * cache, so that callers can skip preparing it otherwise. False when the cache stores nothing, and also when
+     * it copies the payload into a buffer of its own, since the cached entry then has to parse the metadata from
+     * that copy regardless. The answer is fixed for the lifetime of the cache.
+     *
+     * @return true if supplied message metadata can be reused
+     */
+    default boolean canUseSuppliedMessageMetadata() {
+        return true;
+    }
+
+    /**
      * Remove from cache all the entries related to a ledger up to lastPosition excluded.
      *
      * @param lastPosition

@@ -57,6 +57,7 @@ import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -77,6 +78,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import lombok.Cleanup;
 import lombok.CustomLog;
@@ -102,6 +104,7 @@ import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.broker.intercept.MockBrokerInterceptor;
 import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.broker.namespace.TopicExistsInfo;
 import org.apache.pulsar.broker.service.persistent.AbstractPersistentDispatcherMultipleConsumers;
@@ -141,6 +144,7 @@ import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.TopicPolicies;
 import org.apache.pulsar.common.policies.data.stats.SubscriptionStatsImpl;
 import org.apache.pulsar.common.protocol.ByteBufPair;
+import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.schema.SchemaVersion;
 import org.apache.pulsar.common.semaphore.AsyncDualMemoryLimiter;
 import org.apache.pulsar.common.util.Codec;
@@ -418,6 +422,131 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         });
 
         assertTrue(latch.await(1, TimeUnit.SECONDS));
+    }
+
+    /**
+     * The entry cache keeps the metadata for as long as the entry stays cached, which is long after the publish
+     * buffer has been released. A parsed {@link MessageMetadata} decodes its string and bytes fields lazily out
+     * of that buffer, so what the publish context hands over has to be detached from it.
+     */
+    @Test
+    public void testMessageMetadataHandedToTheEntryCacheIsDetachedFromThePublishBuffer() throws Exception {
+        // every field that a MessageMetadata decodes lazily out of the buffer it was parsed from, including the
+        // nested ones, since detachment has to reach all of them
+        MessageMetadata metadata = new MessageMetadata()
+                .setProducerName("prod-name")
+                .setSequenceId(1)
+                .setPublishTime(1L)
+                .setReplicatedFrom("source-cluster")
+                .setPartitionKey("partition-key")
+                .setOrderingKey("ordering-key".getBytes(StandardCharsets.UTF_8))
+                .setUuid("chunk-uuid")
+                .setSchemaVersion("schema-version".getBytes(StandardCharsets.UTF_8))
+                .setEncryptionAlgo("encryption-algo");
+        metadata.addReplicateTo("target-cluster");
+        metadata.addProperty().setKey("prop-key").setValue("prop-value");
+        metadata.addEncryptionKey().setKey("enc-key").setValue("enc-value".getBytes(StandardCharsets.UTF_8))
+                .addMetadata().setKey("enc-meta-key").setValue("enc-meta-value");
+        ByteBuf headersAndPayload = Commands.serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, metadata,
+                Unpooled.copiedBuffer("content", StandardCharsets.UTF_8));
+
+        Topic topicMock = mock(Topic.class);
+        doReturn(true).when(topicMock).isPersistent();
+        AtomicReference<Topic.PublishContext> published = new AtomicReference<>();
+        doAnswer(invocation -> {
+            published.set((Topic.PublishContext) invocation.getArguments()[1]);
+            return null;
+        }).when(topicMock).publishMessage(any(ByteBuf.class), any(Topic.PublishContext.class));
+
+        Producer producer = new Producer(topicMock, serverCnx, 1 /* producer id */, "prod-name",
+                "role", false, null, SchemaVersion.Latest, 0, false,
+                ProducerAccessMode.Shared, Optional.empty(), true);
+        producer.publishMessage(1 /* producer id */, 1 /* sequence id */, headersAndPayload, 1, false, false, null);
+
+        assertThat(published.get()).isNotNull();
+        MessageMetadata handedOver = published.get().getMessageMetadataForEntryCache(headersAndPayload);
+        assertThat(handedOver).isNotNull();
+
+        // the publish buffer goes away as soon as the write completes; the metadata must not depend on it
+        headersAndPayload.release();
+        assertEquals(handedOver.getProducerName(), "prod-name");
+        assertEquals(handedOver.getSequenceId(), 1L);
+        assertEquals(handedOver.getReplicatedFrom(), "source-cluster");
+        assertEquals(handedOver.getPartitionKey(), "partition-key");
+        assertEquals(new String(handedOver.getOrderingKey(), StandardCharsets.UTF_8), "ordering-key");
+        assertEquals(handedOver.getUuid(), "chunk-uuid");
+        assertEquals(new String(handedOver.getSchemaVersion(), StandardCharsets.UTF_8), "schema-version");
+        assertEquals(handedOver.getEncryptionAlgo(), "encryption-algo");
+        assertEquals(handedOver.getReplicateToAt(0), "target-cluster");
+        assertEquals(handedOver.getPropertyAt(0).getKey(), "prop-key");
+        assertEquals(handedOver.getPropertyAt(0).getValue(), "prop-value");
+        assertEquals(handedOver.getEncryptionKeyAt(0).getKey(), "enc-key");
+        assertEquals(new String(handedOver.getEncryptionKeyAt(0).getValue(), StandardCharsets.UTF_8), "enc-value");
+        assertEquals(handedOver.getEncryptionKeyAt(0).getMetadataAt(0).getKey(), "enc-meta-key");
+        assertEquals(handedOver.getEncryptionKeyAt(0).getMetadataAt(0).getValue(), "enc-meta-value");
+    }
+
+    /**
+     * A {@link BrokerInterceptor} is handed the mutable {@code headersAndPayload} of the message being
+     * published, so any metadata the publish context parsed before it ran describes the wrong bytes. That
+     * matters beyond the publish checks now that the parsed instance is handed to the entry cache, where it
+     * would be served to every reader of the entry.
+     */
+    @Test
+    public void testMessageMetadataIsReparsedAfterAnInterceptorRewritesThePayload() throws Exception {
+        // sequenceId is decoded eagerly by parseFrom, unlike the string fields which are decoded lazily out of
+        // the buffer and would therefore follow an in place rewrite even from a stale instance
+        MessageMetadata beforeIntercept = new MessageMetadata()
+                .setProducerName("prod-name")
+                .setSequenceId(1)
+                .setPublishTime(1L);
+        beforeIntercept.addEncryptionKey().setKey("key").setValue(new byte[]{1});
+        MessageMetadata afterIntercept = new MessageMetadata()
+                .setProducerName("prod-name")
+                .setSequenceId(2)
+                .setPublishTime(1L);
+        afterIntercept.addEncryptionKey().setKey("key").setValue(new byte[]{1});
+        ByteBuf payload = Unpooled.copiedBuffer("content", StandardCharsets.UTF_8);
+        ByteBuf headersAndPayload =
+                Commands.serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, beforeIntercept, payload.slice());
+        ByteBuf rewritten =
+                Commands.serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, afterIntercept, payload.slice());
+        // both serialize to the same length, so the interceptor can overwrite the bytes in place
+        assertEquals(rewritten.readableBytes(), headersAndPayload.readableBytes());
+
+        doReturn(new MockBrokerInterceptor() {
+            @Override
+            public void onMessagePublish(Producer producer, ByteBuf headersAndPayload,
+                                         Topic.PublishContext publishContext) {
+                headersAndPayload.setBytes(headersAndPayload.readerIndex(), rewritten.nioBuffer());
+                // an interceptor that reads through the buffer leaves the reader index behind it; the entry
+                // that gets persisted is copied from readerIndex(), so it must not stay advanced
+                headersAndPayload.readerIndex(headersAndPayload.readerIndex() + 4);
+            }
+        }).when(brokerService).getInterceptor();
+
+        Topic topicMock = mock(Topic.class);
+        doReturn(true).when(topicMock).isEncryptionRequired();
+        doReturn(true).when(topicMock).isPersistent();
+        Producer producer = new Producer(topicMock, serverCnx, 1 /* producer id */, "prod-name",
+                "role", false, null, SchemaVersion.Latest, 0, false,
+                ProducerAccessMode.Shared, Optional.empty(), true);
+
+        AtomicReference<Topic.PublishContext> published = new AtomicReference<>();
+        doAnswer(invocation -> {
+            published.set((Topic.PublishContext) invocation.getArguments()[1]);
+            return null;
+        }).when(topicMock).publishMessage(any(ByteBuf.class), any(Topic.PublishContext.class));
+
+        int readerIndexBeforePublish = headersAndPayload.readerIndex();
+        producer.publishMessage(1 /* producer id */, 1 /* sequence id */, headersAndPayload, 1, false, false, null);
+
+        assertThat(published.get()).isNotNull();
+        assertEquals(published.get().getMessageMetadata(headersAndPayload).getSequenceId(), 2L);
+        assertEquals(headersAndPayload.readerIndex(), readerIndexBeforePublish);
+        headersAndPayload.release();
+        rewritten.release();
+        payload.release();
     }
 
     @Test

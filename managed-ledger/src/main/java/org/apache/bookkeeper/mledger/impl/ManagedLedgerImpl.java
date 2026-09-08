@@ -97,6 +97,7 @@ import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.TerminateCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.UpdatePropertiesCallback;
 import org.apache.bookkeeper.mledger.Entry;
+import org.apache.bookkeeper.mledger.EntryMessageMetadataSupplier;
 import org.apache.bookkeeper.mledger.LedgerOffloader;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedger;
@@ -139,6 +140,7 @@ import org.apache.bookkeeper.net.BookieId;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.InitialPosition;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.policies.data.EnsemblePlacementPolicyConfig;
 import org.apache.pulsar.common.policies.data.ManagedLedgerInternalStats;
 import org.apache.pulsar.common.policies.data.OffloadPolicies;
@@ -841,12 +843,35 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         // retain buffer in this thread
         buffer.retain();
 
+        MessageMetadata messageMetadata = messageMetadataForEntryCache(buffer, ctx);
+
         // Jump to specific thread to avoid contention from writers writing from different threads
         executor.execute(() -> {
             OpAddEntry addOperation = OpAddEntry.createNoRetainBuffer(this, buffer, numberOfMessages, callback, ctx,
                     currentLedgerTimeoutTriggered);
+            addOperation.setMessageMetadata(messageMetadata);
             internalAsyncAddEntry(addOperation);
         });
+    }
+
+    /**
+     * Asks the caller for the message metadata it has already parsed, so that the entry cache doesn't have to
+     * parse the same bytes again. Only worth asking when the entry is going to be cached, since that is the only
+     * thing the metadata would be used for. Runs on the caller's thread, while the buffer is still intact.
+     */
+    private MessageMetadata messageMetadataForEntryCache(ByteBuf buffer, Object ctx) {
+        if (!(ctx instanceof EntryMessageMetadataSupplier supplier)
+                || !entryCache.canUseSuppliedMessageMetadata() || !shouldCacheAddedEntry()) {
+            return null;
+        }
+        try {
+            return supplier.getMessageMetadataForEntryCache(buffer);
+        } catch (Throwable t) {
+            // This is only an optimization, so an entry whose metadata cannot be parsed is still added. The
+            // entry cache logs the same failure if it ends up parsing the entry itself.
+            log.debug().exception(t).log("Failed to get the message metadata for the entry cache");
+            return null;
+        }
     }
 
     protected synchronized void internalAsyncAddEntry(OpAddEntry addOperation) {

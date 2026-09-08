@@ -49,6 +49,7 @@ import com.google.common.collect.Range;
 import com.google.common.collect.Sets;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
+import io.netty.buffer.Unpooled;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import java.lang.reflect.Field;
 import java.nio.ReadOnlyBufferException;
@@ -122,6 +123,7 @@ import org.apache.bookkeeper.mledger.AsyncCallbacks.OpenLedgerCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
 import org.apache.bookkeeper.mledger.Entry;
+import org.apache.bookkeeper.mledger.EntryMessageMetadataSupplier;
 import org.apache.bookkeeper.mledger.LedgerOffloader;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedCursor.IndividualDeletedEntries;
@@ -141,6 +143,7 @@ import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl.VoidCallback;
 import org.apache.bookkeeper.mledger.impl.MetaStore.MetaStoreCallback;
 import org.apache.bookkeeper.mledger.impl.cache.EntryCache;
 import org.apache.bookkeeper.mledger.impl.cache.EntryCacheManager;
+import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
 import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo;
 import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo;
 import org.apache.bookkeeper.mledger.util.Futures;
@@ -150,8 +153,10 @@ import org.apache.commons.lang3.mutable.MutableBoolean;
 import org.apache.commons.lang3.mutable.MutableObject;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.InitialPosition;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.policies.data.EnsemblePlacementPolicyConfig;
 import org.apache.pulsar.common.policies.data.OffloadPoliciesImpl;
+import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.metadata.api.MetadataStoreException;
 import org.apache.pulsar.metadata.api.Stat;
@@ -1899,6 +1904,186 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
         // If there is the race condition, this method will not complete triggering the test timeout
         counter.await();
+    }
+
+    private static ByteBuf serializeMessage(String producerName) {
+        MessageMetadata metadata = new MessageMetadata()
+                .setProducerName(producerName)
+                .setSequenceId(1)
+                .setPublishTime(1L);
+        return Commands.serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, metadata,
+                Unpooled.copiedBuffer("payload", StandardCharsets.UTF_8));
+    }
+
+    /**
+     * A ctx that supplies message metadata to the entry cache the way {@code Producer.MessagePublishContext}
+     * does, and records whether the managed ledger asked for it.
+     */
+    private static class RecordingMetadataSupplier implements EntryMessageMetadataSupplier {
+        private final MessageMetadata metadata;
+        private int callCount;
+
+        RecordingMetadataSupplier(MessageMetadata metadata) {
+            this.metadata = metadata;
+        }
+
+        @Override
+        public MessageMetadata getMessageMetadataForEntryCache(ByteBuf entryData) {
+            callCount++;
+            metadata.materialize();
+            return metadata;
+        }
+    }
+
+    private static Position addEntry(ManagedLedgerImpl ledger, ByteBuf headersAndPayload, Object ctx)
+            throws Exception {
+        CompletableFuture<Position> added = new CompletableFuture<>();
+        ledger.asyncAddEntry(headersAndPayload, 1, new AddEntryCallback() {
+            @Override
+            public void addComplete(Position position, ByteBuf entryData, Object callbackCtx) {
+                added.complete(position);
+            }
+
+            @Override
+            public void addFailed(ManagedLedgerException exception, Object callbackCtx) {
+                added.completeExceptionally(exception);
+            }
+        }, ctx);
+        return added.get();
+    }
+
+    @Test
+    public void testCachedEntryReusesTheMessageMetadataPassedToAsyncAddEntry() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("test_add_entry_reuses_message_metadata");
+        ManagedCursor cursor = ledger.openCursor("c1");
+
+        ByteBuf headersAndPayload = serializeMessage("producer");
+        MessageMetadata parsedByTheCaller = new MessageMetadata();
+        Commands.peekMessageMetadata(headersAndPayload, parsedByTheCaller);
+        RecordingMetadataSupplier ctx = new RecordingMetadataSupplier(parsedByTheCaller);
+
+        addEntry(ledger, headersAndPayload, ctx);
+        headersAndPayload.release();
+
+        assertEquals(ctx.callCount, 1);
+        List<Entry> entries = cursor.readEntries(1);
+        assertEquals(entries.size(), 1);
+        // the entry read out of the cache carries the very instance the caller parsed, so the same bytes were
+        // never parsed a second time
+        assertSame(entries.get(0).getMessageMetadata(), parsedByTheCaller);
+        assertEquals(entries.get(0).getMessageMetadata().getProducerName(), "producer");
+        entries.forEach(Entry::release);
+    }
+
+    @Test
+    public void testParsedMessageMetadataIsNotAskedForWhenTheEntryCacheIsDisabled() throws Exception {
+        ManagedLedgerFactoryConfig factoryConfig = new ManagedLedgerFactoryConfig();
+        factoryConfig.setMaxCacheSize(0);
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl cacheDisabledFactory =
+                new ManagedLedgerFactoryImpl(metadataStore, bkc, factoryConfig);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) cacheDisabledFactory.open("test_cache_disabled");
+        ledger.openCursor("c1");
+
+        ByteBuf headersAndPayload = serializeMessage("producer");
+        MessageMetadata metadata = new MessageMetadata();
+        Commands.peekMessageMetadata(headersAndPayload, metadata);
+        RecordingMetadataSupplier ctx = new RecordingMetadataSupplier(metadata);
+
+        addEntry(ledger, headersAndPayload, ctx);
+        headersAndPayload.release();
+
+        // there are active cursors, but nothing can be stored, so parsing the metadata would be wasted work
+        assertEquals(ctx.callCount, 0);
+    }
+
+    @Test
+    public void testParsedMessageMetadataIsNotAskedForWhenTheCacheCopiesEntries() throws Exception {
+        ManagedLedgerFactoryConfig factoryConfig = new ManagedLedgerFactoryConfig();
+        factoryConfig.setCopyEntriesInCache(true);
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl copyingFactory =
+                new ManagedLedgerFactoryImpl(metadataStore, bkc, factoryConfig);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) copyingFactory.open("test_cache_copies_entries");
+        ledger.openCursor("c1");
+
+        ByteBuf headersAndPayload = serializeMessage("producer");
+        MessageMetadata metadata = new MessageMetadata();
+        Commands.peekMessageMetadata(headersAndPayload, metadata);
+        RecordingMetadataSupplier ctx = new RecordingMetadataSupplier(metadata);
+
+        addEntry(ledger, headersAndPayload, ctx);
+        headersAndPayload.release();
+
+        // the cached entry is backed by the cache's own copy, so it parses the metadata from that copy and a
+        // supplied instance would only be thrown away
+        assertEquals(ctx.callCount, 0);
+    }
+
+    @Test
+    public void testParsedMessageMetadataIsNotAskedForWhenThereAreNoActiveCursors() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("test_no_active_cursors");
+
+        ByteBuf headersAndPayload = serializeMessage("producer");
+        MessageMetadata metadata = new MessageMetadata();
+        Commands.peekMessageMetadata(headersAndPayload, metadata);
+        RecordingMetadataSupplier ctx = new RecordingMetadataSupplier(metadata);
+
+        addEntry(ledger, headersAndPayload, ctx);
+        headersAndPayload.release();
+
+        // nothing is caching added entries, so the metadata would only be thrown away
+        assertEquals(ctx.callCount, 0);
+    }
+
+    @Test
+    public void testCachedEntryMetadataSurvivesAnInterceptorReplacingTheBuffer() throws Exception {
+        // the real BrokerEntryMetadata interceptor: for payloads up to 16 KB it copies into a new buffer and
+        // releases the one the caller parsed its metadata from
+        ManagedLedgerInterceptor interceptor = new ManagedLedgerInterceptor() {
+            @Override
+            public void beforeAddEntry(AddEntryOperation op, int numberOfMessages) {
+                op.setData(Commands.addBrokerEntryMetadata(op.getData(), Collections.emptySet(), numberOfMessages));
+            }
+
+            @Override
+            public void onUpdateManagedLedgerInfo(Map<String, String> propertiesMap) {
+            }
+
+            @Override
+            public void onManagedLedgerPropertiesInitialize(Map<String, String> propertiesMap) {
+            }
+
+            @Override
+            public CompletableFuture<Void> onManagedLedgerLastLedgerInitialize(String name,
+                                                                              LastEntryHandle lastEntryHandle) {
+                return CompletableFuture.completedFuture(null);
+            }
+        };
+        ManagedLedgerConfig config = new ManagedLedgerConfig();
+        config.setManagedLedgerInterceptor(interceptor);
+        ManagedLedgerImpl ledger =
+                (ManagedLedgerImpl) factory.open("test_add_entry_metadata_survives_replace", config);
+        ManagedCursor cursor = ledger.openCursor("c1");
+
+        ByteBuf headersAndPayload = serializeMessage("producer");
+        MessageMetadata parsedByTheCaller = new MessageMetadata();
+        Commands.peekMessageMetadata(headersAndPayload, parsedByTheCaller);
+        RecordingMetadataSupplier ctx = new RecordingMetadataSupplier(parsedByTheCaller);
+
+        addEntry(ledger, headersAndPayload, ctx);
+        // the interceptor released the reference the managed ledger took, this releases the test's own one
+        headersAndPayload.release();
+        assertEquals(headersAndPayload.refCnt(), 0);
+
+        List<Entry> entries = cursor.readEntries(1);
+        assertEquals(entries.size(), 1);
+        // the supplier detached the metadata from the buffer, so it is still the caller's instance and its
+        // lazily decoded fields are still readable even though that buffer is long gone
+        MessageMetadata cachedMetadata = entries.get(0).getMessageMetadata();
+        assertSame(cachedMetadata, parsedByTheCaller);
+        assertEquals(cachedMetadata.getProducerName(), "producer");
+        entries.forEach(Entry::release);
     }
 
     @Test

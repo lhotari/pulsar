@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import org.apache.bookkeeper.mledger.EntryMessageMetadataSupplier;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.broker.service.persistent.DispatchRateLimiter;
 import org.apache.pulsar.broker.service.persistent.SubscribeRateLimiter;
@@ -35,6 +36,7 @@ import org.apache.pulsar.client.api.transaction.TxnID;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.InitialPosition;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
 import org.apache.pulsar.common.api.proto.KeySharedMeta;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.policies.data.BacklogQuota;
 import org.apache.pulsar.common.policies.data.BacklogQuota.BacklogQuotaType;
 import org.apache.pulsar.common.policies.data.EntryFilters;
@@ -42,6 +44,7 @@ import org.apache.pulsar.common.policies.data.HierarchyTopicPolicies;
 import org.apache.pulsar.common.policies.data.PersistentTopicInternalStats;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.stats.TopicStatsImpl;
+import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.schema.SchemaData;
 import org.apache.pulsar.common.protocol.schema.SchemaVersion;
 import org.apache.pulsar.common.util.FutureUtil;
@@ -50,7 +53,19 @@ import org.apache.pulsar.utils.StatsOutputStream;
 
 public interface Topic {
 
-    interface PublishContext {
+    interface PublishContext extends EntryMessageMetadataSupplier {
+
+        /**
+         * {@inheritDoc}
+         *
+         * <p>Returns null by default, so that a context which doesn't keep the parsed metadata around doesn't
+         * pay for a parse that would only be thrown away. Implementations that do keep it must hand over an
+         * instance detached from {@code entryData}, since the entry cache outlives the publish.
+         */
+        @Override
+        default MessageMetadata getMessageMetadataForEntryCache(ByteBuf entryData) {
+            return null;
+        }
 
         default String getProducerName() {
             return null;
@@ -83,6 +98,25 @@ public interface Topic {
         void completed(Exception e, long ledgerId, long entryId);
 
         default void setMetadataFromEntryData(ByteBuf entryData) {
+        }
+
+        /**
+         * Returns the message metadata of the message being published, parsing it from
+         * {@code headersAndPayload} when it isn't available yet.
+         *
+         * <p>Implementations may memoize the result for the duration of a single publish, but the returned
+         * instance must be owned by this publish and must never be one that is shared or reused across messages,
+         * such as the thread local returned by {@link Commands#parseMessageMetadata(ByteBuf)}: an implementation
+         * of {@link #getMessageMetadataForEntryCache(ByteBuf)} may hand it to the entry cache, which reads it for
+         * as long as the entry stays cached.
+         *
+         * @param headersAndPayload the buffer holding the message being published
+         * @return the parsed message metadata
+         */
+        default MessageMetadata getMessageMetadata(ByteBuf headersAndPayload) {
+            MessageMetadata messageMetadata = new MessageMetadata();
+            Commands.peekMessageMetadata(headersAndPayload, messageMetadata);
+            return messageMetadata;
         }
 
         default long getHighestSequenceId() {

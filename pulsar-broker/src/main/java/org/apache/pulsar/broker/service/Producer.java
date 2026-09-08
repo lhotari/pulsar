@@ -208,8 +208,13 @@ public class Producer {
 
     public void publishMessage(long producerId, long sequenceId, ByteBuf headersAndPayload, int batchSize,
             boolean isChunked, boolean isMarker, Position position) {
-        if (checkAndStartPublish(producerId, sequenceId, headersAndPayload, batchSize, position)) {
-            publishMessageToTopic(headersAndPayload, sequenceId, batchSize, isChunked, isMarker, position);
+        MessagePublishContext messagePublishContext =
+                MessagePublishContext.get(this, sequenceId, headersAndPayload.readableBytes(),
+                        batchSize, isChunked, System.nanoTime(), isMarker, position, isSupportsReplDedupByLidAndEid());
+        if (checkAndStartPublish(producerId, sequenceId, headersAndPayload, position, messagePublishContext)) {
+            publishMessageToTopic(headersAndPayload, messagePublishContext);
+        } else {
+            messagePublishContext.recycle();
         }
     }
 
@@ -223,14 +228,18 @@ public class Producer {
             });
             return;
         }
-        if (checkAndStartPublish(producerId, highestSequenceId, headersAndPayload, batchSize, position)) {
-            publishMessageToTopic(headersAndPayload, lowestSequenceId, highestSequenceId, batchSize, isChunked,
-                    isMarker, position);
+        MessagePublishContext messagePublishContext = MessagePublishContext.get(this, lowestSequenceId,
+                highestSequenceId, headersAndPayload.readableBytes(), batchSize,
+                isChunked, System.nanoTime(), isMarker, position, isSupportsReplDedupByLidAndEid());
+        if (checkAndStartPublish(producerId, highestSequenceId, headersAndPayload, position, messagePublishContext)) {
+            publishMessageToTopic(headersAndPayload, messagePublishContext);
+        } else {
+            messagePublishContext.recycle();
         }
     }
 
-    public boolean checkAndStartPublish(long producerId, long sequenceId, ByteBuf headersAndPayload, int batchSize,
-                                        Position position) {
+    public boolean checkAndStartPublish(long producerId, long sequenceId, ByteBuf headersAndPayload,
+                                        Position position, PublishContext publishContext) {
         if (!isShadowTopic && position != null) {
             cnx.execute(() -> {
                 cnx.getCommandSender().sendSendError(producerId, sequenceId, ServerError.NotAllowedError,
@@ -266,10 +275,7 @@ public class Producer {
         }
 
         if (topic.isEncryptionRequired()) {
-
-            headersAndPayload.markReaderIndex();
-            MessageMetadata msgMetadata = Commands.parseMessageMetadata(headersAndPayload);
-            headersAndPayload.resetReaderIndex();
+            MessageMetadata msgMetadata = publishContext.getMessageMetadata(headersAndPayload);
             int encryptionKeysCount = msgMetadata.getEncryptionKeysCount();
             // Check whether the message is encrypted or not
             if (encryptionKeysCount < 1) {
@@ -283,7 +289,7 @@ public class Producer {
             }
         }
 
-        startPublishOperation((int) batchSize, headersAndPayload.readableBytes());
+        startPublishOperation((int) publishContext.getNumberOfMessages(), headersAndPayload.readableBytes());
         return true;
     }
 
@@ -292,28 +298,29 @@ public class Producer {
         return cnx.isClientSupportsReplDedupByLidAndEid() && topic.isPersistent();
     }
 
-    private void publishMessageToTopic(ByteBuf headersAndPayload, long sequenceId, int batchSize, boolean isChunked,
-                                       boolean isMarker, Position position) {
-        MessagePublishContext messagePublishContext =
-                MessagePublishContext.get(this, sequenceId, headersAndPayload.readableBytes(),
-                        batchSize, isChunked, System.nanoTime(), isMarker, position, isSupportsReplDedupByLidAndEid());
-        if (brokerInterceptor != null) {
-            brokerInterceptor
-                    .onMessagePublish(this, headersAndPayload, messagePublishContext);
-        }
+    private void publishMessageToTopic(ByteBuf headersAndPayload, MessagePublishContext messagePublishContext) {
+        onMessagePublishIntercepted(headersAndPayload, messagePublishContext);
         topic.publishMessage(headersAndPayload, messagePublishContext);
     }
 
-    private void publishMessageToTopic(ByteBuf headersAndPayload, long lowestSequenceId, long highestSequenceId,
-                                       int batchSize, boolean isChunked, boolean isMarker, Position position) {
-        MessagePublishContext messagePublishContext = MessagePublishContext.get(this, lowestSequenceId,
-                highestSequenceId, headersAndPayload.readableBytes(), batchSize,
-                isChunked, System.nanoTime(), isMarker, position, isSupportsReplDedupByLidAndEid());
-        if (brokerInterceptor != null) {
-            brokerInterceptor
-                    .onMessagePublish(this, headersAndPayload, messagePublishContext);
+    /**
+     * Runs the broker interceptor over the message being published, if there is one. The interceptor is handed
+     * the mutable {@code headersAndPayload}, so afterwards anything derived from it is dropped: the memoized
+     * metadata may describe the bytes as they were before, and a reader index left behind by the interceptor
+     * would truncate the entry that gets persisted.
+     */
+    private void onMessagePublishIntercepted(ByteBuf headersAndPayload,
+                                             MessagePublishContext messagePublishContext) {
+        if (brokerInterceptor == null) {
+            return;
         }
-        topic.publishMessage(headersAndPayload, messagePublishContext);
+        int readerIndex = headersAndPayload.readerIndex();
+        try {
+            brokerInterceptor.onMessagePublish(this, headersAndPayload, messagePublishContext);
+        } finally {
+            headersAndPayload.readerIndex(readerIndex);
+            messagePublishContext.clearMessageMetadata();
+        }
     }
 
     private boolean verifyChecksum(ByteBuf headersAndPayload) {
@@ -412,6 +419,13 @@ public class Producer {
         private long originalHighestSequenceId;
 
         private long entryTimestamp;
+        /**
+         * Metadata of the message being published, parsed on first use. The instance is handed to the entry
+         * cache and stays readable for as long as the entry is cached, which is long after this context has
+         * been recycled, so it must be released by nulling the reference: never clear it, pool it, or share one
+         * instance between messages.
+         */
+        private MessageMetadata messageMetadata;
 
         @Override
         public long getLedgerId() {
@@ -465,6 +479,37 @@ public class Producer {
         @Override
         public long getHighestSequenceId() {
             return highestSequenceId;
+        }
+
+        @Override
+        public MessageMetadata getMessageMetadata(ByteBuf headersAndPayload) {
+            if (messageMetadata == null) {
+                MessageMetadata parsed = new MessageMetadata();
+                // assign only once the parse succeeded, so that a failure doesn't memoize a half parsed instance
+                Commands.peekMessageMetadata(headersAndPayload, parsed);
+                messageMetadata = parsed;
+            }
+            return messageMetadata;
+        }
+
+        @Override
+        public MessageMetadata getMessageMetadataForEntryCache(ByteBuf entryData) {
+            MessageMetadata metadata = getMessageMetadata(entryData);
+            // The cached entry keeps this instance long after entryData has been released, and a parsed
+            // MessageMetadata decodes its string and bytes fields lazily out of the buffer it was parsed from,
+            // so detach it. Doing it here, before the entry is handed over, also means the fields are resolved
+            // once on this thread instead of racily on each dispatcher thread that first reads them.
+            metadata.materialize();
+            return metadata;
+        }
+
+        /**
+         * Drops the memoized metadata so that the next {@link #getMessageMetadata(ByteBuf)} parses the buffer
+         * again. Called after a {@link BrokerInterceptor}, which is handed the mutable {@code headersAndPayload},
+         * has run.
+         */
+        void clearMessageMetadata() {
+            messageMetadata = null;
         }
 
         @Override
@@ -629,11 +674,14 @@ public class Producer {
             callback.chunked = chunked;
             callback.originalProducerName = null;
             callback.originalSequenceId = -1L;
+            callback.highestSequenceId = -1L;
+            callback.originalHighestSequenceId = -1L;
             callback.startTimeNs = startTimeNs;
             callback.isMarker = isMarker;
             callback.supportsReplDedupByLidAndEid = supportsReplDedupByLidAndEid;
             callback.ledgerId = position == null ? -1 : position.getLedgerId();
             callback.entryId = position == null ? -1 : position.getEntryId();
+            callback.messageMetadata = null;
             if (callback.propertyMap != null) {
                 callback.propertyMap.clear();
             }
@@ -651,12 +699,14 @@ public class Producer {
             callback.batchSize = batchSize;
             callback.originalProducerName = null;
             callback.originalSequenceId = -1L;
+            callback.originalHighestSequenceId = -1L;
             callback.startTimeNs = startTimeNs;
             callback.chunked = chunked;
             callback.isMarker = isMarker;
             callback.supportsReplDedupByLidAndEid = supportsReplDedupByLidAndEid;
             callback.ledgerId = position == null ? -1 : position.getLedgerId();
             callback.entryId = position == null ? -1 : position.getEntryId();
+            callback.messageMetadata = null;
             if (callback.propertyMap != null) {
                 callback.propertyMap.clear();
             }
@@ -703,6 +753,7 @@ public class Producer {
             startTimeNs = -1L;
             chunked = false;
             isMarker = false;
+            messageMetadata = null;
             if (propertyMap != null) {
                 propertyMap.clear();
             }
@@ -868,17 +919,15 @@ public class Producer {
 
     public void publishTxnMessage(TxnID txnID, long producerId, long sequenceId, long highSequenceId,
                                   ByteBuf headersAndPayload, int batchSize, boolean isChunked, boolean isMarker) {
-        if (!checkAndStartPublish(producerId, sequenceId, headersAndPayload, batchSize, null)) {
-            return;
-        }
         MessagePublishContext messagePublishContext =
                 MessagePublishContext.get(this, sequenceId, highSequenceId,
                         headersAndPayload.readableBytes(), batchSize, isChunked, System.nanoTime(), isMarker, null,
                         cnx.isClientSupportsReplDedupByLidAndEid());
-        if (brokerInterceptor != null) {
-            brokerInterceptor
-                    .onMessagePublish(this, headersAndPayload, messagePublishContext);
+        if (!checkAndStartPublish(producerId, sequenceId, headersAndPayload, null, messagePublishContext)) {
+            messagePublishContext.recycle();
+            return;
         }
+        onMessagePublishIntercepted(headersAndPayload, messagePublishContext);
         topic.publishTxnMessage(txnID, headersAndPayload, messagePublishContext);
     }
 
