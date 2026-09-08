@@ -431,10 +431,22 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
      */
     @Test
     public void testMessageMetadataHandedToTheEntryCacheIsDetachedFromThePublishBuffer() throws Exception {
+        // every field that a MessageMetadata decodes lazily out of the buffer it was parsed from, including the
+        // nested ones, since detachment has to reach all of them
         MessageMetadata metadata = new MessageMetadata()
                 .setProducerName("prod-name")
                 .setSequenceId(1)
-                .setPublishTime(1L);
+                .setPublishTime(1L)
+                .setReplicatedFrom("source-cluster")
+                .setPartitionKey("partition-key")
+                .setOrderingKey("ordering-key".getBytes(StandardCharsets.UTF_8))
+                .setUuid("chunk-uuid")
+                .setSchemaVersion("schema-version".getBytes(StandardCharsets.UTF_8))
+                .setEncryptionAlgo("encryption-algo");
+        metadata.addReplicateTo("target-cluster");
+        metadata.addProperty().setKey("prop-key").setValue("prop-value");
+        metadata.addEncryptionKey().setKey("enc-key").setValue("enc-value".getBytes(StandardCharsets.UTF_8))
+                .addMetadata().setKey("enc-meta-key").setValue("enc-meta-value");
         ByteBuf headersAndPayload = Commands.serializeMetadataAndPayload(Commands.ChecksumType.Crc32c, metadata,
                 Unpooled.copiedBuffer("content", StandardCharsets.UTF_8));
 
@@ -459,6 +471,19 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         headersAndPayload.release();
         assertEquals(handedOver.getProducerName(), "prod-name");
         assertEquals(handedOver.getSequenceId(), 1L);
+        assertEquals(handedOver.getReplicatedFrom(), "source-cluster");
+        assertEquals(handedOver.getPartitionKey(), "partition-key");
+        assertEquals(new String(handedOver.getOrderingKey(), StandardCharsets.UTF_8), "ordering-key");
+        assertEquals(handedOver.getUuid(), "chunk-uuid");
+        assertEquals(new String(handedOver.getSchemaVersion(), StandardCharsets.UTF_8), "schema-version");
+        assertEquals(handedOver.getEncryptionAlgo(), "encryption-algo");
+        assertEquals(handedOver.getReplicateToAt(0), "target-cluster");
+        assertEquals(handedOver.getPropertyAt(0).getKey(), "prop-key");
+        assertEquals(handedOver.getPropertyAt(0).getValue(), "prop-value");
+        assertEquals(handedOver.getEncryptionKeyAt(0).getKey(), "enc-key");
+        assertEquals(new String(handedOver.getEncryptionKeyAt(0).getValue(), StandardCharsets.UTF_8), "enc-value");
+        assertEquals(handedOver.getEncryptionKeyAt(0).getMetadataAt(0).getKey(), "enc-meta-key");
+        assertEquals(handedOver.getEncryptionKeyAt(0).getMetadataAt(0).getValue(), "enc-meta-value");
     }
 
     /**
