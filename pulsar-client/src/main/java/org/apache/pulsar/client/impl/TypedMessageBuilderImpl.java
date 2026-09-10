@@ -71,7 +71,7 @@ public class TypedMessageBuilderImpl<T> implements TypedMessageBuilder<T> {
         this.txn = txn;
     }
 
-    private long beforeSend() {
+    private long beforeSend(String topic) {
         if (value == null) {
             getOrCreateMetadata().setNullValue(true);
         } else {
@@ -79,13 +79,13 @@ public class TypedMessageBuilderImpl<T> implements TypedMessageBuilder<T> {
             getKeyValueSchema().map(keyValueSchema -> {
                 isKeyValueSchema.set(true);
                 if (keyValueSchema.getKeyValueEncodingType() == KeyValueEncodingType.SEPARATED) {
-                    setSeparateKeyValue(value, keyValueSchema);
+                    setSeparateKeyValue(value, keyValueSchema, topic);
                     return this;
                 } else {
                     return null;
                 }
             }).orElseGet(() -> {
-                EncodeData encodeData = schema.encode(getTopic(), value);
+                EncodeData encodeData = schema.encode(topic, value);
                 content = ByteBuffer.wrap(encodeData.data());
                 if (encodeData.hasSchemaId()) {
                     getOrCreateMetadata().setSchemaId(
@@ -287,8 +287,44 @@ public class TypedMessageBuilderImpl<T> implements TypedMessageBuilder<T> {
     }
 
     public Message<T> getMessage() {
-        beforeSend();
+        beforeSend(getTopic());
         return MessageImpl.create(msgMetadata, content, schema, getTopic());
+    }
+
+    /**
+     * Serialize a send before its destination producer is available. The prepared value owns a
+     * metadata snapshot and can create a fresh transport message on each segment-routing retry.
+     * Used by the V5 client to account for queued payloads without serializing twice.
+     */
+    public PreparedMessage<T> prepare(String topic) {
+        beforeSend(topic);
+        MessageMetadata metadata = msgMetadata == null ? null : new MessageMetadata().copyFrom(msgMetadata);
+        return new PreparedMessage<>(metadata, content, schema, txn);
+    }
+
+    public record PreparedMessage<T>(MessageMetadata metadata, ByteBuffer content, Schema<T> schema,
+                                      TransactionImpl transaction) {
+        public long estimatedMemorySize() {
+            // Encoded value plus its eventual transport copy and retained metadata.
+            return 2L * content.remaining() + (metadata == null ? 0
+                    : 2L * metadata.getSerializedSize() + 128L * metadata.getPropertiesCount()
+                            + 64L * metadata.getReplicateTosCount());
+        }
+
+        public CompletableFuture<MessageId> sendAsync(ProducerBase<?> producer, boolean flushImmediately) {
+            Message<T> message = MessageImpl.create(metadata, content, schema, producer.getTopic());
+            CompletableFuture<MessageId> future;
+            if (transaction == null) {
+                future = producer.sendAsync(message);
+            } else {
+                future = producer.internalSendWithTxnAsync(message, transaction);
+                transaction.registerSendOp(future);
+            }
+            if (flushImmediately && !future.isDone()) {
+                producer.triggerFlush();
+            }
+            return future;
+        }
     }
 
     public long getPublishTime() {
@@ -319,7 +355,7 @@ public class TypedMessageBuilderImpl<T> implements TypedMessageBuilder<T> {
     }
 
     @SuppressWarnings("unchecked")
-    private <K, V> void setSeparateKeyValue(T value, KeyValueSchema<K, V> keyValueSchema) {
+    private <K, V> void setSeparateKeyValue(T value, KeyValueSchema<K, V> keyValueSchema, String topic) {
         checkArgument(value instanceof org.apache.pulsar.common.schema.KeyValue);
         org.apache.pulsar.common.schema.KeyValue<K, V> keyValue =
                 (org.apache.pulsar.common.schema.KeyValue<K, V>) value;
@@ -327,7 +363,7 @@ public class TypedMessageBuilderImpl<T> implements TypedMessageBuilder<T> {
         EncodeData keyEncoded = null;
         // set key as the message key
         if (keyValue.getKey() != null) {
-            keyEncoded = keyValueSchema.getKeySchema().encode(getTopic(), keyValue.getKey());
+            keyEncoded = keyValueSchema.getKeySchema().encode(topic, keyValue.getKey());
             getOrCreateMetadata().setPartitionKey(Base64.getEncoder().encodeToString(keyEncoded.data()));
             getOrCreateMetadata().setPartitionKeyB64Encoded(true);
         } else {
@@ -337,7 +373,7 @@ public class TypedMessageBuilderImpl<T> implements TypedMessageBuilder<T> {
         EncodeData valueEncoded = null;
         // set value as the payload
         if (keyValue.getValue() != null) {
-            valueEncoded = keyValueSchema.getValueSchema().encode(getTopic(), keyValue.getValue());
+            valueEncoded = keyValueSchema.getValueSchema().encode(topic, keyValue.getValue());
             content = ByteBuffer.wrap(valueEncoded.data());
         } else {
             getOrCreateMetadata().setNullValue(true);

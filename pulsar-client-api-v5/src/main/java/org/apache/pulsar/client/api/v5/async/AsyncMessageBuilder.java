@@ -26,14 +26,18 @@ import org.apache.pulsar.client.api.v5.MessageMetadata;
  * Asynchronous message builder, obtained from {@link AsyncProducer#newMessage()}.
  *
  * <p>Inherits all metadata setters from {@link MessageMetadata} and adds a
- * non-blocking {@link #send()} terminal operation.
+ * {@link #send()} terminal operation returning an acknowledgement future.
  *
  * @param <T> the type of the message value
  */
 public interface AsyncMessageBuilder<T> extends MessageMetadata<T, AsyncMessageBuilder<T>> {
 
     /**
-     * Send the message asynchronously.
+     * Send the message asynchronously. With blockIfQueueFull enabled, this call waits for memory
+     * admission before returning the future. With it disabled, a full client send memory budget
+     * fails the returned future with
+     * {@link org.apache.pulsar.client.api.v5.PulsarClientException.MemoryBufferIsFullException}
+     * without queuing the message. Disable blocking when sending from client callbacks or IO threads.
      *
      * @return a {@link CompletableFuture} that completes with the {@link MessageId} assigned
      *         to the published message by the broker

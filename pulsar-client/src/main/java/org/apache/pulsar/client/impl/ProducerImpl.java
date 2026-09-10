@@ -664,7 +664,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
             if (!conf.isBlockIfQueueFull() && !canEnqueueRequest(callback, message.getSequenceId(),
                     0 /* The memory was already reserved */)) {
                 compressedPayload.release();
-                client.getMemoryLimitController().releaseMemory(uncompressedSize);
+                releaseMemory(uncompressedSize);
                 semaphoreRelease(i + 1);
                 return;
             }
@@ -695,7 +695,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
                 if (chunkId > 0 && conf.isBlockIfQueueFull() && !canEnqueueRequest(callback,
                         message.getSequenceId(), 0 /* The memory was already reserved */)) {
                     compressedPayload.release();
-                    client.getMemoryLimitController().releaseMemory(uncompressedSize - readStartIndex);
+                    releaseMemory(uncompressedSize - readStartIndex);
                     semaphoreRelease(totalChunks - chunkId);
                     return;
                 }
@@ -1128,12 +1128,13 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
     }
 
     private boolean canEnqueueRequest(SendCallback callback, long sequenceId, int payloadSize) {
+        int memorySize = conf.isMemoryLimitExternallyManaged() ? 0 : payloadSize;
         try {
             if (conf.isBlockIfQueueFull()) {
                 if (semaphore.isPresent()) {
                     semaphore.get().acquire();
                 }
-                client.getMemoryLimitController().reserveMemory(payloadSize);
+                client.getMemoryLimitController().reserveMemory(memorySize);
             } else {
                 if (!semaphore.map(Semaphore::tryAcquire).orElse(true)) {
                     pendingQueueFullCounter.incrementAndGet();
@@ -1142,7 +1143,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
                     return false;
                 }
 
-                if (!client.getMemoryLimitController().tryReserveMemory(payloadSize)) {
+                if (!client.getMemoryLimitController().tryReserveMemory(memorySize)) {
                     semaphore.ifPresent(Semaphore::release);
                     callback.sendComplete(new PulsarClientException.MemoryBufferIsFullError(
                             "Client memory buffer is full", sequenceId), null);
@@ -1451,16 +1452,30 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
         return Math.max(op.highestSequenceId, op.sequenceId);
     }
 
+    // V5 segment producers use the same controller, but V5 owns the reservation until the
+    // logical send completes (possibly after multiple segment attempts). Never credit it here.
+    void releaseMemory(long size) {
+        if (!conf.isMemoryLimitExternallyManaged()) {
+            client.getMemoryLimitController().releaseMemory(size);
+        }
+    }
+
+    void reserveAdditionalMemory(long size) {
+        if (!conf.isMemoryLimitExternallyManaged()) {
+            client.getMemoryLimitController().forceReserveMemory(size);
+        }
+    }
+
     protected void releaseSemaphoreForSendOp(OpSendMsg op) {
 
         semaphoreRelease(isBatchMessagingEnabled() ? op.numMessagesInBatch : 1);
 
-        client.getMemoryLimitController().releaseMemory(op.uncompressedSize);
+        releaseMemory(op.uncompressedSize);
     }
 
     private void completeCallbackAndReleaseSemaphore(long payloadSize, SendCallback callback, Exception exception) {
         semaphore.ifPresent(Semaphore::release);
-        client.getMemoryLimitController().releaseMemory(payloadSize);
+        releaseMemory(payloadSize);
         callback.sendComplete(exception, null);
     }
 
@@ -2435,7 +2450,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
                             .log("Got exception while completing the callback");
                 }
 
-                client.getMemoryLimitController().releaseMemory(op.uncompressedSize);
+                releaseMemory(op.uncompressedSize);
                 releaseOpCmdAndRecycle(op);
             }
 
@@ -2509,7 +2524,7 @@ public class ProducerImpl<T> extends ProducerBase<T> implements TimerTask, Conne
         final long currentBatchSize = batchMessageContainer.getCurrentBatchSize();
         final int batchAllocatedSizeBytes = batchMessageContainer.getBatchAllocatedSizeBytes();
         semaphoreRelease(numMessagesInBatch);
-        client.getMemoryLimitController().releaseMemory(currentBatchSize + batchAllocatedSizeBytes);
+        releaseMemory(currentBatchSize + batchAllocatedSizeBytes);
         batchMessageContainer.discard(ex);
     }
 

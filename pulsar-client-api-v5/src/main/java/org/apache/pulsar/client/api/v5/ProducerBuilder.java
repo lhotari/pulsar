@@ -92,8 +92,11 @@ public interface ProducerBuilder<T> {
     ProducerBuilder<T> sendTimeout(Duration timeout);
 
     /**
-     * Whether the producer should block when the pending message queue is full,
-     * rather than failing immediately. Default is {@code true}.
+     * Whether sends should wait when the pending message queue or client send memory budget is full,
+     * rather than failing immediately. This applies to both synchronous and asynchronous sends:
+     * asynchronous sends wait for admission before returning their acknowledgement future.
+     * Set this to {@code false} when sending from a client callback or IO thread.
+     * When disabled, admission failures are reported through the returned future for async sends.
      *
      * @param blockIfQueueFull {@code true} to block, {@code false} to fail immediately
      * @return this builder instance for chaining

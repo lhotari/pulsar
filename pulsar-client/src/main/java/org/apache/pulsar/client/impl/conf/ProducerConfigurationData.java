@@ -51,6 +51,14 @@ public class ProducerConfigurationData implements Serializable, Cloneable {
 
     private static final long serialVersionUID = 1L;
 
+    /**
+     * Internal segment-producer mode: V5 owns memory admission and release for the entire send,
+     * including batch buffers. Not a user-configurable or serialized producer option.
+     */
+    @JsonIgnore
+    private transient boolean memoryLimitExternallyManaged;
+
+
     public static final int DEFAULT_BATCHING_MAX_MESSAGES = 1000;
     public static final int DEFAULT_MAX_PENDING_MESSAGES = 0;
     public static final int DEFAULT_MAX_PENDING_MESSAGES_ACROSS_PARTITIONS = 0;

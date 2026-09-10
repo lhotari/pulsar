@@ -21,12 +21,14 @@ package org.apache.pulsar.tests.integration.cli;
 import static org.testng.Assert.fail;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import org.apache.pulsar.common.naming.TopicDomain;
 import org.apache.pulsar.tests.integration.containers.ChaosContainer;
 import org.apache.pulsar.tests.integration.containers.PulsarContainer;
 import org.apache.pulsar.tests.integration.containers.ZKContainer;
 import org.apache.pulsar.tests.integration.docker.ContainerExecResult;
 import org.apache.pulsar.tests.integration.messaging.TopicMessagingBase;
 import org.testng.Assert;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 public class PerfToolTest extends TopicMessagingBase {
@@ -44,6 +46,28 @@ public class PerfToolTest extends TopicMessagingBase {
                 produceWithPerfTool(clientToolContainer, serviceUrl, topicName, MESSAGE_COUNT);
         checkOutputForLogs(produceResult, "PerformanceProducer - Aggregated throughput stats",
                 "PerformanceProducer - Aggregated latency stats");
+    }
+
+    @DataProvider
+    public Object[][] producerTopicDomains() {
+        return new Object[][] {{TopicDomain.persistent}, {TopicDomain.topic}};
+    }
+
+    @Test(dataProvider = "producerTopicDomains", timeOut = 240_000)
+    public void testV5ProducerMemoryLimit(TopicDomain domain) throws Exception {
+        String serviceUrl = "pulsar://" + pulsarCluster.getProxy().getContainerName() + ":"
+                + PulsarContainer.BROKER_PORT;
+        String topic = generateTopicName("producer-memory-limit", domain);
+        // Reproduce #26470 in a separate, small-heap JVM: unthrottled async sends, tiny unbatched
+        // payloads, and a configured memory limit. Both the dispatch queue and per-send overhead
+        // must be accounted for. Two million sends far exceed what this heap can retain.
+        ContainerExecResult result = pulsarCluster.getZooKeeper().execCmdAsync(
+                "env", "PULSAR_MEM=-Xmx256m -XX:+ExitOnOutOfMemoryError",
+                "bin/pulsar-perf", "produce", topic, "-u", serviceUrl,
+                "-r", String.valueOf(Integer.MAX_VALUE), "-s", "128", "-db",
+                "-m", "2000000", "-ml", "32M").get(3, TimeUnit.MINUTES);
+        failOnError("V5 producer with bounded memory", result);
+        checkOutputForLogs(result, "number=2000000", "PerformanceProducer - Aggregated throughput stats");
     }
 
     @Test

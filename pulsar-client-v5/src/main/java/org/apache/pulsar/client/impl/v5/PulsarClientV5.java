@@ -31,6 +31,7 @@ import org.apache.pulsar.client.api.v5.QueueConsumerBuilder;
 import org.apache.pulsar.client.api.v5.StreamConsumerBuilder;
 import org.apache.pulsar.client.api.v5.Transaction;
 import org.apache.pulsar.client.api.v5.schema.Schema;
+import org.apache.pulsar.client.impl.MemoryLimitController;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
 
 /**
@@ -54,6 +55,10 @@ final class PulsarClientV5 implements PulsarClient {
      */
     PulsarClientImpl v4Client() {
         return v4Client;
+    }
+
+    MemoryLimitController sendMemory() {
+        return v4Client.getMemoryLimitController();
     }
 
     @Override

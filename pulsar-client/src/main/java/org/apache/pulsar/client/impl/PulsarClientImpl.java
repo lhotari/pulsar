@@ -898,8 +898,14 @@ public class PulsarClientImpl implements PulsarClient {
     }
 
     /**
-     * Create a producer bypassing the scalable domain check.
-     * This is intended for internal use by the V5 client to create segment producers.
+     * Internal V5 transport API: create a segment producer bypassing the scalable domain check.
+     * V5 must reserve memory on this client's controller before dispatch and release the same
+     * estimate when the logical send completes, including any segment retries.
+     *
+     * <p>The estimate includes payloads, metadata and batch/transport overhead. Segment producers
+     * skip all memory debits and credits, including batch buffer capacity adjustments; actual
+     * buffer sizes are still tracked for transport bookkeeping, but do not change the reservation.
+     * Message-count permits, payload sizes and send metrics are unaffected.
      */
     public <T> CompletableFuture<Producer<T>> createSegmentProducerAsync(
             ProducerConfigurationData conf, Schema<T> schema) {
@@ -912,7 +918,9 @@ public class PulsarClientImpl implements PulsarClient {
             return FutureUtil.failedFuture(
                 new PulsarClientException.InvalidTopicNameException("Invalid topic name: '" + topic + "'"));
         }
-        return createProducerAsync(topic, conf, schema, null);
+        ProducerConfigurationData segmentConf = conf.clone();
+        segmentConf.setMemoryLimitExternallyManaged(true);
+        return createProducerAsync(topic, segmentConf, schema, null);
     }
 
     /**

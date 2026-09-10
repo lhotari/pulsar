@@ -191,7 +191,11 @@ public interface PulsarClientBuilder {
     PulsarClientBuilder openTelemetry(OpenTelemetry openTelemetry);
 
     /**
-     * Maximum amount of direct memory the client can use for pending messages.
+     * Bounds the estimated memory retained by pending sends across all producers, including
+     * encoded payloads, metadata and dispatch/transport overhead. This is an admission budget,
+     * not an exact measurement of JVM heap or direct-memory usage. One send may cross the budget;
+     * subsequent sends block or fail according to the producer's blockIfQueueFull setting until
+     * memory is released.
      *
      * @param size the memory limit for pending messages across all producers
      * @return this builder instance for chaining

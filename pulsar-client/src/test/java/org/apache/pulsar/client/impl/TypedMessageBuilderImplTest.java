@@ -18,15 +18,21 @@
  */
 package org.apache.pulsar.client.impl;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.util.Base64;
+import java.util.concurrent.CompletableFuture;
+import org.apache.pulsar.client.api.Message;
+import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.schema.SchemaDefinition;
 import org.apache.pulsar.client.impl.schema.AvroSchema;
@@ -46,7 +52,7 @@ public class TypedMessageBuilderImplTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    public void testDefaultValue() throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
+    public void testDefaultValue() {
         producerBase = mock(ProducerBase.class);
 
         AvroSchema<SchemaTestUtils.Foo> fooSchema = AvroSchema.of(
@@ -69,10 +75,7 @@ public class TypedMessageBuilderImplTest {
         // Check kv.encoding.type default, not set value
         TypedMessageBuilderImpl<KeyValue<?, ?>>  typedMessageBuilder =
                 (TypedMessageBuilderImpl<KeyValue<?, ?>>) typedMessageBuilderImpl.value(keyValue);
-        Method method = TypedMessageBuilderImpl.class.getDeclaredMethod("beforeSend");
-        method.setAccessible(true);
-        method.invoke(typedMessageBuilder);
-        ByteBuffer content = typedMessageBuilder.getContent();
+        ByteBuffer content = typedMessageBuilder.prepare("persistent://tenant/ns/topic").content();
         byte[] contentByte = new byte[content.remaining()];
         content.get(contentByte);
         KeyValue<SchemaTestUtils.Foo, SchemaTestUtils.Bar>  decodeKeyValue = keyValueSchema.decode(contentByte);
@@ -83,7 +86,7 @@ public class TypedMessageBuilderImplTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    public void testInlineValue() throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
+    public void testInlineValue() {
         producerBase = mock(ProducerBase.class);
 
         AvroSchema<SchemaTestUtils.Foo> fooSchema = AvroSchema.of(
@@ -106,10 +109,7 @@ public class TypedMessageBuilderImplTest {
         // Check kv.encoding.type INLINE
         TypedMessageBuilderImpl<KeyValue<?, ?>> typedMessageBuilder =
                 (TypedMessageBuilderImpl<KeyValue<?, ?>>) typedMessageBuilderImpl.value(keyValue);
-        Method method = TypedMessageBuilderImpl.class.getDeclaredMethod("beforeSend");
-        method.setAccessible(true);
-        method.invoke(typedMessageBuilder);
-        ByteBuffer content = typedMessageBuilder.getContent();
+        ByteBuffer content = typedMessageBuilder.prepare("persistent://tenant/ns/topic").content();
         byte[] contentByte = new byte[content.remaining()];
         content.get(contentByte);
         KeyValue<SchemaTestUtils.Foo, SchemaTestUtils.Bar> decodeKeyValue = keyValueSchema.decode(contentByte);
@@ -143,10 +143,7 @@ public class TypedMessageBuilderImplTest {
         // Check kv.encoding.type SEPARATED
         TypedMessageBuilderImpl<?> typedMessageBuilder =
                 (TypedMessageBuilderImpl<?>) typedMessageBuilderImpl.value(keyValue);
-        Method method = TypedMessageBuilderImpl.class.getDeclaredMethod("beforeSend");
-        method.setAccessible(true);
-        method.invoke(typedMessageBuilder);
-        ByteBuffer content = typedMessageBuilder.getContent();
+        ByteBuffer content = typedMessageBuilder.prepare("persistent://tenant/ns/topic").content();
         byte[] contentByte = new byte[content.remaining()];
         content.get(contentByte);
         assertTrue(typedMessageBuilderImpl.hasKey());
@@ -353,6 +350,40 @@ public class TypedMessageBuilderImplTest {
             message.getDataBuffer().release();
             message.recycle();
         }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testPreparedMessageSerializesOnceAndRetainsMetadataAcrossRetries() {
+        String topic = "persistent://tenant/ns/topic";
+        Schema<byte[]> schema = spy(Schema.BYTES);
+        byte[] payload = {1, 2, 3};
+        TypedMessageBuilderImpl<byte[]> builder = new TypedMessageBuilderImpl<>(null, schema);
+        builder.value(payload).key("original").sequenceId(5);
+        var prepared = builder.prepare(topic);
+        builder.key("changed").sequenceId(6);
+        ProducerBase<byte[]> transport = mock(ProducerBase.class);
+        when(transport.getTopic()).thenReturn(topic);
+        CompletableFuture<MessageId> ack = new CompletableFuture<>();
+        when(transport.sendAsync(any(Message.class))).thenAnswer(invocation -> {
+            MessageImpl<?> message = invocation.getArgument(0);
+            try {
+                assertEquals(message.getData(), payload);
+                assertEquals(message.getKey(), "original");
+                assertEquals(message.getSequenceId(), 5);
+                // Transport metadata changes must not carry over to a segment retry.
+                message.getMessageBuilder().setSequenceId(123);
+            } finally {
+                message.getDataBuffer().release();
+                message.recycle();
+            }
+            return ack;
+        });
+        prepared.sendAsync(transport, false);
+        prepared.sendAsync(transport, true);
+        verify(schema, times(1)).encode(topic, payload);
+        verify(transport).triggerFlush();
+        ack.complete(MessageId.earliest);
     }
 
 }

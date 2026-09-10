@@ -125,7 +125,7 @@ class BatchMessageContainerImpl extends AbstractBatchMessageContainer {
                 log.error().exception(e).log("construct first message failed, exception is ");
                 if (producer != null) {
                     producer.semaphoreRelease(getNumMessagesInBatch());
-                    producer.client.getMemoryLimitController().releaseMemory(msg.getUncompressedSize()
+                    producer.releaseMemory(msg.getUncompressedSize()
                             + batchAllocatedSizeBytes);
                 }
                 discard(new PulsarClientException(e));
@@ -321,7 +321,7 @@ class BatchMessageContainerImpl extends AbstractBatchMessageContainer {
             if (op.getMessageHeaderAndPayloadSize() > getMaxMessageSize()) {
                 cmd.release();
                 producer.semaphoreRelease(1);
-                producer.client.getMemoryLimitController().releaseMemory(
+                producer.releaseMemory(
                         messages.get(0).getUncompressedSize() + batchAllocatedSizeBytes);
                 discard(new PulsarClientException.InvalidMessageException(
                     "Message size is bigger than " + getMaxMessageSize() + " bytes"));
@@ -336,9 +336,8 @@ class BatchMessageContainerImpl extends AbstractBatchMessageContainer {
         if (encryptedPayload.readableBytes() > getMaxMessageSize()) {
             encryptedPayload.release();
             producer.semaphoreRelease(messages.size());
-            messages.forEach(msg -> producer.client.getMemoryLimitController()
-                    .releaseMemory(msg.getUncompressedSize()));
-            producer.client.getMemoryLimitController().releaseMemory(batchAllocatedSizeBytes);
+            messages.forEach(msg -> producer.releaseMemory(msg.getUncompressedSize()));
+            producer.releaseMemory(batchAllocatedSizeBytes);
             discard(new PulsarClientException.InvalidMessageException("Message size "
                     + encryptedPayload.readableBytes() + " is bigger than " + getMaxMessageSize() + " bytes"));
             return null;
@@ -383,13 +382,15 @@ class BatchMessageContainerImpl extends AbstractBatchMessageContainer {
     }
 
     protected void updateAndReserveBatchAllocatedSize(int updatedSizeBytes) {
+        // Keep actual capacity for transport bookkeeping. For V5 segment producers the helpers
+        // below are no-ops: V5 owns a fixed estimate until the logical send completes.
         int delta = updatedSizeBytes - batchAllocatedSizeBytes;
         batchAllocatedSizeBytes = updatedSizeBytes;
         if (producer != null) {
             if (delta > 0) {
-                producer.client.getMemoryLimitController().forceReserveMemory(delta);
+                producer.reserveAdditionalMemory(delta);
             } else if (delta < 0) {
-                producer.client.getMemoryLimitController().releaseMemory(-delta);
+                producer.releaseMemory(-delta);
             }
         }
     }

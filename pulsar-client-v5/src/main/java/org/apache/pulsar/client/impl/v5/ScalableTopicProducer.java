@@ -19,8 +19,11 @@
 package org.apache.pulsar.client.impl.v5;
 
 import io.github.merlimat.slog.Logger;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,11 +34,16 @@ import org.apache.pulsar.client.api.v5.MessageBuilder;
 import org.apache.pulsar.client.api.v5.MessageId;
 import org.apache.pulsar.client.api.v5.Producer;
 import org.apache.pulsar.client.api.v5.PulsarClientException;
+import org.apache.pulsar.client.api.v5.Transaction;
 import org.apache.pulsar.client.api.v5.async.AsyncProducer;
 import org.apache.pulsar.client.api.v5.schema.Schema;
 import org.apache.pulsar.client.impl.EntryBucketBatcherBuilder;
+import org.apache.pulsar.client.impl.ProducerBase;
 import org.apache.pulsar.client.impl.PulsarClientImpl;
+import org.apache.pulsar.client.impl.TypedMessageBuilderImpl;
+import org.apache.pulsar.client.impl.TypedMessageBuilderImpl.PreparedMessage;
 import org.apache.pulsar.client.impl.conf.ProducerConfigurationData;
+import org.apache.pulsar.client.impl.transaction.TransactionImpl;
 import org.apache.pulsar.client.impl.v5.SegmentRouter.ActiveSegment;
 import org.apache.pulsar.common.scalable.ScalableTopicConstants;
 
@@ -56,10 +64,13 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
     /** Cap on the per-attempt backoff while waiting for the new layout. */
     private static final long SEND_RETRY_MAX_BACKOFF_MS = 500L;
 
+    // Metadata, callbacks, futures and transport objects retained by an unbatched send.
+    // This is an estimate, not an exact JVM heap measurement; charge even empty payloads.
+    static final long SEND_OVERHEAD_BYTES = 2048;
+
     private final Logger log;
 
     private final PulsarClientV5 client;
-    private final Schema<T> v5Schema;
     private final org.apache.pulsar.client.api.Schema<T> v4Schema;
     private final ProducerConfigurationData producerConf;
     private final DagWatchClient dagWatch;
@@ -118,7 +129,6 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
                           DagWatchClient dagWatch,
                           ClientSegmentLayout initialLayout) {
         this.client = client;
-        this.v5Schema = v5Schema;
         this.v4Schema = SchemaAdapter.toV4(v5Schema);
         this.producerConf = producerConf;
         this.dagWatch = dagWatch;
@@ -197,45 +207,36 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
             java.util.List<String> replicationClusters,
             org.apache.pulsar.client.api.v5.Transaction txn) throws PulsarClientException {
 
-        PulsarClientException lastError = null;
-        for (int attempt = 0; attempt < SEND_RETRY_MAX_ATTEMPTS; attempt++) {
-            long segmentId = routeMessage(key);
+        while (true) {
             try {
-                var producer = getOrCreateSegmentProducer(segmentId);
-                var v4MsgId = buildV4Message(producer, key, value, properties,
-                        eventTime, sequenceId, deliverAfter, deliverAt, replicationClusters, txn)
-                        .send();
-                return new MessageIdV5(v4MsgId, segmentId);
-            } catch (PulsarClientException e) {
-                // Thrown while (re)creating the per-segment producer — already a V5 exception
-                // (it may wrap a v4 TopicTerminated/AlreadyClosed cause).
-                if (!isSegmentGoneError(e)) {
-                    throw e;
-                }
-                lastError = e;
-            } catch (org.apache.pulsar.client.api.PulsarClientException e) {
-                // Thrown by the v4 producer's send().
-                if (!isSegmentGoneError(e)) {
-                    throw new PulsarClientException(e.getMessage(), e);
-                }
-                lastError = new PulsarClientException(e.getMessage(), e);
-            }
-            // The target segment is gone: sealed by a split/merge, or terminated by a
-            // regular-to-scalable migration. Drop the stale per-segment producer and wait
-            // for the DAG watch to deliver the new layout; routeMessage on the next attempt
-            // lands on an active child.
-            log.info().attr("segmentId", segmentId).attr("attempt", attempt + 1)
-                    .log("Target segment gone, waiting for layout update");
-            segmentProducers.remove(segmentId);
-            try {
-                Thread.sleep(Math.min(100L * (attempt + 1), SEND_RETRY_MAX_BACKOFF_MS));
-            } catch (InterruptedException ie) {
+                return (MessageIdV5) sendInternalAsync(key, value, properties, eventTime, sequenceId,
+                        deliverAfter, deliverAt, replicationClusters, txn, true).get();
+            } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new PulsarClientException("Interrupted while waiting for layout update", ie);
+                throw new PulsarClientException("Send interrupted", e);
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (producerConf.isBlockIfQueueFull() && isAdmissionFailure(cause)) {
+                    // Retry transport admission failures on the synchronous caller as well.
+                    try {
+                        Thread.sleep(1);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new PulsarClientException("Send interrupted", interrupted);
+                    }
+                    continue;
+                }
+                if (cause instanceof PulsarClientException clientException) {
+                    throw clientException;
+                }
+                throw new PulsarClientException(cause);
             }
         }
-        throw lastError != null ? lastError
-                : new PulsarClientException("Failed to send after segment termination retries");
+    }
+
+    private static boolean isAdmissionFailure(Throwable cause) {
+        return cause instanceof PulsarClientException.MemoryBufferIsFullException
+                || cause instanceof PulsarClientException.ProducerQueueIsFullException;
     }
 
     /**
@@ -281,22 +282,78 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
             java.util.List<String> replicationClusters,
             org.apache.pulsar.client.api.v5.Transaction txn) {
 
+        return sendInternalAsync(key, value, properties, eventTime, sequenceId,
+                deliverAfter, deliverAt, replicationClusters, txn, false);
+    }
+
+    private CompletableFuture<MessageId> sendInternalAsync(
+            String key, T value, Map<String, String> properties,
+            Instant eventTime, Long sequenceId,
+            Duration deliverAfter, Instant deliverAt,
+            List<String> replicationClusters,
+            Transaction txn, boolean flushImmediately) {
+
+        if (closed) {
+            return CompletableFuture.failedFuture(new PulsarClientException.AlreadyClosedException("Producer closed"));
+        }
+        // Avoid serializing values merely to reject them while the budget is already exhausted.
+        if (!producerConf.isBlockIfQueueFull() && client.sendMemory().isMemoryLimited()
+                && client.sendMemory().currentUsage() > client.sendMemory().memoryLimit()) {
+            return CompletableFuture.failedFuture(
+                    new PulsarClientException.MemoryBufferIsFullException("Client send memory buffer is full"));
+        }
+        PreparedMessage<T> message;
+        long memorySize;
+        try {
+            message = prepareMessage(key, value, properties, eventTime, sequenceId,
+                    deliverAfter, deliverAt, replicationClusters, txn);
+            memorySize = SEND_OVERHEAD_BYTES + message.estimatedMemorySize();
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(e);
+        }
+        try {
+            if (producerConf.isBlockIfQueueFull()) {
+                // Honor blocking admission on the invoking thread, before appending a dispatch
+                // link. The eventual transport dispatch must still never wait for memory.
+                client.sendMemory().reserveMemory(memorySize);
+            } else if (!client.sendMemory().tryReserveMemory(memorySize)) {
+                return CompletableFuture.failedFuture(
+                        new PulsarClientException.MemoryBufferIsFullException("Client send memory buffer is full"));
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return CompletableFuture.failedFuture(new PulsarClientException("Send admission interrupted", e));
+        }
+
         CompletableFuture<MessageId> userFuture = new CompletableFuture<>();
+        CompletableFuture<MessageId> operation = new CompletableFuture<>();
         inFlightSends.add(userFuture);
-        userFuture.whenComplete((__, ___) -> inFlightSends.remove(userFuture));
-        dispatchSendAttempt(userFuture, key, value, properties, eventTime, sequenceId,
-                deliverAfter, deliverAt, replicationClusters, txn, 0);
+        operation.whenComplete((messageId, error) -> {
+            // The caller can cancel or complete userFuture without stopping the underlying send.
+            // Retain the reservation until that send actually finishes, including segment retries.
+            client.sendMemory().releaseMemory(memorySize);
+            if (error == null) {
+                userFuture.complete(messageId);
+            } else {
+                userFuture.completeExceptionally(error);
+            }
+            inFlightSends.remove(userFuture);
+        });
+        try {
+            dispatchSendAttempt(operation, key, message, flushImmediately, 0);
+        } catch (Exception e) {
+            operation.completeExceptionally(e);
+        }
         return userFuture;
     }
 
-    private void dispatchSendAttempt(
-            CompletableFuture<MessageId> userFuture,
-            String key, T value, java.util.Map<String, String> properties,
-            java.time.Instant eventTime, Long sequenceId,
-            java.time.Duration deliverAfter, java.time.Instant deliverAt,
-            java.util.List<String> replicationClusters,
-            org.apache.pulsar.client.api.v5.Transaction txn, int attempt) {
+    private void dispatchSendAttempt(CompletableFuture<MessageId> userFuture, String key,
+                                     PreparedMessage<T> message, boolean flushImmediately, int attempt) {
 
+        if (closed) {
+            userFuture.completeExceptionally(new PulsarClientException.AlreadyClosedException("Producer closed"));
+            return;
+        }
         long segmentId;
         try {
             segmentId = routeMessage(key);
@@ -316,16 +373,12 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
             CompletableFuture.delayedExecutor(
                             Math.min(100L * (attempt + 1), SEND_RETRY_MAX_BACKOFF_MS),
                             java.util.concurrent.TimeUnit.MILLISECONDS)
-                    .execute(() -> dispatchSendAttempt(userFuture, key, value, properties,
-                            eventTime, sequenceId, deliverAfter, deliverAt,
-                            replicationClusters, txn, attempt + 1));
+                    .execute(() -> dispatchSendAttempt(userFuture, key, message, flushImmediately, attempt + 1));
         };
 
         appendToDispatchChain(routedSegmentId,
                 producer -> {
-                    var ackFuture = buildV4Message(producer, key, value, properties,
-                            eventTime, sequenceId, deliverAfter, deliverAt, replicationClusters, txn)
-                            .sendAsync();
+                    var ackFuture = message.sendAsync((ProducerBase<?>) producer, flushImmediately);
                     ackFuture.whenComplete((v4MsgId, ex) -> {
                         if (ex == null) {
                             userFuture.complete(new MessageIdV5(v4MsgId, routedSegmentId));
@@ -354,7 +407,12 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
                     .log("Target segment gone, retrying async send after layout update");
             retry.run();
         } else {
-            userFuture.completeExceptionally(ex);
+            if (cause instanceof org.apache.pulsar.client.api.PulsarClientException.MemoryBufferIsFullError) {
+                cause = new PulsarClientException.MemoryBufferIsFullException(cause.getMessage());
+            } else if (cause instanceof org.apache.pulsar.client.api.PulsarClientException.ProducerQueueIsFullError) {
+                cause = new PulsarClientException.ProducerQueueIsFullException(cause.getMessage());
+            }
+            userFuture.completeExceptionally(cause);
         }
     }
 
@@ -386,17 +444,16 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
         }
     }
 
-    private org.apache.pulsar.client.api.TypedMessageBuilder<T> buildV4Message(
-            org.apache.pulsar.client.api.Producer<T> producer,
-            String key, T value, java.util.Map<String, String> properties,
-            java.time.Instant eventTime, Long sequenceId,
-            java.time.Duration deliverAfter, java.time.Instant deliverAt,
-            java.util.List<String> replicationClusters,
-            org.apache.pulsar.client.api.v5.Transaction txn) {
+    private PreparedMessage<T> prepareMessage(
+            String key, T value, Map<String, String> properties,
+            Instant eventTime, Long sequenceId,
+            Duration deliverAfter, Instant deliverAt,
+            List<String> replicationClusters,
+            Transaction txn) {
 
-        org.apache.pulsar.client.api.transaction.Transaction v4Txn = TransactionV5.unwrap(txn);
-        var msgBuilder = (v4Txn != null ? producer.newMessage(v4Txn) : producer.newMessage())
-                .value(value);
+        var v4Txn = (TransactionImpl) TransactionV5.unwrap(txn);
+        var msgBuilder = new TypedMessageBuilderImpl<T>(null, v4Schema, v4Txn);
+        msgBuilder.value(value);
 
         if (key != null) {
             msgBuilder.key(key);
@@ -420,7 +477,7 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
             msgBuilder.replicationClusters(replicationClusters);
         }
 
-        return msgBuilder;
+        return msgBuilder.prepare(topicName);
     }
 
     /**
@@ -584,6 +641,8 @@ final class ScalableTopicProducer<T> implements Producer<T>, DagWatchClient.Layo
             // fields explicitly carried over.
             var segConf = producerConf.clone();
             segConf.setTopicName(segment.attachTopicName());
+            // Dispatch can run on the connection's IO thread. Admission must never block it.
+            segConf.setBlockIfQueueFull(false);
             // Only legacy segments wrap a persistent:// topic that the regular-to-scalable
             // migration pre-check (PIP-475) inspects, so mark just those connections as
             // V5-managed — connections to real segment:// topics are never examined.

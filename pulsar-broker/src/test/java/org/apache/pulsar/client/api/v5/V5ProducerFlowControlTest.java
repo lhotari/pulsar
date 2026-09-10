@@ -21,7 +21,6 @@ package org.apache.pulsar.client.api.v5;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertTrue;
 import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.Map;
@@ -32,19 +31,10 @@ import org.apache.pulsar.client.impl.conf.ProducerConfigurationData;
 import org.testng.annotations.Test;
 
 /**
- * Coverage for {@link ProducerBuilder#sendTimeout(Duration)} and
- * {@link ProducerBuilder#blockIfQueueFull(boolean)}: the V5 builder must wire
- * each user-supplied flow-control knob down to every per-segment v4
- * {@code ProducerImpl}. Without this wiring, the V5 setting would be silently
- * ignored — the v4 layer would default and the caller would have no way of
- * knowing.
- *
- * <p>Behavioural verification of the actual timeout-firing and block-on-full
- * paths lives in the v4 test suite (e.g. {@code SimpleProducerConsumerTest
- * .testSendTimeout}); those tests stop the broker mid-send to force the
- * pending-queue overflow / timeout, which the in-process shared cluster used
- * here cannot do. The plumbing test suffices as a regression guard for the V5
- * → v4 mapping.
+ * Verifies send-timeout propagation and non-blocking transport configuration. V5 sends
+ * implement blockIfQueueFull at the calling thread; per-segment producers must never block the
+ * IO thread that dispatches asynchronous sends. Admission behavior is covered by
+ * ScalableTopicProducerAdmissionTest in the client module.
  */
 public class V5ProducerFlowControlTest extends V5ClientBaseTest {
 
@@ -68,7 +58,7 @@ public class V5ProducerFlowControlTest extends V5ClientBaseTest {
     }
 
     @Test
-    public void testBlockIfQueueFullTrue() throws Exception {
+    public void testTransportNonBlockingWhenSendAdmissionWaits() throws Exception {
         String topic = newScalableTopic(1);
 
         @Cleanup
@@ -79,8 +69,8 @@ public class V5ProducerFlowControlTest extends V5ClientBaseTest {
         producer.newMessage().value("warm-up").send();
 
         ProducerConfigurationData conf = readV4ProducerConf(producer);
-        assertTrue(conf.isBlockIfQueueFull(),
-                "blockIfQueueFull(true) must propagate to the v4 ProducerImpl");
+        assertFalse(conf.isBlockIfQueueFull(),
+                "V5 dispatch must not block a v4 IO thread, even when callers wait for send admission");
     }
 
     @Test
