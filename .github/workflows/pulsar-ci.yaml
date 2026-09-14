@@ -169,32 +169,6 @@ jobs:
       - name: Tune Runner VM
         uses: ./.github/actions/tune-runner-vm
 
-      # TEMPORARY: verify that explicit false overrides this public repository's default.
-      - name: Verify SSH start is disabled by explicit false
-        if: ${{ github.repository == 'lhotari/pulsar' && github.event_name == 'pull_request' }}
-        uses: ./.github/actions/ssh-access
-        env:
-          CI_ENABLE_SSH: 'false'
-        with:
-          limit-access-to-actor: true
-
-      - name: Verify SSH wait is disabled by explicit false
-        if: ${{ github.repository == 'lhotari/pulsar' && github.event_name == 'pull_request' }}
-        uses: ./.github/actions/ssh-access
-        env:
-          CI_ENABLE_SSH: 'false'
-        with:
-          action: wait
-          timeout: '1800'
-
-      - name: Verify disabled SSH did not start a session
-        if: ${{ github.repository == 'lhotari/pulsar' && github.event_name == 'pull_request' }}
-        run: |
-          if tmux has-session -t upterm-wrapper 2>/dev/null; then
-            echo "::error::SSH started despite CI_ENABLE_SSH=false."
-            exit 1
-          fi
-
       - name: Setup ssh access to build runner VM
         # ssh access is enabled for builds in own forks
         if: ${{ github.repository != 'apache/pulsar' && github.event_name == 'pull_request' }}
@@ -202,13 +176,6 @@ jobs:
         continue-on-error: true
         with:
           limit-access-to-actor: true
-
-      # TEMPORARY: remove this step before proposing the change upstream.
-      - name: Inject failure to test Linux SSH access
-        if: ${{ github.repository == 'lhotari/pulsar' && github.event_name == 'pull_request' }}
-        run: |
-          echo "Intentional failure: verify SSH access in the final wait step."
-          exit 1
 
       - name: Set up JDK ${{ env.CI_JDK_MAJOR_VERSION }}
         uses: actions/setup-java@v5
@@ -266,7 +233,6 @@ jobs:
         continue-on-error: true
         with:
           action: wait
-          timeout: '1800' # TEMPORARY: allow time to connect while testing this PR.
 
 
   unit-tests:
