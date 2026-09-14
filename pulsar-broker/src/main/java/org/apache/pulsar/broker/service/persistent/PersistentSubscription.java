@@ -1747,6 +1747,10 @@ public class PersistentSubscription extends AbstractSubscription {
         return this.pendingAckHandle.getStats(lowWaterMarks);
     }
 
+    public boolean checkAndRepairInconsistentReadState() {
+        return dispatcher != null && dispatcher.checkAndRepairInconsistentReadState();
+    }
+
     public boolean checkAndUnblockIfStuck() {
         return dispatcher != null ? dispatcher.checkAndUnblockIfStuck() : false;
     }
