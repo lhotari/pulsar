@@ -365,7 +365,8 @@ setting the repository variable `CI_ENABLE_CODEQL=true`.
 
 The `ssh-access` action defaults to enabled for public workflow repositories and disabled for private,
 internal, or unknown visibility. Set `CI_ENABLE_SSH` to `true` or `false` as a repository variable or
-workflow/job/step environment variable to override that default; an environment variable takes precedence.
+workflow/job/step environment variable to override that default. The CI workflows map the repository
+variable into the environment; a job or step environment setting takes precedence.
 The setting applies to both starting a session and waiting after failure. Existing workflow conditions
 still determine when the action is called (for example, pull requests in personal forks). SSH access
 continues to use the action's configured GitHub-user key restrictions. Linux installs Upterm 0.27.0;

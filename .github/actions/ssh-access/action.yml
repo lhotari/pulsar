@@ -49,7 +49,7 @@ runs:
   steps:
     - name: Configure SSH access
       env:
-        SSH_ACCESS_ENABLED: ${{ env.CI_ENABLE_SSH || vars.CI_ENABLE_SSH || (github.event.repository.visibility == 'public' && 'true' || 'false') }}
+        SSH_ACCESS_ENABLED: ${{ env.CI_ENABLE_SSH || (github.event.repository.visibility == 'public' && 'true' || 'false') }}
       run: |
         case "$SSH_ACCESS_ENABLED" in
           false)
