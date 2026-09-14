@@ -83,10 +83,11 @@ public class PersistentDispatcherMultipleConsumersReadLimitsTest extends Produce
                 spy -> {
                     doAnswer(invocation -> {
                         List<Entry> entries = invocation.getArgument(0);
-                        PersistentDispatcherMultipleConsumers.ReadType readType = invocation.getArgument(1);
+                        // The read context identifies the read, not just its type; keep it opaque here.
+                        Object readContext = invocation.getArgument(1);
                         int numberOfEntries = entries.size();
-                        log.info().attr("readentriescompleteWith", numberOfEntries).attr("readType", readType)
-                                .log("intercepted readEntriesComplete with entries, read type");
+                        log.info().attr("readentriescompleteWith", numberOfEntries).attr("readContext", readContext)
+                                .log("intercepted readEntriesComplete with entries, read context");
                         entriesReadMax.updateAndGet(current -> Math.max(current, numberOfEntries));
                         return invocation.callRealMethod();
                     }).when(spy).readEntriesComplete(any(), any());

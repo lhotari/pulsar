@@ -148,29 +148,42 @@ class OpReadEntry implements ReadEntriesCallback {
                     .attr("readPosition", readPosition)
                     .exceptionMessage(exception)
                     .log("Read failed from ledger");
-            final ManagedLedgerImpl ledger = (ManagedLedgerImpl) cursor.getManagedLedger();
-            Position nexReadPosition;
-            Long lostLedger = null;
-            if (exception instanceof ManagedLedgerException.LedgerNotExistException) {
-                // try to find and move to next valid ledger
-                nexReadPosition = cursor.getNextLedgerPosition(readPosition.getLedgerId());
-                lostLedger = readPosition.getLedgerId();
-            } else {
-                // Skip this read operation
-                nexReadPosition = ledger.getValidPositionAfterSkippedEntries(readPosition, count);
+            // This read operation does not end here after all: it skips ahead and continues, and
+            // checkReadCompletion() releases it when it really ends. Take the release at the top of this
+            // method back before anything below advances the cursor's read position, so the cursor never
+            // reports that no operation is outstanding while one can still move that position.
+            cursor.readOperationResumed();
+            try {
+                final ManagedLedgerImpl ledger = (ManagedLedgerImpl) cursor.getManagedLedger();
+                Position nexReadPosition;
+                Long lostLedger = null;
+                if (exception instanceof ManagedLedgerException.LedgerNotExistException) {
+                    // try to find and move to next valid ledger
+                    nexReadPosition = cursor.getNextLedgerPosition(readPosition.getLedgerId());
+                    lostLedger = readPosition.getLedgerId();
+                } else {
+                    // Skip this read operation
+                    nexReadPosition = ledger.getValidPositionAfterSkippedEntries(readPosition, count);
+                }
+                // fail callback if it couldn't find next valid ledger
+                if (nexReadPosition == null) {
+                    cursor.readOperationCompleted();
+                    fail(exception, ctx);
+                    return;
+                }
+                updateReadPosition(nexReadPosition);
+                if (lostLedger != null) {
+                    cursor.getManagedLedger().skipNonRecoverableLedger(lostLedger);
+                } else {
+                    cursor.skipNonRecoverableEntries(readPosition, nexReadPosition);
+                }
+            } catch (Throwable t) {
+                // The caller turns this into a plain failure, which does not release a read operation. Give
+                // back what was re-acquired above, or the count leaks for the life of the cursor.
+                cursor.readOperationCompleted();
+                throw t;
             }
-            // fail callback if it couldn't find next valid ledger
-            if (nexReadPosition == null) {
-                fail(exception, ctx);
-                return;
-            }
-            updateReadPosition(nexReadPosition);
-            if (lostLedger != null) {
-                cursor.getManagedLedger().skipNonRecoverableLedger(lostLedger);
-            } else {
-                cursor.skipNonRecoverableEntries(readPosition, nexReadPosition);
-            }
-            checkReadCompletion();
+            checkReadCompletion(true);
         } else {
             if (!(exception instanceof TooManyRequestsException)) {
                 log.warn()
@@ -197,22 +210,44 @@ class OpReadEntry implements ReadEntriesCallback {
     }
 
     void checkReadCompletion() {
-        // op readPosition is smaller or equals maxPosition then can read again
-        if (entries.size() < count && cursor.hasMoreEntries()
-                && maxPosition.compareTo(readPosition) > 0) {
+        checkReadCompletion(false);
+    }
 
-            // We still have more entries to read from the next ledger, schedule a new async operation
-            cursor.ledger.getExecutor().execute(() -> {
-                readPosition = cursor.ledger.startReadOperationOnLedger(nextReadPosition);
-                cursor.ledger.asyncReadEntries(OpReadEntry.this);
-            });
-        } else {
-            // The reading was already completed, release resources and trigger callback
-            try {
-                cursor.readOperationCompleted();
-            } finally {
-                complete(ctx);
+    /**
+     * @param releaseOnFailure when true the caller cannot give back the read operation it holds at the
+     *                        cursor, so a failure here has to release it. Only the auto-skip path in
+     *                        {@link #internalReadEntriesFailed} is in that position: it has re-acquired the
+     *                        operation through {@link ManagedCursorImpl#readOperationResumed()}, and its
+     *                        caller turns a throw into a plain failure that releases nothing.
+     */
+    private void checkReadCompletion(boolean releaseOnFailure) {
+        boolean released = false;
+        try {
+            // op readPosition is smaller or equals maxPosition then can read again
+            if (entries.size() < count && cursor.hasMoreEntries()
+                    && maxPosition.compareTo(readPosition) > 0) {
+
+                // We still have more entries to read from the next ledger, schedule a new async operation
+                cursor.ledger.getExecutor().execute(() -> {
+                    readPosition = cursor.ledger.startReadOperationOnLedger(nextReadPosition);
+                    cursor.ledger.asyncReadEntries(OpReadEntry.this);
+                });
+            } else {
+                // The reading was already completed, release resources and trigger callback. The release is
+                // recorded before the call because it decrements first: a throw from the flush it triggers
+                // must not be compensated a second time below.
+                released = true;
+                try {
+                    cursor.readOperationCompleted();
+                } finally {
+                    complete(ctx);
+                }
             }
+        } catch (Throwable t) {
+            if (releaseOnFailure && !released) {
+                cursor.readOperationCompleted();
+            }
+            throw t;
         }
     }
 
