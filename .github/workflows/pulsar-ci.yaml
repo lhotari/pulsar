@@ -176,6 +176,13 @@ jobs:
         with:
           limit-access-to-actor: true
 
+      # TEMPORARY: remove this step before proposing the change upstream.
+      - name: Inject failure to test Linux SSH access
+        if: ${{ github.repository == 'lhotari/pulsar' && github.event_name == 'pull_request' }}
+        run: |
+          echo "Intentional failure: verify SSH access in the final wait step."
+          exit 1
+
       - name: Set up JDK ${{ env.CI_JDK_MAJOR_VERSION }}
         uses: actions/setup-java@v5
         with:
@@ -232,6 +239,7 @@ jobs:
         continue-on-error: true
         with:
           action: wait
+          timeout: '1800' # TEMPORARY: allow time to connect while testing this PR.
 
 
   unit-tests:
