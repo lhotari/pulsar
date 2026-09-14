@@ -17,6 +17,13 @@
 # under the License.
 #
 
+# CI_ENABLE_SSH=true or false explicitly enables or disables both start and wait.
+# In particular, false disables SSH even for public repositories.
+# Without an override, public workflow repositories are enabled; private, internal,
+# and unknown visibility are disabled. The calling workflows map the repository
+# variable CI_ENABLE_SSH into the environment; job/step environment overrides win.
+# Callers still control when this action runs and which GitHub users' keys are allowed.
+
 name: ssh access
 description: Sets up SSH access to build VM with upterm
 inputs:

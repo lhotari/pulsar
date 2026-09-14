@@ -363,15 +363,6 @@ can also disable them with the action's `build-scan-publish: 'false'` input. Cod
 for public repositories; private repositories with GitHub Code Security enabled can opt in by
 setting the repository variable `CI_ENABLE_CODEQL=true`.
 
-The `ssh-access` action defaults to enabled for public workflow repositories and disabled for private,
-internal, or unknown visibility. Set `CI_ENABLE_SSH` to `true` or `false` as a repository variable or
-workflow/job/step environment variable to override that default. The CI workflows map the repository
-variable into the environment; a job or step environment setting takes precedence.
-The setting applies to both starting a session and waiting after failure. Existing workflow conditions
-still determine when the action is called (for example, pull requests in personal forks). SSH access
-continues to use the action's configured GitHub-user key restrictions. Linux installs Upterm 0.27.0;
-macOS installs the Upterm Homebrew cask with installation prompts disabled.
-
 The CI workflows declare the token permissions needed by their jobs, including reading PR changes.
 This supports repositories whose organization or enterprise enforces read-only default workflow
 permissions. Explicit permissions do not override restrictions on tokens for fork pull requests or
