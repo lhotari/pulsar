@@ -24,6 +24,7 @@ import com.google.common.annotations.VisibleForTesting;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelException;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.resolver.AddressResolver;
@@ -64,6 +65,14 @@ import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.netty.EventLoopUtil;
 import org.apache.pulsar.tls.PulsarTlsFactory;
 
+/**
+ * Client TCP connection pool.
+ *
+ * <p>Setting {@code -Dpulsar.client.connectionCountBalancing=true} assigns new connections to the least
+ * occupied loop in a shared, fixed event-loop group. Pending registrations count toward occupancy;
+ * established channels stay on their assigned loop. This is disabled by default because distributing
+ * connections across more threads can increase CPU use for sparse traffic.
+ */
 @CustomLog
 public class ConnectionPool implements AutoCloseable {
 
@@ -72,6 +81,7 @@ public class ConnectionPool implements AutoCloseable {
     protected final ConcurrentMap<Key, CompletableFuture<ClientCnx>> pool;
 
     private final Bootstrap bootstrap;
+    private final ConnectionCountAllocator connectionAllocator;
     private final PulsarChannelInitializer channelInitializerHandler;
     private final ClientConfigurationData clientConfig;
     private final EventLoopGroup eventLoopGroup;
@@ -128,6 +138,9 @@ public class ConnectionPool implements AutoCloseable {
             clientCnxSupplier = () -> new ClientCnx(instrumentProvider, conf, eventLoopGroup);
         }
         this.eventLoopGroup = eventLoopGroup;
+        // Opt-in: share counts across independently pooled clients using the same IO group.
+        this.connectionAllocator = Boolean.getBoolean("pulsar.client.connectionCountBalancing")
+                ? ConnectionCountAllocator.forGroup(eventLoopGroup) : null;
         this.clientConfig = conf;
         this.maxConnectionsPerHosts = conf.getConnectionsPerBroker();
         boolean sniProxyExpected = clientConfig.getProxyProtocol() != null
@@ -444,7 +457,7 @@ public class ConnectionPool implements AutoCloseable {
                                                         InetSocketAddress unresolvedPhysicalAddress,
                                                         InetSocketAddress sniHost) {
         if (clientConfig.isUseTls()) {
-            return toCompletableFuture(bootstrap.register())
+            return toCompletableFuture(registerConnection())
                     .thenCompose(channel -> channelInitializerHandler
                             .initTls(channel, sniHost != null ? sniHost : physicalAddress))
                     .thenCompose(channelInitializerHandler::initSocks5IfConfig)
@@ -453,13 +466,17 @@ public class ConnectionPool implements AutoCloseable {
                                     unresolvedPhysicalAddress))
                     .thenCompose(channel -> connectToPhysicalAddress(channel, physicalAddress));
         } else {
-            return toCompletableFuture(bootstrap.register())
+            return toCompletableFuture(registerConnection())
                     .thenCompose(channelInitializerHandler::initSocks5IfConfig)
                     .thenCompose(ch ->
                             channelInitializerHandler.initializeClientCnx(ch, logicalAddress,
                                     unresolvedPhysicalAddress))
                     .thenCompose(channel -> connectToPhysicalAddress(channel, physicalAddress));
         }
+    }
+
+    private ChannelFuture registerConnection() {
+        return connectionAllocator == null ? bootstrap.register() : connectionAllocator.register(bootstrap);
     }
 
     protected CompletableFuture<Channel> connectToPhysicalAddress(Channel channel, InetSocketAddress physicalAddress) {
