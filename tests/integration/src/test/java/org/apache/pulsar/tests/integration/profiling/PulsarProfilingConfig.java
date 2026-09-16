@@ -111,7 +111,7 @@ final class PulsarProfilingConfig {
             int workers = Math.max(1, isolatedProducers);
             if (isolatedProducers > producerCount || isolatedConsumers > consumerCount
                     || numberOfMessages % workers != 0 || produceRate < workers) {
-                throw new IllegalArgumentException("Isolated clients must have work: use at least one producer/consumer "
+                throw new IllegalArgumentException("Isolated clients require at least one producer/consumer "
                         + "per client, a message count divisible by producer clients, and a rate >= producer clients");
             }
             if (subscriptionType == SubscriptionType.Exclusive && consumerCount != 1) {
