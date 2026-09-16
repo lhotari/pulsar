@@ -104,24 +104,25 @@ and read failure/retry. Broker dispatcher and failover tests provide additional 
 
 ## Observed comparison
 
-A local comparison with the prerequisite changes above, performance power settings and SMT enabled
+A local comparison against current master, with performance power settings and SMT enabled
 completed both runs with 500 distinct producer connections, 12 million messages consumed and no
 failed ACKs:
 
 | Metric | Baseline | Inline read completion |
 |---|---:|---:|
-| Steady ingress, from counter deltas | 105,625 msg/s | 123,052 msg/s |
-| Steady dispatch, from counter deltas | 4,529 msg/s | 123,042 msg/s |
-| Whole-run consumer throughput | 65,602 msg/s | 117,405 msg/s |
-| Sampled peak backlog | 11,258,559 | 17,040 |
-| Broker CPU in a steady 30-second window | 6.16 logical cores | 4.94 logical cores |
+| Steady ingress, from counter deltas | 106,980 msg/s | 119,048 msg/s |
+| Steady dispatch, from counter deltas | 4,581 msg/s | 119,057 msg/s |
+| Whole-run producer throughput | 99,762 msg/s | 108,766 msg/s |
+| Whole-run consumer throughput | 66,254 msg/s | 113,550 msg/s |
+| Sampled peak backlog | 11,375,512 | 13,139 |
+| Broker CPU in a steady 30-second window | 6.27 logical cores | 5.35 logical cores |
 
-The baseline dispatcher was sleeping in 596 of 599 weighted wall samples while the ledger worker
+The baseline dispatcher was sleeping in 601 of 602 weighted wall samples while the ledger worker
 was nearly fully busy. After the change, dispatch kept up with publishing. The handoff JMH measured
-9.22 to 4.43 microseconds per operation and 312 to 232 bytes per operation.
+9.27 to 4.46 microseconds per operation and 312 to 232 bytes per operation.
 
 This is one pair of runs on an 8-core / 16-thread i9-9980HK. Both runs experienced thermal throttling,
-so the exact capacity differences need repetition. The large dispatch/backlog difference is the main
+so the exact capacity differences need repetition. The steady windows reached 97C and 96C, respectively. The large dispatch/backlog difference is the main
 result. Heap allocation per second increased as the candidate performed much more delivery work;
 do not infer a macro allocation reduction from the handoff benchmark. When analyzing ZGC recordings,
 use `jdk.GCPhasePause` for pauses: total `jdk.GarbageCollection` duration includes concurrent work.
