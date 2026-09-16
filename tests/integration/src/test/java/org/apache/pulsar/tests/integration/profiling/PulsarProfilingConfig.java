@@ -24,6 +24,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;
+import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 
 /** Configuration for the profiling scenario harness. */
@@ -84,7 +85,8 @@ final class PulsarProfilingConfig {
                                     Map.entry("isForceGCAllowWhenNoSpace", "true"),
                                     Map.entry("diskUsageLwmThreshold", "0.75"),
                                     Map.entry("diskCheckInterval", "60"))),
-                    new Load(20_000_000, "200M", "200M", Integer.MAX_VALUE, 128, 20_000, 10, 0, 0),
+                    new Load(20_000_000, "200M", "200M", Integer.MAX_VALUE, 128, 20_000, 10, 0, 0,
+                            1, 1, 1, 1, SubscriptionType.Shared, 50_000, 180),
                     new Output("build/pulsar-profiling"));
         }
     }
@@ -96,7 +98,26 @@ final class PulsarProfilingConfig {
 
     record Load(long numberOfMessages, String produceMemoryLimit, String consumeMemoryLimit,
                 int produceRate, int messageSize, int maxOutstanding, int statsIntervalSeconds,
-                int isolatedProducers, int isolatedConsumers) {
+                int isolatedProducers, int isolatedConsumers, int producerCount, int consumerCount,
+                int producerIoThreads, int consumerIoThreads, SubscriptionType subscriptionType,
+                int receiverQueueSize, int timeoutSeconds) {
+        Load {
+            if (producerCount < 1 || consumerCount < 1 || producerIoThreads < 1 || consumerIoThreads < 1
+                    || isolatedProducers < 0 || isolatedConsumers < 0 || receiverQueueSize < 1 || timeoutSeconds < 1
+                    || numberOfMessages < 1 || produceRate < 1 || subscriptionType == null) {
+                throw new IllegalArgumentException("Profiling counts, rate, queue size and timeout must be positive");
+            }
+            // pulsar-perf divides the message count and rate between workers using integer division.
+            int workers = Math.max(1, isolatedProducers);
+            if (isolatedProducers > producerCount || isolatedConsumers > consumerCount
+                    || numberOfMessages % workers != 0 || produceRate < workers) {
+                throw new IllegalArgumentException("Isolated clients must have work: use at least one producer/consumer "
+                        + "per client, a message count divisible by producer clients, and a rate >= producer clients");
+            }
+            if (subscriptionType == SubscriptionType.Exclusive && consumerCount != 1) {
+                throw new IllegalArgumentException("Exclusive subscriptions require exactly one consumer");
+            }
+        }
     }
 
     record Output(String directory) {
