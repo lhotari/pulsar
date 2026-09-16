@@ -42,7 +42,8 @@ options identical. A timeout, process restart or OOM invalidates the run even if
 
 ## Baseline and candidate
 
-The baseline is current master plus the prerequisite ledger-callback ordering change in PR #26599.
+The baseline is current master plus the prerequisite ledger-callback ordering change in PR #26599
+and the managed-ledger cache allocator change in PR #26603.
 For the initial review it is `lh-perfopt-ledger-ordering-key-base`; the candidate is
 `lh-perfopt-read-completion-isolation`. Both must run the same harness and YAML. To prepare a separate
 baseline checkout with only the candidate's test scaffolding:
