@@ -18,6 +18,7 @@
  */
 package org.apache.bookkeeper.mledger.impl;
 
+import static org.apache.bookkeeper.mledger.util.ManagedLedgerTestUtil.rawEntryConfig;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertEquals;
@@ -44,12 +45,6 @@ import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 public class ReadCompletionAffinityTest extends MockedBookKeeperTestCase {
-    private static ManagedLedgerConfig rawEntryConfig() {
-        ManagedLedgerConfig config = new ManagedLedgerConfig();
-        config.setPulsarMessageEntries(false);
-        return config;
-    }
-
     @DataProvider
     public Object[][] inlineCompletion() {
         return new Object[][] {{false}, {true}};
