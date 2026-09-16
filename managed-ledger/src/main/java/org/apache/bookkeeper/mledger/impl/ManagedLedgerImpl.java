@@ -2452,7 +2452,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             long lastValidEntry = -1L;
             long entryId = firstEntry;
             for (; entryId <= lastEntry; entryId++) {
-                if (opReadEntry.skipCondition.test(PositionFactory.create(ledger.getId(), entryId))) {
+                if (PositionPredicate.test(opReadEntry.skipCondition, ledger.getId(), entryId)) {
                     if (firstValidEntry != -1L) {
                         break;
                     }
