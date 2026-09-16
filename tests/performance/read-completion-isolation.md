@@ -32,8 +32,8 @@ compacted-read paths are unchanged.
 [read-completion-isolation.yaml](read-completion-isolation.yaml) uses `produce-v4` and `consume-v4`
 from the standard profiling harness: 500 producers, 500 isolated clients (shared PIP-234 resources),
 one connection per client, a single non-partitioned `persistent://` topic, one Exclusive consumer,
-12 million unbatched 128-byte messages, and unrestricted production. Each producer has 40 outstanding
-sends, for at most 20,000 across 500 producers. The consumer subscription is created before publishing.
+a target of 12 million unbatched 128-byte messages, and unrestricted production. Each producer has
+40 outstanding sends, for at most 20,000 across 500 producers. The consumer subscription is created before publishing.
 
 Allow at least 16 GiB of available host memory, sufficient Docker disk space, and 10 minutes for a
 run after building. The broker has a 2 GiB heap and 4 GiB direct-memory ceiling. Run comparisons
@@ -75,10 +75,15 @@ fresh output directory for every run. Record `git rev-parse HEAD` and `git diff`
 
 - In `stats-v4.*.txt`, verify 500 publishers with distinct connection addresses, one Exclusive
   consumer, steady `msgRateIn`/`msgRateOut`, and the peak and final `msgBacklog` for subscription `sub`.
-- In `produce-v4.*.txt` and `consume-v4.*.txt`, check the final counts (12 million), errors, throughput
-  and latency. Consumer throughput during publication and backlog growth are the primary signals;
+- In `produce-v4.*.txt` and `consume-v4.*.txt`, check the final counts (at least 12 million),
+  errors, throughput and latency. Consumer throughput during publication and backlog growth are the primary signals;
   producer capacity alone can hide a stalled consumer. Whole-run consumer throughput includes startup
-  and drain time.
+  and drain time. The producer counts completed sends, so it can overshoot the target by sends still
+  in flight; record the actual totals rather than assuming an exact production count.
+- Derive publishing and dispatch rates from differences in `msgInCounter` and `msgOutCounter`
+  divided by the time between snapshots. The `msgRateIn`/`msgRateOut` fields are cached broker rates
+  and can lag a phase change. For a steady window, omit the first 20 seconds after all 500 publishers
+  appear and stop before publishers start disconnecting.
 - Analyze each broker JFR with Jafar `jfr_diagnose` and `jfr_stackprofile`; save the results beside it
   as `<filename>.jfr.analysis.md`. Include CPU and `profiler.WallClockSample` views, and distinguish
   startup/drain from steady publishing. Look for a busy ledger worker alongside a parked subscription
@@ -97,3 +102,27 @@ It compares the two completion paths with real executors, without storage IO or 
 It does not predict end-to-end throughput or prove concurrency correctness. The managed-ledger tests
 cover callback affinity, the asynchronous dispatch boundary, cache misses across ledger rollover,
 and read failure/retry. Broker dispatcher and failover tests provide additional coverage.
+
+## Observed comparison
+
+A local comparison with the prerequisite changes above, performance power settings and SMT enabled
+completed both runs with 500 distinct producer connections, 12 million messages consumed and no
+failed ACKs:
+
+| Metric | Baseline | Inline read completion |
+|---|---:|---:|
+| Steady ingress, from counter deltas | 105,625 msg/s | 123,052 msg/s |
+| Steady dispatch, from counter deltas | 4,529 msg/s | 123,042 msg/s |
+| Whole-run consumer throughput | 65,602 msg/s | 117,405 msg/s |
+| Sampled peak backlog | 11,258,559 | 17,040 |
+| Broker CPU in a steady 30-second window | 6.16 logical cores | 4.94 logical cores |
+
+The baseline dispatcher was sleeping in 596 of 599 weighted wall samples while the ledger worker
+was nearly fully busy. After the change, dispatch kept up with publishing. The handoff JMH measured
+9.22 to 4.43 microseconds per operation and 312 to 232 bytes per operation.
+
+This is one pair of runs on an 8-core / 16-thread i9-9980HK. Both runs experienced thermal throttling,
+so the exact capacity differences need repetition. The large dispatch/backlog difference is the main
+result. Heap allocation per second increased as the candidate performed much more delivery work;
+do not infer a macro allocation reduction from the handoff benchmark. When analyzing ZGC recordings,
+use `jdk.GCPhasePause` for pauses: total `jdk.GarbageCollection` duration includes concurrent work.
