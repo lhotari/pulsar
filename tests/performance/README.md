@@ -60,9 +60,19 @@ PULSAR_PROFILING_LOAD_NUMBER_OF_MESSAGES=1000000 \
 For the v4 scenario, set `load.isolatedProducers` or `load.isolatedConsumers` to create that many
 independent v4 client instances. The corresponding `pulsar-perf` command receives
 `--isolated-clients`; v5 ignores these fields. The option is mutually exclusive with the regular
-producer test-thread option and with consumer listener-thread expansion.
+producer test-thread option and with consumer listener-thread expansion. Set `load.producerCount`
+and `load.consumerCount` separately: creating clients does not create producers or consumers.
+`load.subscriptionType` selects the subscription type; `producerIoThreads` and `consumerIoThreads`
+size the shared client IO pools. `maxOutstanding` is per producer, not a global limit.
+The harness saves `resolved-config.yaml` with environment overrides applied in the output directory.
 For v4 production, `--num-producers` remains the producer count per topic and is distributed across
 the isolated clients; when the counts differ, producers are assigned round-robin as evenly as possible.
+
+## Reproducible scenarios
+
+- [Read-completion queue isolation](read-completion-isolation.md): 500 producers on separate
+  connections to one persistent topic, with one Exclusive consumer. Includes the
+  [scenario YAML](read-completion-isolation.yaml) and baseline/comparison instructions.
 
 ## Inspecting recordings
 

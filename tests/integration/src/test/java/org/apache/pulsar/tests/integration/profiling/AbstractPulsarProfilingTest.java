@@ -33,6 +33,7 @@ import lombok.CustomLog;
 import org.apache.pulsar.common.naming.TopicDomain;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.util.FutureUtil;
+import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.tests.ManualTestUtil;
 import org.apache.pulsar.tests.integration.containers.PulsarContainer;
 import org.apache.pulsar.tests.integration.suites.PulsarTestSuite;
@@ -162,8 +163,10 @@ public abstract class AbstractPulsarProfilingTest extends PulsarTestSuite {
                     "bash", "-c", "set -o pipefail; echo $$ > /tmp/command.pid; "
                             + "/pulsar/bin/pulsar-perf consume" + commandSuffix + " " + topicName + " "
                             + "-u pulsar://" + brokerHostname + ":6650 "
-                            + "-st Shared "
-                            + "-q 50000 "
+                            + "-st " + load.subscriptionType() + " "
+                            + "-q " + load.receiverQueueSize() + " "
+                            + "--num-consumers " + load.consumerCount() + " "
+                            + "--num-io-threads " + load.consumerIoThreads() + " "
                             + isolatedClientsOption(load.isolatedConsumers())
                             + "-m " + load.numberOfMessages() + " -ml " + load.consumeMemoryLimit() + " "
                             + "--histogram-file=/testoutput/consume" + commandSuffix
@@ -179,6 +182,9 @@ public abstract class AbstractPulsarProfilingTest extends PulsarTestSuite {
                             + "-au http://" + brokerHostname + ":8080 "
                             + "-r " + load.produceRate() + " "
                             + "-s " + load.messageSize() + " -db "
+                            + "--num-producers " + load.producerCount() + " "
+                            + "--num-io-threads " + load.producerIoThreads() + " "
+                            + "--max-connections 1 "
                             + isolatedClientsOption(load.isolatedProducers())
                             // maxOutstanding only applies to the v4 client; the v5 client accepts
                             // the flag for back-compat but ignores it
@@ -270,6 +276,8 @@ public abstract class AbstractPulsarProfilingTest extends PulsarTestSuite {
         // This matters only on Linux
         try {
             Files.setPosixFilePermissions(testOutputDir.toPath(), PosixFilePermissions.fromString("rwxrwxrwx"));
+            ObjectMapperFactory.getYamlMapper().getObjectMapper().writeValue(
+                    new File(testOutputDir, "resolved-config.yaml"), profilingConfig);
         } catch (IOException e) {
             throw new UncheckedIOException("Cannot change access to test output directory", e);
         }
@@ -374,6 +382,7 @@ public abstract class AbstractPulsarProfilingTest extends PulsarTestSuite {
      */
     protected void runPulsarPerfBenchmark() throws Exception {
         String topicName = generateTopicName("profiletest", getTopicDomain());
+        prepareTopic(topicName);
         CompletableFuture<Long> consumeFuture = perfConsume.consume(topicName);
         Thread.sleep(1000);
         CompletableFuture<Long> produceFuture = perfProduce.produce(topicName);
@@ -381,7 +390,7 @@ public abstract class AbstractPulsarProfilingTest extends PulsarTestSuite {
         printStats.stats(getTopicStatsEndpoints(topicName));
         // pulsar-perf is sized to finish inside this window, so running out of it is a failure.
         FutureUtil.waitForAll(List.of(consumeFuture, produceFuture))
-                .orTimeout(3, TimeUnit.MINUTES)
+                .orTimeout(profilingConfig.load().timeoutSeconds(), TimeUnit.SECONDS)
                 .exceptionally(t -> {
                     log.error().exception(t).log("Failed to run pulsar-perf");
                     throw FutureUtil.wrapToCompletionException(t);
@@ -391,5 +400,8 @@ public abstract class AbstractPulsarProfilingTest extends PulsarTestSuite {
             softly.assertThat(consumeFuture).as("consume should have completed successfully").isCompletedWithValue(0L);
             softly.assertThat(produceFuture).as("produce should have completed successfully").isCompletedWithValue(0L);
         });
+    }
+
+    protected void prepareTopic(String topicName) throws Exception {
     }
 }

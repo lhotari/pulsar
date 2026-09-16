@@ -19,9 +19,11 @@
 package org.apache.pulsar.tests.integration.profiling;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import org.apache.pulsar.client.api.SubscriptionType;
 import org.testng.annotations.Test;
 
 public class PulsarProfilingConfigTest {
@@ -41,5 +43,37 @@ public class PulsarProfilingConfigTest {
         } finally {
             Files.deleteIfExists(file);
         }
+    }
+
+    @Test
+    public void configuresIsolatedProducersAndExclusiveConsumer() {
+        var config = PulsarProfilingConfig.Config.read(null, Map.of(
+                "PULSAR_PROFILING_LOAD_PRODUCER_COUNT", "500",
+                "PULSAR_PROFILING_LOAD_ISOLATED_PRODUCERS", "500",
+                "PULSAR_PROFILING_LOAD_PRODUCER_IO_THREADS", "8",
+                "PULSAR_PROFILING_LOAD_SUBSCRIPTION_TYPE", "Exclusive",
+                "PULSAR_PROFILING_LOAD_TIMEOUT_SECONDS", "480"));
+        assertThat(config.load().producerCount()).isEqualTo(500);
+        assertThat(config.load().isolatedProducers()).isEqualTo(500);
+        assertThat(config.load().producerIoThreads()).isEqualTo(8);
+        assertThat(config.load().subscriptionType()).isEqualTo(SubscriptionType.Exclusive);
+        assertThat(config.load().consumerCount()).isEqualTo(1);
+        assertThat(config.load().timeoutSeconds()).isEqualTo(480);
+    }
+
+    @Test
+    public void rejectsWorkloadsThatCannotFinish() {
+        assertThatThrownBy(() -> PulsarProfilingConfig.Config.read(null,
+                Map.of("PULSAR_PROFILING_LOAD_ISOLATED_PRODUCERS", "500")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> PulsarProfilingConfig.Config.read(null, Map.of(
+                "PULSAR_PROFILING_LOAD_PRODUCER_COUNT", "500",
+                "PULSAR_PROFILING_LOAD_ISOLATED_PRODUCERS", "500",
+                "PULSAR_PROFILING_LOAD_NUMBER_OF_MESSAGES", "501")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> PulsarProfilingConfig.Config.read(null, Map.of(
+                "PULSAR_PROFILING_LOAD_SUBSCRIPTION_TYPE", "Exclusive",
+                "PULSAR_PROFILING_LOAD_CONSUMER_COUNT", "2")))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }
