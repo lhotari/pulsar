@@ -273,18 +273,24 @@ class OpReadEntry implements ReadEntriesCallback {
     }
 
     private void complete(Object ctx) {
-        // Runs inline when the read completed on the managed ledger thread
-        cursor.ledger.getExecutor().executeOrRun(() -> {
-            try {
-                callback.readEntriesComplete(entries, ctx);
-                recycle();
-            } catch (Throwable throwable) {
-                log.error().attr("op", this)
-                        .attr("lastPosition", lastEntryPosition())
-                        .exception(throwable)
-                        .log("readEntriesComplete failed");
-            }
-        });
+        if (callback.canExecuteOnAnyThread()) {
+            completeCallback(ctx);
+        } else {
+            // Preserve managed-ledger executor affinity unless the callback explicitly opts out.
+            cursor.ledger.getExecutor().executeOrRun(() -> completeCallback(ctx));
+        }
+    }
+
+    private void completeCallback(Object ctx) {
+        try {
+            callback.readEntriesComplete(entries, ctx);
+            recycle();
+        } catch (Throwable throwable) {
+            log.error().attr("op", this)
+                    .attr("lastPosition", lastEntryPosition())
+                    .exception(throwable)
+                    .log("readEntriesComplete failed");
+        }
     }
 
     private void fail(ManagedLedgerException e, Object ctx) {
