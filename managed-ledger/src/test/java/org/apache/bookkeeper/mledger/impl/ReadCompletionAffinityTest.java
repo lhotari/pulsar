@@ -22,16 +22,21 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotSame;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
+import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.util.ManagedLedgerUtils;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
@@ -46,7 +51,8 @@ public class ReadCompletionAffinityTest extends MockedBookKeeperTestCase {
 
     @Test(dataProvider = "inlineCompletion")
     public void testCacheHitCompletionAffinity(boolean inline) throws Exception {
-        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("completion-affinity-" + inline);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("completion-affinity-" + inline,
+                new ManagedLedgerConfig().setPulsarMessageEntries(false));
         CountDownLatch releaseWorker = new CountDownLatch(1);
         try {
             ManagedCursor cursor = ledger.openCursor("cursor");
@@ -84,7 +90,8 @@ public class ReadCompletionAffinityTest extends MockedBookKeeperTestCase {
 
     @Test
     public void testInlineFutureKeepsDispatcherBoundary() throws Exception {
-        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("completion-dispatcher-boundary");
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("completion-dispatcher-boundary",
+                new ManagedLedgerConfig().setPulsarMessageEntries(false));
         CountDownLatch releaseWorker = new CountDownLatch(1);
         ExecutorService dispatcher = Executors.newSingleThreadExecutor();
         try {
@@ -122,5 +129,72 @@ public class ReadCompletionAffinityTest extends MockedBookKeeperTestCase {
             }
         });
         return started.get(10, TimeUnit.SECONDS);
+    }
+
+    @Test(dataProvider = "inlineCompletion")
+    public void testCacheMissAcrossLedgers(boolean inline) throws Exception {
+        ManagedLedgerConfig config = new ManagedLedgerConfig().setMaxEntriesPerLedger(2)
+                .setPulsarMessageEntries(false);
+        config.setMinimumRolloverTime(0, TimeUnit.SECONDS);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("completion-rollover-" + inline, config);
+        AtomicInteger storageReads = new AtomicInteger();
+        try {
+            ManagedCursor cursor = ledger.openCursor("cursor");
+            for (int i = 0; i < 6; i++) {
+                ledger.addEntry(new byte[] {(byte) i});
+            }
+            ledger.entryCache.clear();
+            bkc.setReadHandleInterceptor((ledgerId, first, last, entries) -> {
+                storageReads.incrementAndGet();
+                return CompletableFuture.completedFuture(entries);
+            });
+            List<Entry> entries = ManagedLedgerUtils.readEntriesWithSkipOrWait(
+                    cursor, 6, Long.MAX_VALUE, PositionFactory.LATEST, null, inline).get(10, TimeUnit.SECONDS);
+            try {
+                assertThat(entries).hasSize(6);
+                for (int i = 0; i < entries.size(); i++) {
+                    assertThat(entries.get(i).getData()).containsExactly((byte) i);
+                }
+                assertThat(entries.stream().map(entry -> entry.getPosition().getLedgerId()).distinct().count())
+                        .isEqualTo(3);
+                assertThat(storageReads.get()).isGreaterThanOrEqualTo(3);
+            } finally {
+                entries.forEach(Entry::release);
+            }
+        } finally {
+            bkc.setReadHandleInterceptor(null);
+            ledger.close();
+        }
+    }
+
+    @Test(dataProvider = "inlineCompletion")
+    public void testStorageFailureAndRetry(boolean inline) throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("completion-failure-" + inline,
+                new ManagedLedgerConfig().setPulsarMessageEntries(false));
+        try {
+            ManagedCursor cursor = ledger.openCursor("cursor");
+            ledger.addEntry(new byte[] {1});
+            ledger.entryCache.clear();
+            bkc.setReadHandleInterceptor((ledgerId, first, last, entries) -> {
+                entries.close();
+                return CompletableFuture.failedFuture(BKException.create(BKException.Code.ReadException));
+            });
+            var failed = ManagedLedgerUtils.readEntriesWithSkipOrWait(
+                    cursor, 1, Long.MAX_VALUE, PositionFactory.LATEST, null, inline);
+            assertThatThrownBy(() -> failed.get(10, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ManagedLedgerException.class);
+            bkc.setReadHandleInterceptor(null);
+            List<Entry> entries = ManagedLedgerUtils.readEntriesWithSkipOrWait(
+                    cursor, 1, Long.MAX_VALUE, PositionFactory.LATEST, null, inline).get(10, TimeUnit.SECONDS);
+            try {
+                assertThat(entries).hasSize(1);
+                assertThat(entries.get(0).getData()).containsExactly((byte) 1);
+            } finally {
+                entries.forEach(Entry::release);
+            }
+        } finally {
+            bkc.setReadHandleInterceptor(null);
+            ledger.close();
+        }
     }
 }
