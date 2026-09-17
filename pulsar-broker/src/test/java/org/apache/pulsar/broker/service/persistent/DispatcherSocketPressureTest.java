@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.service.persistent;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
@@ -108,4 +109,96 @@ public class DispatcherSocketPressureTest extends SharedPulsarBaseTest {
             }
         }
     }
+
+    @Test(timeOut = 120000)
+    public void testSlowKeySharedSocketDoesNotBlockFastConsumer() throws Exception {
+        String topicName = newTopicName();
+        int fastMessageCount = 1024;
+        // Exceed the socket receive window without reaching the dispatcher's replay look-ahead limit.
+        int slowMessagesPerFastMessage = 4;
+        int slowMessageCount = fastMessageCount * slowMessagesPerFastMessage;
+        try (PulsarClient slowClient = newPulsarClient();
+             PulsarClient fastClient = newPulsarClient();
+             Consumer<byte[]> slow = slowClient.newConsumer(Schema.BYTES).topic(topicName)
+                     .subscriptionName("sub").consumerName("slow").subscriptionType(SubscriptionType.Key_Shared)
+                     .receiverQueueSize(32768).subscribe();
+             Consumer<byte[]> fast = fastClient.newConsumer(Schema.BYTES).topic(topicName)
+                     .subscriptionName("sub").consumerName("fast").subscriptionType(SubscriptionType.Key_Shared)
+                     .receiverQueueSize(32768).subscribe();
+             Producer<byte[]> producer = pulsarClient.newProducer(Schema.BYTES).topic(topicName)
+                     .enableBatching(false).maxPendingMessages(256).blockIfQueueFull(true).create()) {
+            PersistentTopic topic = (PersistentTopic) getTopic(topicName, false).join().orElseThrow();
+            PersistentStickyKeyDispatcherMultipleConsumers dispatcher =
+                    (PersistentStickyKeyDispatcherMultipleConsumers) topic.getSubscription("sub").getDispatcher();
+            var slowBrokerConsumer = dispatcher.getConsumers().stream()
+                    .filter(c -> c.consumerName().equals("slow")).findFirst().orElseThrow();
+            var fastBrokerConsumer = dispatcher.getConsumers().stream()
+                    .filter(c -> c.consumerName().equals("fast")).findFirst().orElseThrow();
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                assertThat(slowBrokerConsumer.getAvailablePermits()).isEqualTo(32768);
+                assertThat(fastBrokerConsumer.getAvailablePermits()).isEqualTo(32768);
+            });
+            String slowKey = keyForConsumer(dispatcher, "slow");
+            String fastKey = keyForConsumer(dispatcher, "fast");
+            Channel brokerChannel = ((ServerCnx) slowBrokerConsumer.cnx()).ctx().channel();
+            Channel clientChannel = ((ConsumerImpl<byte[]>) slow).getClientCnx().ctx().channel();
+            brokerChannel.eventLoop().submit(() ->
+                    brokerChannel.config().setOption(ChannelOption.SO_SNDBUF, 8192)).sync();
+            clientChannel.eventLoop().submit(() -> {
+                clientChannel.config().setOption(ChannelOption.SO_RCVBUF, 8192);
+                clientChannel.config().setAutoRead(false);
+            }).sync();
+            try {
+                List<CompletableFuture<MessageId>> sends = new ArrayList<>();
+                for (int i = 0; i < slowMessageCount; i++) {
+                    byte[] payload = new byte[16384];
+                    ByteBuffer.wrap(payload).putInt(i);
+                    sends.add(producer.newMessage().key(slowKey).value(payload).sendAsync());
+                    // Spread healthy messages across the slow stream so some remain when its socket fills.
+                    // Keep healthy batches below the watermark: writable events must not hide the barrier.
+                    if (i % slowMessagesPerFastMessage == 0) {
+                        byte[] fastPayload = new byte[128];
+                        ByteBuffer.wrap(fastPayload).putInt(i / slowMessagesPerFastMessage);
+                        sends.add(producer.newMessage().key(fastKey).value(fastPayload).sendAsync());
+                    }
+                }
+                CompletableFuture.allOf(sends.toArray(CompletableFuture[]::new)).get(15, TimeUnit.SECONDS);
+                Awaitility.await().atMost(Duration.ofSeconds(10)).until(() -> !brokerChannel.isWritable());
+                List<Message<byte[]>> fastMessages = new ArrayList<>();
+                // No FLOW or ACK from either consumer: a slow socket must not stop the other hash range.
+                for (int i = 0; i < fastMessageCount; i++) {
+                    Message<byte[]> message = fast.receive(3, TimeUnit.SECONDS);
+                    assertThat(message).as("fast message %s while the slow socket is paused", i).isNotNull();
+                    assertThat(ByteBuffer.wrap(message.getData()).getInt()).isEqualTo(i);
+                    fastMessages.add(message);
+                }
+                clientChannel.eventLoop().submit(() -> {
+                    clientChannel.config().setOption(ChannelOption.SO_RCVBUF, 1024 * 1024);
+                    clientChannel.config().setAutoRead(true);
+                }).sync();
+                for (int i = 0; i < slowMessageCount; i++) {
+                    Message<byte[]> message = slow.receive(5, TimeUnit.SECONDS);
+                    assertThat(message).as("slow message %s after resume", i).isNotNull();
+                    assertThat(ByteBuffer.wrap(message.getData()).getInt()).isEqualTo(i);
+                    slow.acknowledge(message);
+                }
+                for (Message<byte[]> message : fastMessages) {
+                    fast.acknowledge(message);
+                }
+            } finally {
+                clientChannel.eventLoop().submit(() -> clientChannel.config().setAutoRead(true)).sync();
+            }
+        }
+    }
+
+    private static String keyForConsumer(PersistentStickyKeyDispatcherMultipleConsumers dispatcher, String name) {
+        for (int i = 0; i < 10000; i++) {
+            String key = "key-" + i;
+            if (dispatcher.getSelector().select(key.getBytes(UTF_8)).consumerName().equals(name)) {
+                return key;
+            }
+        }
+        throw new AssertionError("No key found for " + name);
+    }
+
 }
