@@ -21,6 +21,7 @@ package org.apache.pulsar.broker.stats.prometheus.metrics;
 import static org.testng.Assert.assertEquals;
 import io.netty.util.concurrent.FastThreadLocalThread;
 import java.util.concurrent.Phaser;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.datasketches.kll.KllDoublesSketch;
 import org.jspecify.annotations.Nullable;
 import org.testng.annotations.DataProvider;
@@ -83,6 +84,30 @@ public class ThreadLocalAccessorTest {
         assertEquals(accessor.getLocalDataCount(), fastThreadLocalThread ? 0 : 1);
         accessor.record(KllDoublesSketch.newHeapInstance(), aggregateFail);
         assertEquals(accessor.getLocalDataCount(), 0);
+    }
+
+    @Test
+    public void testConcurrentUpdatesAndRecording() throws Exception {
+        final int updates = 100_000;
+        ThreadLocalAccessor accessor = new ThreadLocalAccessor();
+        AtomicBoolean completed = new AtomicBoolean();
+        Thread updater = new Thread(() -> {
+            ThreadLocalAccessor.LocalData localData = accessor.getLocalData();
+            for (int i = 0; i < updates; i++) {
+                localData.updateSuccess(i);
+            }
+            completed.set(true);
+        });
+        updater.start();
+
+        KllDoublesSketch aggregate = KllDoublesSketch.newHeapInstance();
+        while (!completed.get()) {
+            accessor.record(aggregate, null);
+        }
+        updater.join();
+        accessor.record(aggregate, null);
+
+        assertEquals(aggregate.getN(), updates);
     }
 
     private static Thread getThread(boolean fastThreadLocalThread, Runnable runnable) {
