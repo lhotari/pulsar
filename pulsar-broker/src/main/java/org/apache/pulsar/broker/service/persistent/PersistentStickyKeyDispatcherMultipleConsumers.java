@@ -22,6 +22,7 @@ import static org.apache.pulsar.broker.service.StickyKeyConsumerSelector.STICKY_
 import com.google.common.annotations.VisibleForTesting;
 import io.github.merlimat.slog.Logger;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -467,9 +468,10 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
     private Map<Consumer, List<Entry>> filterAndGroupEntriesForDispatching(List<Entry> entries, ReadType readType,
                                                                            MutableBoolean triggerLookAhead) {
         // entries grouped by consumer
-        Map<Consumer, List<Entry>> entriesGroupedByConsumer = new HashMap<>();
+        Map<Consumer, List<Entry>> entriesGroupedByConsumer =
+                new Object2ObjectOpenHashMap<>(consumerList.size());
         // permits for consumer, permits are for entries/batches
-        Map<Consumer, MutableInt> permitsForConsumer = new HashMap<>();
+        Map<Consumer, MutableInt> permitsForConsumer = new Object2ObjectOpenHashMap<>(consumerList.size());
         boolean lookAheadAllowed = isReplayQueueSizeBelowLimit();
         // in normal read mode, keep track of consumers that are blocked by hash, to check if look-ahead could be useful
         Set<Consumer> blockedByHashConsumers = lookAheadAllowed && readType == ReadType.Normal ? new HashSet<>() : null;
