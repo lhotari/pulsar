@@ -31,7 +31,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -80,6 +80,67 @@ public class RangeEntryCacheImpl implements EntryCache {
     private final LongAdder totalAddedEntriesSize = new LongAdder();
     private final LongAdder totalAddedEntriesCount = new LongAdder();
     private final EntryLengthFunction entryLengthFunction;
+
+    private static final class PermitReleasingReadEntriesCallback implements ReadEntriesCallback, Runnable {
+        private static final AtomicIntegerFieldUpdater<PermitReleasingReadEntriesCallback> REMAINING_ENTRIES_UPDATER =
+                AtomicIntegerFieldUpdater.newUpdater(PermitReleasingReadEntriesCallback.class, "remainingEntries");
+
+        private final InflightReadsLimiter limiter;
+        private final InflightReadsLimiter.Handle handle;
+        private ReadEntriesCallback originalCallback;
+        private volatile int remainingEntries;
+
+        private PermitReleasingReadEntriesCallback(InflightReadsLimiter limiter,
+                                                   InflightReadsLimiter.Handle handle,
+                                                   ReadEntriesCallback originalCallback) {
+            this.limiter = limiter;
+            this.handle = handle;
+            this.originalCallback = originalCallback;
+        }
+
+        @Override
+        public void readEntriesComplete(List<Entry> entries, Object ctx) {
+            // Keep 1 as the terminal state so duplicate or reentrant completion cannot restart the counter.
+            int initialRemainingEntries = entries.isEmpty() ? 1 : entries.size() + 1;
+            if (!REMAINING_ENTRIES_UPDATER.compareAndSet(this, 0, initialRemainingEntries)) {
+                return;
+            }
+            if (entries.isEmpty()) {
+                limiter.release(handle);
+            } else {
+                for (Entry entry : entries) {
+                    ((EntryImpl) entry).onDeallocate(this);
+                }
+            }
+            ReadEntriesCallback callback = originalCallback;
+            try {
+                callback.readEntriesComplete(entries, ctx);
+            } finally {
+                originalCallback = null;
+            }
+        }
+
+        @Override
+        public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+            if (!REMAINING_ENTRIES_UPDATER.compareAndSet(this, 0, 1)) {
+                return;
+            }
+            limiter.release(handle);
+            ReadEntriesCallback callback = originalCallback;
+            try {
+                callback.readEntriesFailed(exception, ctx);
+            } finally {
+                originalCallback = null;
+            }
+        }
+
+        @Override
+        public void run() {
+            if (REMAINING_ENTRIES_UPDATER.decrementAndGet(this) == 1) {
+                limiter.release(handle);
+            }
+        }
+    }
 
     public RangeEntryCacheImpl(RangeEntryCacheManagerImpl manager, ManagedLedgerImpl ml, boolean copyEntries,
                                RangeCacheRemovalQueue rangeCacheRemovalQueue, EntryLengthFunction entryLengthFunction) {
@@ -367,32 +428,8 @@ public class RangeEntryCacheImpl implements EntryCache {
             return;
         }
         InflightReadsLimiter pendingReadsLimiter = getPendingReadsLimiter();
-        ReadEntriesCallback wrappedCallback = new ReadEntriesCallback() {
-            @Override
-            public void readEntriesComplete(List<Entry> entries, Object ctx2) {
-                if (!entries.isEmpty()) {
-                    // release permits only when entries have been handled
-                    AtomicInteger remainingCount = new AtomicInteger(entries.size());
-                    Runnable releasePermits = () -> {
-                        if (remainingCount.decrementAndGet() <= 0) {
-                            pendingReadsLimiter.release(handle);
-                        }
-                    };
-                    for (Entry entry : entries) {
-                        ((EntryImpl) entry).onDeallocate(releasePermits);
-                    }
-                } else {
-                    pendingReadsLimiter.release(handle);
-                }
-                originalCallback.readEntriesComplete(entries, ctx2);
-            }
-
-            @Override
-            public void readEntriesFailed(ManagedLedgerException exception, Object ctx2) {
-                pendingReadsLimiter.release(handle);
-                originalCallback.readEntriesFailed(exception, ctx2);
-            }
-        };
+        ReadEntriesCallback wrappedCallback =
+                new PermitReleasingReadEntriesCallback(pendingReadsLimiter, handle, originalCallback);
         doAsyncReadEntriesByPosition(lh, firstPosition, lastPosition, numberOfEntries, maxSizeBytes,
                 expectedReadCount, wrappedCallback, ctx);
     }

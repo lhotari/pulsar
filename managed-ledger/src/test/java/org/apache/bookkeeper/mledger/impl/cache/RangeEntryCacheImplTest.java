@@ -22,6 +22,7 @@ import static org.apache.bookkeeper.mledger.util.ManagedLedgerTestUtil.defaultCo
 import static org.apache.bookkeeper.mledger.util.ManagedLedgerUtils.NO_MAX_SIZE_LIMIT;
 import static org.apache.pulsar.common.allocator.PulsarByteBufAllocator.ML_CACHE_ALLOCATOR_NAME;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -35,15 +36,18 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntSupplier;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.api.LedgerEntries;
@@ -153,6 +157,194 @@ public class RangeEntryCacheImplTest {
                 if (referenceCountedEntry.refCnt() > 0) {
                     referenceCountedEntry.release(referenceCountedEntry.refCnt());
                 }
+            }
+        }
+    }
+
+    @Test
+    public void testReadPermitsReleasedForEmptyResult() {
+        InflightReadsLimiter limiter = mockEntryCacheManager.getInflightReadsLimiter();
+        InflightReadsLimiter.Handle handle = new InflightReadsLimiter.Handle(300, 0, true);
+        Object expectedContext = new Object();
+        AtomicInteger callbackCount = new AtomicInteger();
+        doAnswer(invocation -> {
+            AsyncCallbacks.ReadEntriesCallback callback = invocation.getArgument(5);
+            callback.readEntriesComplete(List.of(), invocation.getArgument(6));
+            return null;
+        }).when(pendingReadsManager).readEntries(any(), anyLong(), anyLong(), anyLong(), any(), any(), any());
+
+        rangeEntryCache.doAsyncReadEntriesWithAcquiredPermits(lh,
+                PositionFactory.create(1, 0), PositionFactory.create(1, 0), 1, NO_MAX_SIZE_LIMIT, expectedReadCount,
+                new AsyncCallbacks.ReadEntriesCallback() {
+                    @Override
+                    public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                        verify(limiter, times(1)).release(handle);
+                        assertThat(entries).isEmpty();
+                        assertThat(ctx).isSameAs(expectedContext);
+                        callbackCount.incrementAndGet();
+                    }
+
+                    @Override
+                    public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                        throw new AssertionError("Unexpected read failure", exception);
+                    }
+                }, expectedContext, handle, 300);
+
+        assertThat(callbackCount).hasValue(1);
+        verify(limiter, times(1)).release(handle);
+    }
+
+    @Test
+    public void testReadPermitsReleasedForFailedResult() {
+        InflightReadsLimiter limiter = mockEntryCacheManager.getInflightReadsLimiter();
+        InflightReadsLimiter.Handle handle = new InflightReadsLimiter.Handle(300, 0, true);
+        ManagedLedgerException expectedException = new ManagedLedgerException("expected");
+        Object expectedContext = new Object();
+        AtomicInteger callbackCount = new AtomicInteger();
+        AtomicReference<AsyncCallbacks.ReadEntriesCallback> wrappedCallback = new AtomicReference<>();
+        doAnswer(invocation -> {
+            AsyncCallbacks.ReadEntriesCallback callback = invocation.getArgument(5);
+            wrappedCallback.set(callback);
+            callback.readEntriesFailed(expectedException, invocation.getArgument(6));
+            return null;
+        }).when(pendingReadsManager).readEntries(any(), anyLong(), anyLong(), anyLong(), any(), any(), any());
+
+        assertThatThrownBy(() -> rangeEntryCache.doAsyncReadEntriesWithAcquiredPermits(lh,
+                    PositionFactory.create(1, 0), PositionFactory.create(1, 0), 1, NO_MAX_SIZE_LIMIT,
+                    expectedReadCount, new AsyncCallbacks.ReadEntriesCallback() {
+                        @Override
+                        public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                            throw new AssertionError("Unexpected successful read");
+                        }
+
+                        @Override
+                        public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                            verify(limiter, times(1)).release(handle);
+                            assertThat(exception).isSameAs(expectedException);
+                            assertThat(ctx).isSameAs(expectedContext);
+                            callbackCount.incrementAndGet();
+                            throw new RuntimeException("expected callback failure");
+                        }
+                    }, expectedContext, handle, 300))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("expected callback failure");
+
+        assertThat(callbackCount).hasValue(1);
+        wrappedCallback.get().readEntriesFailed(expectedException, expectedContext);
+        assertThat(callbackCount).hasValue(1);
+        verify(limiter, times(1)).release(handle);
+    }
+
+    @Test
+    public void testReadPermitsReleasedWhenSuccessfulCallbackThrows() {
+        InflightReadsLimiter limiter = mockEntryCacheManager.getInflightReadsLimiter();
+        InflightReadsLimiter.Handle handle = new InflightReadsLimiter.Handle(300, 0, true);
+        Object expectedContext = new Object();
+        AtomicInteger callbackCount = new AtomicInteger();
+        AtomicReference<AsyncCallbacks.ReadEntriesCallback> wrappedCallback = new AtomicReference<>();
+        AtomicReference<EntryImpl> returnedEntry = new AtomicReference<>();
+        doAnswer(invocation -> {
+            AsyncCallbacks.ReadEntriesCallback callback = invocation.getArgument(5);
+            EntryImpl entry = EntryImpl.create(1, 0, Unpooled.EMPTY_BUFFER);
+            wrappedCallback.set(callback);
+            returnedEntry.set(entry);
+            callback.readEntriesComplete(List.of(entry), invocation.getArgument(6));
+            return null;
+        }).when(pendingReadsManager).readEntries(any(), anyLong(), anyLong(), anyLong(), any(), any(), any());
+
+        assertThatThrownBy(() -> rangeEntryCache.doAsyncReadEntriesWithAcquiredPermits(lh,
+                    PositionFactory.create(1, 0), PositionFactory.create(1, 0), 1, NO_MAX_SIZE_LIMIT,
+                    expectedReadCount, new AsyncCallbacks.ReadEntriesCallback() {
+                        @Override
+                        public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                            assertThat(entries).containsExactly(returnedEntry.get());
+                            assertThat(ctx).isSameAs(expectedContext);
+                            callbackCount.incrementAndGet();
+                            throw new RuntimeException("expected callback failure");
+                        }
+
+                        @Override
+                        public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                            throw new AssertionError("Unexpected read failure", exception);
+                        }
+                    }, expectedContext, handle, 300))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("expected callback failure");
+
+        assertThat(callbackCount).hasValue(1);
+        verify(limiter, never()).release(any());
+        wrappedCallback.get().readEntriesComplete(List.of(), expectedContext);
+        assertThat(callbackCount).hasValue(1);
+        verify(limiter, never()).release(any());
+
+        returnedEntry.get().release();
+        verify(limiter, times(1)).release(handle);
+    }
+
+    @Test(timeOut = 30_000)
+    public void testReadPermitsReleasedAfterConcurrentShuffledDeallocation() throws Exception {
+        int entryCount = 1_000;
+        InflightReadsLimiter limiter = mockEntryCacheManager.getInflightReadsLimiter();
+        InflightReadsLimiter.Handle handle = new InflightReadsLimiter.Handle(300, 0, true);
+        AtomicInteger preExistingCallbackCount = new AtomicInteger();
+        Object expectedContext = new Object();
+        CompletableFuture<List<Entry>> result = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            AsyncCallbacks.ReadEntriesCallback callback = invocation.getArgument(5);
+            Object ctx = invocation.getArgument(6);
+            List<Entry> entries = new ArrayList<>(entryCount);
+            for (int i = 0; i < entryCount; i++) {
+                EntryImpl entry = EntryImpl.create(1, i, Unpooled.EMPTY_BUFFER);
+                if (i == entryCount / 2) {
+                    entry.onDeallocate(preExistingCallbackCount::incrementAndGet);
+                }
+                entries.add(entry);
+            }
+            callback.readEntriesComplete(entries, ctx);
+            return null;
+        }).when(pendingReadsManager).readEntries(any(), anyLong(), anyLong(), anyLong(), any(), any(), any());
+
+        rangeEntryCache.doAsyncReadEntriesWithAcquiredPermits(lh,
+                PositionFactory.create(1, 0), PositionFactory.create(1, entryCount - 1), entryCount,
+                NO_MAX_SIZE_LIMIT, expectedReadCount, new AsyncCallbacks.ReadEntriesCallback() {
+                    @Override
+                    public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                        assertThat(ctx).isSameAs(expectedContext);
+                        result.complete(entries);
+                    }
+
+                    @Override
+                    public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                        result.completeExceptionally(exception);
+                    }
+                }, expectedContext, handle, 300);
+
+        List<Entry> entries = result.get(5, TimeUnit.SECONDS);
+        Collections.shuffle(entries, new Random(1));
+        Entry lastEntry = entries.remove(entries.size() - 1);
+        ExecutorService executor = Executors.newFixedThreadPool(8);
+        try {
+            CompletableFuture<?>[] releases = entries.stream()
+                    .map(entry -> CompletableFuture.runAsync(entry::release, executor))
+                    .toArray(CompletableFuture[]::new);
+            CompletableFuture.allOf(releases).get(10, TimeUnit.SECONDS);
+            verify(limiter, never()).release(any());
+
+            lastEntry.release();
+            verify(limiter, times(1)).release(handle);
+            assertThat(preExistingCallbackCount).hasValue(1);
+        } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+            for (Entry entry : entries) {
+                ReferenceCountedEntry referenceCountedEntry = (ReferenceCountedEntry) entry;
+                if (referenceCountedEntry.refCnt() > 0) {
+                    referenceCountedEntry.release(referenceCountedEntry.refCnt());
+                }
+            }
+            ReferenceCountedEntry referenceCountedLastEntry = (ReferenceCountedEntry) lastEntry;
+            if (referenceCountedLastEntry.refCnt() > 0) {
+                referenceCountedLastEntry.release(referenceCountedLastEntry.refCnt());
             }
         }
     }
