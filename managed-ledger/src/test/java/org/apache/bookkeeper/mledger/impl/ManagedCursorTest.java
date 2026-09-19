@@ -6208,7 +6208,13 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         skippedPositions.add(map.get(15).getEntryId());
         skippedPositions.add(map.get(16).getEntryId());
 
-        Predicate<Position> skipCondition = position -> skippedPositions.contains(position.getEntryId());
+        List<Position> retainedPredicatePositions = new ArrayList<>();
+        List<Position> predicatePositionSnapshots = new ArrayList<>();
+        Predicate<Position> skipCondition = position -> {
+            retainedPredicatePositions.add(position);
+            predicatePositionSnapshots.add(PositionFactory.create(position.getLedgerId(), position.getEntryId()));
+            return skippedPositions.contains(position.getEntryId());
+        };
         List<Entry> readEntries = new ArrayList<>();
 
         CompletableFuture<Void> f0 = new CompletableFuture<>();
@@ -6248,6 +6254,10 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
             long entryId = entry.getEntryId();
             assertTrue(actualReadEntryIds.contains(entryId));
         }
+
+        readEntries.forEach(Entry::release);
+        assertEquals(retainedPredicatePositions, predicatePositionSnapshots);
+        assertTrue(retainedPredicatePositions.size() > 1);
 
         Position cursorReadPosition = cursor.getReadPosition();
         Position expectReadPosition = maxReadPosition;

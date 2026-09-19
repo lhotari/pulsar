@@ -31,15 +31,68 @@ import java.util.concurrent.TimeUnit;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedger;
+import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerNotFoundException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.ReadOnlyCursor;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 public class ReadOnlyCursorTest extends MockedBookKeeperTestCase {
+
+    @DataProvider(name = "waitingReads")
+    public Object[][] waitingReads() {
+        return new Object[][] {{false}, {true}};
+    }
+
+    @Test(dataProvider = "waitingReads")
+    void deletionOverrideIsPreserved(boolean wait) throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("deletionOverride-" + wait,
+                new ManagedLedgerConfig().setRetentionTime(1, TimeUnit.HOURS));
+        List<Position> positions = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            positions.add(ledger.addEntry(new byte[] {(byte) i}));
+        }
+        ReadOnlyCursorImpl cursor = new ReadOnlyCursorImpl(bkc, ledger, PositionFactory.EARLIEST, "custom") {
+            @Override
+            public boolean isMessageDeleted(Position position) {
+                return position.getEntryId() % 2 == 0;
+            }
+        };
+        List<Entry> entries = null;
+        try {
+            CompletableFuture<List<Entry>> result = new CompletableFuture<>();
+            AsyncCallbacks.ReadEntriesCallback callback = new AsyncCallbacks.ReadEntriesCallback() {
+                @Override
+                public void readEntriesComplete(List<Entry> readEntries, Object ctx) {
+                    result.complete(readEntries);
+                }
+
+                @Override
+                public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                    result.completeExceptionally(exception);
+                }
+            };
+            if (wait) {
+                cursor.asyncReadEntriesOrWait(2, callback, null, PositionFactory.LATEST);
+            } else {
+                cursor.asyncReadEntries(2, callback, null, PositionFactory.LATEST);
+            }
+            entries = result.get(10, TimeUnit.SECONDS);
+            assertEquals(entries.size(), 2);
+            assertEquals(entries.get(0).getPosition(), positions.get(1));
+            assertEquals(entries.get(1).getPosition(), positions.get(3));
+        } finally {
+            if (entries != null) {
+                entries.forEach(Entry::release);
+            }
+            cursor.close();
+            ledger.close();
+        }
+    }
 
     @Test
     void notFound() throws Exception {

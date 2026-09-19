@@ -971,7 +971,8 @@ public class ManagedCursorImpl implements ManagedCursor {
                                      Object ctx, Position maxPosition, Predicate<Position> skipCondition) {
         PENDING_READ_OPS_UPDATER.incrementAndGet(this);
         // Skip deleted entries.
-        skipCondition = skipCondition == null ? this::isMessageDeleted : skipCondition.or(this::isMessageDeleted);
+        skipCondition = skipCondition == null ? defaultSkipCondition()
+                : skipCondition.or(this::isMessageDeleted);
         OpReadEntry op = OpReadEntry.create(this, readPosition, numOfEntriesToRead, maxSizeBytes, callback, ctx,
                 maxPosition, skipCondition, true);
         ledger.asyncReadEntries(op);
@@ -1128,7 +1129,8 @@ public class ManagedCursorImpl implements ManagedCursor {
             readEntriesWithSkip(numberOfEntriesToRead, maxSizeBytes, callback, ctx, maxPosition, skipCondition);
         } else {
             // Skip deleted entries.
-            skipCondition = skipCondition == null ? this::isMessageDeleted : skipCondition.or(this::isMessageDeleted);
+            skipCondition = skipCondition == null ? defaultSkipCondition()
+                    : skipCondition.or(this::isMessageDeleted);
             OpReadEntry op = OpReadEntry.create(this, readPosition, numberOfEntriesToRead, maxSizeBytes, callback,
                     ctx, maxPosition, skipCondition, true);
             int opReadId = op.id;
@@ -3961,6 +3963,22 @@ public class ManagedCursorImpl implements ManagedCursor {
         lock.readLock().lock();
         try {
             return internalIsMessageDeleted(position);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    private Predicate<Position> defaultSkipCondition() {
+        // Subclasses can override the public deletion check, notably read-only cursors with no mark-delete position.
+        return getClass() == ManagedCursorImpl.class ? (PositionPredicate) this::isMessageDeleted
+                : this::isMessageDeleted;
+    }
+
+    private boolean isMessageDeleted(long ledgerId, long entryId) {
+        lock.readLock().lock();
+        try {
+            return markDeletePosition.compareTo(ledgerId, entryId) >= 0
+                    || individualDeletedMessages.contains(ledgerId, entryId);
         } finally {
             lock.readLock().unlock();
         }
