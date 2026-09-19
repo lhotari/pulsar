@@ -28,7 +28,6 @@ import io.github.merlimat.slog.Logger;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.Promise;
 import io.opentelemetry.api.common.Attributes;
-import it.unimi.dsi.fastutil.objects.ObjectIntPair;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -621,20 +620,8 @@ public class Consumer {
         for (int i = 0; i < ack.getMessageIdsCount(); i++) {
             MessageIdData msgId = ack.getMessageIdAt(i);
             boolean hasAckSet = msgId.getAckSetsCount() > 0;
-            ObjectIntPair<Consumer> ackOwnerConsumerAndBatchSize =
-                    getAckOwnerConsumerAndBatchSize(msgId.getLedgerId(), msgId.getEntryId());
-
-            if (hasTxn && ackOwnerConsumerAndBatchSize == null) {
-                log.warn()
-                        .attr("ledgerId", msgId.getLedgerId())
-                        .attr("entryId", msgId.getEntryId())
-                        .log("Acknowledging message that was already deleted");
-                continue;
-            }
-
-            Consumer ackOwnerConsumer = ackOwnerConsumerAndBatchSize.left();
-
             if (hasTxn) {
+                Consumer ackOwnerConsumer = getAckOwnerConsumer(msgId.getLedgerId(), msgId.getEntryId());
                 // Transactional: use batch size from message ID (not from pendingAcks, which may not
                 // exist for non-Shared subscriptions). PendingAckHandleImpl needs the actual batch size
                 // to correctly track ack set state.
@@ -677,11 +664,9 @@ public class Consumer {
             } else {
                 // Non-transactional: build position and compute acked count, defer state updates.
                 Position position = buildPosition(msgId);
-                int batchSize = ackOwnerConsumerAndBatchSize.rightInt();
-                long ackedCount = computeAckedCount(msgId, position, ackOwnerConsumer, batchSize);
+                long ackedCount = addPendingAckCompletion(msgId, position, hasAckSet, pendingAckCompletions);
 
                 nonTxnPositions.add(position);
-                pendingAckCompletions.add(ackOwnerConsumer, position, hasAckSet, ackedCount);
                 totalAckCount += ackedCount;
             }
 
@@ -887,31 +872,49 @@ public class Consumer {
         }
     }
 
-    /**
-     * Retrieves the acknowledgment owner consumer and batch size for the specified ledgerId and entryId.
-     *
-     * @param ledgerId The ID of the ledger.
-     * @param entryId The ID of the entry.
-     * @return Pair<Consumer, BatchSize>
-     */
-    private ObjectIntPair<Consumer> getAckOwnerConsumerAndBatchSize(long ledgerId, long entryId) {
+    private long addPendingAckCompletion(MessageIdData msgId, Position position, boolean hasAckSet,
+                                         PendingAckCompletions pendingAckCompletions) {
+        Consumer ackOwnerConsumer = this;
+        int batchSize = 1;
         if (Subscription.isIndividualAckMode(subType)) {
-            int remainingUnacked = getPendingAcks().getRemainingUnacked(ledgerId, entryId);
+            int remainingUnacked = getPendingAcks()
+                    .getRemainingUnacked(msgId.getLedgerId(), msgId.getEntryId());
             if (remainingUnacked != PENDING_ACK_NOT_FOUND) {
-                return ObjectIntPair.of(this, remainingUnacked);
+                batchSize = remainingUnacked;
             } else {
                 // If there are more consumers, this step will consume more CPU, and it should be optimized later.
                 for (Consumer consumer : subscription.getConsumers()) {
                     if (consumer != this) {
-                        remainingUnacked = consumer.getPendingAcks().getRemainingUnacked(ledgerId, entryId);
+                        remainingUnacked = consumer.getPendingAcks()
+                                .getRemainingUnacked(msgId.getLedgerId(), msgId.getEntryId());
                         if (remainingUnacked != PENDING_ACK_NOT_FOUND) {
-                            return ObjectIntPair.of(consumer, remainingUnacked);
+                            ackOwnerConsumer = consumer;
+                            batchSize = remainingUnacked;
+                            break;
                         }
                     }
                 }
             }
         }
-        return ObjectIntPair.of(this, 1);
+        long ackedCount = computeAckedCount(msgId, position, ackOwnerConsumer, batchSize);
+        pendingAckCompletions.add(ackOwnerConsumer, position, hasAckSet, ackedCount);
+        return ackedCount;
+    }
+
+    private Consumer getAckOwnerConsumer(long ledgerId, long entryId) {
+        if (Subscription.isIndividualAckMode(subType)) {
+            if (getPendingAcks().getRemainingUnacked(ledgerId, entryId) != PENDING_ACK_NOT_FOUND) {
+                return this;
+            }
+            for (Consumer consumer : subscription.getConsumers()) {
+                if (consumer != this
+                        && consumer.getPendingAcks().getRemainingUnacked(ledgerId, entryId)
+                        != PENDING_ACK_NOT_FOUND) {
+                    return consumer;
+                }
+            }
+        }
+        return this;
     }
 
     private long[] getCursorAckSet(Position position) {
