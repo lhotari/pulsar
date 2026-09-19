@@ -650,6 +650,38 @@ public class PositionRangeSetTest {
         assertEquals(ledgerCount.intValue(), 1);
     }
 
+    @Test
+    public void testConcurrentLookupTracksExistingBitmapAndNewLedgers() {
+        PositionRangeSet set = newSet();
+
+        assertFalse(set.containsConcurrent(1, 1));
+        set.addOpenClosed(1, 0, 1, 1);
+        assertTrue(set.containsConcurrent(1, 1));
+
+        // Updating an existing ledger is visible through the published directory without republishing it.
+        set.addOpenClosed(1, 1, 1, 2);
+        assertTrue(set.containsConcurrent(1, 2));
+
+        // A newly added ledger publishes a new directory.
+        set.addOpenClosed(2, 0, 2, 1);
+        assertTrue(set.containsConcurrent(2, 1));
+    }
+
+    @Test
+    public void testConcurrentLookupCanBeInvalidatedBeforeReset() {
+        PositionRangeSet set = newSet();
+        set.addOpenClosed(1, 0, 1, 1);
+        assertTrue(set.containsConcurrent(1, 1));
+
+        set.invalidateConcurrentLookup();
+        assertFalse(set.containsConcurrent(1, 1));
+
+        // The authoritative state is unchanged until the reset clears it.
+        assertTrue(set.contains(1, 1));
+        set.clear();
+        assertFalse(set.containsConcurrent(1, 1));
+    }
+
 
     private List<Range<Position>> getConnectedRange(Set<Range<Position>> gRanges) {
         List<Range<Position>> gRangeConnected = new ArrayList<>();

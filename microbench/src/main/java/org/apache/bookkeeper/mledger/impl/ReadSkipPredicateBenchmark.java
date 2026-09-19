@@ -51,6 +51,7 @@ public class ReadSkipPredicateBenchmark {
     private PositionRangeSet ranges;
     private Predicate<Position> legacy;
     private PositionPredicate primitive;
+    private PositionPredicate concurrent;
     private int nextEntry;
 
     @Setup
@@ -62,6 +63,7 @@ public class ReadSkipPredicateBenchmark {
         }
         legacy = this::isDeleted;
         primitive = this::isDeleted;
+        concurrent = this::isDeletedConcurrent;
     }
 
     private boolean isDeleted(Position position) {
@@ -83,6 +85,10 @@ public class ReadSkipPredicateBenchmark {
         }
     }
 
+    private boolean isDeletedConcurrent(long ledgerId, long entryId) {
+        return markDeletePosition.compareTo(ledgerId, entryId) >= 0 || ranges.containsConcurrent(ledgerId, entryId);
+    }
+
     @Benchmark
     public boolean positionLookup() {
         return legacy.test(PositionFactory.create(1, nextEntry++ & 32767));
@@ -91,5 +97,10 @@ public class ReadSkipPredicateBenchmark {
     @Benchmark
     public boolean primitiveLookup() {
         return PositionPredicate.test(primitive, 1, nextEntry++ & 32767);
+    }
+
+    @Benchmark
+    public boolean concurrentLookup() {
+        return PositionPredicate.test(concurrent, 1, nextEntry++ & 32767);
     }
 }
