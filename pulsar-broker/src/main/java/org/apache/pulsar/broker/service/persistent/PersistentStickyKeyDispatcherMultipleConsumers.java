@@ -23,6 +23,7 @@ import com.google.common.annotations.VisibleForTesting;
 import io.github.merlimat.slog.Logger;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -474,9 +475,11 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         Map<Consumer, MutableInt> permitsForConsumer = new Object2ObjectOpenHashMap<>(consumerList.size());
         boolean lookAheadAllowed = isReplayQueueSizeBelowLimit();
         // in normal read mode, keep track of consumers that are blocked by hash, to check if look-ahead could be useful
-        Set<Consumer> blockedByHashConsumers = lookAheadAllowed && readType == ReadType.Normal ? new HashSet<>() : null;
+        Set<Consumer> blockedByHashConsumers = lookAheadAllowed && readType == ReadType.Normal
+                ? new ObjectOpenHashSet<>(consumerList.size()) : null;
         // in replay read mode, keep track of consumers for entries, used for look-ahead check
-        Set<Consumer> consumersForEntriesForLookaheadCheck = lookAheadAllowed ? new HashSet<>() : null;
+        Set<Consumer> consumersForEntriesForLookaheadCheck = lookAheadAllowed
+                ? new ObjectOpenHashSet<>(consumerList.size()) : null;
         // track already blocked hashes to block any further messages with the same hash
         IntOpenHashSet alreadyBlockedHashes = new IntOpenHashSet();
 
