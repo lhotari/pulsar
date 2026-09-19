@@ -23,7 +23,7 @@ import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.concurrent.FastThreadLocalThread;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.StampedLock;
+import java.util.concurrent.locks.ReentrantLock;
 import org.apache.datasketches.kll.KllDoublesSketch;
 import org.jspecify.annotations.Nullable;
 
@@ -67,7 +67,9 @@ class ThreadLocalAccessor {
 
         private final KllDoublesSketch successSketch = KllDoublesSketch.newHeapInstance();
         private final KllDoublesSketch failSketch = KllDoublesSketch.newHeapInstance();
-        private final StampedLock lock = new StampedLock();
+        // Each LocalData has one updating owner. An exclusive lock is sufficient to coordinate that owner with
+        // the infrequent metrics rotation and is cheaper on the per-event path than a read-write lock.
+        private final ReentrantLock lock = new ReentrantLock();
         // Keep a weak reference to the owner thread so that we can remove the LocalData when the thread
         // is not alive anymore or has been garbage collected.
         // This reference isn't needed when the owner thread is a FastThreadLocalThread and will be null in that case.
@@ -99,7 +101,7 @@ class ThreadLocalAccessor {
         }
 
         void record(KllDoublesSketch aggregateSuccess, @Nullable KllDoublesSketch aggregateFail) {
-            long stamp = lock.writeLock();
+            lock.lock();
             try {
                 aggregateSuccess.merge(successSketch);
                 successSketch.reset();
@@ -108,25 +110,25 @@ class ThreadLocalAccessor {
                     failSketch.reset();
                 }
             } finally {
-                lock.unlockWrite(stamp);
+                lock.unlock();
             }
         }
 
         void updateSuccess(double value) {
-            long stamp = lock.readLock();
+            lock.lock();
             try {
                 successSketch.update(value);
             } finally {
-                lock.unlockRead(stamp);
+                lock.unlock();
             }
         }
 
         void updateFail(double value) {
-            long stamp = lock.readLock();
+            lock.lock();
             try {
                 failSketch.update(value);
             } finally {
-                lock.unlockRead(stamp);
+                lock.unlock();
             }
         }
     }
