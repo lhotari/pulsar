@@ -46,6 +46,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         IotScenario scenario = scenario();
         Files.createDirectories(output);
         DeviceSequenceTracker tracker = new DeviceSequenceTracker(scenario.deviceCount());
+        ProcessingDelaySampler processingDelay = ProcessingDelaySampler.from(scenario);
         List<ClientAndConsumer> pods = new ArrayList<>(scenario.clientsPerApplication());
         AtomicBoolean stopping = new AtomicBoolean();
         AtomicReference<Throwable> restarterFailure = new AtomicReference<>();
@@ -54,12 +55,12 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         PulsarClientSharedResources sharedResources = SharedClientResources.create(scenario);
         try {
             for (int pod = 0; pod < scenario.clientsPerApplication(); pod++) {
-                pods.add(createPod(scenario, sharedResources, tracker, pod));
+                pods.add(createPod(scenario, sharedResources, tracker, processingDelay, pod));
             }
             System.out.println("READY application=" + applicationIndex + " clients=" + pods.size());
             if (scenario.clientRestartIntervalSeconds() > 0 && scenario.clientRestartFraction() > 0) {
-                restarter = new Thread(() -> restartClients(scenario, sharedResources, tracker, pods, stopping,
-                                restarterFailure),
+                restarter = new Thread(() -> restartClients(scenario, sharedResources, tracker, processingDelay,
+                                pods, stopping, restarterFailure),
                         "iot-client-restarter");
                 restarter.start();
             }
@@ -101,7 +102,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
     }
 
     private ClientAndConsumer createPod(IotScenario scenario, PulsarClientSharedResources sharedResources,
-                                        DeviceSequenceTracker tracker, int podIndex) throws Exception {
+                                        DeviceSequenceTracker tracker, ProcessingDelaySampler processingDelay,
+                                        int podIndex) throws Exception {
         PulsarClient client = PulsarClient.builder()
                 .serviceUrl(scenario.serviceUrl())
                 .sharedResources(sharedResources)
@@ -121,6 +123,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                                     || ByteBuffer.wrap(key).getLong() != decoded.deviceId()) {
                                 throw new IllegalArgumentException("Telemetry key does not match payload device ID");
                             }
+                            processingDelay.apply(decoded.deviceId(), decoded.sequence(), applicationIndex);
                             tracker.received(decoded.deviceId(), decoded.sequence(), message.getMessageId(),
                                     decoded.sentNanos(), message.getTopicName(), Thread.currentThread().getName());
                             currentConsumer.acknowledgeAsync(message);
@@ -138,7 +141,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
     }
 
     private void restartClients(IotScenario scenario, PulsarClientSharedResources sharedResources,
-                                DeviceSequenceTracker tracker, List<ClientAndConsumer> pods,
+                                DeviceSequenceTracker tracker, ProcessingDelaySampler processingDelay,
+                                List<ClientAndConsumer> pods,
                                 AtomicBoolean stopping, AtomicReference<Throwable> failure) {
         int restartCount = Math.max(1,
                 (int) Math.ceil(scenario.clientsPerApplication() * scenario.clientRestartFraction()));
@@ -150,7 +154,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     synchronized (pods) {
                         ClientAndConsumer previous = pods.get(index);
                         previous.close();
-                        pods.set(index, createPod(scenario, sharedResources, tracker, index));
+                        pods.set(index, createPod(scenario, sharedResources, tracker, processingDelay, index));
                     }
                 }
             } catch (InterruptedException interrupted) {

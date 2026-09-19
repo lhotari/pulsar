@@ -28,7 +28,10 @@ public record IotScenario(String serviceUrl, String topicPrefix, String subscrip
                           int clientsPerApplication, int ioThreads, int listenerThreads,
                           int maxOutstanding, boolean batchingEnabled, boolean precreateProducers,
                           int consumerTimeoutSeconds,
-                          int clientRestartIntervalSeconds, double clientRestartFraction) {
+                          int clientRestartIntervalSeconds, double clientRestartFraction,
+                          double processingDelayMeanMicros, double processingDelayStdDevMicros,
+                          double processingDelayOutlierProbability, double processingDelayOutlierMeanMicros,
+                          double processingDelayOutlierStdDevMicros) {
     public IotScenario {
         if (serviceUrl == null || serviceUrl.isBlank() || topicPrefix == null || topicPrefix.isBlank()
                 || subscriptionPrefix == null || subscriptionPrefix.isBlank()) {
@@ -39,7 +42,15 @@ public record IotScenario(String serviceUrl, String topicPrefix, String subscrip
                 || deviceCount < 1 || gatewayCount < 1 || topicCount < 1 || applicationCount < 1
                 || clientsPerApplication < 1 || ioThreads < 1 || listenerThreads < 1
                 || maxOutstanding < 1 || consumerTimeoutSeconds < durationSeconds
-                || clientRestartIntervalSeconds < 0 || clientRestartFraction < 0 || clientRestartFraction > 1) {
+                || clientRestartIntervalSeconds < 0 || clientRestartFraction < 0 || clientRestartFraction > 1
+                || processingDelayMeanMicros < 0 || processingDelayStdDevMicros < 0
+                || processingDelayOutlierProbability < 0 || processingDelayOutlierProbability > 1
+                || processingDelayOutlierMeanMicros < 0 || processingDelayOutlierStdDevMicros < 0
+                || !Double.isFinite(processingDelayMeanMicros)
+                || !Double.isFinite(processingDelayStdDevMicros)
+                || !Double.isFinite(processingDelayOutlierProbability)
+                || !Double.isFinite(processingDelayOutlierMeanMicros)
+                || !Double.isFinite(processingDelayOutlierStdDevMicros)) {
             throw new IllegalArgumentException("IoT scenario counts and sizes are invalid");
         }
     }

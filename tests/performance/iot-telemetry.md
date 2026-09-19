@@ -39,6 +39,14 @@ application-visible order across Key_Shared hash-range reassignment.
   consume with ten isolated clients on one Key_Shared subscription.
 - [`iot-telemetry-high-rate-profile.yaml`](scenarios/iot-telemetry-high-rate-profile.yaml) enables broker and
   producer async-profiler recordings for the same saturation workload.
+- [`iot-telemetry-key-shared-50.yaml`](scenarios/iot-telemetry-key-shared-50.yaml) concentrates two million
+  messages on one Key_Shared subscription with 50 isolated consumers to exercise cursor and ACK contention.
+- [`iot-telemetry-key-shared-50-processing.yaml`](scenarios/iot-telemetry-key-shared-50-processing.yaml) rate
+  limits that topology to 1,000 msg/s and adds deterministic processing-time variance. Most messages use a
+  truncated Gaussian centered at 2 ms; 3% use a long-tail Gaussian centered at 50 ms. Processing completes
+  before sequence validation and acknowledgment.
+- [`iot-telemetry-key-shared-50-profile.yaml`](scenarios/iot-telemetry-key-shared-50-profile.yaml) records broker
+  CPU, allocation, and contended-lock events for the saturation variant without wall-clock sampling.
 
 Build the mountable workload distribution without running a cluster:
 
@@ -65,6 +73,13 @@ one key as required for Key_Shared delivery.
 Set `rate: 0` together with a positive `numberOfMessages` to remove producer pacing. Set
 `precreateProducers: true` to open every gateway/topic producer before throughput timing begins. The producer
 summary records elapsed time and whole-run messages/second.
+
+Consumer processing delay is disabled when all `processingDelay*` fields are zero. The delay sampler precomputes
+a deterministic table, avoiding random-number and Gaussian math in the measured message path. Configure the
+normal mean and standard deviation with `processingDelayMeanMicros` and `processingDelayStdDevMicros`; configure
+the long tail with `processingDelayOutlierProbability`, `processingDelayOutlierMeanMicros`, and
+`processingDelayOutlierStdDevMicros`. Samples are truncated at zero and keyed by application, device, and sequence,
+so two broker revisions receive the same processing-delay pattern.
 
 ## Async-profiler
 
