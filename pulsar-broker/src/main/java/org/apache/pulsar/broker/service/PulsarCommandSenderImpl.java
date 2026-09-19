@@ -239,10 +239,11 @@ public class PulsarCommandSenderImpl implements PulsarCommandSender {
         final ChannelHandlerContext ctx = cnx.ctx();
         final ChannelPromise writePromise = ctx.newPromise();
         ctx.channel().eventLoop().execute(() -> {
-            // this list is always accessed in the same thread (the eventLoop here)
-            // and in the completion of the writePromise
-            // it is safe to use a simple ArrayList
-            List<Entry> entriesToRelease = new ArrayList<>(entries.size());
+            // Legacy clients can reject individual batch entries, so retain a separate release list for them.
+            // Modern clients accept every non-null entry and the owned dispatch list is already the release list.
+            boolean batchMessageCompatibleVersion = cnx.isBatchMessageCompatibleVersion();
+            List<Entry> compatibleEntriesToRelease = batchMessageCompatibleVersion
+                    ? null : new ArrayList<>(entries.size());
             for (int i = 0; i < entries.size(); i++) {
                 Entry entry = entries.get(i);
                 if (entry == null) {
@@ -252,7 +253,7 @@ public class PulsarCommandSenderImpl implements PulsarCommandSender {
 
                 int batchSize = batchSizes.getBatchSize(i);
 
-                if (batchSize > 1 && !cnx.isBatchMessageCompatibleVersion()) {
+                if (batchSize > 1 && !batchMessageCompatibleVersion) {
                     log.warn()
                             .attr("topic", topicName)
                             .attr("subscription", subscription)
@@ -299,7 +300,9 @@ public class PulsarCommandSenderImpl implements PulsarCommandSender {
                                 redeliveryCount, metadataAndPayload,
                                 batchIndexesAcks == null ? null : batchIndexesAcks.getAckSet(i), topicName, epoch),
                         ctx.voidPromise());
-                entriesToRelease.add(entry);
+                if (compatibleEntriesToRelease != null) {
+                    compatibleEntriesToRelease.add(entry);
+                }
             }
 
             // Use an empty write here so that we can just tie the flush with the write promise for last entry
@@ -311,7 +314,7 @@ public class PulsarCommandSenderImpl implements PulsarCommandSender {
                 // consumer. It counts the memory as being released when the entry is deallocated
                 // that is that it reaches refcnt=0.
                 // so we need to call release only when we are sure that Netty released the internal ByteBuf
-                entriesToRelease.forEach(Entry::release);
+                releaseEntries(compatibleEntriesToRelease != null ? compatibleEntriesToRelease : entries);
             });
             batchSizes.recyle();
             if (batchIndexesAcks != null) {
@@ -320,6 +323,14 @@ public class PulsarCommandSenderImpl implements PulsarCommandSender {
         });
 
         return writePromise;
+    }
+
+    private static void releaseEntries(List<? extends Entry> entries) {
+        for (Entry entry : entries) {
+            if (entry != null) {
+                entry.release();
+            }
+        }
     }
 
     @Override
