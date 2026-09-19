@@ -148,12 +148,20 @@ class RangeCacheEntryWrapper {
     }
 
     <R> R withWriteLock(Function<RangeCacheEntryWrapper, R> function) {
-        long stamp = lock.writeLock();
+        long stamp = acquireWriteLock();
         try {
             return function.apply(this);
         } finally {
-            lock.unlockWrite(stamp);
+            releaseWriteLock(stamp);
         }
+    }
+
+    long acquireWriteLock() {
+        return lock.writeLock();
+    }
+
+    void releaseWriteLock(long stamp) {
+        lock.unlockWrite(stamp);
     }
 
     void markRequeued() {

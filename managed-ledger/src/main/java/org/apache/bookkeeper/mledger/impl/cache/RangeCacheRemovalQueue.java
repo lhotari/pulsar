@@ -174,16 +174,18 @@ class RangeCacheRemovalQueue {
 
     private EvictionResult handleEviction(EvictionPredicate evictionPredicate, RangeCacheEntryWrapper entry,
                                           RangeCacheRemovalCounters counters) {
-        EvictionResult evictionResult = entry.withWriteLock(e -> {
-            EvictionResult result = evaluateEvictionPredicate(evictionPredicate, counters, e);
+        long stamp = entry.acquireWriteLock();
+        try {
+            EvictionResult result = evaluateEvictionPredicate(evictionPredicate, counters, entry);
             if (result == EvictionResult.REMOVE) {
-                e.rangeCache.removeEntry(e.key, e.value, e, counters, true);
+                entry.rangeCache.removeEntry(entry.key, entry.value, entry, counters, true);
             } else if (result == EvictionResult.REQUEUE) {
-                e.markRequeued();
+                entry.markRequeued();
             }
             return result;
-        });
-        return evictionResult;
+        } finally {
+            entry.releaseWriteLock(stamp);
+        }
     }
 
     private static EvictionResult evaluateEvictionPredicate(EvictionPredicate evictionPredicate,
