@@ -22,6 +22,9 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.BoundType;
 import com.google.common.collect.Range;
 import io.github.merlimat.slog.Logger;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMaps;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectRBTreeMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectSortedMap;
 import java.util.ArrayList;
@@ -47,12 +50,12 @@ import org.apache.pulsar.common.util.collections.LongPairRangeSet;
  *
  * <h2>Thread Safety</h2>
  *
- * <p>This class is not thread-safe. All methods require the caller to provide external
- * synchronization. In normal usage, callers must hold the owning {@link ManagedCursorImpl}'s
- * cursor lock before accessing this class.
+ * <p>This class is not thread-safe. Except for {@link #containsConcurrent(long, long)}, all methods require the
+ * caller to provide external synchronization. In normal usage, callers must hold the owning
+ * {@link ManagedCursorImpl}'s cursor lock before accessing this class.
  *
- * <p>The class intentionally does not maintain internal locking. The cursor lock is the single
- * synchronization boundary for both this structure and related cursor state.
+ * <p>The cursor lock remains the synchronization boundary for authoritative operations and related cursor state.
+ * The concurrent scheduling hint uses a safely published map and the internal synchronization of each bitmap.
  *
  * <h2>Persistence Compatibility</h2>
  *
@@ -78,6 +81,12 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
      * Bit {@code n} in the bitmap represents entry {@code n} in the ledger.
      */
     private final Long2ObjectSortedMap<LongBitmap> rangeBitmapMap = new Long2ObjectRBTreeMap<>();
+    /**
+     * Read-only directory used by the read-scheduling hint. The map itself is never changed after publication,
+     * while its {@link LongBitmap} values support concurrent reads and writes. A new directory is published only
+     * when the set of ledger ids changes, not for each acknowledged entry.
+     */
+    private volatile Long2ObjectMap<LongBitmap> concurrentLookup = Long2ObjectMaps.emptyMap();
     private final LongPairConsumer<Position> consumer;
     private final boolean enableMultiEntry;
 
@@ -103,6 +112,7 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
             markDirty(lowerLedgerId, upperLedgerId);
         }
         long lowerEntryId = lowerEntryIdOpen + 1;
+        boolean ledgerAdded = false;
         if (lowerLedgerId != upperLedgerId) {
             // Extend lower ledger's bitmap only if it already exists and has bits at/after lowerEntryId;
             // otherwise we'd invent acknowledgements that never happened (e.g. (2:10..4:10] must not
@@ -117,12 +127,25 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
                 }
             }
             if (isValid(upperLedgerId, upperEntryId)) {
-                LongBitmap rangeBitmap = rangeBitmapMap.computeIfAbsent(upperLedgerId, k -> LongBitmaps.create());
+                LongBitmap rangeBitmap = rangeBitmapMap.get(upperLedgerId);
+                if (rangeBitmap == null) {
+                    rangeBitmap = LongBitmaps.create();
+                    rangeBitmapMap.put(upperLedgerId, rangeBitmap);
+                    ledgerAdded = true;
+                }
                 rangeBitmap.add(0, upperEntryId + 1);
             }
         } else {
-            LongBitmap rangeBitmap = rangeBitmapMap.computeIfAbsent(lowerLedgerId, k -> LongBitmaps.create());
+            LongBitmap rangeBitmap = rangeBitmapMap.get(lowerLedgerId);
+            if (rangeBitmap == null) {
+                rangeBitmap = LongBitmaps.create();
+                rangeBitmapMap.put(lowerLedgerId, rangeBitmap);
+                ledgerAdded = true;
+            }
             rangeBitmap.add(lowerEntryId, upperEntryId + 1);
+        }
+        if (ledgerAdded) {
+            publishConcurrentLookup();
         }
         invalidateCaches();
     }
@@ -134,6 +157,28 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
             return rangeBitmap.contains(getSafeEntry(entryId));
         }
         return false;
+    }
+
+    /**
+     * Returns an eventually consistent membership result without requiring the cursor lock.
+     *
+     * <p>This method is only suitable as a read-scheduling hint. A concurrent addition may be omitted, causing an
+     * already deleted entry to be read; callers must perform an authoritative check before exposing the entry. A
+     * destructive cursor reset must call {@link #invalidateConcurrentLookup()} before moving its mark-delete
+     * position backwards.
+     */
+    boolean containsConcurrent(long ledgerId, long entryId) {
+        LongBitmap bitmap = concurrentLookup.get(ledgerId);
+        return bitmap != null && bitmap.contains(entryId);
+    }
+
+    /** Prevents new scheduling readers from observing deletion state from before a cursor reset. */
+    void invalidateConcurrentLookup() {
+        concurrentLookup = Long2ObjectMaps.emptyMap();
+    }
+
+    private void publishConcurrentLookup() {
+        concurrentLookup = new Long2ObjectOpenHashMap<>(rangeBitmapMap);
     }
 
     /**
@@ -193,6 +238,7 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
 
     @Override
     public void clear() {
+        invalidateConcurrentLookup();
         rangeBitmapMap.clear();
         resetDirtyKeys();
         invalidateCaches();
@@ -303,12 +349,14 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
 
     @Override
     public void build(Map<Long, long[]> internalRange) {
+        invalidateConcurrentLookup();
         rangeBitmapMap.clear();
         resetDirtyKeys();
 
         internalRange.forEach((ledgerId, ranges) -> {
             rangeBitmapMap.put(ledgerId.longValue(), LongBitmaps.deserializeFromLongArray(ranges));
         });
+        publishConcurrentLookup();
         invalidateCaches();
     }
 
@@ -402,6 +450,7 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
                 .add(lowerEntryIdOpen + 1);
         addOpenClosed(lowerEndpoint.getLedgerId(), lowerEntryIdOpen,
                 upperEndpoint.getLedgerId(), upperEntryIdClosed);
+        publishConcurrentLookup();
     }
 
     @VisibleForTesting

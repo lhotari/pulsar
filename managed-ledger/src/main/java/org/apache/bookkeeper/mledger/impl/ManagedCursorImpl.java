@@ -208,6 +208,9 @@ public class ManagedCursorImpl implements ManagedCursor {
     @VisibleForTesting
     @Nullable protected final ConcurrentSkipListMap<Position, BitSet> batchDeletedIndexes;
     protected final ReadWriteLock lock = new ReentrantReadWriteLock();
+    // Odd while a cursor reset is replacing deletion state. Normal forward acknowledgments do not need this guard:
+    // any mixed view can only cause an extra read, which the authoritative post-I/O filter handles.
+    private volatile long readSchedulingDeletionEpoch;
 
     // Reusable LightProto object for cursor position serialization (used only from persistPositionToLedger)
     private final PositionInfo reusablePositionInfo = new PositionInfo();
@@ -1676,18 +1679,25 @@ public class ManagedCursorImpl implements ManagedCursor {
             });
             MSG_CONSUMED_COUNTER_UPDATER.addAndGet(ManagedCursorImpl.this,
                     -ackedEntriesAfterMdPosition.get().longValue());
-            markDeletePosition = newMarkDeletePosition;
-            lastMarkDeleteEntry = new MarkDeleteEntry(newMarkDeletePosition, isCompactionCursor()
-                    ? getProperties() : Collections.emptyMap(), null, null);
-            individualDeletedMessages.clear();
-            if (batchDeletedIndexes != null) {
-                batchDeletedIndexes.clear();
-                AckSetStateUtil.maybeGetAckSetState(newReadPosition).ifPresent(ackSetState -> {
-                    long[] resetWords = ackSetState.getAckSet();
-                    if (resetWords != null) {
-                        batchDeletedIndexes.put(newReadPosition, BitSet.valueOf(resetWords));
-                    }
-                });
+            readSchedulingDeletionEpoch++;
+            try {
+                // Stop new lock-free scheduling checks from observing individual deletions from before the reset.
+                individualDeletedMessages.invalidateConcurrentLookup();
+                markDeletePosition = newMarkDeletePosition;
+                lastMarkDeleteEntry = new MarkDeleteEntry(newMarkDeletePosition, isCompactionCursor()
+                        ? getProperties() : Collections.emptyMap(), null, null);
+                individualDeletedMessages.clear();
+                if (batchDeletedIndexes != null) {
+                    batchDeletedIndexes.clear();
+                    AckSetStateUtil.maybeGetAckSetState(newReadPosition).ifPresent(ackSetState -> {
+                        long[] resetWords = ackSetState.getAckSet();
+                        if (resetWords != null) {
+                            batchDeletedIndexes.put(newReadPosition, BitSet.valueOf(resetWords));
+                        }
+                    });
+                }
+            } finally {
+                readSchedulingDeletionEpoch++;
             }
 
             Position oldReadPosition = readPosition;
@@ -3970,8 +3980,24 @@ public class ManagedCursorImpl implements ManagedCursor {
 
     private Predicate<Position> defaultSkipCondition() {
         // Subclasses can override the public deletion check, notably read-only cursors with no mark-delete position.
-        return getClass() == ManagedCursorImpl.class ? (PositionPredicate) this::isMessageDeleted
+        return getClass() == ManagedCursorImpl.class ? (PositionPredicate) this::isMessageDeletedForReadScheduling
                 : this::isMessageDeleted;
+    }
+
+    /**
+     * Lock-free scheduling hint. Reads are filtered against the authoritative deletion state after I/O, so racing
+     * acknowledgments may cause extra reads but cannot expose acknowledged entries.
+     */
+    private boolean isMessageDeletedForReadScheduling(long ledgerId, long entryId) {
+        long epoch = readSchedulingDeletionEpoch;
+        if ((epoch & 1) != 0) {
+            return isMessageDeleted(ledgerId, entryId);
+        }
+        Position currentMarkDeletePosition = markDeletePosition;
+        boolean deleted = currentMarkDeletePosition.compareTo(ledgerId, entryId) >= 0
+                || individualDeletedMessages.containsConcurrent(ledgerId, entryId);
+        // Reset is rare. If one overlapped the optimistic check, use the cursor lock for a coherent answer.
+        return epoch == readSchedulingDeletionEpoch ? deleted : isMessageDeleted(ledgerId, entryId);
     }
 
     private boolean isMessageDeleted(long ledgerId, long entryId) {
