@@ -47,6 +47,7 @@ import org.apache.pulsar.common.api.proto.KeyValue;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.Markers;
+import org.apache.pulsar.common.util.FutureUtil;
 
 /**
  * Class that contains all the logic to control and perform the deduplication on the broker side.
@@ -593,45 +594,46 @@ public class MessageDeduplication {
     }
 
     private CompletableFuture<Void> takeSnapshot(Position position) {
-        log.debug("Taking snapshot of sequence ids map");
-
-        if (!snapshotTaking.compareAndSet(false, true)) {
-            log.warn()
-                    .attr("position", position)
-                    .log("There is a pending snapshot when taking snapshot for");
-            return CompletableFuture.completedFuture(null);
-        }
-
-        Map<String, Long> snapshot = new TreeMap<>();
-        highestSequencedPersisted.forEach((producerName, sequenceId) -> {
-            if (snapshot.size() < maxNumberOfProducers) {
-                snapshot.put(producerName, sequenceId);
-            }
-        });
-
         final var cursor = managedCursor;
         if (cursor == null) {
-            log.warn()
-                    .attr("position", position)
-                    .log("Cursor is null when taking snapshot for");
+            // A publish that already passed isEnabled() can race with disabling deduplication.
             return CompletableFuture.completedFuture(null);
         }
-        final var future = markDelete(cursor, position, snapshot).thenRun(() -> {
+
+        if (!snapshotTaking.compareAndSet(false, true)) {
+            // The entry/time thresholds can expire again before the previous snapshot completes.
+            // Later triggers will retry; overlapping snapshots must not overwrite newer cursor properties.
             log.debug()
                     .attr("position", position)
-                    .log("Stored new deduplication snapshot at");
-            lastSnapshotTimestamp = System.currentTimeMillis();
-            snapshotTaking.set(false);
+                    .log("Skipping deduplication snapshot while another snapshot is pending");
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return FutureUtil.supplySafely(() -> {
+            Map<String, Long> snapshot = new TreeMap<>();
+            highestSequencedPersisted.forEach((producerName, sequenceId) -> {
+                if (snapshot.size() < maxNumberOfProducers) {
+                    snapshot.put(producerName, sequenceId);
+                }
+            });
+            return markDelete(cursor, position, snapshot);
+        }).whenComplete((__, error) -> {
+            try {
+                if (error == null) {
+                    lastSnapshotTimestamp = System.currentTimeMillis();
+                    log.debug()
+                            .attr("position", position)
+                            .log("Stored new deduplication snapshot at");
+                } else {
+                    log.warn()
+                            .attr("position", position)
+                            .exception(error)
+                            .log("Failed to store new deduplication snapshot at");
+                }
+            } finally {
+                snapshotTaking.set(false);
+            }
         });
-        future.exceptionally(e -> {
-            log.warn()
-                    .attr("position", position)
-                    .exception(e)
-                    .log("Failed to store new deduplication snapshot at");
-            snapshotTaking.set(false);
-            return null;
-        });
-        return future;
     }
 
     /**
