@@ -250,6 +250,11 @@ public class PulsarCommandSenderImpl implements PulsarCommandSender {
                     continue;
                 }
 
+                if (cnx.getBrokerService().pulsar().isMetadataSessionsClosing()) {
+                    entry.release();
+                    ctx.close();
+                    continue;
+                }
                 int batchSize = batchSizes.getBatchSize(i);
 
                 if (batchSize > 1 && !cnx.isBatchMessageCompatibleVersion()) {

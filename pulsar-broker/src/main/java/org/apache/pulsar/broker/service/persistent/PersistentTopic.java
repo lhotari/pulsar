@@ -674,7 +674,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     @Override
     public void publishMessage(ByteBuf headersAndPayload, PublishContext publishContext) {
         pendingWriteOps.incrementAndGet();
-        if (isFenced) {
+        if (isFenced || brokerService.pulsar().isMetadataSessionsClosing()) {
             publishContext.completed(new TopicFencedException("fenced"), -1, -1);
             decrementPendingWriteOpsAndCheck();
             return;
@@ -5177,7 +5177,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     public void publishTxnMessage(TxnID txnID, ByteBuf headersAndPayload, PublishContext publishContext) {
         pendingWriteOps.incrementAndGet();
 
-        if (isFenced) {
+        if (isFenced || brokerService.pulsar().isMetadataSessionsClosing()) {
             publishContext.completed(new TopicFencedException("fenced"), -1, -1);
             decrementPendingWriteOpsAndCheck();
             return;

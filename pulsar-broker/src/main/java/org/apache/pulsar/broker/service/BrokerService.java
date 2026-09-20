@@ -1069,8 +1069,8 @@ public class BrokerService implements Closeable {
                                         .timeout(
                                                 Duration.ofMillis(
                                                         (long) (GRACEFUL_SHUTDOWN_TIMEOUT_RATIO_OF_TOTAL_TIMEOUT
-                                                                * pulsar.getConfiguration()
-                                                                .getBrokerShutdownTimeoutMs())))
+                                                                * Math.max(0, pulsar.getConfiguration()
+                                                                .getBrokerShutdownTimeoutMs()))))
                                         .shutdown(
                                                 statsUpdater,
                                                 inactivityMonitor,
@@ -1119,7 +1119,7 @@ public class BrokerService implements Closeable {
     }
 
     CompletableFuture<Void> shutdownEventLoopGracefully(String name, EventLoopGroup eventLoopGroup) {
-        long brokerShutdownTimeoutMs = pulsar.getConfiguration().getBrokerShutdownTimeoutMs();
+        long brokerShutdownTimeoutMs = Math.max(0, pulsar.getConfiguration().getBrokerShutdownTimeoutMs());
         long timeout = (long) (GRACEFUL_SHUTDOWN_TIMEOUT_RATIO_OF_TOTAL_TIMEOUT * brokerShutdownTimeoutMs);
         long periodMs = (timeout > 0) ? 1 : 0;
         long startNs = System.nanoTime();
@@ -1165,7 +1165,7 @@ public class BrokerService implements Closeable {
     }
 
     public void unloadNamespaceBundlesGracefully(int maxConcurrentUnload, boolean closeWithoutWaitingClientDisconnect) {
-        if (unloaded) {
+        if (unloaded || pulsar.getRemainingShutdownDrainNanos() == 0) {
             return;
         }
         try {
@@ -1193,16 +1193,31 @@ public class BrokerService implements Closeable {
                     pulsar.getNamespaceService() != null ? pulsar.getNamespaceService().getOwnedServiceUnits() : null;
             if (serviceUnits != null) {
                 RateLimiter rateLimiter = maxConcurrentUnload > 0 ? RateLimiter.create(maxConcurrentUnload) : null;
-                serviceUnits.forEach(su -> {
+                for (NamespaceBundle su : serviceUnits) {
+                    if (pulsar.getRemainingShutdownDrainNanos() == 0 || Thread.currentThread().isInterrupted()) {
+                        break;
+                    }
                     if (su != null) {
                         try {
                             if (rateLimiter != null) {
-                                rateLimiter.acquire(1);
+                                if (!rateLimiter.tryAcquire(1, pulsar.getRemainingShutdownDrainNanos(),
+                                        TimeUnit.NANOSECONDS)) {
+                                    break;
+                                }
                             }
-                            long timeout = pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs();
-                            pulsar.getNamespaceService().unloadNamespaceBundle(su, timeout, MILLISECONDS,
-                                    closeWithoutWaitingClientDisconnect).get(timeout, MILLISECONDS);
+                            long timeout = Math.min(TimeUnit.MILLISECONDS.toNanos(
+                                    pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs()),
+                                    pulsar.getRemainingShutdownDrainNanos());
+                            if (timeout <= 0) {
+                                break;
+                            }
+                            pulsar.getNamespaceService().unloadNamespaceBundle(su, timeout, TimeUnit.NANOSECONDS,
+                                    closeWithoutWaitingClientDisconnect).get(timeout, TimeUnit.NANOSECONDS);
                         } catch (Exception e) {
+                            if (e instanceof InterruptedException) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
                             if (e instanceof ExecutionException
                                     && e.getCause() instanceof ServiceUnitNotReadyException) {
                                 log.warn()
@@ -1214,7 +1229,7 @@ public class BrokerService implements Closeable {
                             }
                         }
                     }
-                });
+                }
                 double closeTopicsTimeSeconds =
                         TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - closeTopicsStartTime))
                                 / 1000.0;
@@ -1333,6 +1348,9 @@ public class BrokerService implements Closeable {
      */
     public CompletableFuture<Optional<Topic>> getTopic(final TopicName topicName, boolean createIfMissing,
                                                        @Nullable Map<String, String> properties) {
+        if (pulsar.isMetadataSessionsClosing()) {
+            return CompletableFuture.failedFuture(new ServiceUnitNotReadyException("Broker is shutting down"));
+        }
         try {
             // If topic future exists in the cache returned directly regardless of whether it fails or timeout.
             CompletableFuture<Optional<Topic>> tp = topics.get(topicName.toString());

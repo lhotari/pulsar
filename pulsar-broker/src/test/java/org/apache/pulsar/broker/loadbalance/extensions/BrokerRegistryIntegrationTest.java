@@ -63,12 +63,16 @@ public class BrokerRegistryIntegrationTest {
     @AfterClass(alwaysRun = true)
     protected void cleanup() throws Exception {
         final var startMs = System.currentTimeMillis();
-        if (pulsar != null) {
-            pulsar.close();
-        }
-        final var elapsedMs = System.currentTimeMillis() - startMs;
-        if (bk != null) {
-            bk.stop();
+        final long elapsedMs;
+        try {
+            if (pulsar != null) {
+                pulsar.close();
+            }
+        } finally {
+            elapsedMs = System.currentTimeMillis() - startMs;
+            if (bk != null) {
+                bk.stop();
+            }
         }
         // Guard against regressions where the broker hangs on shutdown (e.g. blocked health
         // checks or stuck registrations). Keep the threshold generous enough to tolerate CI
@@ -130,7 +134,8 @@ public class BrokerRegistryIntegrationTest {
         config.setDefaultNumberOfNamespaceBundles(16);
         config.setLoadManagerClassName(ExtensibleLoadManagerImpl.class.getName());
         config.setLoadBalancerDebugModeEnabled(true);
-        config.setBrokerShutdownTimeoutMs(100);
+        // This is an overall shutdown budget, including draining and metadata-session cleanup.
+        config.setBrokerShutdownTimeoutMs(10000);
         return config;
     }
 }

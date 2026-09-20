@@ -46,12 +46,14 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -64,7 +66,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -334,7 +335,14 @@ public class PulsarService implements AutoCloseable, ShutdownService {
     private volatile State state;
 
     private final ReentrantLock mutex = new ReentrantLock();
-    private final Condition isClosedCondition = mutex.newCondition();
+    private final Object shutdownLock = new Object();
+    private final CompletableFuture<Void> closed = new CompletableFuture<>();
+    private volatile BrokerShutdown shutdown;
+    private boolean immediateShutdownRequested;
+    private final CompletableFuture<Long> shutdownStarted = new CompletableFuture<>();
+    @Getter
+    private volatile boolean metadataSessionsClosing;
+    private final Map<MetadataStore, CompletableFuture<Void>> metadataCloseFutures = new IdentityHashMap<>();
     private volatile CompletableFuture<Void> closeFuture;
     // key is listener name, value is pulsar address and pulsar ssl address
     private Map<String, AdvertisedListener> advertisedListeners;
@@ -460,14 +468,14 @@ public class PulsarService implements AutoCloseable, ShutdownService {
     }
 
     /**
-     * Close the session to the metadata service.
-     * <p>
-     * This will immediately release all the resource locks held by this broker on the coordination service.
+     * Fence the broker and close every distinct metadata-store client it owns.
+     * Session closure releases session-bound registration and coordination leases; the extensible load manager
+     * uses a separate bundle-ownership protocol.
      *
      * @throws Exception if the close operation fails
      */
     public void closeMetadataServiceSession() throws Exception {
-        localMetadataStore.close();
+        closeMetadataSessionsAsync().get();
     }
 
     private void closeLeaderElectionService() throws Exception {
@@ -521,6 +529,54 @@ public class PulsarService implements AutoCloseable, ShutdownService {
      * @return a future which will be completed when the service is fully closed.
      */
     public CompletableFuture<Void> closeAsync(boolean waitForWebServiceToStop) {
+        return closeAsync(waitForWebServiceToStop, 0, true);
+    }
+
+    /** Starts the same shutdown deadline for the admin API and the process shutdown hook. */
+    public CompletableFuture<Void> closeAsync(boolean waitForWebServiceToStop, int maxConcurrentUnloadPerSec,
+                                               boolean forcedTerminateTopic) {
+        return closeAsync(waitForWebServiceToStop, maxConcurrentUnloadPerSec, forcedTerminateTopic,
+                config.getBrokerShutdownTimeoutMs());
+    }
+
+    private CompletableFuture<Void> closeAsync(boolean waitForWebServiceToStop, int maxConcurrentUnloadPerSec,
+                                                boolean forcedTerminateTopic, long timeoutMs) {
+        synchronized (shutdownLock) {
+            if (closeFuture != null) {
+                return closeFuture;
+            }
+            state = State.Closing;
+            shutdown = new BrokerShutdown(timeoutMs, this::closeMetadataSessionsAsync);
+            closeFuture = new CompletableFuture<>();
+            shutdownStarted.complete(timeoutMs > 0 ? shutdown.deadlineNanos() : 0L);
+            shutdown.start(() -> closeServices(waitForWebServiceToStop,
+                            maxConcurrentUnloadPerSec, forcedTerminateTopic))
+                    .whenComplete((__, error) -> {
+                        state = State.Closed;
+                        if (error == null) {
+                            closed.complete(null);
+                            closeFuture.complete(null);
+                        } else {
+                            closed.completeExceptionally(error);
+                            closeFuture.completeExceptionally(error);
+                        }
+                    });
+            return closeFuture;
+        }
+    }
+
+    /** The monotonic process deadline, or zero when the overall deadline is disabled. */
+    public CompletableFuture<Long> getShutdownStartedFuture() {
+        return shutdownStarted;
+    }
+
+    public long getRemainingShutdownDrainNanos() {
+        BrokerShutdown current = shutdown;
+        return current == null ? Long.MAX_VALUE : current.remainingDrainNanos();
+    }
+
+    private CompletableFuture<Void> closeServices(boolean waitForWebServiceToStop, int maxConcurrentUnloadPerSec,
+                                                   boolean forcedTerminateTopic) {
         mutex.lock();
         try {
             // Close protocol handler before unloading namespace bundles because protocol handlers might maintain
@@ -529,18 +585,14 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                 protocolHandlers.close();
                 protocolHandlers = null;
             }
-            if (closeFuture != null) {
-                return closeFuture;
-            }
             log.info("Closing PulsarService");
             if (topicPoliciesService != null) {
                 topicPoliciesService.close();
             }
             if (brokerService != null) {
-                brokerService.unloadNamespaceBundlesGracefully();
+                brokerService.unloadNamespaceBundlesGracefully(maxConcurrentUnloadPerSec, forcedTerminateTopic);
             }
-            // It only tells the Pulsar clients that this service is not ready to serve for the lookup requests
-            state = State.Closing;
+            shutdown.servicesClosing();
 
             if (healthChecker != null) {
                 healthChecker.close();
@@ -604,8 +656,8 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                             .timeout(
                                     Duration.ofMillis(
                                             (long) (GRACEFUL_SHUTDOWN_TIMEOUT_RATIO_OF_TOTAL_TIMEOUT
-                                                    * getConfiguration()
-                                                    .getBrokerShutdownTimeoutMs())));
+                                                    * Math.max(0, getConfiguration()
+                                                    .getBrokerShutdownTimeoutMs()))));
 
             // cancel loadShedding task and shutdown the loadManager executor before shutting down the broker
             cancelLoadBalancerTasks();
@@ -694,12 +746,8 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                 }
             }
 
-            asyncCloseFutures.add(closeLocalMetadataStore());
             if (configMetadataSynchronizer != null) {
                 asyncCloseFutures.add(configMetadataSynchronizer.closeAsync());
-            }
-            if (configurationMetadataStore != null && shouldShutdownConfigurationMetadataStore) {
-                configurationMetadataStore.close();
             }
 
             if (transactionExecutorProvider != null) {
@@ -761,27 +809,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             // add timeout handling for closing executors
             asyncCloseFutures.add(executorServicesShutdown.handle());
 
-            closeFuture = addTimeoutHandling(FutureUtil.waitForAllAndSupportCancel(asyncCloseFutures));
-            closeFuture.handle((v, t) -> {
-                if (t == null) {
-                    log.info("Closed");
-                } else if (t instanceof CancellationException) {
-                    log.info("Closed (shutdown cancelled)");
-                } else if (t instanceof TimeoutException) {
-                    log.info("Closed (shutdown timeout)");
-                } else {
-                    log.warn().exception(t).log("Closed with errors");
-                }
-                mutex.lock();
-                try {
-                    state = State.Closed;
-                    isClosedCondition.signalAll();
-                } finally {
-                    mutex.unlock();
-                }
-                return null;
-            });
-            return closeFuture;
+            return FutureUtil.waitForAllAndSupportCancel(asyncCloseFutures);
         } catch (Exception e) {
             PulsarServerException pse;
             if (e instanceof CompletionException && e.getCause() instanceof MetadataStoreException) {
@@ -795,6 +823,11 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             return FutureUtil.failedFuture(pse);
         } finally {
             mutex.unlock();
+            if (metadataSessionsClosing) {
+                // Startup may have returned a new client after the watchdog's snapshot. The identity-based
+                // registry skips clients already attempted, including ones whose close is still blocked.
+                closeMetadataSessionsAsync();
+            }
         }
     }
 
@@ -802,26 +835,53 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         metricsServlet = null;
     }
 
-    private CompletableFuture<Void> addTimeoutHandling(CompletableFuture<Void> future) {
-        long brokerShutdownTimeoutMs = getConfiguration().getBrokerShutdownTimeoutMs();
-        if (brokerShutdownTimeoutMs <= 0) {
-            return future;
+    private CompletableFuture<Void> closeMetadataSessionsAsync() {
+        // Publish the irreversible fence before releasing ownership. Neither this path nor its watchdog takes mutex.
+        metadataSessionsClosing = true;
+        List<CompletableFuture<Void>> closes = new ArrayList<>();
+        closes.add(closeMetadataStore("local", localMetadataStore, this::closeLocalMetadataStore));
+        if (shouldShutdownConfigurationMetadataStore) {
+            MetadataStore store = configurationMetadataStore;
+            closes.add(closeMetadataStore("configuration", store, () -> {
+                store.close();
+                return CompletableFuture.completedFuture(null);
+            }));
         }
-        ScheduledExecutorService shutdownExecutor = Executors.newSingleThreadScheduledExecutor(
-                new ExecutorProvider.ExtendedThreadFactory(getClass().getSimpleName() + "-shutdown"));
-        FutureUtil.addTimeoutHandling(future,
-                Duration.ofMillis(brokerShutdownTimeoutMs),
-                shutdownExecutor, () -> FutureUtil.createTimeoutException("Timeout in close", getClass(), "close"));
-        future.handle((v, t) -> {
-            if (t instanceof TimeoutException) {
-                log.info().attr("timeoutMs", brokerShutdownTimeoutMs).log("Shutdown timed out");
-                log.info(ThreadDumpUtil.buildThreadDiagnosticString());
-            }
-            // shutdown the shutdown executor
-            shutdownExecutor.shutdownNow();
-            return null;
-        });
-        return future;
+        return FutureUtil.waitForAll(closes);
+    }
+
+    private CompletableFuture<Void> closeMetadataStore(String name, MetadataStore store,
+                                                        Callable<CompletableFuture<Void>> close) {
+        if (store == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        synchronized (metadataCloseFutures) {
+            return metadataCloseFutures.computeIfAbsent(store, __ -> {
+                CompletableFuture<Void> future = new CompletableFuture<>();
+                closed.whenComplete((ignored, error) -> {
+                    if (!future.isDone()) {
+                        log.warn().attr("store", name).log("Metadata session close did not finish before shutdown");
+                    }
+                });
+                BrokerShutdown.newDaemonThread("pulsar-close-metadata-" + name, () -> {
+                    try {
+                        close.call().whenComplete((ignored, error) -> {
+                            if (error == null) {
+                                log.info().attr("store", name).log("Closed metadata session");
+                                future.complete(null);
+                            } else {
+                                log.warn().attr("store", name).exception(error).log("Failed to close metadata session");
+                                future.completeExceptionally(error);
+                            }
+                        });
+                    } catch (Throwable error) {
+                        log.warn().attr("store", name).exception(error).log("Failed to close metadata session");
+                        future.completeExceptionally(error);
+                    }
+                }).start();
+                return future;
+            });
+        }
     }
 
     /**
@@ -930,6 +990,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                     : null;
             localMetadataStore = createLocalMetadataStore(localMetadataSynchronizer,
                     openTelemetry.getOpenTelemetryService().getOpenTelemetry());
+            checkNotShuttingDown();
             localMetadataStore.registerSessionListener(this::handleMetadataSessionEvent);
 
             coordinationService = new CoordinationServiceImpl(localMetadataStore);
@@ -945,6 +1006,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                 configurationMetadataStore = localMetadataStore;
                 shouldShutdownConfigurationMetadataStore = false;
             }
+            checkNotShuttingDown();
             pulsarResources = newPulsarResources();
 
             orderedExecutor = newOrderedExecutor();
@@ -1147,7 +1209,10 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                     .attr("configOverrides", PulsarConfigurationLoader.runtimeConfigurationOverrides(config))
                     .log("Messaging service is ready");
 
-            state = State.Started;
+            synchronized (shutdownLock) {
+                checkNotShuttingDown();
+                state = State.Started;
+            }
         } catch (Exception e) {
             log.error().exception(e).log("Failed to start Pulsar service");
             PulsarServerException startException = PulsarServerException.from(e);
@@ -1155,6 +1220,12 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             throw startException;
         } finally {
             mutex.unlock();
+        }
+    }
+
+    private void checkNotShuttingDown() throws PulsarServerException {
+        if (shutdown != null) {
+            throw new PulsarServerException("Broker shutdown started before startup completed");
         }
     }
 
@@ -1498,17 +1569,18 @@ public class PulsarService implements AutoCloseable, ShutdownService {
     }
 
     /**
-     * Block until the service is finally closed.
+     * Observe shutdown completion without starting it. Process entry points can enforce termination on failure.
      */
-    public void waitUntilClosed() throws InterruptedException {
-        mutex.lock();
+    public CompletableFuture<Void> getShutdownFuture() {
+        return closed;
+    }
 
+    /** Block until shutdown has completed, including when cleanup fails or times out. */
+    public void waitUntilClosed() throws InterruptedException {
         try {
-            while (state != State.Closed) {
-                isClosedCondition.await();
-            }
-        } finally {
-            mutex.unlock();
+            closed.get();
+        } catch (ExecutionException e) {
+            // Waiting for shutdown, regardless of its outcome. close() exposes the failure.
         }
     }
 
@@ -1614,7 +1686,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
      * check the current pulsar service is running, including Started and Init state.
      */
     public boolean isRunning() {
-        return this.state == State.Started || this.state == State.Init;
+        return !metadataSessionsClosing && (this.state == State.Started || this.state == State.Init);
     }
 
     /**
@@ -2359,14 +2431,19 @@ public class PulsarService implements AutoCloseable, ShutdownService {
     @Override
     public void shutdownNow() {
         log.info("Invoking Pulsar service immediate shutdown");
-        try {
-            // Try to close metadata service session to ensure all ephemeral locks get released immediately
-            closeMetadataServiceSession();
-        } catch (Exception e) {
-            log.warn().exceptionMessage(e).log("Failed to close metadata service session");
+        synchronized (shutdownLock) {
+            if (immediateShutdownRequested) {
+                return;
+            }
+            immediateShutdownRequested = true;
+            long timeoutMs = config.getBrokerShutdownTimeoutMs();
+            long reserveMs = timeoutMs > 0 ? Math.max(1, Math.min(5000, timeoutMs / 5)) : 5000;
+            if (shutdown == null) {
+                closeAsync(true, 0, true, reserveMs);
+            }
+            shutdown.finishImmediately(reserveMs);
+            closeFuture.whenComplete((__, error) -> processTerminator.accept(-1));
         }
-
-        processTerminator.accept(-1);
     }
 
     @VisibleForTesting

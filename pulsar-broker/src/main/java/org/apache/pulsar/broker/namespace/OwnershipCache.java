@@ -108,8 +108,15 @@ public class OwnershipCache {
 
         @Override
         public CompletableFuture<OwnedBundle> asyncLoad(NamespaceBundle namespaceBundle, Executor executor) {
+            if (!pulsar.isRunning()) {
+                return CompletableFuture.failedFuture(new IllegalStateException("Broker is shutting down"));
+            }
             return lockManager.acquireLock(ServiceUnitUtils.path(namespaceBundle), selfOwnerInfo)
                     .thenApply(rl -> {
+                        if (!pulsar.isRunning()) {
+                            rl.release();
+                            throw new IllegalStateException("Broker shut down during ownership acquisition");
+                        }
                         locallyAcquiredLocks.put(namespaceBundle, rl);
                         OwnedBundle ownedBundle = new OwnedBundle(namespaceBundle, rl);
                         rl.getLockExpiredFuture()
@@ -273,7 +280,7 @@ public class OwnershipCache {
      * @throws Exception
      */
     public CompletableFuture<NamespaceEphemeralData> tryAcquiringOwnership(NamespaceBundle bundle) throws Exception {
-        if (!refreshSelfOwnerInfo()) {
+        if (!pulsar.isRunning() || !refreshSelfOwnerInfo()) {
             return FutureUtil.failedFuture(
                     new RuntimeException("Namespace service is not ready for acquiring ownership"));
         }
