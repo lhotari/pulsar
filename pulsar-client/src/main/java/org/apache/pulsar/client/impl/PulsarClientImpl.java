@@ -1715,6 +1715,24 @@ public class PulsarClientImpl implements PulsarClient {
         cnxPool.closeAllConnections();
     }
 
+    /**
+     * Change the lookup route of a broker's internal client while retaining its established data connections.
+     * This is intentionally separate from the public client service-URL update, which reconnects every entity.
+     * The new route must use the same protocol, including TLS, as the current route.
+     */
+    public synchronized void updateLookupServiceUrl(String serviceUrl) throws PulsarClientException {
+        PulsarServiceNameResolver current = new PulsarServiceNameResolver();
+        current.updateServiceUrl(conf.getServiceUrl());
+        PulsarServiceNameResolver replacement = new PulsarServiceNameResolver();
+        replacement.updateServiceUrl(serviceUrl);
+        if (!current.getServiceUri().getServiceScheme().equals(replacement.getServiceUri().getServiceScheme())) {
+            throw new PulsarClientException.InvalidServiceURL(
+                    new IllegalArgumentException("The lookup route must retain the service protocol"));
+        }
+        lookup.updateServiceUrl(serviceUrl);
+        conf.setServiceUrl(serviceUrl);
+    }
+
     public void updateAuthentication(Authentication authentication) throws IOException {
         log.info().attr("authentication", authentication).log("Updating authentication");
         if (conf.getAuthentication() != null) {
@@ -1874,7 +1892,7 @@ public class PulsarClientImpl implements PulsarClient {
         return lookup;
     }
 
-    public void reloadLookUp() throws PulsarClientException {
+    public synchronized void reloadLookUp() throws PulsarClientException {
         LookupService previousLookup = lookup;
         lookup = createLookup(conf.getServiceUrl());
         // close the previous lookup after the new lookup is created successfully
