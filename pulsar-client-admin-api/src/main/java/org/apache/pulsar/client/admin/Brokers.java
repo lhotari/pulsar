@@ -329,12 +329,42 @@ public interface Brokers {
     /**
      * Trigger the current broker to graceful-shutdown asynchronously.
      *
-     * @param maxConcurrentUnloadPerSec the maximum number of topics to unload per second.
+     * @param maxConcurrentUnloadPerSec the maximum number of bundle unloads to start per second (zero is unlimited).
      *                                  This helps control the speed of the unload operation during shutdown.
      * @param forcedTerminateTopic if true, topics will be forcefully terminated during the shutdown process.
      */
     CompletableFuture<Void> shutDownBrokerGracefully(int maxConcurrentUnloadPerSec,
                                                      boolean forcedTerminateTopic);
+
+    /**
+     * Shut down this broker within a duration measured from acceptance of the request.
+     * Only one shutdown request is accepted; subsequent requests fail with a conflict.
+     *
+     * @param maxConcurrentUnloadPerSec maximum bundle unload starts per second; zero means unlimited
+     * @param forcedTerminateTopic whether to close topics without waiting for client disconnection
+     * @param timeoutMs positive shutdown timeout in milliseconds, or null to use brokerShutdownTimeoutMs
+     */
+    default CompletableFuture<Void> shutDownBrokerGracefully(int maxConcurrentUnloadPerSec,
+                                                              boolean forcedTerminateTopic, Long timeoutMs) {
+        if (timeoutMs == null) {
+            return shutDownBrokerGracefully(maxConcurrentUnloadPerSec, forcedTerminateTopic);
+        }
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Shutdown timeout is not supported"));
+    }
+
+    /** Get whether this broker can be elected leader. */
+    default CompletableFuture<Boolean> isLeaderElectionEnabledAsync() {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Election control is not supported"));
+    }
+
+    /**
+     * Enable or disable this broker's leadership eligibility until it restarts.
+     * Disabling releases leadership even if no other broker is available. The broker still serves its topics.
+     * This requires super-user access and is rejected once shutdown has started.
+     */
+    default CompletableFuture<Void> setLeaderElectionEnabledAsync(boolean enabled) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Election control is not supported"));
+    }
 
     /**
      * Get version of broker.

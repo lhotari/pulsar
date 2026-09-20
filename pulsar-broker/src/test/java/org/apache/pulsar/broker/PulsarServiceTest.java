@@ -40,6 +40,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import lombok.Cleanup;
@@ -377,9 +378,16 @@ public class PulsarServiceTest extends MockedPulsarServiceBaseTest {
             draining.countDown();
             return new CompletableFuture<Void>();
         }).when(namespaces).unloadNamespaceBundle(any(), anyLong(), any(), anyBoolean());
-        pulsar.getConfiguration().setBrokerShutdownTimeoutMs(1000);
-        CompletableFuture<Void> request = admin.brokers().shutDownBrokerGracefully(1, true);
+        pulsar.getConfiguration().setBrokerShutdownTimeoutMs(60000);
+        CompletableFuture<Void> request = admin.brokers().shutDownBrokerGracefully(1, true, 3000L);
         assertTrue(draining.await(5, TimeUnit.SECONDS));
+        try {
+            admin.brokers().shutDownBrokerGracefully(1, true, 60000L).get(5, TimeUnit.SECONDS);
+            fail("A second shutdown request must be rejected");
+        } catch (ExecutionException e) {
+            assertTrue(e.getCause() instanceof PulsarAdminException.ConflictException);
+        }
+        assertEquals(pulsar.getConfiguration().getBrokerShutdownTimeoutMs(), 60000L);
         pulsar.getShutdownFuture().handle((__, error) -> null).get(5, TimeUnit.SECONDS);
         assertTrue(pulsar.isMetadataSessionsClosing());
         assertEquals(pulsar.getState(), PulsarService.State.Closed);

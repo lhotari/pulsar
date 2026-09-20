@@ -162,6 +162,37 @@ public class BrokersBase extends AdminResource {
     }
 
     @GET
+    @Path("/leaderElectionEnabled")
+    @Operation(summary = "Get this broker's leadership eligibility.")
+    public void getLeaderElectionEnabled(@Suspended final AsyncResponse response) {
+        validateSuperUserAccessAsync()
+                .thenAccept(__ -> response.resume(pulsar().getLeaderElectionService().isElectionEnabled()))
+                .exceptionally(error -> {
+                    resumeAsyncResponseExceptionally(response, error);
+                    return null;
+                });
+    }
+
+    @POST
+    @Path("/leaderElectionEnabled")
+    @Operation(summary = "Enable or disable this broker's leadership eligibility until it restarts.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "204", description = "Leadership eligibility changed"),
+            @ApiResponse(responseCode = "403", description = "This operation requires super-user access"),
+            @ApiResponse(responseCode = "409", description = "Broker shutdown is already in progress")})
+    public void setLeaderElectionEnabled(boolean enabled, @Suspended final AsyncResponse response) {
+        validateSuperUserAccessAsync()
+                .thenCompose(__ -> pulsar().setLeaderElectionEnabled(enabled))
+                .thenAccept(__ -> response.resume(Response.noContent().build()))
+                .exceptionally(error -> {
+                    Throwable cause = FutureUtil.unwrapCompletionException(error);
+                    resumeAsyncResponseExceptionally(response, cause instanceof IllegalStateException
+                            ? new RestException(Status.CONFLICT, cause.getMessage()) : cause);
+                    return null;
+                });
+    }
+
+    @GET
     @Path("/{clusterName}/{brokerId}/ownedNamespaces")
     @Operation(summary = "Get the list of namespaces served by the specific broker id")
     @ApiResponses(value = {
@@ -510,19 +541,23 @@ public class BrokersBase extends AdminResource {
             "Shutdown broker gracefully.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Execute shutdown command successfully"),
+            @ApiResponse(responseCode = "400", description = "Invalid unload rate or timeout"),
+            @ApiResponse(responseCode = "409", description = "Broker shutdown is already in progress"),
             @ApiResponse(responseCode = "403",
                     description = "You don't have admin permission to update service-configuration"),
             @ApiResponse(responseCode = "500", description = "Internal server error")})
     public void shutDownBrokerGracefully(
             @Parameter(name = "maxConcurrentUnloadPerSec",
-                    description = "If the value is absent (value=0), it means there is no concurrency limit.")
+                    description = "Maximum bundle unload starts per second; zero means no rate limit.")
             @QueryParam("maxConcurrentUnloadPerSec") int maxConcurrentUnloadPerSec,
             @QueryParam("forcedTerminateTopic") @DefaultValue("true") boolean forcedTerminateTopic,
+            @QueryParam("timeoutMs") Long timeoutMs,
             @Suspended final AsyncResponse asyncResponse
     ) {
         validateBothSuperuserAndBrokerOperation(pulsar().getConfig().getClusterName(), pulsar().getBrokerId(),
                 BrokerOperation.SHUTDOWN)
-                .thenCompose(__ -> doShutDownBrokerGracefullyAsync(maxConcurrentUnloadPerSec, forcedTerminateTopic))
+                .thenCompose(__ -> doShutDownBrokerGracefullyAsync(
+                        maxConcurrentUnloadPerSec, forcedTerminateTopic, timeoutMs))
                 .thenAccept(__ -> {
                     log.info("Successfully shutdown broker gracefully");
                     asyncResponse.resume(Response.noContent().build());
@@ -535,8 +570,18 @@ public class BrokersBase extends AdminResource {
     }
 
     private CompletableFuture<Void> doShutDownBrokerGracefullyAsync(int maxConcurrentUnloadPerSec,
-                                                                    boolean forcedTerminateTopic) {
-        return pulsar().closeAsync(false, maxConcurrentUnloadPerSec, forcedTerminateTopic);
+                                                                    boolean forcedTerminateTopic, Long timeoutMs) {
+        return pulsar().shutdownAsync(maxConcurrentUnloadPerSec, forcedTerminateTopic, timeoutMs)
+                .exceptionallyCompose(error -> {
+                    Throwable cause = FutureUtil.unwrapCompletionException(error);
+                    if (cause instanceof IllegalStateException) {
+                        return FutureUtil.failedFuture(new RestException(Status.CONFLICT, cause.getMessage()));
+                    }
+                    if (cause instanceof IllegalArgumentException) {
+                        return FutureUtil.failedFuture(new RestException(Status.BAD_REQUEST, cause.getMessage()));
+                    }
+                    return FutureUtil.failedFuture(cause);
+                });
     }
 
     private CompletableFuture<Void> validateBothSuperuserAndBrokerOperation(String cluster, String brokerId,

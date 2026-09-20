@@ -29,7 +29,6 @@ import static org.apache.pulsar.common.naming.SystemTopicNames.isTransactionInte
 import static org.apache.pulsar.common.util.Runnables.catchingAndLoggingThrowables;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Queues;
-import com.google.common.util.concurrent.RateLimiter;
 import io.github.merlimat.slog.LoggerBuilder;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -1156,7 +1155,7 @@ public class BrokerService implements Closeable {
      * <ul>
      * <li>First it makes current broker unavailable and isolates from the clusters so, it will not serve any new
      * requests.</li>
-     * <li>Second it starts unloading namespace bundle one by one without closing the connection in order to avoid
+     * <li>Second it unloads namespace bundles concurrently without closing the connection in order to avoid
      * disruption for other namespacebundles which are sharing the same connection from the same client.</li>
      * </ul>
      */
@@ -1192,44 +1191,11 @@ public class BrokerService implements Closeable {
             Set<NamespaceBundle> serviceUnits =
                     pulsar.getNamespaceService() != null ? pulsar.getNamespaceService().getOwnedServiceUnits() : null;
             if (serviceUnits != null) {
-                RateLimiter rateLimiter = maxConcurrentUnload > 0 ? RateLimiter.create(maxConcurrentUnload) : null;
-                for (NamespaceBundle su : serviceUnits) {
-                    if (pulsar.getRemainingShutdownDrainNanos() == 0 || Thread.currentThread().isInterrupted()) {
-                        break;
-                    }
-                    if (su != null) {
-                        try {
-                            if (rateLimiter != null) {
-                                if (!rateLimiter.tryAcquire(1, pulsar.getRemainingShutdownDrainNanos(),
-                                        TimeUnit.NANOSECONDS)) {
-                                    break;
-                                }
-                            }
-                            long timeout = Math.min(TimeUnit.MILLISECONDS.toNanos(
-                                    pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs()),
-                                    pulsar.getRemainingShutdownDrainNanos());
-                            if (timeout <= 0) {
-                                break;
-                            }
-                            pulsar.getNamespaceService().unloadNamespaceBundle(su, timeout, TimeUnit.NANOSECONDS,
-                                    closeWithoutWaitingClientDisconnect).get(timeout, TimeUnit.NANOSECONDS);
-                        } catch (Exception e) {
-                            if (e instanceof InterruptedException) {
-                                Thread.currentThread().interrupt();
-                                break;
-                            }
-                            if (e instanceof ExecutionException
-                                    && e.getCause() instanceof ServiceUnitNotReadyException) {
-                                log.warn()
-                                        .attr("su", su)
-                                        .exceptionMessage(e)
-                                        .log("Failed to unload namespace bundle");
-                            } else {
-                                log.warn().attr("su", su).exception(e).log("Failed to unload namespace bundle");
-                            }
-                        }
-                    }
-                }
+                GracefulBundleUnload.unload(pulsar.getNamespaceService(), serviceUnits,
+                        Math.max(1, pulsar.getConfiguration().getBrokerShutdownMaxConcurrentUnload()),
+                        maxConcurrentUnload, closeWithoutWaitingClientDisconnect,
+                        pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs(),
+                        pulsar::getRemainingShutdownDrainNanos);
                 double closeTopicsTimeSeconds =
                         TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - closeTopicsStartTime))
                                 / 1000.0;

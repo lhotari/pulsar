@@ -52,6 +52,14 @@ public class LeaderElectionService implements AutoCloseable {
         leaderElection.elect(localValue).join();
     }
 
+    public boolean isElectionEnabled() {
+        return leaderElection.isElectionEnabled();
+    }
+
+    public CompletableFuture<Void> setElectionEnabled(boolean enabled) {
+        return leaderElection.setElectionEnabled(enabled);
+    }
+
     public void close() throws Exception {
         leaderElection.close();
     }

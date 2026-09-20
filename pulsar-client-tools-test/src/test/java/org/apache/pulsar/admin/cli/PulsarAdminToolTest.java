@@ -174,9 +174,21 @@ public class PulsarAdminToolTest {
         verify(mockBrokers).getVersion();
 
         doReturn(CompletableFuture.completedFuture(null)).when(mockBrokers)
-                .shutDownBrokerGracefully(anyInt(), anyBoolean());
+                .shutDownBrokerGracefully(anyInt(), anyBoolean(), any());
         brokers.run(split("shutdown -m 10 -f"));
-        verify(mockBrokers).shutDownBrokerGracefully(10, true);
+        verify(mockBrokers).shutDownBrokerGracefully(10, true, null);
+        brokers.run(split("shutdown --timeout-ms 30000"));
+        verify(mockBrokers).shutDownBrokerGracefully(0, false, 30000L);
+
+        doReturn(CompletableFuture.completedFuture(true)).when(mockBrokers).isLeaderElectionEnabledAsync();
+        brokers.run(split("get-leader-election-enabled"));
+        verify(mockBrokers).isLeaderElectionEnabledAsync();
+        doReturn(CompletableFuture.completedFuture(null)).when(mockBrokers)
+                .setLeaderElectionEnabledAsync(anyBoolean());
+        brokers.run(split("set-leader-election-enabled --enabled false"));
+        verify(mockBrokers).setLeaderElectionEnabledAsync(false);
+        brokers.run(split("set-leader-election-enabled --enabled true"));
+        verify(mockBrokers).setLeaderElectionEnabledAsync(true);
     }
 
     @Test

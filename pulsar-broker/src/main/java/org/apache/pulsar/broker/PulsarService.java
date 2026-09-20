@@ -478,6 +478,55 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         closeMetadataSessionsAsync().get();
     }
 
+    /** Change this broker's leadership eligibility until it restarts. */
+    public CompletableFuture<Void> setLeaderElectionEnabled(boolean enabled) {
+        synchronized (shutdownLock) {
+            if (closeFuture != null) {
+                return FutureUtil.failedFuture(new IllegalStateException("Broker shutdown is already in progress"));
+            }
+            LeaderElectionService election = getLeaderElectionService();
+            if (election == null) {
+                return FutureUtil.failedFuture(new IllegalStateException("Leader election is not initialized"));
+            }
+            return election.setElectionEnabled(enabled);
+        }
+    }
+
+    private void handOffLeadership() {
+        LeaderElectionService election = getLeaderElectionService();
+        if (election == null || loadManager.get() == null) {
+            return;
+        }
+        try {
+            long timeout = Math.min(getRemainingShutdownDrainNanos(),
+                    TimeUnit.SECONDS.toNanos(config.getMetadataStoreOperationTimeoutSeconds()));
+            if (timeout <= 0) {
+                return;
+            }
+            Set<String> available = loadManager.get().getAvailableBrokersAsync().get(timeout, TimeUnit.NANOSECONDS);
+            // Retain the last broker's leadership until final cleanup. There is nobody to hand it to.
+            if (available.stream().anyMatch(broker -> !broker.equals(getBrokerId()))) {
+                timeout = Math.min(getRemainingShutdownDrainNanos(),
+                        TimeUnit.SECONDS.toNanos(config.getMetadataStoreOperationTimeoutSeconds()));
+                long handoffStarted = System.nanoTime();
+                election.setElectionEnabled(false).get(Math.max(0, timeout), TimeUnit.NANOSECONDS);
+                long remaining;
+                while ((remaining = Math.min(timeout - (System.nanoTime() - handoffStarted),
+                        getRemainingShutdownDrainNanos())) > 0) {
+                    Optional<LeaderBroker> leader = election.readCurrentLeader().get(remaining, TimeUnit.NANOSECONDS);
+                    if (leader.isPresent() && !leader.get().getBrokerId().equals(getBrokerId())) {
+                        return;
+                    }
+                    TimeUnit.NANOSECONDS.sleep(Math.min(TimeUnit.MILLISECONDS.toNanos(10), remaining));
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.warn().exceptionMessage(e).log("Unable to hand off broker leadership before draining");
+        }
+    }
+
     private void closeLeaderElectionService() throws Exception {
         if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(this)) {
             ExtensibleLoadManagerImpl.get(loadManager.get()).getLeaderElectionService().close();
@@ -539,6 +588,22 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                 config.getBrokerShutdownTimeoutMs());
     }
 
+    /** Accept one administrative shutdown request. Internal close calls remain idempotent. */
+    public CompletableFuture<Void> shutdownAsync(int maxConcurrentUnloadPerSec, boolean forcedTerminateTopic,
+                                                  Long timeoutMs) {
+        if (maxConcurrentUnloadPerSec < 0 || (timeoutMs != null && timeoutMs <= 0)) {
+            return FutureUtil.failedFuture(new IllegalArgumentException(
+                    "Unload rate must be non-negative and timeoutMs must be positive"));
+        }
+        synchronized (shutdownLock) {
+            if (closeFuture != null) {
+                return FutureUtil.failedFuture(new IllegalStateException("Broker shutdown is already in progress"));
+            }
+            return closeAsync(false, maxConcurrentUnloadPerSec, forcedTerminateTopic,
+                    timeoutMs != null ? timeoutMs : config.getBrokerShutdownTimeoutMs());
+        }
+    }
+
     private CompletableFuture<Void> closeAsync(boolean waitForWebServiceToStop, int maxConcurrentUnloadPerSec,
                                                 boolean forcedTerminateTopic, long timeoutMs) {
         synchronized (shutdownLock) {
@@ -579,6 +644,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                                                    boolean forcedTerminateTopic) {
         mutex.lock();
         try {
+            handOffLeadership();
             // Close protocol handler before unloading namespace bundles because protocol handlers might maintain
             // Pulsar clients that could send lookup requests that affect unloading.
             if (protocolHandlers != null) {

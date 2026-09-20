@@ -32,6 +32,7 @@ import static org.mockito.Mockito.when;
 import io.opentelemetry.api.OpenTelemetry;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -39,6 +40,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import org.apache.pulsar.broker.loadbalance.LeaderBroker;
+import org.apache.pulsar.broker.loadbalance.LeaderElectionService;
+import org.apache.pulsar.broker.loadbalance.LoadManager;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.PulsarMetadataEventSynchronizer;
 import org.apache.pulsar.metadata.BaseMetadataStoreTest;
@@ -66,6 +70,51 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
     @DataProvider
     public Object[][] shutdownPaths() {
         return new Object[][]{{true}, {false}};
+    }
+
+    @Test(dataProvider = "shutdownPaths")
+    public void handOffLeadershipBeforeDrainingOnlyWithAnotherBroker(boolean otherBroker) throws Exception {
+        LeaderElectionService election = mock(LeaderElectionService.class);
+        when(election.setElectionEnabled(false)).thenReturn(CompletableFuture.completedFuture(null));
+        when(election.readCurrentLeader()).thenReturn(CompletableFuture.completedFuture(
+                Optional.of(new LeaderBroker("other-broker:8080", "http://other-broker:8080"))));
+        ServiceConfiguration config = new ServiceConfiguration();
+        config.setClusterName("shutdown-test");
+        config.setBrokerShutdownTimeoutMs(10000);
+        PulsarService service = new PulsarService(config) {
+            @Override
+            public LeaderElectionService getLeaderElectionService() {
+                return election;
+            }
+
+            @Override
+            public String getBrokerId() {
+                return "this-broker:8080";
+            }
+        };
+        LoadManager loadManager = mock(LoadManager.class);
+        service.getLoadManager().set(loadManager);
+        when(loadManager.getAvailableBrokersAsync()).thenReturn(CompletableFuture.completedFuture(
+                otherBroker ? Set.of(service.getBrokerId(), "other-broker:8080") : Set.of(service.getBrokerId())));
+        BrokerService broker = mock(BrokerService.class);
+        service.setBrokerService(broker);
+        when(broker.closeAsync()).thenReturn(CompletableFuture.completedFuture(null));
+        doAnswer(invocation -> {
+            verify(election, times(otherBroker ? 1 : 0)).setElectionEnabled(false);
+            return null;
+        }).when(broker).unloadNamespaceBundlesGracefully(anyInt(), anyBoolean());
+        service.closeAsync().get(10, TimeUnit.SECONDS);
+        awaitWorkerCleanup(service);
+    }
+
+    @Test
+    public void invalidShutdownRequestDoesNotConsumeAdmission() throws Exception {
+        PulsarService service = newService(10000);
+        assertThatThrownBy(() -> service.shutdownAsync(0, true, 0L).join())
+                .hasCauseInstanceOf(IllegalArgumentException.class);
+        service.shutdownAsync(0, true, 10000L).get(10, TimeUnit.SECONDS);
+        assertThatThrownBy(() -> service.shutdownAsync(0, true, 10000L).join())
+                .hasCauseInstanceOf(IllegalStateException.class);
     }
 
     @Test(dataProvider = "shutdownPaths")
