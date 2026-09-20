@@ -352,7 +352,7 @@ public class ManagedCursorImpl implements ManagedCursor {
     // Guarded by pendingMarkDeleteOps, together with submission and the close boundary.
     private CompletableFuture<Void> closeFuture;
     private CompletableFuture<Void> submittedMarkDeletesDrained;
-    private final Set<CompletableFuture<Void>> pendingLedgerCreations = new HashSet<>();
+    private final Set<CompletableFuture<Void>> pendingPersistenceOperations = new HashSet<>();
     private Throwable ledgerCreationCleanupFailure;
 
     protected final ManagedCursorMXBean mbean;
@@ -430,41 +430,61 @@ public class ManagedCursorImpl implements ManagedCursor {
     private CompletableFuture<Void> computeCursorProperties(
             final Function<Map<String, String>, Map<String, String>> updateFunction) {
         CompletableFuture<Void> updateCursorPropertiesResult = new CompletableFuture<>();
-
-        final Stat lastCursorLedgerStat = ManagedCursorImpl.this.cursorLedgerStat;
-
-        Map<String, String> newProperties = updateFunction.apply(ManagedCursorImpl.this.cursorProperties);
-        if (!isDurable()) {
-            this.cursorProperties = Collections.unmodifiableMap(newProperties);
-            updateCursorPropertiesResult.complete(null);
-            return updateCursorPropertiesResult;
+        // Keep physical completion private: cancellation/timeout of the caller's result must not
+        // retire a metadata write that has already been admitted.
+        CompletableFuture<Void> metadataWriteComplete = new CompletableFuture<>();
+        synchronized (pendingMarkDeleteOps) {
+            if (state.isClosed()) {
+                return CompletableFuture.failedFuture(new CursorAlreadyClosedException("Cursor is closing"));
+            }
+            pendingPersistenceOperations.add(metadataWriteComplete);
         }
+        metadataWriteComplete.whenComplete((__, error) -> {
+            synchronized (pendingMarkDeleteOps) {
+                pendingPersistenceOperations.remove(metadataWriteComplete);
+            }
+        });
+        try {
+            final Stat lastCursorLedgerStat = ManagedCursorImpl.this.cursorLedgerStat;
+            Map<String, String> newProperties = updateFunction.apply(ManagedCursorImpl.this.cursorProperties);
+            if (!isDurable()) {
+                this.cursorProperties = Collections.unmodifiableMap(newProperties);
+                metadataWriteComplete.complete(null);
+                updateCursorPropertiesResult.complete(null);
+                return updateCursorPropertiesResult;
+            }
 
-        ManagedCursorInfo copy = new ManagedCursorInfo();
-        copy.copyFrom(ManagedCursorImpl.this.managedCursorInfo);
-        copy.clearCursorProperties();
-        copy.addAllCursorProperties(buildStringPropertiesMap(newProperties));
+            ManagedCursorInfo copy = new ManagedCursorInfo();
+            copy.copyFrom(ManagedCursorImpl.this.managedCursorInfo);
+            copy.clearCursorProperties();
+            copy.addAllCursorProperties(buildStringPropertiesMap(newProperties));
 
-        ledger.getStore().asyncUpdateCursorInfo(ledger.getName(),
-                name, copy, lastCursorLedgerStat, new MetaStoreCallback<>() {
-                    @Override
-                    public void operationComplete(Void result, Stat stat) {
-                        log.info("Updated ledger cursor");
-                        ManagedCursorImpl.this.cursorProperties = Collections.unmodifiableMap(newProperties);
-                        updateCursorLedgerStat(copy, stat);
-                        updateCursorPropertiesResult.complete(result);
-                    }
+            ledger.getStore().asyncUpdateCursorInfo(ledger.getName(),
+                    name, copy, lastCursorLedgerStat, new MetaStoreCallback<>() {
+                        @Override
+                        public void operationComplete(Void result, Stat stat) {
+                            log.info("Updated ledger cursor");
+                            ManagedCursorImpl.this.cursorProperties = Collections.unmodifiableMap(newProperties);
+                            updateCursorLedgerStat(copy, stat);
+                            metadataWriteComplete.complete(null);
+                            updateCursorPropertiesResult.complete(result);
+                        }
 
-                    @Override
-                    public void operationFailed(MetaStoreException e) {
-                        log.error()
-                                .attr("properties", newProperties)
-                                .exception(e)
-                                .log("Error while updating ledger cursor properties");
-                        updateCursorPropertiesResult.completeExceptionally(e);
-                    }
-                });
-
+                        @Override
+                        public void operationFailed(MetaStoreException e) {
+                            log.error()
+                                    .attr("properties", newProperties)
+                                    .exception(e)
+                                    .log("Error while updating ledger cursor properties");
+                            // Final close persistence can proceed after a failed conditional property write.
+                            metadataWriteComplete.complete(null);
+                            updateCursorPropertiesResult.completeExceptionally(e);
+                        }
+                    });
+        } catch (Throwable error) {
+            metadataWriteComplete.complete(null);
+            updateCursorPropertiesResult.completeExceptionally(error);
+        }
         return updateCursorPropertiesResult;
     }
 
@@ -3154,7 +3174,7 @@ public class ManagedCursorImpl implements ManagedCursor {
                 queued = List.of();
             }
             closing = closeFuture;
-            List<CompletableFuture<Void>> pending = new ArrayList<>(pendingLedgerCreations);
+            List<CompletableFuture<Void>> pending = new ArrayList<>(pendingPersistenceOperations);
             pending.add(submittedMarkDeletesDrained);
             if (ledgerCreationCleanupFailure != null) {
                 pending.add(CompletableFuture.failedFuture(ledgerCreationCleanupFailure));
@@ -3426,7 +3446,7 @@ public class ManagedCursorImpl implements ManagedCursor {
         synchronized (pendingMarkDeleteOps) {
             rejected = state.isClosed();
             if (!rejected) {
-                pendingLedgerCreations.add(creation);
+                pendingPersistenceOperations.add(creation);
             }
         }
         if (rejected) {
@@ -3438,7 +3458,7 @@ public class ManagedCursorImpl implements ManagedCursor {
                 if (error != null && ledgerCreationCleanupFailure == null) {
                     ledgerCreationCleanupFailure = FutureUtil.unwrapCompletionException(error);
                 }
-                pendingLedgerCreations.remove(creation);
+                pendingPersistenceOperations.remove(creation);
             }
         });
         ledger.mbean.startCursorLedgerCreateOp();

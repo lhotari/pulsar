@@ -35,6 +35,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import lombok.Cleanup;
 import org.apache.bookkeeper.client.AsyncCallback;
@@ -578,6 +579,133 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
         } finally {
             oldClosed.complete(null);
             original.closeAsync().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @DataProvider
+    public Object[][] propertyWrites() {
+        return new Object[][] {{false, false}, {true, false}, {false, true}, {true, true}};
+    }
+
+    @Test(dataProvider = "propertyWrites")
+    public void testCursorCloseJoinsPropertyWrite(boolean fail, boolean cancelResult) throws Exception {
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bkc) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                return new ManagedLedgerImpl(this, bk, spy(store), config, scheduledExecutor, name, ownershipChecker);
+            }
+        };
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) localFactory.open("cursor-property-close", defaultConfig());
+        ManagedCursor cursor = ledger.openCursor("cursor");
+        CompletableFuture<Runnable> metadataWrite = new CompletableFuture<>();
+        AtomicBoolean intercepted = new AtomicBoolean();
+        doAnswer(invocation -> {
+            if (!intercepted.compareAndSet(false, true)) {
+                return invocation.callRealMethod();
+            }
+            String ledgerName = invocation.getArgument(0);
+            String cursorName = invocation.getArgument(1);
+            ManagedCursorInfo info = invocation.getArgument(2);
+            Stat stat = invocation.getArgument(3);
+            MetaStoreCallback<Void> callback = invocation.getArgument(4);
+            metadataWrite.complete(() -> {
+                if (fail) {
+                    callback.operationFailed(new MetaStoreException("held property write failed"));
+                } else {
+                    localFactory.getMetaStore().asyncUpdateCursorInfo(ledgerName, cursorName, info, stat, callback);
+                }
+            });
+            return null;
+        }).when(ledger.store).asyncUpdateCursorInfo(any(), any(), any(), any(), any());
+        CompletableFuture<Void> result = cursor.putCursorProperty("maintenance", "test");
+        Runnable release = metadataWrite.get(5, TimeUnit.SECONDS);
+        try {
+            if (cancelResult) {
+                result.cancel(false);
+            }
+            CloseFuture closing = new CloseFuture();
+            cursor.asyncClose(closing, null);
+            assertPending(closing);
+            assertThatThrownBy(() -> cursor.putCursorProperty("late", "rejected").get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ManagedLedgerException.CursorAlreadyClosedException.class);
+            release.run();
+            release = null;
+            closing.get(5, TimeUnit.SECONDS);
+            if (cancelResult) {
+                assertThat(result).isCancelled();
+            } else if (fail) {
+                assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS)).hasCauseInstanceOf(MetaStoreException.class);
+            } else {
+                result.get(5, TimeUnit.SECONDS);
+            }
+            ledger.close();
+            ManagedCursor recovered = localFactory.open("cursor-property-close", defaultConfig()).openCursor("cursor");
+            if (fail) {
+                assertThat(recovered.getCursorProperties()).doesNotContainKey("maintenance");
+            } else {
+                assertThat(recovered.getCursorProperties()).containsEntry("maintenance", "test");
+            }
+            assertThat(recovered.getCursorProperties()).doesNotContainKey("late");
+        } finally {
+            if (release != null) {
+                release.run();
+            }
+        }
+    }
+
+    @Test(dataProvider = "closeFailures")
+    public void testCursorCloseJoinsResetPersistence(boolean fail) throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("cursor-reset-close", defaultConfig());
+        ManagedCursorImpl original = (ManagedCursorImpl) ledger.openCursor("cursor");
+        Position first = ledger.addEntry(new byte[] {1});
+        Position second = ledger.addEntry(new byte[] {2});
+        ledger.addEntry(new byte[] {3});
+        original.markDelete(second);
+        ManagedCursorImpl cursor = spy(original);
+        ledger.getCursors().removeCursor(cursor.getName());
+        ledger.getCursors().add(cursor, cursor.getMarkDeletedPosition());
+        CompletableFuture<VoidCallback> resetWrite = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            resetWrite.complete(invocation.getArgument(2));
+            return null;
+        }).when(cursor).persistPositionToLedger(any(), any(), any(), anyBoolean());
+        CompletableFuture<Void> reset = new CompletableFuture<>();
+        cursor.asyncResetCursor(first, false, new AsyncCallbacks.ResetCursorCallback() {
+            @Override
+            public void resetComplete(Object ctx) {
+                reset.complete(null);
+            }
+
+            @Override
+            public void resetFailed(ManagedLedgerException exception, Object ctx) {
+                reset.completeExceptionally(exception);
+            }
+        });
+        VoidCallback write = resetWrite.get(5, TimeUnit.SECONDS);
+        boolean released = false;
+        try {
+            CloseFuture closing = new CloseFuture();
+            cursor.asyncClose(closing, null);
+            assertPending(closing);
+            released = true;
+            if (fail) {
+                write.operationFailed(new ManagedLedgerException("held reset write failed"));
+                assertThatThrownBy(() -> reset.get(5, TimeUnit.SECONDS))
+                        .hasCauseInstanceOf(ManagedLedgerException.InvalidCursorPositionException.class);
+            } else {
+                write.operationComplete();
+                reset.get(5, TimeUnit.SECONDS);
+            }
+            closing.get(5, TimeUnit.SECONDS);
+            ledger.close();
+            ManagedCursor recovered = factory.open("cursor-reset-close", defaultConfig()).openCursor("cursor");
+            assertThat(recovered.getNumberOfEntriesInBacklog(false)).isEqualTo(fail ? 1 : 3);
+        } finally {
+            if (!released) {
+                write.operationFailed(new ManagedLedgerException("test interrupted"));
+            }
         }
     }
 
