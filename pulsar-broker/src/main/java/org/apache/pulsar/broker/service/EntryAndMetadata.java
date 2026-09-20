@@ -20,6 +20,8 @@ package org.apache.pulsar.broker.service;
 
 import com.google.common.annotations.VisibleForTesting;
 import io.netty.buffer.ByteBuf;
+import io.netty.util.Recycler;
+import io.netty.util.Recycler.Handle;
 import java.util.function.ToIntFunction;
 import lombok.Getter;
 import org.apache.bookkeeper.mledger.Entry;
@@ -31,22 +33,32 @@ import org.jspecify.annotations.Nullable;
 
 public class EntryAndMetadata implements Entry {
     private static final int STICKY_KEY_HASH_NOT_INITIALIZED = -1;
-    private final Entry entry;
+    private static final Recycler<EntryAndMetadata> RECYCLER = new Recycler<>() {
+        @Override
+        protected EntryAndMetadata newObject(Handle<EntryAndMetadata> handle) {
+            return new EntryAndMetadata(handle);
+        }
+    };
+
+    private final Handle<EntryAndMetadata> recyclerHandle;
+    private Entry entry;
     @Getter
     @Nullable
-    private final MessageMetadata metadata;
+    private MessageMetadata metadata;
     int stickyKeyHash = STICKY_KEY_HASH_NOT_INITIALIZED;
 
-    private EntryAndMetadata(final Entry entry, @Nullable final MessageMetadata metadata) {
-        this.entry = entry;
-        this.metadata = metadata;
+    private EntryAndMetadata(Handle<EntryAndMetadata> recyclerHandle) {
+        this.recyclerHandle = recyclerHandle;
     }
 
     public static EntryAndMetadata create(final Entry entry, final MessageMetadata metadata) {
         if (entry instanceof EntryAndMetadata entryAndMetadata) {
             return entryAndMetadata;
         }
-        return new EntryAndMetadata(entry, metadata);
+        EntryAndMetadata entryAndMetadata = RECYCLER.get();
+        entryAndMetadata.entry = entry;
+        entryAndMetadata.metadata = metadata;
+        return entryAndMetadata;
     }
 
     @VisibleForTesting
@@ -87,7 +99,9 @@ public class EntryAndMetadata implements Entry {
 
     @Override
     public byte[] getDataAndRelease() {
-        return entry.getDataAndRelease();
+        byte[] data = entry.getDataAndRelease();
+        recycle();
+        return data;
     }
 
     @Override
@@ -117,7 +131,16 @@ public class EntryAndMetadata implements Entry {
 
     @Override
     public boolean release() {
-        return entry.release();
+        boolean released = entry.release();
+        recycle();
+        return released;
+    }
+
+    private void recycle() {
+        entry = null;
+        metadata = null;
+        stickyKeyHash = STICKY_KEY_HASH_NOT_INITIALIZED;
+        recyclerHandle.recycle(this);
     }
 
     /**
