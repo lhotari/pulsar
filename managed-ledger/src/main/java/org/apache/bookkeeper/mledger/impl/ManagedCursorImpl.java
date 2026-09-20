@@ -3153,6 +3153,14 @@ public class ManagedCursorImpl implements ManagedCursor {
 
     @Override
     public void asyncClose(final AsyncCallbacks.CloseCallback callback, final Object ctx) {
+        asyncClose(callback, ctx, false);
+    }
+
+    void asyncCloseForDeletion(AsyncCallbacks.CloseCallback callback, Object ctx) {
+        asyncClose(callback, ctx, true);
+    }
+
+    private void asyncClose(AsyncCallbacks.CloseCallback callback, Object ctx, boolean deleting) {
         final CompletableFuture<Void> closing;
         final CompletableFuture<Void> prerequisites;
         final List<MarkDeleteEntry> queued;
@@ -3162,7 +3170,11 @@ public class ManagedCursorImpl implements ManagedCursor {
             initiateClose = closeFuture == null;
             if (initiateClose) {
                 closeFuture = new CompletableFuture<>();
-                alreadyClosed = !trySetStateToClosing();
+                if (deleting) {
+                    alreadyClosed = changeStateToDeletingIfNotDeleted().isClosed();
+                } else {
+                    alreadyClosed = !trySetStateToClosing();
+                }
                 submittedMarkDeletesDrained = new CompletableFuture<>();
                 if (PENDING_MARK_DELETED_SUBMITTED_COUNT_UPDATER.get(this) == 0) {
                     submittedMarkDeletesDrained.complete(null);
@@ -3208,7 +3220,17 @@ public class ManagedCursorImpl implements ManagedCursor {
             // Join all started writes/switches before final persistence, including failed cleanup. A
             // published switch may have installed the handle that final persistence must close.
             prerequisites.handleAsync((__, error) -> {
-                if (alreadyClosed) {
+                if (deleting) {
+                    // Metadata removal follows this barrier. Do not write a final position that is
+                    // about to be deleted, but do join every writer before the name can be reused.
+                    closeLedgerHandle(cursorLedger).whenComplete((ignored, closeError) -> {
+                        if (closeError == null) {
+                            finalPersistence.complete(null);
+                        } else {
+                            finalPersistence.completeExceptionally(closeError);
+                        }
+                    });
+                } else if (alreadyClosed) {
                     // Deleting/Deleted/DeletingFailed must not issue another cursor metadata write.
                     finalPersistence.complete(null);
                 } else {

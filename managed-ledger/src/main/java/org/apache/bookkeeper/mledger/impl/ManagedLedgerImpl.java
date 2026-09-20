@@ -36,6 +36,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -336,6 +337,15 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     // Guarded by this. A logical create timeout must not retire the underlying BookKeeper operation.
     private final Set<CompletableFuture<Void>> pendingDataLedgerCreations = new HashSet<>();
     private Throwable dataLedgerCreationCleanupFailure;
+    // Deletions outlive removal from cursors. Close must still join their physical outcome.
+    private final Map<ManagedCursorImpl, CursorDeletion> pendingCursorDeletions = new IdentityHashMap<>();
+    private Throwable cursorDeletionCleanupFailure;
+
+    private record CursorDeletion(CompletableFuture<Void> result, CompletableFuture<Void> physicalCompletion) {
+        private CursorDeletion() {
+            this(new CompletableFuture<>(), new CompletableFuture<>());
+        }
+    }
 
     private record DataLedgerCreationContext(Object delegate, CompletableFuture<Void> metadataCompletion) { }
 
@@ -1133,57 +1143,120 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     }
 
     @Override
-    public synchronized void asyncDeleteCursor(final String consumerName, final DeleteCursorCallback callback,
+    public void asyncDeleteCursor(final String consumerName, final DeleteCursorCallback callback,
             final Object ctx) {
-        final ManagedCursorImpl cursor = (ManagedCursorImpl) cursors.get(consumerName);
-        if (cursor == null) {
-            callback.deleteCursorFailed(new ManagedLedgerException.CursorNotFoundException("ManagedCursor not found: "
-                    + consumerName), ctx);
-            return;
-        }
-
-        // Non-durable cursors can be closed and removed immediately
-        if (!cursor.isDurable()) {
-            try {
-                cursor.close();
-            } catch (Exception e) {
-                log.warn().attr("cursorName", consumerName).exception(e).log("Failed to close non-durable cursor");
+        final ManagedCursorImpl cursor;
+        final CursorDeletion deletion;
+        final boolean initiate;
+        ManagedLedgerException rejected = null;
+        synchronized (this) {
+            cursor = (ManagedCursorImpl) cursors.get(consumerName);
+            if (closeFuture != null) {
+                rejected = new ManagedLedgerAlreadyClosedException("Managed ledger is closed");
+            } else if (cursor == null) {
+                rejected = new ManagedLedgerException.CursorNotFoundException("ManagedCursor not found: "
+                        + consumerName);
             }
-            cursors.removeCursor(consumerName);
-            callback.deleteCursorComplete(ctx);
+            if (rejected == null) {
+                CursorDeletion existing = pendingCursorDeletions.get(cursor);
+                initiate = existing == null;
+                deletion = initiate ? new CursorDeletion() : existing;
+                if (initiate) {
+                    pendingCursorDeletions.put(cursor, deletion);
+                }
+            } else {
+                deletion = null;
+                initiate = false;
+            }
+        }
+        if (rejected != null) {
+            callback.deleteCursorFailed(rejected, ctx);
             return;
         }
-
-        // If the cursor is active, we need to deactivate it first
-        cursor.setInactive();
-        // Set the state to deleting (which is a closed state) to avoid any new writes
-        ManagedCursorImpl.State beforeChangingState = cursor.changeStateToDeletingIfNotDeleted();
-        if (beforeChangingState.isDeletingOrDeleted()) {
-            log.warn().attr("cursorName", consumerName).log("Cursor is already being deleted or has been deleted");
-            return;
-        }
-
-        // First remove the consumer form the MetaStore. If this operation succeeds and the next one (removing the
-        // ledger from BK) don't, we end up having a loose ledger leaked but the state will be consistent.
-        store.asyncRemoveCursor(ManagedLedgerImpl.this.name, consumerName, new MetaStoreCallback<Void>() {
-            @Override
-            public void operationComplete(Void result, Stat stat) {
-                cursor.asyncDeleteCursorLedger();
-                cursors.removeCursor(consumerName);
-
-                trimConsumedLedgersInBackground();
-
-                log.info().attr("cursorName", consumerName).log("Deleted cursor");
+        deletion.result().whenComplete((__, error) -> {
+            if (error == null) {
                 callback.deleteCursorComplete(ctx);
+            } else {
+                callback.deleteCursorFailed(ManagedLedgerException.getManagedLedgerException(
+                        FutureUtil.unwrapCompletionException(error)), ctx);
             }
-
-            @Override
-            public void operationFailed(MetaStoreException e) {
-                cursor.getAndSetState(ManagedCursorImpl.State.DeletingFailed);
-                callback.deleteCursorFailed(e, ctx);
-            }
-
         });
+        if (!initiate) {
+            return;
+        }
+
+        Futures.CloseFuture writerClosed = new Futures.CloseFuture();
+        writerClosed.whenComplete((__, closeError) -> {
+            if (!cursor.isDurable()) {
+                finishCursorDeletion(cursor, deletion, closeError, null);
+                return;
+            }
+            // Removing the metadata first permits same-name recreation while an old conditional
+            // write is still in flight (including an ABA on its version). Seal and join writes first.
+            try {
+                store.asyncRemoveCursor(name, consumerName, new MetaStoreCallback<>() {
+                    @Override
+                    public void operationComplete(Void result, Stat stat) {
+                        finishCursorDeletion(cursor, deletion, closeError, null);
+                    }
+
+                    @Override
+                    public void operationFailed(MetaStoreException error) {
+                        finishCursorDeletion(cursor, deletion, closeError, error);
+                    }
+                });
+            } catch (Throwable error) {
+                finishCursorDeletion(cursor, deletion, closeError, error);
+            }
+        });
+        try {
+            if (cursor.isDurable()) {
+                cursor.asyncCloseForDeletion(writerClosed, null);
+            } else {
+                cursor.asyncClose(writerClosed, null);
+            }
+        } catch (Throwable error) {
+            writerClosed.completeExceptionally(error);
+        }
+    }
+
+    private void finishCursorDeletion(ManagedCursorImpl cursor, CursorDeletion deletion,
+                                      Throwable closeError, Throwable metadataError) {
+        // A failed metadata removal leaves the closed cursor recoverable. Only writer cleanup
+        // failure makes a subsequent graceful ownership handoff unsafe.
+        Throwable physicalError = closeError;
+        synchronized (this) {
+            if (metadataError == null) {
+                cursors.removeCursor(cursor.getName());
+            } else {
+                cursor.getAndSetState(ManagedCursorImpl.State.DeletingFailed);
+            }
+            if (physicalError != null && cursorDeletionCleanupFailure == null) {
+                cursorDeletionCleanupFailure = FutureUtil.unwrapCompletionException(physicalError);
+            }
+            pendingCursorDeletions.remove(cursor);
+        }
+        // Metadata deletion remains successful even if storage cleanup failed. However, a failed
+        // writer close must never become a successful graceful ledger close after cursor removal.
+        if (physicalError == null) {
+            deletion.physicalCompletion().complete(null);
+        } else {
+            deletion.physicalCompletion().completeExceptionally(physicalError);
+        }
+        if (metadataError == null) {
+            if (cursor.isDurable()) {
+                try {
+                    cursor.asyncDeleteCursorLedger();
+                } catch (Throwable error) {
+                    log.debug().attr("cursorName", cursor.getName()).exception(error)
+                            .log("Failed to schedule unreferenced cursor ledger deletion");
+                }
+            }
+            trimConsumedLedgersInBackground();
+            deletion.result().complete(null);
+        } else {
+            deletion.result().completeExceptionally(metadataError);
+        }
     }
 
     @Override
@@ -1710,6 +1783,10 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 }
                 ledgerToClose = currentLedger;
                 creations = new ArrayList<>(pendingDataLedgerCreations);
+                pendingCursorDeletions.values().forEach(deletion -> creations.add(deletion.physicalCompletion()));
+                if (cursorDeletionCleanupFailure != null) {
+                    creations.add(CompletableFuture.failedFuture(cursorDeletionCleanupFailure));
+                }
                 if (dataLedgerCreationCleanupFailure != null) {
                     creations.add(CompletableFuture.failedFuture(dataLedgerCreationCleanupFailure));
                 }

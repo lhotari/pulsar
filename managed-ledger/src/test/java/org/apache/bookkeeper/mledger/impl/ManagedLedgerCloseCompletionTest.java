@@ -299,6 +299,16 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
 
     @Test(dataProvider = "closeFailures")
     public void testCursorCloseWaitsForSubmittedMarkDelete(boolean markDeleteFailure) throws Exception {
+        assertCursorCleanupWaitsForSubmittedMarkDelete(markDeleteFailure, false);
+    }
+
+    @Test(dataProvider = "closeFailures")
+    public void testCursorDeletionWaitsForSubmittedMarkDelete(boolean markDeleteFailure) throws Exception {
+        assertCursorCleanupWaitsForSubmittedMarkDelete(markDeleteFailure, true);
+    }
+
+    private void assertCursorCleanupWaitsForSubmittedMarkDelete(boolean markDeleteFailure, boolean deleting)
+            throws Exception {
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("submitted-mark-delete", defaultConfig());
         ManagedCursorImpl original = (ManagedCursorImpl) ledger.openCursor("cursor");
         Position first = ledger.addEntry(new byte[] {1});
@@ -322,7 +332,13 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
         boolean released = false;
         try {
             CloseFuture closing = new CloseFuture();
-            cursor.asyncClose(closing, null);
+            CompletableFuture<Void> deletion = deleting ? deleteCursor(ledger, "cursor") : null;
+            if (deleting) {
+                ledger.asyncClose(closing, null);
+                assertPending(deletion);
+            } else {
+                cursor.asyncClose(closing, null);
+            }
             assertThat(finalWriteStarted).as("final metadata cannot overtake a submitted acknowledgment").isNotDone();
             assertThat(closing).isNotDone();
             released = true;
@@ -335,7 +351,12 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
                 acknowledged.get(5, TimeUnit.SECONDS);
             }
             closing.get(5, TimeUnit.SECONDS);
-            assertThat(finalWriteStarted).isCompleted();
+            if (deleting) {
+                deletion.get(5, TimeUnit.SECONDS);
+                assertThat(finalWriteStarted).isNotDone();
+            } else {
+                assertThat(finalWriteStarted).isCompleted();
+            }
         } finally {
             if (!released) {
                 write.operationComplete();
@@ -371,6 +392,16 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
 
     @Test(dataProvider = "lateCreates")
     public void testCursorCloseJoinsLateLedgerCreate(boolean timeout, boolean closeFailure) throws Exception {
+        assertCursorCleanupJoinsLateCreate(timeout, closeFailure, false);
+    }
+
+    @Test(dataProvider = "lateCreates")
+    public void testCursorDeletionJoinsLateLedgerCreate(boolean timeout, boolean closeFailure) throws Exception {
+        assertCursorCleanupJoinsLateCreate(timeout, closeFailure, true);
+    }
+
+    private void assertCursorCleanupJoinsLateCreate(boolean timeout, boolean closeFailure, boolean deleting)
+            throws Exception {
         BookKeeper bookKeeper = spy(bkc);
         @Cleanup("shutdown")
         ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bookKeeper);
@@ -401,7 +432,13 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
                 Awaitility.await().atMost(5, TimeUnit.SECONDS).until(() -> cursor.getState().equals("NoLedger"));
             }
             CloseFuture closing = new CloseFuture();
-            cursor.asyncClose(closing, null);
+            CompletableFuture<Void> deletion = deleting ? deleteCursor(ledger, "cursor") : null;
+            if (deleting) {
+                ledger.asyncClose(closing, null);
+                assertPending(deletion);
+            } else {
+                cursor.asyncClose(closing, null);
+            }
             assertPending(closing);
             createResult.complete(lateHandle);
             lateCloseStarted.get(5, TimeUnit.SECONDS);
@@ -412,6 +449,9 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
                 lateClose.complete(null);
             }
             assertResult(closing, closeFailure);
+            if (deleting) {
+                deletion.get(5, TimeUnit.SECONDS);
+            }
             verify(lateHandle, times(1)).closeAsync();
         } finally {
             createResult.complete(lateHandle);
@@ -707,6 +747,180 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
                 write.operationFailed(new ManagedLedgerException("test interrupted"));
             }
         }
+    }
+
+    @Test(dataProvider = "closeFailures")
+    public void testCursorDeletionJoinsPropertyWriteAndMetadataRemoval(boolean fail) throws Exception {
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bkc) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                return new ManagedLedgerImpl(this, bk, spy(store), config, scheduledExecutor, name, ownershipChecker);
+            }
+        };
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) localFactory.open("cursor-delete-property", defaultConfig());
+        ManagedCursor cursor = ledger.openCursor("cursor");
+        CompletableFuture<Runnable> metadataWrite = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            String ledgerName = invocation.getArgument(0);
+            String cursorName = invocation.getArgument(1);
+            ManagedCursorInfo info = invocation.getArgument(2);
+            Stat stat = invocation.getArgument(3);
+            MetaStoreCallback<Void> callback = invocation.getArgument(4);
+            metadataWrite.complete(() -> {
+                if (fail) {
+                    callback.operationFailed(new MetaStoreException("held property write failed"));
+                } else {
+                    localFactory.getMetaStore().asyncUpdateCursorInfo(ledgerName, cursorName, info, stat, callback);
+                }
+            });
+            return null;
+        }).when(ledger.store).asyncUpdateCursorInfo(any(), any(), any(), any(), any());
+        CompletableFuture<Runnable> metadataRemoval = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            String ledgerName = invocation.getArgument(0);
+            String cursorName = invocation.getArgument(1);
+            MetaStoreCallback<Void> callback = invocation.getArgument(2);
+            AtomicBoolean removed = new AtomicBoolean();
+            metadataRemoval.complete(() -> {
+                if (removed.compareAndSet(false, true)) {
+                    localFactory.getMetaStore().asyncRemoveCursor(ledgerName, cursorName, callback);
+                }
+            });
+            return null;
+        }).when(ledger.store).asyncRemoveCursor(any(), any(), any());
+        CompletableFuture<Void> writeResult = cursor.putCursorProperty("old", "generation");
+        Runnable releaseWrite = metadataWrite.get(5, TimeUnit.SECONDS);
+        Runnable releaseRemove = null;
+        try {
+            CompletableFuture<Void> first = deleteCursor(ledger, "cursor");
+            CompletableFuture<Void> duplicate = deleteCursor(ledger, "cursor");
+            first.cancel(false);
+            assertPending(metadataRemoval);
+            assertThatThrownBy(() -> cursor.putCursorProperty("late", "rejected").get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ManagedLedgerException.CursorAlreadyClosedException.class);
+            releaseWrite.run();
+            releaseWrite = null;
+            releaseRemove = metadataRemoval.get(5, TimeUnit.SECONDS);
+            if (fail) {
+                assertThatThrownBy(() -> writeResult.get(5, TimeUnit.SECONDS))
+                        .hasCauseInstanceOf(MetaStoreException.class);
+            } else {
+                writeResult.get(5, TimeUnit.SECONDS);
+            }
+            CloseFuture closing = new CloseFuture();
+            ledger.asyncClose(closing, null);
+            assertPending(closing);
+            assertPending(duplicate);
+            assertThatThrownBy(() -> deleteCursor(ledger, "cursor").get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ManagedLedgerException.ManagedLedgerAlreadyClosedException.class);
+            releaseRemove.run();
+            releaseRemove = null;
+            duplicate.get(5, TimeUnit.SECONDS);
+            closing.get(5, TimeUnit.SECONDS);
+            assertThat(first).isCancelled();
+            ManagedCursor replacement = localFactory.open("cursor-delete-property", defaultConfig())
+                    .openCursor("cursor");
+            assertThat(replacement.getCursorProperties()).isEmpty();
+            replacement.putCursorProperty("new", "generation").get(5, TimeUnit.SECONDS);
+            assertThat(replacement.getCursorProperties()).containsOnlyKeys("new");
+        } finally {
+            if (releaseWrite != null) {
+                releaseWrite.run();
+            }
+            metadataRemoval.thenAccept(Runnable::run);
+        }
+    }
+
+    @Test(dataProvider = "closeFailures")
+    public void testDeletedCursorWriterFailureIsRetainedForLedgerClose(boolean closeBeforeDeleteFinishes)
+            throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("cursor-delete-writer", defaultConfig());
+        ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("cursor");
+        cursor.markDelete(ledger.addEntry(new byte[] {1}));
+        LedgerHandle original = cursor.cursorLedger;
+        LedgerHandle handle = spy(original);
+        cursor.cursorLedger = handle;
+        CompletableFuture<Void> physicalClose = new CompletableFuture<>();
+        CompletableFuture<Void> closeStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            closeStarted.complete(null);
+            return physicalClose;
+        }).when(handle).closeAsync();
+        try {
+            CompletableFuture<Void> deleting = deleteCursor(ledger, "cursor");
+            closeStarted.get(5, TimeUnit.SECONDS);
+            assertPending(deleting);
+            CloseFuture closing = new CloseFuture();
+            if (closeBeforeDeleteFinishes) {
+                ledger.asyncClose(closing, null);
+                assertPending(closing);
+            }
+            physicalClose.completeExceptionally(new ManagedLedgerException("writer close failed"));
+            // Logical deletion can succeed, but graceful handoff cannot forget the failed writer.
+            deleting.get(5, TimeUnit.SECONDS);
+            assertThat(ledger.getCursors().get("cursor")).isNull();
+            if (!closeBeforeDeleteFinishes) {
+                ledger.asyncClose(closing, null);
+            }
+            assertResult(closing, true);
+        } finally {
+            physicalClose.complete(null);
+            original.closeAsync().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test(dataProvider = "closeFailures")
+    public void testCursorRemovalFailureDoesNotPreventSafeLedgerClose(boolean retryDelete) throws Exception {
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bkc) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                return new ManagedLedgerImpl(this, bk, spy(store), config, scheduledExecutor, name, ownershipChecker);
+            }
+        };
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) localFactory.open("cursor-delete-failure", defaultConfig());
+        ManagedCursor cursor = ledger.openCursor("cursor");
+        cursor.putCursorProperty("preserved", "value").get(5, TimeUnit.SECONDS);
+        AtomicBoolean failed = new AtomicBoolean();
+        doAnswer(invocation -> {
+            if (failed.compareAndSet(false, true)) {
+                MetaStoreCallback<Void> callback = invocation.getArgument(2);
+                callback.operationFailed(new MetaStoreException("metadata removal failed"));
+                return null;
+            }
+            return invocation.callRealMethod();
+        }).when(ledger.store).asyncRemoveCursor(any(), any(), any());
+        assertThatThrownBy(() -> deleteCursor(ledger, "cursor").get(5, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(MetaStoreException.class);
+        if (retryDelete) {
+            deleteCursor(ledger, "cursor").get(5, TimeUnit.SECONDS);
+        }
+        ledger.close();
+        ManagedCursor recovered = localFactory.open("cursor-delete-failure", defaultConfig()).openCursor("cursor");
+        if (retryDelete) {
+            assertThat(recovered.getCursorProperties()).isEmpty();
+        } else {
+            assertThat(recovered.getCursorProperties()).containsEntry("preserved", "value");
+        }
+    }
+
+    private static CompletableFuture<Void> deleteCursor(ManagedLedgerImpl ledger, String name) {
+        CompletableFuture<Void> deleted = new CompletableFuture<>();
+        ledger.asyncDeleteCursor(name, new AsyncCallbacks.DeleteCursorCallback() {
+            @Override
+            public void deleteCursorComplete(Object ctx) {
+                deleted.complete(null);
+            }
+
+            @Override
+            public void deleteCursorFailed(ManagedLedgerException exception, Object ctx) {
+                deleted.completeExceptionally(exception);
+            }
+        }, null);
+        return deleted;
     }
 
     private static void assertPending(CompletableFuture<?> future) {
