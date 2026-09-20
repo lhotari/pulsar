@@ -24,9 +24,12 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.MoreExecutors;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -35,6 +38,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import lombok.CustomLog;
 import org.apache.pulsar.broker.PulsarService;
@@ -105,6 +109,36 @@ public class OwnershipCache {
 
     private final PulsarService pulsar;
 
+    // OwnedBundle has mutable equality state. These are ownership generations, compared by identity.
+    private final Set<OwnedBundle> shutdownBundles = Collections.newSetFromMap(new IdentityHashMap<>());
+    private volatile boolean shutdownCallbacksFinished;
+
+    void registerShutdownBundle(OwnedBundle bundle) {
+        synchronized (shutdownBundles) {
+            if (!shutdownCallbacksFinished) {
+                shutdownBundles.add(bundle);
+                return;
+            }
+        }
+        bundle.finishShutdownNotifications();
+    }
+
+    void completeShutdownBundle(OwnedBundle bundle) {
+        synchronized (shutdownBundles) {
+            shutdownBundles.remove(bundle);
+        }
+    }
+
+    void finishShutdownCallbacks() {
+        List<OwnedBundle> bundles;
+        synchronized (shutdownBundles) {
+            shutdownCallbacksFinished = true;
+            bundles = List.copyOf(shutdownBundles);
+            shutdownBundles.clear();
+        }
+        bundles.forEach(OwnedBundle::finishShutdownNotifications);
+    }
+
     private RuntimeException ownershipUnavailable() {
         return pulsar.getBrokerAdmission().isClosed()
                 ? FutureUtil.wrapToCompletionException(new BrokerDrainingException())
@@ -129,13 +163,14 @@ public class OwnershipCache {
                         rl.getLockExpiredFuture()
                                 .thenRun(() -> {
                                     // ResourceLockImpl completes the expiry future on a deliberate release()
-                                    // as well, and both removeOwnership overloads take the lock out of
-                                    // locallyAcquiredLocks before releasing it. So the lock is still registered
-                                    // here only when it died on its own — a lost metadata session or a failed
+                                    // as well. Ordinary releases remove the local mapping first; shutdown
+                                    // retains it until deletion succeeds and is identified by its unload state.
+                                    // Otherwise a registered lock died on its own — a lost metadata session or a failed
                                     // revalidation — which is the case worth an INFO line. A deliberate release,
                                     // or a stale listener whose generation has already been replaced, is routine
                                     // and would otherwise report one false expiry per unload.
-                                    if (locallyAcquiredLocks.remove(namespaceBundle, rl)) {
+                                    if (locallyAcquiredLocks.remove(namespaceBundle, rl)
+                                            && !ownedBundle.isShutdownUnloading()) {
                                         log.info().attr("path", rl.getPath()).log("Resource lock has expired");
                                     } else {
                                         log.debug().attr("path", rl.getPath())
@@ -148,7 +183,8 @@ public class OwnershipCache {
                                     // newer generation's topics and release its lock. If the cache does not
                                     // hold this instance, this generation never served anything (or is already
                                     // gone), so there is nothing to unload.
-                                    if (getOwnedBundle(namespaceBundle) == ownedBundle) {
+                                    if (getOwnedBundle(namespaceBundle) == ownedBundle
+                                            && !ownedBundle.isShutdownUnloading()) {
                                         namespaceService.unloadNamespaceBundle(namespaceBundle)
                                                 .exceptionally(ex -> {
                                                     log.debug()
@@ -168,7 +204,13 @@ public class OwnershipCache {
                                     // owned bundles and tears the namespace's cache down at zero), so an
                                     // unmatched event is not harmless.
                                     invalidateLocalOwnerCache(namespaceBundle, ownedBundle,
-                                            () -> namespaceService.onNamespaceBundleUnload(namespaceBundle));
+                                            () -> {
+                                                if (shutdownCallbacksFinished) {
+                                                    ownedBundle.finishShutdownNotifications();
+                                                }
+                                                ownedBundle.onOwnershipInvalidated(() ->
+                                                        namespaceService.onNamespaceBundleUnload(namespaceBundle));
+                                            });
                                 });
                         if (rl.getLockExpiredFuture().isDone()) {
                             // Expiry won the race: never publish an OwnedBundle whose lock is already gone. Let
@@ -408,6 +450,31 @@ public class OwnershipCache {
                 return CompletableFuture.completedFuture(null);
             }
             return lock.release();
+        });
+    }
+
+    /** Shutdown may notify clients only after the exact ownership generation is known to be gone. */
+    CompletableFuture<Void> removeOwnership(OwnedBundle ownedBundle, BooleanSupplier withinDeadline) {
+        ResourceLock<NamespaceEphemeralData> lock = ownedBundle.getResourceLock();
+        if (lock == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Unbound shutdown ownership"));
+        }
+        NamespaceBundle bundle = ownedBundle.getNamespaceBundle();
+        return serialize(bundle, () -> {
+            if (!withinDeadline.getAsBoolean()) {
+                return CompletableFuture.failedFuture(new TimeoutException("Bundle ownership release deadline passed"));
+            }
+            if (locallyAcquiredLocks.get(bundle) != lock) {
+                CompletableFuture<Void> expired = lock.getLockExpiredFuture();
+                if (expired.isDone() && !expired.isCompletedExceptionally()) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                return CompletableFuture.failedFuture(new IllegalStateException(
+                        "Shutdown ownership release is not confirmed: " + bundle));
+            }
+            // Keep the identity until deletion succeeds. A failed delete must not turn the next call into
+            // a successful no-op. The expiry listener can also remove this identity, never a newer one.
+            return lock.release().thenRun(() -> locallyAcquiredLocks.remove(bundle, lock));
         });
     }
 

@@ -3025,15 +3025,22 @@ public class BrokerService implements Closeable {
                                                          boolean closeWithoutWaitingClientDisconnect,
                                                          Map<String, CompletableFuture<Optional<Topic>>>
                                                                  topicFutures) {
+        List<BrokerAdmission.TopicLoad> loads = pulsar.getBrokerAdmission().isClosed()
+                ? pulsar.getBrokerAdmission().getShutdownTopicLoads() : List.of();
+        return unloadServiceUnit(serviceUnit, disconnectClients, closeWithoutWaitingClientDisconnect,
+                topicFutures, loads);
+    }
+
+    private CompletableFuture<Integer> unloadServiceUnit(NamespaceBundle serviceUnit, boolean disconnectClients,
+            boolean closeWithoutWaitingClientDisconnect, Map<String, CompletableFuture<Optional<Topic>>> topicFutures,
+            List<BrokerAdmission.TopicLoad> loads) {
         List<CompletableFuture<Void>> closeFutures = new ArrayList<>();
         Map<CompletableFuture<Optional<Topic>>, BrokerAdmission.TopicLoad> pendingLoads = new IdentityHashMap<>();
-        if (pulsar.getBrokerAdmission().isClosed()) {
-            pulsar.getBrokerAdmission().getShutdownTopicLoads().forEach(load -> {
-                if (serviceUnit.includes(load.name())) {
-                    pendingLoads.put(load.request(), load);
-                }
-            });
-        }
+        loads.forEach(load -> {
+            if (serviceUnit.includes(load.name())) {
+                pendingLoads.put(load.request(), load);
+            }
+        });
         topicFutures.forEach((name, topicFuture) -> {
             TopicName topicName = TopicName.get(name);
             if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
@@ -3055,7 +3062,7 @@ public class BrokerService implements Closeable {
             if (trackedLoad == null && topicFuture.isCompletedExceptionally()) {
                 try {
                     topicFuture.get();
-                } catch (InterruptedException | ExecutionException ex) {
+                } catch (InterruptedException | ExecutionException | CancellationException ex) {
                     if (ex.getCause() instanceof ServiceUnitNotReadyException) {
                         // Topic was already unloaded
                         log.debug().attr("topic", topicName).log("Topic was already unloaded");
@@ -3104,6 +3111,59 @@ public class BrokerService implements Closeable {
         }
 
         return FutureUtil.waitForAll(closeFutures).thenApply(v -> closeFutures.size());
+    }
+
+    /** Capture the same cache and materialization identities for both shutdown close phases. */
+    public BundleUnload captureShutdownBundle(NamespaceBundle bundle) {
+        List<BrokerAdmission.TopicLoad> loads = pulsar.getBrokerAdmission().getShutdownTopicLoads().stream()
+                .filter(load -> bundle.includes(load.name())).toList();
+        return new BundleUnload(bundle, Map.copyOf(getTopicFuturesInBundle(bundle)), loads);
+    }
+
+    /** Retained physical completion; request timeouts and cancellation must not mutate these barriers. */
+    public final class BundleUnload {
+        private final NamespaceBundle bundle;
+        private final Map<String, CompletableFuture<Optional<Topic>>> topics;
+        private final List<BrokerAdmission.TopicLoad> loads;
+        private CompletableFuture<Void> storageClosed;
+        private CompletableFuture<Void> clientsClosed;
+
+        private BundleUnload(NamespaceBundle bundle, Map<String, CompletableFuture<Optional<Topic>>> topics,
+                             List<BrokerAdmission.TopicLoad> loads) {
+            this.bundle = bundle;
+            this.topics = topics;
+            this.loads = loads;
+        }
+
+        public CompletableFuture<Void> closeStorage() {
+            CompletableFuture<Void> result;
+            synchronized (this) {
+                if (storageClosed != null) {
+                    return storageClosed.copy();
+                }
+                result = new CompletableFuture<>();
+                storageClosed = result;
+            }
+            FutureUtil.completeAfter(result, FutureUtil.supplySafely(() -> CompletableFuture.supplyAsync(
+                    () -> unloadServiceUnit(bundle, false, false, topics, loads), pulsar.getExecutor())
+                    .thenCompose(future -> future).thenAccept(ignored -> { })));
+            return result.copy();
+        }
+
+        public CompletableFuture<Void> disconnectClients() {
+            CompletableFuture<Void> result;
+            synchronized (this) {
+                if (clientsClosed != null) {
+                    return clientsClosed.copy();
+                }
+                result = new CompletableFuture<>();
+                clientsClosed = result;
+            }
+            FutureUtil.completeAfter(result, closeStorage().thenComposeAsync(
+                    ignored -> unloadServiceUnit(bundle, true, false, topics, loads), pulsar.getExecutor())
+                    .thenAcceptAsync(ignored -> cleanUnloadedTopicFromCache(bundle, topics), pulsar.getExecutor()));
+            return result.copy();
+        }
     }
 
     /**

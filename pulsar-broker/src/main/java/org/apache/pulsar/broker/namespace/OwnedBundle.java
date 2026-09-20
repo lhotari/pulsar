@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -29,6 +30,7 @@ import lombok.CustomLog;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
 import org.apache.pulsar.broker.PulsarService;
+import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.util.FutureUtil;
@@ -61,6 +63,16 @@ public class OwnedBundle {
     private static final AtomicIntegerFieldUpdater<OwnedBundle> IS_ACTIVE_UPDATER =
             AtomicIntegerFieldUpdater.newUpdater(OwnedBundle.class, "isActive");
     private volatile int isActive = TRUE;
+
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
+    private volatile CompletableFuture<Void> shutdownOperation;
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
+    private Runnable deferredUnloadEvent;
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
+    private boolean shutdownNotificationsFinished;
 
     /**
      * constructor.
@@ -130,6 +142,9 @@ public class OwnedBundle {
 
     public CompletableFuture<Void> handleUnloadRequest(PulsarService pulsar, long timeout, TimeUnit timeoutUnit,
                                                        boolean closeWithoutWaitingClientDisconnect) {
+        if (pulsar.getBrokerAdmission().isClosed()) {
+            return handleShutdownUnload(pulsar, timeout, timeoutUnit);
+        }
         long unloadBundleStartTime = System.nanoTime();
         // Need a per namespace ReentrantReadWriteLock
         // Here to do a writeLock to set the flag and proceed to check and close connections
@@ -228,6 +243,67 @@ public class OwnedBundle {
                             .exception(ex)
                             .log("Unloading namespace-bundle completed");
                 });
+    }
+
+    private CompletableFuture<Void> handleShutdownUnload(PulsarService pulsar, long timeout, TimeUnit unit) {
+        long budget = Math.max(0, Math.min(unit.toNanos(timeout), pulsar.getRemainingShutdownDrainNanos()));
+        long deadline = System.nanoTime() + budget;
+        CompletableFuture<Void> result;
+        synchronized (this) {
+            if (shutdownOperation != null) {
+                return shutdownOperation.copy();
+            }
+            if (budget <= 0) {
+                return CompletableFuture.failedFuture(new TimeoutException("Bundle shutdown admission timed out"));
+            }
+            // The CAS also arbitrates with an ordinary administrative unload. No external code runs here,
+            // and shutdown never waits on a bundle lock on an asynchronous completion thread.
+            if (!IS_ACTIVE_UPDATER.compareAndSet(this, TRUE, FALSE)) {
+                return CompletableFuture.failedFuture(new IllegalStateException(
+                        "Bundle already has an unload in progress: " + bundle));
+            }
+            result = new CompletableFuture<>();
+            shutdownOperation = result;
+        }
+        FutureUtil.completeAfter(result, FutureUtil.supplySafely(() -> {
+            OwnershipCache ownership = pulsar.getNamespaceService().getOwnershipCache();
+            ownership.registerShutdownBundle(this);
+            BrokerService.BundleUnload unload = pulsar.getBrokerService().captureShutdownBundle(bundle);
+            return unload.closeStorage().thenCompose(ignored -> ownership.removeOwnership(this,
+                            () -> deadline - System.nanoTime() > 0 && pulsar.getRemainingShutdownDrainNanos() > 0))
+                    .thenCompose(ignored -> unload.disconnectClients().whenCompleteAsync((closed, error) -> {
+                        finishShutdownNotifications();
+                        ownership.completeShutdownBundle(this);
+                    }, pulsar.getExecutor()));
+        }));
+        return result.copy();
+    }
+
+    boolean isShutdownUnloading() {
+        return shutdownOperation != null;
+    }
+
+    /** Cache invalidation is immediate; namespace listeners wait for client notification or final teardown. */
+    void onOwnershipInvalidated(Runnable notification) {
+        synchronized (this) {
+            if (shutdownOperation != null && !shutdownNotificationsFinished) {
+                deferredUnloadEvent = notification;
+                return;
+            }
+        }
+        notification.run();
+    }
+
+    void finishShutdownNotifications() {
+        Runnable notification;
+        synchronized (this) {
+            shutdownNotificationsFinished = true;
+            notification = deferredUnloadEvent;
+            deferredUnloadEvent = null;
+        }
+        if (notification != null) {
+            notification.run();
+        }
     }
 
     /**

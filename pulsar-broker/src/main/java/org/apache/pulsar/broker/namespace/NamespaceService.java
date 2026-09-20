@@ -1994,6 +1994,7 @@ public class NamespaceService implements AutoCloseable {
 
     @Override
     public void close() {
+        ownershipCache.finishShutdownCallbacks();
         namespaceClients.forEach((cluster, client) -> {
             try {
                 client.shutdown();

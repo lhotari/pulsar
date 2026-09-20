@@ -30,6 +30,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
@@ -53,6 +54,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.Cleanup;
@@ -81,6 +83,7 @@ import org.apache.pulsar.zookeeper.ZookeeperServerTest;
 import org.awaitility.Awaitility;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 @Test(groups = "broker")
@@ -979,6 +982,158 @@ public class OwnershipCacheTest {
         assertThat(lock.released).isTrue();
         assertThat(cache.getLocallyAcquiredLocks()).isEmpty();
         verify(nsService, never()).onNamespaceBundleOwned(bundle);
+    }
+
+    @DataProvider
+    public Object[][] shutdownPhases() {
+        return new Object[][] {{0, false}, {1, false}, {2, false}, {3, false},
+                {0, true}, {1, true}, {3, true}};
+    }
+
+    @Test(dataProvider = "shutdownPhases")
+    public void testShutdownWaitsForStorageReleaseAndNotification(int failure, boolean expireEarly) throws Exception {
+        CompletableFuture<Void> expired = new CompletableFuture<>();
+        CompletableFuture<Void> released = new CompletableFuture<>();
+        ResourceLock<NamespaceEphemeralData> lock = mock(ResourceLock.class);
+        when(lock.getLockExpiredFuture()).thenReturn(expired);
+        when(lock.release()).thenReturn(released.thenRun(() -> expired.complete(null)));
+        CoordinationService coordination = mock(CoordinationService.class);
+        doReturn(lockManagerHandingOut(List.of(lock))).when(coordination)
+                .getLockManager(NamespaceEphemeralData.class);
+        doReturn(coordination).when(pulsar).getCoordinationService();
+        OwnershipCache cache = new OwnershipCache(pulsar, nsService);
+        doReturn(cache).when(nsService).getOwnershipCache();
+        NamespaceBundle bundle = new NamespaceBundle(NamespaceName.get("pulsar/shutdown-phases"),
+                Range.closedOpen(0L, (long) Integer.MAX_VALUE), bundleFactory);
+        cache.tryAcquiringOwnership(bundle).get(10, TimeUnit.SECONDS);
+        OwnedBundle owned = cache.getOwnedBundle(bundle);
+        BrokerService.BundleUnload unload = mock(BrokerService.BundleUnload.class);
+        doReturn(unload).when(brokerService).captureShutdownBundle(bundle);
+        CompletableFuture<Void> storage = new CompletableFuture<>();
+        CompletableFuture<Void> notifications = new CompletableFuture<>();
+        when(unload.closeStorage()).thenReturn(storage);
+        when(unload.disconnectClients()).thenReturn(notifications);
+        when(pulsar.getRemainingShutdownDrainNanos()).thenReturn(TimeUnit.SECONDS.toNanos(30));
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        Thread completionThread = Thread.currentThread();
+        doAnswer(invocation -> {
+            assertThat(Thread.holdsLock(owned)).isFalse();
+            if (failure != 1) {
+                assertThat(Thread.currentThread()).isNotSameAs(completionThread);
+            }
+            return null;
+        }).when(nsService).onNamespaceBundleUnload(bundle);
+
+        CompletableFuture<Void> canceled = owned.handleUnloadRequest(pulsar, 30, TimeUnit.SECONDS);
+        assertThat(canceled).isNotDone();
+        assertThat(canceled.cancel(false)).isTrue();
+        CompletableFuture<Void> result = owned.handleUnloadRequest(pulsar, 30, TimeUnit.SECONDS);
+        assertThat(result).isNotDone();
+        verify(lock, never()).release();
+        verify(unload, never()).disconnectClients();
+        if (expireEarly) {
+            expired.complete(null);
+            assertThat(cache.getOwnedBundle(bundle)).isNull();
+            verify(nsService, never()).unloadNamespaceBundle(bundle);
+            verify(nsService, never()).onNamespaceBundleUnload(bundle);
+        }
+        if (failure == 1) {
+            storage.completeExceptionally(new IllegalStateException("storage failed"));
+            assertThatThrownBy(() -> result.get(10, TimeUnit.SECONDS)).hasRootCauseMessage("storage failed");
+            verify(lock, never()).release();
+            verify(unload, never()).disconnectClients();
+            verify(nsService, never()).onNamespaceBundleUnload(bundle);
+            cache.finishShutdownCallbacks();
+            cache.finishShutdownCallbacks();
+            verify(nsService, times(expireEarly ? 1 : 0)).onNamespaceBundleUnload(bundle);
+            return;
+        }
+        storage.complete(null);
+        if (!expireEarly) {
+            Awaitility.await().untilAsserted(() -> verify(lock).release());
+            assertThat(result).isNotDone();
+            verify(unload, never()).disconnectClients();
+            if (failure == 2) {
+                released.completeExceptionally(new IllegalStateException("release failed"));
+                assertThatThrownBy(() -> result.get(10, TimeUnit.SECONDS)).hasRootCauseMessage("release failed");
+                assertThat(cache.getLocallyAcquiredLocks().get(bundle)).isSameAs(lock);
+                verify(unload, never()).disconnectClients();
+                verify(nsService, never()).onNamespaceBundleUnload(bundle);
+                return;
+            }
+            released.complete(null);
+        }
+        Awaitility.await().untilAsserted(() -> verify(unload).disconnectClients());
+        assertThat(cache.getOwnedBundle(bundle)).isNull();
+        assertThat(result).isNotDone();
+        verify(nsService, never()).onNamespaceBundleUnload(bundle);
+        verify(nsService, never()).unloadNamespaceBundle(bundle);
+        if (failure == 3) {
+            notifications.completeExceptionally(new IllegalStateException("notification failed"));
+            assertThatThrownBy(() -> result.get(10, TimeUnit.SECONDS)).hasRootCauseMessage("notification failed");
+        } else {
+            notifications.complete(null);
+            result.get(10, TimeUnit.SECONDS);
+        }
+        cache.finishShutdownCallbacks();
+        verify(nsService).onNamespaceBundleUnload(bundle);
+        verify(brokerService).captureShutdownBundle(bundle);
+        verify(unload).closeStorage();
+        verify(lock, times(expireEarly ? 0 : 1)).release();
+    }
+
+    @Test
+    public void testShutdownDeadlineCheckedAfterQueuedOperation() throws Exception {
+        CompletableFuture<Void> expired = new CompletableFuture<>();
+        CompletableFuture<Void> released = new CompletableFuture<>();
+        ResourceLock<NamespaceEphemeralData> lock = mock(ResourceLock.class);
+        when(lock.getLockExpiredFuture()).thenReturn(expired);
+        when(lock.release()).thenReturn(released);
+        CoordinationService coordination = mock(CoordinationService.class);
+        doReturn(lockManagerHandingOut(List.of(lock))).when(coordination)
+                .getLockManager(NamespaceEphemeralData.class);
+        doReturn(coordination).when(pulsar).getCoordinationService();
+        OwnershipCache cache = new OwnershipCache(pulsar, nsService);
+        NamespaceBundle bundle = new NamespaceBundle(NamespaceName.get("pulsar/shutdown-release-deadline"),
+                Range.closedOpen(0L, (long) Integer.MAX_VALUE), bundleFactory);
+        cache.tryAcquiringOwnership(bundle).get(10, TimeUnit.SECONDS);
+        OwnedBundle owned = cache.getOwnedBundle(bundle);
+        CompletableFuture<Void> first = cache.removeOwnership(owned, () -> true);
+        Awaitility.await().untilAsserted(() -> verify(lock).release());
+        AtomicBoolean budgetRemaining = new AtomicBoolean(true);
+        CompletableFuture<Void> queued = cache.removeOwnership(owned, budgetRemaining::get);
+        assertThat(queued).isNotDone();
+        budgetRemaining.set(false);
+        released.completeExceptionally(new IllegalStateException("delete failed"));
+        assertThatThrownBy(() -> first.get(10, TimeUnit.SECONDS)).hasRootCauseMessage("delete failed");
+        assertThatThrownBy(() -> queued.get(10, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(TimeoutException.class);
+        verify(lock).release();
+        assertThat(cache.getLocallyAcquiredLocks().get(bundle)).isSameAs(lock);
+    }
+
+    @Test
+    public void testShutdownMissingLocalLockIsNotProofOfRelease() throws Exception {
+        CompletableFuture<Void> expired = new CompletableFuture<>();
+        ResourceLock<NamespaceEphemeralData> lock = mock(ResourceLock.class);
+        when(lock.getLockExpiredFuture()).thenReturn(expired);
+        when(lock.release()).thenReturn(CompletableFuture.failedFuture(new IllegalStateException("delete failed")));
+        CoordinationService coordination = mock(CoordinationService.class);
+        doReturn(lockManagerHandingOut(List.of(lock))).when(coordination)
+                .getLockManager(NamespaceEphemeralData.class);
+        doReturn(coordination).when(pulsar).getCoordinationService();
+        OwnershipCache cache = new OwnershipCache(pulsar, nsService);
+        NamespaceBundle bundle = new NamespaceBundle(NamespaceName.get("pulsar/shutdown-missing-lock"),
+                Range.closedOpen(0L, (long) Integer.MAX_VALUE), bundleFactory);
+        cache.tryAcquiringOwnership(bundle).get(10, TimeUnit.SECONDS);
+        OwnedBundle owned = cache.getOwnedBundle(bundle);
+        // The existing administrative release removes its local mapping before the delete settles.
+        assertThatThrownBy(() -> cache.removeOwnership(owned).get(10, TimeUnit.SECONDS))
+                .hasRootCauseMessage("delete failed");
+        assertThat(cache.getLocallyAcquiredLocks()).doesNotContainKey(bundle);
+        assertThatThrownBy(() -> cache.removeOwnership(owned, () -> true).get(10, TimeUnit.SECONDS))
+                .hasMessageContaining("release is not confirmed");
+        verify(lock).release();
     }
 
     private static boolean loggedLockExpiredAtInfo(TestLogAppender logAppender) {

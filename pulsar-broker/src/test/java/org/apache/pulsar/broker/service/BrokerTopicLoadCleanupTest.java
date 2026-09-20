@@ -31,6 +31,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -78,6 +79,10 @@ public class BrokerTopicLoadCleanupTest {
             CompletableFuture<Optional<Topic>> physical = admission.getShutdownTopicLoads().get(0).completion();
             assertPending(physical);
             CompletableFuture<Integer> unloading = unload(context);
+            NamespaceBundle bundle = mock(NamespaceBundle.class);
+            when(bundle.includes(any(TopicName.class))).thenReturn(true);
+            CompletableFuture<Void> snapshotStorage = broker.captureShutdownBundle(bundle).closeStorage();
+            assertPending(snapshotStorage);
             assertPending(unloading);
             var canceledObserver = admission.getShutdownTopicLoads().get(0).completion();
             assertThat(canceledObserver.cancel(false)).isTrue();
@@ -98,10 +103,13 @@ public class BrokerTopicLoadCleanupTest {
                         .hasRootCauseMessage("late handle close failed");
                 assertThatThrownBy(() -> unloading.get(10, TimeUnit.SECONDS))
                         .hasRootCauseMessage("late handle close failed");
+                assertThatThrownBy(() -> snapshotStorage.get(10, TimeUnit.SECONDS))
+                        .hasRootCauseMessage("late handle close failed");
             } else {
                 closeCallback.closeComplete(null);
                 assertThat(physical.get(10, TimeUnit.SECONDS)).isEmpty();
                 unloading.get(10, TimeUnit.SECONDS);
+                snapshotStorage.get(10, TimeUnit.SECONDS);
             }
             assertThat(request).isCompletedExceptionally();
         }
@@ -273,6 +281,92 @@ public class BrokerTopicLoadCleanupTest {
                 initialized.complete(null);
                 stopped.complete(null);
                 topic.getReplicators().clear();
+            }
+        }
+    }
+
+    @Test(dataProvider = "cleanupResults")
+    public void testBundleSnapshotRetainsBothPhasesAndOriginalTopic(boolean failStorage) throws Exception {
+        try (PulsarTestContext context = context()) {
+            BrokerService broker = context.getBrokerService();
+            Topic original = mock(Topic.class);
+            Topic replacement = mock(Topic.class);
+            CompletableFuture<Void> storage = new CompletableFuture<>();
+            CompletableFuture<Void> notifications = new CompletableFuture<>();
+            when(original.close(false, false)).thenReturn(storage);
+            when(original.close(true, false)).thenReturn(notifications);
+            broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(original)));
+            context.getPulsarService().getBrokerAdmission().close().forEach(Runnable::run);
+            NamespaceBundle bundle = mock(NamespaceBundle.class);
+            when(bundle.includes(any(TopicName.class))).thenReturn(true);
+            BrokerService.BundleUnload unload = broker.captureShutdownBundle(bundle);
+            var replacementFuture = CompletableFuture.completedFuture(Optional.of(replacement));
+            broker.getTopics().put(NAME.toString(), replacementFuture);
+            try {
+                CompletableFuture<Void> canceled = unload.closeStorage();
+                assertThat(canceled.cancel(false)).isTrue();
+                CompletableFuture<Void> first = unload.closeStorage();
+                CompletableFuture<Void> second = unload.disconnectClients();
+                assertThat(second.cancel(false)).isTrue();
+                second = unload.disconnectClients();
+                verify(original, timeout(10000)).close(false, false);
+                assertPending(first);
+                assertPending(second);
+                verify(original, never()).close(true, false);
+                if (failStorage) {
+                    storage.completeExceptionally(new IllegalStateException("storage close failed"));
+                    assertThatThrownBy(() -> first.get(10, TimeUnit.SECONDS))
+                            .hasRootCauseMessage("storage close failed");
+                    CompletableFuture<Void> failedDisconnect = second;
+                    assertThatThrownBy(() -> failedDisconnect.get(10, TimeUnit.SECONDS))
+                            .hasRootCauseMessage("storage close failed");
+                    verify(original, never()).close(true, false);
+                } else {
+                    storage.complete(null);
+                    first.get(10, TimeUnit.SECONDS);
+                    verify(original, timeout(10000)).close(true, false);
+                    assertPending(second);
+                    notifications.complete(null);
+                    second.get(10, TimeUnit.SECONDS);
+                }
+                verify(original).close(false, false);
+                verify(replacement, never()).close(false, false);
+                verify(replacement, never()).close(true, false);
+                assertThat(broker.getTopics().get(NAME.toString())).isSameAs(replacementFuture);
+            } finally {
+                broker.getTopics().remove(NAME.toString(), replacementFuture);
+                storage.complete(null);
+                notifications.complete(null);
+            }
+        }
+    }
+
+    @Test
+    public void testCanceledCachedTopicDoesNotAbandonSiblingStorageClose() throws Exception {
+        try (PulsarTestContext context = context()) {
+            BrokerService broker = context.getBrokerService();
+            Topic topic = mock(Topic.class);
+            CompletableFuture<Void> physical = new CompletableFuture<>();
+            when(topic.close(false, false)).thenReturn(physical);
+            CompletableFuture<Optional<Topic>> canceled = new CompletableFuture<>();
+            canceled.cancel(false);
+            broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(topic)));
+            String canceledName = NAME + "-canceled";
+            broker.getTopics().put(canceledName, canceled);
+            context.getPulsarService().getBrokerAdmission().close().forEach(Runnable::run);
+            NamespaceBundle bundle = mock(NamespaceBundle.class);
+            when(bundle.includes(any(TopicName.class))).thenReturn(true);
+            try {
+                CompletableFuture<Void> closing = broker.captureShutdownBundle(bundle).closeStorage();
+                verify(topic, timeout(10000)).close(false, false);
+                assertPending(closing);
+                physical.complete(null);
+                assertThatThrownBy(() -> closing.get(10, TimeUnit.SECONDS))
+                        .hasCauseInstanceOf(CancellationException.class);
+            } finally {
+                broker.getTopics().remove(NAME.toString());
+                broker.getTopics().remove(canceledName);
+                physical.complete(null);
             }
         }
     }
