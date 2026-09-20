@@ -2361,6 +2361,79 @@ public class ServiceUnitStateChannelTest extends MockedPulsarServiceBaseTest {
         }
     }
 
+    @Test(timeOut = 20000)
+    public void testShutdownTransferRetriesTheSameOverrideAfterUnappliedAcknowledgment() throws Exception {
+        var channel = (ServiceUnitStateChannelImpl) channel1;
+        var view = channel.getTableView();
+        var delayedView = spy(view);
+        String serviceUnit = namespaceName + "/0x10000024_0x10000025";
+        var first = new CompletableFuture<ServiceUnitStateData>();
+        var retry = new CompletableFuture<ServiceUnitStateData>();
+        doAnswer(invocation -> {
+            ServiceUnitStateData data = invocation.getArgument(1);
+            if (data.state() == Releasing) {
+                if (first.complete(data)) {
+                    return CompletableFuture.completedFuture(null); // Acknowledged, but not applied.
+                }
+                retry.complete(data);
+            }
+            return invocation.callRealMethod();
+        }).when(delayedView).put(eq(serviceUnit), any());
+        doReturn(CompletableFuture.completedFuture(Optional.of(brokerId2)))
+                .when(loadManager).selectAsync(any(), any(), any());
+        var admission = new BrokerAdmission();
+        @Cleanup("shutdownNow")
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        try {
+            view.put(serviceUnit, new ServiceUnitStateData(Owned, brokerId1, true, 1)).get(5, TimeUnit.SECONDS);
+            Awaitility.await().untilAsserted(() -> assertEquals(Owned, state(view.get(serviceUnit))));
+            channel.setTableView(delayedView);
+            admission.close();
+            doReturn(admission).when(pulsar1).getBrokerAdmission();
+            var draining = CompletableFuture.runAsync(channel::cleanOwnerships, worker);
+            assertEquals("A publish retry must retain the selected destination, timestamp, and version",
+                    first.get(5, TimeUnit.SECONDS), retry.get(5, TimeUnit.SECONDS));
+            draining.get(10, TimeUnit.SECONDS);
+        } finally {
+            channel.setTableView(view);
+            doCallRealMethod().when(pulsar1).getBrokerAdmission();
+            view.delete(serviceUnit).get(5, TimeUnit.SECONDS);
+            channel.enable();
+        }
+    }
+
+    @Test
+    public void testLocalOnlyShutdownLeavesIncomingOwnershipForSuccessorRecovery() throws Exception {
+        var channel = (ServiceUnitStateChannelImpl) channel1;
+        var view = channel.getTableView();
+        var observedView = spy(view);
+        String serviceUnit = namespaceName + "/0x10000022_0x10000023";
+        var admission = new BrokerAdmission();
+        admission.close();
+        var preparation = new CompletableFuture<Void>();
+        doReturn(admission).when(pulsar1).getBrokerAdmission();
+        doReturn(preparation).when(pulsar1).getShutdownPreparationComplete();
+        doReturn(true).when(pulsar1).isLocalOnlyShutdown();
+        channel.setTableView(observedView);
+        try {
+            var owned = new ServiceUnitStateData(Owned, brokerId1, null, true, 1);
+            view.put(serviceUnit, owned).get(5, TimeUnit.SECONDS);
+            Awaitility.await().until(() -> channel.getShutdownRecovery(serviceUnit) != null);
+            var recovery = channel.getShutdownRecovery(serviceUnit);
+            preparation.complete(null);
+            recovery.get(5, TimeUnit.SECONDS);
+            verify(observedView, times(0)).put(eq(serviceUnit), any());
+            assertEquals(owned, view.get(serviceUnit));
+        } finally {
+            preparation.complete(null);
+            channel.setTableView(view);
+            doCallRealMethod().when(pulsar1).getBrokerAdmission();
+            doCallRealMethod().when(pulsar1).getShutdownPreparationComplete();
+            doCallRealMethod().when(pulsar1).isLocalOnlyShutdown();
+            view.delete(serviceUnit).get(5, TimeUnit.SECONDS);
+        }
+    }
+
     @Test
     public void testRejectedOwnedClosesBeforeFreeAndDoesNotOverwriteNewOwner() throws Exception {
         var channel = (ServiceUnitStateChannelImpl) channel1;

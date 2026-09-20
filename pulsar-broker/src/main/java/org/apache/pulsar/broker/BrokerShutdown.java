@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker;
 
+import com.google.common.annotations.VisibleForTesting;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -38,7 +39,6 @@ final class BrokerShutdown {
     private final AtomicBoolean closingSessions = new AtomicBoolean();
     private final Supplier<CompletableFuture<Void>> closeSessions;
     private final ScheduledExecutorService watchdog;
-    private volatile Throwable failure;
     private volatile String phase = "bundle drain";
 
     BrokerShutdown(long timeoutMs, Supplier<CompletableFuture<Void>> closeSessions) {
@@ -51,12 +51,7 @@ final class BrokerShutdown {
 
     CompletableFuture<Void> start(Supplier<CompletableFuture<Void>> closeServices) {
         if (watchdog != null) {
-            watchdog.schedule(() -> {
-                failure = new TimeoutException("Broker shutdown budget exhausted during " + phase);
-                String exhaustedPhase = phase;
-                finish();
-                log.warn().attr("phase", exhaustedPhase).log("Shutdown budget exhausted; closing metadata sessions");
-            }, remainingDrainNanos(), TimeUnit.NANOSECONDS);
+            watchdog.schedule(this::expireDrainBudget, remainingDrainNanos(), TimeUnit.NANOSECONDS);
             watchdog.schedule(() -> {
                 result.completeExceptionally(new TimeoutException("Broker shutdown deadline expired during " + phase));
                 log.warn().attr("phase", phase).log("Overall broker shutdown deadline expired");
@@ -64,12 +59,7 @@ final class BrokerShutdown {
             result.whenComplete((__, error) -> watchdog.shutdownNow());
         }
         newDaemonThread("pulsar-service-close", () -> FutureUtil.supplySafely(closeServices)
-                .whenComplete((__, error) -> {
-                    if (error != null) {
-                        failure = error;
-                    }
-                    finish();
-                })).start();
+                .whenComplete((__, error) -> finish(error))).start();
         return result;
     }
 
@@ -103,9 +93,23 @@ final class BrokerShutdown {
         }
     }
 
+    @VisibleForTesting
+    void expireDrainBudget() {
+        String exhaustedPhase = phase;
+        if (finish(new TimeoutException("Broker shutdown budget exhausted during " + exhaustedPhase))) {
+            log.warn().attr("phase", exhaustedPhase).log("Shutdown budget exhausted; closing metadata sessions");
+        }
+    }
+
     void finish() {
+        finish(null);
+    }
+
+    private boolean finish(Throwable failure) {
+        // Only the transition winner owns the service-close outcome. A late drain watchdog must not
+        // turn timely service closure into a failure while metadata cleanup is using its reserved budget.
         if (!closingSessions.compareAndSet(false, true)) {
-            return;
+            return false;
         }
         phase = "metadata session cleanup";
         // The supplier only fences the broker and starts independent daemon threads. It must never wait for IO.
@@ -117,6 +121,7 @@ final class BrokerShutdown {
                 result.completeExceptionally(cause);
             }
         });
+        return true;
     }
 
     static Thread newDaemonThread(String name, Runnable runnable) {

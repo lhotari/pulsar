@@ -107,6 +107,26 @@ public class BrokerShutdownTest {
     }
 
     @Test
+    public void metadataReserveDoesNotTurnTimelyServiceClosureIntoTimeout() throws Exception {
+        CompletableFuture<Void> sessions = new CompletableFuture<>();
+        CountDownLatch sessionsStarted = new CountDownLatch(1);
+        BrokerShutdown shutdown = new BrokerShutdown(5000, () -> {
+            sessionsStarted.countDown();
+            return sessions;
+        });
+        CompletableFuture<Void> result = shutdown.start(() -> CompletableFuture.completedFuture(null));
+        try {
+            assertThat(sessionsStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            shutdown.expireDrainBudget();
+            assertThat(result).isNotDone();
+            sessions.complete(null);
+            result.get(5, TimeUnit.SECONDS);
+        } finally {
+            sessions.complete(null);
+        }
+    }
+
+    @Test
     public void nonPositiveTimeoutDisablesDeadline() throws Exception {
         for (long timeout : new long[]{0, -1}) {
             CompletableFuture<Void> services = new CompletableFuture<>();

@@ -40,7 +40,10 @@ public class BrokerAdmissionTest {
         List<Runnable> channelTasks = new ArrayList<>();
         AtomicInteger canceled = new AtomicInteger();
         var admitted = gate.register(channelTasks::add, canceled::incrementAndGet);
-        var pending = gate.register(channelTasks::add, () -> {
+        var pending = gate.register(task -> {
+            assertFalse(Thread.holdsLock(gate));
+            channelTasks.add(task);
+        }, () -> {
             assertFalse(Thread.holdsLock(gate));
             canceled.incrementAndGet();
         });

@@ -161,12 +161,15 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         BrokerService broker = mock(BrokerService.class);
         service.setBrokerService(broker);
         when(broker.closeAsync()).thenReturn(CompletableFuture.completedFuture(null));
+        CompletableFuture<Void> handoffChecked = new CompletableFuture<>();
         doAnswer(invocation -> {
             verify(election, times(!leader || otherBroker && !differentElection && ready && eligible ? 1 : 0))
                     .setElectionEnabled(false);
+            handoffChecked.complete(null);
             return null;
         }).when(broker).unloadNamespaceBundlesGracefully(anyInt(), anyBoolean());
         service.closeAsync().get(10, TimeUnit.SECONDS);
+        handoffChecked.get(5, TimeUnit.SECONDS);
         awaitWorkerCleanup(service);
     }
 

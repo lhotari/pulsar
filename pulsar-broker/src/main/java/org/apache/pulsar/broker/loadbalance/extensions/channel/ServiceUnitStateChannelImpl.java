@@ -908,7 +908,7 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
     }
 
     private boolean canRecoverShutdownOwnership() {
-        return channelState != Closed && !pulsar.isMetadataSessionsClosing()
+        return channelState != Closed && !pulsar.isMetadataSessionsClosing() && !pulsar.isLocalOnlyShutdown()
                 && pulsar.getRemainingShutdownDrainNanos() > 0 && !Thread.currentThread().isInterrupted();
     }
 
@@ -1737,7 +1737,20 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
                                                       ServiceUnitStateData orphanData,
                                                       String inactiveBroker,
                                                       boolean gracefully) {
+        return selectOwnershipOverride(serviceUnit, orphanData, inactiveBroker, gracefully)
+                .thenComposeAsync(override -> {
+                    log.infof(
+                            "Overriding inactiveBroker:%s, ownership serviceUnit:%s from orphanData:%s to "
+                                    + "overrideData:%s",
+                            inactiveBroker, serviceUnit, orphanData, override);
+                    return publishOverrideEventAsync(serviceUnit, override);
+                }, gracefully && pulsar.getBrokerAdmission().isClosed() ? shutdownCloseExecutor() : Runnable::run);
+    }
 
+    private CompletableFuture<ServiceUnitStateData> selectOwnershipOverride(String serviceUnit,
+                                                      ServiceUnitStateData orphanData,
+                                                      String inactiveBroker,
+                                                      boolean gracefully) {
         final var version = getNextVersionId(orphanData);
         return selectBroker(serviceUnit, inactiveBroker)
                 .thenApply(selectedOpt ->
@@ -1772,14 +1785,7 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
                         }).orElseGet(() -> new ServiceUnitStateData(Free, null,
                                 orphanData.state() == Owned ? orphanData.dstBroker() : orphanData.sourceBroker(),
                                 true,
-                                version)))
-                .thenComposeAsync(override -> {
-                    log.infof(
-                            "Overriding inactiveBroker:%s, ownership serviceUnit:%s from orphanData:%s to "
-                                    + "overrideData:%s",
-                            inactiveBroker, serviceUnit, orphanData, override);
-                    return publishOverrideEventAsync(serviceUnit, override);
-                }, gracefully && pulsar.getBrokerAdmission().isClosed() ? shutdownCloseExecutor() : Runnable::run);
+                                version)));
     }
 
     private void waitForCleanups(String broker, boolean gracefully, int maxWaitTimeInMillis) {
@@ -1957,10 +1963,19 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
             if (terminal != null) {
                 completeShutdownTransfer(serviceUnit, terminal.state(), terminal.close());
             }
+            ServiceUnitStateData attempted = null;
+            ServiceUnitStateData override = null;
             while (pulsar.getRemainingShutdownDrainNanos() > 0 && !Thread.currentThread().isInterrupted()) {
                 var current = tableview.get(serviceUnit);
                 if (current != null && current.state() == Owned && isTargetBroker(current.dstBroker())) {
-                    overrideOwnership(serviceUnit, current, brokerId, true)
+                    if (!current.equals(attempted)) {
+                        override = selectOwnershipOverride(serviceUnit, current, brokerId, true)
+                                .get(pulsar.getRemainingShutdownDrainNanos(), TimeUnit.NANOSECONDS);
+                        attempted = current;
+                    }
+                    // Acknowledgment does not prove application. Retries for an unchanged generation must
+                    // preserve the same destination and record instead of starting another broker selection.
+                    publishOverrideEventAsync(serviceUnit, override)
                             .get(pulsar.getRemainingShutdownDrainNanos(), TimeUnit.NANOSECONDS);
                 }
                 try {
