@@ -53,12 +53,13 @@ final class BrokerShutdown {
         if (watchdog != null) {
             watchdog.schedule(() -> {
                 failure = new TimeoutException("Broker shutdown budget exhausted during " + phase);
-                log.warn().attr("phase", phase).log("Shutdown budget exhausted; closing metadata sessions");
+                String exhaustedPhase = phase;
                 finish();
+                log.warn().attr("phase", exhaustedPhase).log("Shutdown budget exhausted; closing metadata sessions");
             }, remainingDrainNanos(), TimeUnit.NANOSECONDS);
             watchdog.schedule(() -> {
-                log.warn().attr("phase", phase).log("Overall broker shutdown deadline expired");
                 result.completeExceptionally(new TimeoutException("Broker shutdown deadline expired during " + phase));
+                log.warn().attr("phase", phase).log("Overall broker shutdown deadline expired");
             }, remainingNanos(), TimeUnit.NANOSECONDS);
             result.whenComplete((__, error) -> watchdog.shutdownNow());
         }
