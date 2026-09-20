@@ -866,6 +866,9 @@ public class ExtensibleLoadManagerImpl implements ExtensibleLoadManager, BrokerS
     private boolean handleNoChannelOwnerError(Throwable e) {
         if (FutureUtil.unwrapCompletionException(e).getMessage().contains("no channel owner now")) {
             var leaderElectionService = getLeaderElectionService();
+            if (!leaderElectionService.isElectionEnabled()) {
+                return false;
+            }
             log.warn("No channel owner is found. Trying to start LeaderElectionService again.");
             leaderElectionService.start();
             var channelOwner = serviceUnitStateChannel.getChannelOwnerAsync().join();
@@ -1148,11 +1151,12 @@ public class ExtensibleLoadManagerImpl implements ExtensibleLoadManager, BrokerS
         stopLoadDataReportTasks();
         serviceUnitStateChannel.cleanOwnerships();
         brokerRegistry.unregister();
-        leaderElectionService.close();
         final var availableBrokers = brokerRegistry.getAvailableBrokersAsync()
                 .get(conf.getMetadataStoreOperationTimeoutSeconds(), TimeUnit.SECONDS);
         if (availableBrokers.isEmpty()) {
             close();
+        } else {
+            leaderElectionService.close();
         }
         // Close the internal topics (if owned any) after giving up the possible leader role,
         // so that the subsequent lookups could hit the next leader.

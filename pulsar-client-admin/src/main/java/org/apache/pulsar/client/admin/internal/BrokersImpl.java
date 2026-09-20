@@ -210,10 +210,31 @@ public class BrokersImpl extends BaseResource implements Brokers {
     @Override
     public CompletableFuture<Void> shutDownBrokerGracefully(int maxConcurrentUnloadPerSec,
                                                             boolean forcedTerminateTopic) {
+        return shutDownBrokerGracefully(maxConcurrentUnloadPerSec, forcedTerminateTopic, null);
+    }
+
+    @Override
+    public CompletableFuture<Void> shutDownBrokerGracefully(int maxConcurrentUnloadPerSec,
+                                                            boolean forcedTerminateTopic, Long timeoutMs) {
         WebTarget path = adminBrokers.path("shutdown")
                 .queryParam("maxConcurrentUnloadPerSec", maxConcurrentUnloadPerSec)
                 .queryParam("forcedTerminateTopic", forcedTerminateTopic);
+        if (timeoutMs != null) {
+            path = path.queryParam("timeoutMs", timeoutMs);
+        }
         return asyncPostRequest(path, Entity.entity("", MediaType.APPLICATION_JSON));
+    }
+
+    @Override
+    public CompletableFuture<Boolean> isLeaderElectionEnabledAsync() {
+        return asyncGetRequest(adminBrokers.path("leaderElectionEnabled"),
+                new FutureCallback<Boolean>() { });
+    }
+
+    @Override
+    public CompletableFuture<Void> setLeaderElectionEnabledAsync(boolean enabled) {
+        return asyncPostRequest(adminBrokers.path("leaderElectionEnabled"),
+                Entity.entity(enabled, MediaType.APPLICATION_JSON));
     }
 
     @Override

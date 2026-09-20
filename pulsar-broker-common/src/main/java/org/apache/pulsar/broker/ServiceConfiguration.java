@@ -618,6 +618,14 @@ public class ServiceConfiguration implements PulsarConfiguration {
 
     @FieldContext(
         category = CATEGORY_SERVER,
+        minValue = 1,
+        doc = "Maximum namespace bundles unloaded concurrently during graceful broker shutdown. "
+                + "The shutdown API can separately limit the number of unload starts per second."
+    )
+    private int brokerShutdownMaxConcurrentUnload = 32;
+
+    @FieldContext(
+        category = CATEGORY_SERVER,
         dynamic = true,
         doc = "Flag to skip broker shutdown when broker handles Out of memory error"
     )

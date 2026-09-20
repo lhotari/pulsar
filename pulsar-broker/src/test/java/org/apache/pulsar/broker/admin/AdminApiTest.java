@@ -546,6 +546,20 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
     }
 
     @Test
+    public void leadershipEligibility() throws Exception {
+        assertTrue(admin.brokers().isLeaderElectionEnabledAsync().get());
+        try {
+            admin.brokers().setLeaderElectionEnabledAsync(false).get();
+            assertFalse(admin.brokers().isLeaderElectionEnabledAsync().get());
+            assertFalse(pulsar.getLeaderElectionService().isLeader());
+        } finally {
+            admin.brokers().setLeaderElectionEnabledAsync(true).get();
+        }
+        assertTrue(admin.brokers().isLeaderElectionEnabledAsync().get());
+        Awaitility.await().until(() -> pulsar.getLeaderElectionService().isLeader());
+    }
+
+    @Test
     public void brokers() throws Exception {
         List<String> list = admin.brokers().getActiveBrokers("test");
         Assert.assertNotNull(list);

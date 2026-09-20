@@ -43,6 +43,43 @@ import org.testng.annotations.Test;
 
 public class LeaderElectionTest extends BaseMetadataStoreTest {
 
+    @Test(dataProvider = "distributedImpl")
+    public void disabledParticipantObservesLeadersAndCanRejoin(String provider, Supplier<String> urlSupplier)
+            throws Exception {
+        String url = urlSupplier.get();
+        String path = newKey();
+        try (MetadataStoreExtended firstStore = MetadataStoreExtended.create(url,
+                     MetadataStoreConfig.builder().build());
+             MetadataStoreExtended secondStore = MetadataStoreExtended.create(url,
+                     MetadataStoreConfig.builder().build());
+             CoordinationService firstService = new CoordinationServiceImpl(firstStore);
+             CoordinationService secondService = new CoordinationServiceImpl(secondStore)) {
+            LeaderElection<String> first = firstService.getLeaderElection(String.class, path, __ -> { });
+            LeaderElection<String> second = secondService.getLeaderElection(String.class, path, __ -> { });
+            assertEquals(first.elect("first").get(10, TimeUnit.SECONDS), LeaderElectionState.Leading);
+            assertEquals(second.elect("second").get(10, TimeUnit.SECONDS), LeaderElectionState.Following);
+
+            first.setElectionEnabled(false).get(10, TimeUnit.SECONDS);
+            Awaitility.await().untilAsserted(() -> {
+                assertEquals(second.getState(), LeaderElectionState.Leading);
+                assertEquals(first.getLeaderValue().join(), Optional.of("second"));
+                assertEquals(first.getState(), LeaderElectionState.Following);
+            });
+            // Recovery code calling elect must not accidentally re-enable a disabled participant.
+            first.elect("first").get(10, TimeUnit.SECONDS);
+            second.setElectionEnabled(false).get(10, TimeUnit.SECONDS);
+            assertEquals(first.getLeaderValue().get(10, TimeUnit.SECONDS), Optional.empty());
+            assertEquals(second.getLeaderValue().get(10, TimeUnit.SECONDS), Optional.empty());
+
+            first.setElectionEnabled(true).get(10, TimeUnit.SECONDS);
+            assertEquals(first.getState(), LeaderElectionState.Leading);
+            assertEquals(second.getLeaderValue().get(10, TimeUnit.SECONDS), Optional.of("first"));
+            second.setElectionEnabled(true).get(10, TimeUnit.SECONDS);
+            first.close();
+            Awaitility.await().untilAsserted(() -> assertEquals(second.getState(), LeaderElectionState.Leading));
+        }
+    }
+
     @Test(dataProvider = "impl")
     public void basicTest(String provider, Supplier<String> urlSupplier) throws Exception {
         @Cleanup

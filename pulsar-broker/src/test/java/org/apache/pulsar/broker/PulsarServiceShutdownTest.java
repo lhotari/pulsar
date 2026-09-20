@@ -32,6 +32,7 @@ import static org.mockito.Mockito.when;
 import io.opentelemetry.api.OpenTelemetry;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -39,12 +40,19 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import org.apache.pulsar.broker.loadbalance.LeaderBroker;
+import org.apache.pulsar.broker.loadbalance.LeaderElectionService;
+import org.apache.pulsar.broker.loadbalance.LoadManager;
+import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl;
+import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
+import org.apache.pulsar.broker.loadbalance.impl.ModularLoadManagerImpl;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.PulsarMetadataEventSynchronizer;
 import org.apache.pulsar.metadata.BaseMetadataStoreTest;
 import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.MetadataStoreConfig;
 import org.apache.pulsar.metadata.api.coordination.CoordinationService;
+import org.apache.pulsar.metadata.api.coordination.LockManager;
 import org.apache.pulsar.metadata.api.coordination.ResourceLock;
 import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 import org.apache.pulsar.metadata.coordination.impl.CoordinationServiceImpl;
@@ -66,6 +74,82 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
     @DataProvider
     public Object[][] shutdownPaths() {
         return new Object[][]{{true}, {false}};
+    }
+
+    @DataProvider
+    public Object[][] leadershipSuccessors() {
+        return new Object[][]{{false, false}, {true, false}, {true, true}};
+    }
+
+    public static class CustomExtensibleLoadManager extends ExtensibleLoadManagerImpl {
+    }
+
+    @Test
+    public void leadershipSuccessorUsesTheSameElectionIncludingCustomLoadManagers() {
+        assertThat(PulsarService.sharesLeaderElection(true, CustomExtensibleLoadManager.class.getName())).isTrue();
+        assertThat(PulsarService.sharesLeaderElection(false, CustomExtensibleLoadManager.class.getName())).isFalse();
+        assertThat(PulsarService.sharesLeaderElection(true, ExtensibleLoadManagerImpl.class.getName())).isTrue();
+        assertThat(PulsarService.sharesLeaderElection(false, ModularLoadManagerImpl.class.getName())).isTrue();
+        assertThat(PulsarService.sharesLeaderElection(true, ModularLoadManagerImpl.class.getName())).isFalse();
+        assertThat(PulsarService.sharesLeaderElection(false, null)).isTrue();
+        assertThat(PulsarService.sharesLeaderElection(true, null)).isFalse();
+        assertThat(PulsarService.sharesLeaderElection(false, "unavailable.LoadManager")).isFalse();
+    }
+
+    @Test(dataProvider = "leadershipSuccessors")
+    public void handOffLeadershipBeforeDrainingOnlyWithAnotherBroker(boolean otherBroker,
+                                                                   boolean differentElection) throws Exception {
+        LeaderElectionService election = mock(LeaderElectionService.class);
+        when(election.setElectionEnabled(false)).thenReturn(CompletableFuture.completedFuture(null));
+        when(election.readCurrentLeader()).thenReturn(CompletableFuture.completedFuture(
+                Optional.of(new LeaderBroker("other-broker:8080", "http://other-broker:8080"))));
+        ServiceConfiguration config = new ServiceConfiguration();
+        config.setClusterName("shutdown-test");
+        config.setBrokerShutdownTimeoutMs(10000);
+        PulsarService service = new PulsarService(config) {
+            @Override
+            public LeaderElectionService getLeaderElectionService() {
+                return election;
+            }
+
+            @Override
+            public String getBrokerId() {
+                return "this-broker:8080";
+            }
+        };
+        LoadManager loadManager = mock(LoadManager.class);
+        service.getLoadManager().set(loadManager);
+        when(loadManager.getAvailableBrokersAsync()).thenReturn(CompletableFuture.completedFuture(
+                otherBroker ? Set.of(service.getBrokerId(), "other-broker:8080") : Set.of(service.getBrokerId())));
+        CoordinationService coordination = mock(CoordinationService.class);
+        service.setCoordinationService(coordination);
+        @SuppressWarnings("unchecked")
+        LockManager<BrokerLookupData> registrations = mock(LockManager.class);
+        when(coordination.getLockManager(BrokerLookupData.class)).thenReturn(registrations);
+        BrokerLookupData lookupData = mock(BrokerLookupData.class);
+        when(lookupData.getLoadManagerClassName()).thenReturn(differentElection
+                ? ExtensibleLoadManagerImpl.class.getName() : ModularLoadManagerImpl.class.getName());
+        when(registrations.readLock(LoadManager.LOADBALANCE_BROKERS_ROOT + "/other-broker:8080"))
+                .thenReturn(CompletableFuture.completedFuture(Optional.of(lookupData)));
+        BrokerService broker = mock(BrokerService.class);
+        service.setBrokerService(broker);
+        when(broker.closeAsync()).thenReturn(CompletableFuture.completedFuture(null));
+        doAnswer(invocation -> {
+            verify(election, times(otherBroker && !differentElection ? 1 : 0)).setElectionEnabled(false);
+            return null;
+        }).when(broker).unloadNamespaceBundlesGracefully(anyInt(), anyBoolean());
+        service.closeAsync().get(10, TimeUnit.SECONDS);
+        awaitWorkerCleanup(service);
+    }
+
+    @Test
+    public void invalidShutdownRequestDoesNotConsumeAdmission() throws Exception {
+        PulsarService service = newService(10000);
+        assertThatThrownBy(() -> service.shutdownAsync(0, true, 0L).join())
+                .hasCauseInstanceOf(IllegalArgumentException.class);
+        service.shutdownAsync(0, true, 10000L).get(10, TimeUnit.SECONDS);
+        assertThatThrownBy(() -> service.shutdownAsync(0, true, 10000L).join())
+                .hasCauseInstanceOf(IllegalStateException.class);
     }
 
     @Test(dataProvider = "shutdownPaths")

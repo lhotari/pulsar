@@ -39,6 +39,19 @@ public interface LeaderElection<T> extends AutoCloseable {
      */
     CompletableFuture<LeaderElectionState> elect(T proposedValue);
 
+    /** Whether this participant is eligible to become leader. */
+    default boolean isElectionEnabled() {
+        return true;
+    }
+
+    /**
+     * Enable or disable competing for leadership while continuing to observe the current leader.
+     * Disabling releases any leadership held by this participant. Enabling joins the election again.
+     */
+    default CompletableFuture<Void> setElectionEnabled(boolean enabled) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Election control is not supported"));
+    }
+
     /**
      * Get the current leader election state.
      */

@@ -137,19 +137,43 @@ public class CmdBrokers extends CmdBase {
     private class ShutDownBrokerGracefully extends CliCommand {
 
         @Option(names = {"--max-concurrent-unload-per-sec", "-m"},
-                description = "Max concurrent unload per second, "
-                        + "if the value absent(value=0) means no concurrent limitation")
+                description = "Maximum bundle unload starts per second; zero means no rate limit")
         private int maxConcurrentUnloadPerSec;
 
         @Option(names = {"--forced-terminate-topic", "-f"}, description = "Force terminate all topics on Broker")
         private boolean forcedTerminateTopic;
 
+        @Option(names = "--timeout-ms", description = "Shutdown timeout in milliseconds; defaults to "
+                + "brokerShutdownTimeoutMs. A second shutdown request is rejected.")
+        private Long timeoutMs;
+
         @Override
         void run() throws Exception {
-            sync(() -> getAdmin().brokers().shutDownBrokerGracefully(maxConcurrentUnloadPerSec, forcedTerminateTopic));
+            sync(() -> getAdmin().brokers().shutDownBrokerGracefully(
+                    maxConcurrentUnloadPerSec, forcedTerminateTopic, timeoutMs));
             System.out.println("Successfully shutdown broker gracefully");
         }
 
+    }
+
+    @Command(description = "Get this broker's leadership eligibility.")
+    private class GetLeaderElectionEnabled extends CliCommand {
+        @Override
+        void run() throws Exception {
+            print(sync(() -> getAdmin().brokers().isLeaderElectionEnabledAsync()));
+        }
+    }
+
+    @Command(description = "Enable or disable this broker's leadership eligibility until it restarts.")
+    private class SetLeaderElectionEnabled extends CliCommand {
+        @Option(names = "--enabled", required = true, arity = "1",
+                description = "Whether this broker may become leader (true or false)")
+        private boolean enabled;
+
+        @Override
+        void run() throws Exception {
+            sync(() -> getAdmin().brokers().setLeaderElectionEnabledAsync(enabled));
+        }
     }
 
     @Command(description = "Manually trigger backlogQuotaCheck")
@@ -176,6 +200,8 @@ public class CmdBrokers extends CmdBase {
         super("brokers", admin);
         addCommand("list", new List());
         addCommand("leader-broker", new LeaderBroker());
+        addCommand("get-leader-election-enabled", new GetLeaderElectionEnabled());
+        addCommand("set-leader-election-enabled", new SetLeaderElectionEnabled());
         addCommand("namespaces", new Namespaces());
         addCommand("update-dynamic-config", new UpdateConfigurationCmd());
         addCommand("delete-dynamic-config", new DeleteConfigurationCmd());
