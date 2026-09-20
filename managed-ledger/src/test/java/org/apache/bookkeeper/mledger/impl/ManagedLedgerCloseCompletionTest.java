@@ -31,6 +31,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -46,6 +47,7 @@ import org.apache.bookkeeper.client.api.CreateBuilder;
 import org.apache.bookkeeper.client.api.WriteHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
 import org.apache.bookkeeper.mledger.ManagedCursor;
+import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.MetaStoreException;
@@ -905,6 +907,198 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
         } else {
             assertThat(recovered.getCursorProperties()).containsEntry("preserved", "value");
         }
+    }
+
+    @Test(dataProvider = "ledgerCloseFailures")
+    public void testLedgerCloseJoinsCursorInitialization(boolean initializeFailure, boolean closeFailure)
+            throws Exception {
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bkc) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                return new ManagedLedgerImpl(this, bk, spy(store), config, scheduledExecutor, name, ownershipChecker);
+            }
+        };
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) localFactory.open("cursor-initialize-close", defaultConfig());
+        CompletableFuture<Runnable> initialWrite = new CompletableFuture<>();
+        CompletableFuture<Runnable> finalWrite = new CompletableFuture<>();
+        AtomicBoolean first = new AtomicBoolean(true);
+        doAnswer(invocation -> {
+            boolean initial = first.getAndSet(false);
+            String ledgerName = invocation.getArgument(0);
+            String cursorName = invocation.getArgument(1);
+            ManagedCursorInfo info = invocation.getArgument(2);
+            Stat stat = invocation.getArgument(3);
+            MetaStoreCallback<Void> callback = invocation.getArgument(4);
+            AtomicBoolean released = new AtomicBoolean();
+            (initial ? initialWrite : finalWrite).complete(() -> {
+                if (!released.compareAndSet(false, true)) {
+                    return;
+                }
+                if (initial ? initializeFailure : closeFailure) {
+                    callback.operationFailed(new MetaStoreException("held initialization/close write failed"));
+                } else {
+                    localFactory.getMetaStore().asyncUpdateCursorInfo(ledgerName, cursorName, info, stat, callback);
+                }
+            });
+            return null;
+        }).when(ledger.store).asyncUpdateCursorInfo(any(), any(), any(), any(), any());
+        CompletableFuture<ManagedCursor> opening = openCursor(ledger, "cursor");
+        CompletableFuture<ManagedCursor> duplicate = openCursor(ledger, "cursor");
+        Runnable release = initialWrite.get(5, TimeUnit.SECONDS);
+        try {
+            opening.cancel(false);
+            CloseFuture closing = new CloseFuture();
+            ledger.asyncClose(closing, null);
+            assertPending(closing);
+            assertPending(duplicate);
+            release.run();
+            if (!initializeFailure) {
+                Runnable releaseFinal = finalWrite.get(5, TimeUnit.SECONDS);
+                assertPending(closing);
+                releaseFinal.run();
+            }
+            assertResult(closing, closeFailure);
+            assertThatThrownBy(() -> duplicate.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(initializeFailure ? MetaStoreException.class
+                            : ManagedLedgerException.ManagedLedgerAlreadyClosedException.class);
+            assertThat(ledger.getCursors().get("cursor")).isNull();
+            assertThat(opening).isCancelled();
+        } finally {
+            release.run();
+            finalWrite.thenAccept(Runnable::run);
+        }
+    }
+
+    @Test(dataProvider = "closeFailures")
+    public void testLedgerCloseJoinsLazyCursorRecovery(boolean recoveryFailure) throws Exception {
+        ManagedLedgerImpl original = (ManagedLedgerImpl) factory.open("cursor-lazy-close", defaultConfig());
+        ManagedCursor cursor = original.openCursor("cursor");
+        cursor.putCursorProperty("recovered", "value").get(5, TimeUnit.SECONDS);
+        original.close();
+        CompletableFuture<Runnable> recovery = new CompletableFuture<>();
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bkc) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                MetaStore heldStore = spy(store);
+                doAnswer(invocation -> {
+                    String ledgerName = invocation.getArgument(0);
+                    String cursorName = invocation.getArgument(1);
+                    MetaStoreCallback<ManagedCursorInfo> callback = invocation.getArgument(2);
+                    AtomicBoolean released = new AtomicBoolean();
+                    recovery.complete(() -> {
+                        if (!released.compareAndSet(false, true)) {
+                            return;
+                        }
+                        if (recoveryFailure) {
+                            callback.operationFailed(new MetaStoreException("held recovery failed"));
+                        } else {
+                            store.asyncGetCursorInfo(ledgerName, cursorName, callback);
+                        }
+                    });
+                    return null;
+                }).when(heldStore).asyncGetCursorInfo(any(), any(), any());
+                return new ManagedLedgerImpl(this, bk, heldStore, config, scheduledExecutor, name, ownershipChecker);
+            }
+        };
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) localFactory.open("cursor-lazy-close",
+                defaultConfig().setLazyCursorRecovery(true));
+        Runnable release = recovery.get(5, TimeUnit.SECONDS);
+        try {
+            CompletableFuture<ManagedCursor> opening = openCursor(ledger, "cursor");
+            CloseFuture closing = new CloseFuture();
+            ledger.asyncClose(closing, null);
+            assertPending(closing);
+            release.run();
+            closing.get(5, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> opening.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(recoveryFailure ? MetaStoreException.class
+                            : ManagedLedgerException.ManagedLedgerAlreadyClosedException.class);
+            assertThat(ledger.getCursors().get("cursor")).isNull();
+            ManagedCursor replacement = factory.open("cursor-lazy-close", defaultConfig()).openCursor("cursor");
+            assertThat(replacement.getCursorProperties()).containsEntry("recovered", "value");
+        } finally {
+            release.run();
+        }
+    }
+
+    @Test(dataProvider = "closeFailures")
+    public void testLedgerCloseJoinsCursorDiscovery(boolean lazyRecovery) throws Exception {
+        ManagedLedger original = factory.open("cursor-discovery-close", defaultConfig());
+        original.openCursor("cursor");
+        original.close();
+        CompletableFuture<ManagedLedgerImpl> created = new CompletableFuture<>();
+        CompletableFuture<Runnable> discovery = new CompletableFuture<>();
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bkc) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                MetaStore heldStore = spy(store);
+                doAnswer(invocation -> {
+                    String ledgerName = invocation.getArgument(0);
+                    MetaStoreCallback<List<String>> callback = invocation.getArgument(1);
+                    AtomicBoolean released = new AtomicBoolean();
+                    discovery.complete(() -> {
+                        if (released.compareAndSet(false, true)) {
+                            store.getCursors(ledgerName, callback);
+                        }
+                    });
+                    return null;
+                }).when(heldStore).getCursors(any(), any());
+                ManagedLedgerImpl ledger = new ManagedLedgerImpl(this, bk, heldStore, config, scheduledExecutor,
+                        name, ownershipChecker);
+                created.complete(ledger);
+                return ledger;
+            }
+        };
+        CompletableFuture<ManagedLedger> opening = new CompletableFuture<>();
+        localFactory.asyncOpen("cursor-discovery-close", defaultConfig().setLazyCursorRecovery(lazyRecovery),
+                new AsyncCallbacks.OpenLedgerCallback() {
+                    @Override
+                    public void openLedgerComplete(ManagedLedger ledger, Object ctx) {
+                        opening.complete(ledger);
+                    }
+
+                    @Override
+                    public void openLedgerFailed(ManagedLedgerException exception, Object ctx) {
+                        opening.completeExceptionally(exception);
+                    }
+                }, null, null);
+        ManagedLedgerImpl ledger = created.get(5, TimeUnit.SECONDS);
+        Runnable release = discovery.get(5, TimeUnit.SECONDS);
+        try {
+            CloseFuture closing = new CloseFuture();
+            ledger.asyncClose(closing, null);
+            assertPending(closing);
+            release.run();
+            closing.get(5, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> opening.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ManagedLedgerException.ManagedLedgerAlreadyClosedException.class);
+            assertThat(ledger.getCursors().get("cursor")).isNull();
+            verify(ledger.store, times(0)).asyncGetCursorInfo(any(), any(), any());
+        } finally {
+            release.run();
+        }
+    }
+
+    private static CompletableFuture<ManagedCursor> openCursor(ManagedLedgerImpl ledger, String name) {
+        CompletableFuture<ManagedCursor> opening = new CompletableFuture<>();
+        ledger.asyncOpenCursor(name, new AsyncCallbacks.OpenCursorCallback() {
+            @Override
+            public void openCursorComplete(ManagedCursor cursor, Object ctx) {
+                opening.complete(cursor);
+            }
+
+            @Override
+            public void openCursorFailed(ManagedLedgerException exception, Object ctx) {
+                opening.completeExceptionally(exception);
+            }
+        }, null);
+        return opening;
     }
 
     private static CompletableFuture<Void> deleteCursor(ManagedLedgerImpl ledger, String name) {

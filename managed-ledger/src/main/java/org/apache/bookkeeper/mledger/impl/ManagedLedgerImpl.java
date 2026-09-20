@@ -340,6 +340,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     // Deletions outlive removal from cursors. Close must still join their physical outcome.
     private final Map<ManagedCursorImpl, CursorDeletion> pendingCursorDeletions = new IdentityHashMap<>();
     private Throwable cursorDeletionCleanupFailure;
+    private final Set<CompletableFuture<Void>> pendingCursorInitializations = new HashSet<>();
+    private Throwable cursorInitializationCleanupFailure;
+
+    private record CursorInitialization(ManagedCursorImpl cursor, CompletableFuture<ManagedCursor> result,
+                                        CompletableFuture<Void> physicalCompletion) { }
 
     private record CursorDeletion(CompletableFuture<Void> result, CompletableFuture<Void> physicalCompletion) {
         private CursorDeletion() {
@@ -718,96 +723,151 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     }
 
     protected void initializeCursors(final ManagedLedgerInitializeLedgerCallback callback) {
-        log.debug("Initializing cursors");
-        store.getCursors(name, new MetaStoreCallback<List<String>>() {
+        CompletableFuture<Void> discovery = new CompletableFuture<>();
+        boolean rejected;
+        synchronized (this) {
+            rejected = closeFuture != null || state.isFenced();
+            if (!rejected) {
+                pendingCursorInitializations.add(discovery);
+            }
+        }
+        if (rejected) {
+            callback.initializeFailed(new ManagedLedgerAlreadyClosedException("Managed ledger is closed"));
+            return;
+        }
+        MetaStoreCallback<List<String>> discovered = new MetaStoreCallback<>() {
             @Override
-            public void operationComplete(List<String> consumers, Stat s) {
-                // Load existing cursors
-                final AtomicInteger cursorCount = new AtomicInteger(consumers.size());
-                log.debug().attr("count", consumers.size()).log("Found cursors");
-
-                if (consumers.isEmpty()) {
-                    callback.initializeComplete();
+            public void operationComplete(List<String> consumers, Stat stat) {
+                List<CursorInitialization> initializations = new ArrayList<>();
+                boolean closed;
+                synchronized (ManagedLedgerImpl.this) {
+                    closed = closeFuture != null || state.isFenced();
+                    if (!closed) {
+                        // Register the whole batch before issuing recovery: an inline failure must
+                        // not allow close to miss the remaining admitted recovery operations.
+                        for (String cursorName : consumers) {
+                            initializations.add(registerCursorInitialization(createCursor(bookKeeper, cursorName)));
+                        }
+                    }
+                    pendingCursorInitializations.remove(discovery);
+                }
+                discovery.complete(null);
+                if (closed) {
+                    callback.initializeFailed(new ManagedLedgerAlreadyClosedException("Managed ledger is closed"));
                     return;
                 }
-
-                if (!ManagedLedgerImpl.this.config.isLazyCursorRecovery()) {
-                    log.debug("Loading cursors");
-
-                    for (final String cursorName : consumers) {
-                        log.info().attr("cursorName", cursorName).log("Loading cursor");
-                        final ManagedCursorImpl cursor;
-                        cursor = createCursor(ManagedLedgerImpl.this.bookKeeper, cursorName);
-
-                        cursor.recover(new VoidCallback() {
-                            @Override
-                            public void operationComplete() {
-                                log.info().attr("cursorName", cursorName)
-                                        .attr("position", cursor.getMarkDeletedPosition())
-                                        .attr("remaining", cursorCount.get() - 1)
-                                        .log("Recovery for cursor completed");
-                                cursor.setActive();
-                                addCursor(cursor);
-
-                                if (cursorCount.decrementAndGet() == 0) {
-                                    // The initialization is now completed, register the jmx mbean
+                if (!config.isLazyCursorRecovery()) {
+                    FutureUtil.waitForAll(initializations.stream().map(CursorInitialization::result).toList())
+                            .whenComplete((__, error) -> {
+                                if (error == null) {
                                     callback.initializeComplete();
+                                } else {
+                                    callback.initializeFailed(ManagedLedgerException.getManagedLedgerException(
+                                            FutureUtil.unwrapCompletionException(error)));
                                 }
-                            }
-
-                            @Override
-                            public void operationFailed(ManagedLedgerException exception) {
-                                log.warn().attr("cursorName", cursorName).exception(exception)
-                                        .log("Recovery for cursor failed");
-                                cursorCount.set(-1);
-                                callback.initializeFailed(exception);
-                            }
-                        });
+                            });
+                }
+                for (CursorInitialization initialization : initializations) {
+                    VoidCallback recovered = cursorInitializationCallback(initialization, () -> { });
+                    try {
+                        initialization.cursor().recover(recovered);
+                    } catch (Throwable error) {
+                        recovered.operationFailed(ManagedLedgerException.getManagedLedgerException(error));
                     }
-                } else {
-                    // Lazily recover cursors by put them to uninitializedCursors map.
-                    for (final String cursorName : consumers) {
-                        log.debug().attr("cursorName", cursorName).log("Recovering cursor lazily");
-                        final ManagedCursorImpl cursor;
-                        cursor = createCursor(ManagedLedgerImpl.this.bookKeeper, cursorName);
-                        CompletableFuture<ManagedCursor> cursorRecoveryFuture = new CompletableFuture<>();
-                        uninitializedCursors.put(cursorName, cursorRecoveryFuture);
-
-                        cursor.recover(new VoidCallback() {
-                            @Override
-                            public void operationComplete() {
-                                log.info().attr("cursorName", cursorName)
-                                        .attr("position", cursor.getMarkDeletedPosition())
-                                        .attr("remaining", cursorCount.get() - 1)
-                                        .log("Lazy recovery for cursor completed");
-                                cursor.setActive();
-                                synchronized (ManagedLedgerImpl.this) {
-                                    addCursor(cursor);
-                                    uninitializedCursors.remove(cursor.getName()).complete(cursor);
-                                }
-                            }
-
-                            @Override
-                            public void operationFailed(ManagedLedgerException exception) {
-                                log.warn().attr("cursorName", cursorName).exception(exception)
-                                        .log("Lazy recovery for cursor failed");
-                                synchronized (ManagedLedgerImpl.this) {
-                                    uninitializedCursors.remove(cursor.getName()).completeExceptionally(exception);
-                                }
-                            }
-                        });
-                    }
-                    // Complete ledger recovery.
+                }
+                if (config.isLazyCursorRecovery()) {
                     callback.initializeComplete();
                 }
             }
 
             @Override
-            public void operationFailed(MetaStoreException e) {
-                log.warn().exception(e).log("Failed to get the cursors list");
-                callback.initializeFailed(new ManagedLedgerException(e));
+            public void operationFailed(MetaStoreException error) {
+                synchronized (ManagedLedgerImpl.this) {
+                    pendingCursorInitializations.remove(discovery);
+                }
+                discovery.complete(null);
+                callback.initializeFailed(error);
             }
-        });
+        };
+        try {
+            store.getCursors(name, discovered);
+        } catch (Throwable error) {
+            discovered.operationFailed(new MetaStoreException(error));
+        }
+    }
+
+    // Called under the ledger lifecycle monitor, before issuing any asynchronous initialization.
+    private CursorInitialization registerCursorInitialization(ManagedCursorImpl cursor) {
+        CursorInitialization initialization = new CursorInitialization(cursor, new CompletableFuture<>(),
+                new CompletableFuture<>());
+        uninitializedCursors.put(cursor.getName(), initialization.result());
+        pendingCursorInitializations.add(initialization.physicalCompletion());
+        return initialization;
+    }
+
+    private VoidCallback cursorInitializationCallback(CursorInitialization initialization, Runnable beforePublish) {
+        return new VoidCallback() {
+            @Override
+            public void operationComplete() {
+                boolean publish;
+                synchronized (ManagedLedgerImpl.this) {
+                    publish = closeFuture == null && !state.isFenced();
+                    if (publish) {
+                        beforePublish.run();
+                        initialization.cursor().setActive();
+                        addCursor(initialization.cursor());
+                    }
+                }
+                if (publish) {
+                    finishCursorInitialization(initialization, null, null);
+                } else {
+                    closeInitializedCursor(initialization,
+                            new ManagedLedgerAlreadyClosedException("Managed ledger is closed"), false);
+                }
+            }
+
+            @Override
+            public void operationFailed(ManagedLedgerException exception) {
+                closeInitializedCursor(initialization, exception, true);
+            }
+        };
+    }
+
+    private void closeInitializedCursor(CursorInitialization initialization, ManagedLedgerException openError,
+                                         boolean initializationFailed) {
+        Futures.CloseFuture cleanup = new Futures.CloseFuture();
+        cleanup.whenComplete((__, closeError) -> finishCursorInitialization(initialization, openError, closeError));
+        try {
+            if (initializationFailed) {
+                // Initialization may not have a position/stat to persist. Close only acquired writers.
+                initialization.cursor().asyncCloseForDeletion(cleanup, null);
+            } else {
+                initialization.cursor().asyncClose(cleanup, null);
+            }
+        } catch (Throwable error) {
+            cleanup.completeExceptionally(error);
+        }
+    }
+
+    private void finishCursorInitialization(CursorInitialization initialization, ManagedLedgerException openError,
+                                            Throwable closeError) {
+        synchronized (this) {
+            uninitializedCursors.remove(initialization.cursor().getName());
+            if (closeError != null && cursorInitializationCleanupFailure == null) {
+                cursorInitializationCleanupFailure = FutureUtil.unwrapCompletionException(closeError);
+            }
+            pendingCursorInitializations.remove(initialization.physicalCompletion());
+        }
+        if (closeError == null) {
+            initialization.physicalCompletion().complete(null);
+        } else {
+            initialization.physicalCompletion().completeExceptionally(closeError);
+        }
+        if (openError == null) {
+            initialization.result().complete(initialization.cursor());
+        } else {
+            initialization.result().completeExceptionally(openError);
+        }
     }
 
     private void addCursor(ManagedCursorImpl cursor) {
@@ -1077,65 +1137,55 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     }
 
     @Override
-    public synchronized void asyncOpenCursor(final String cursorName, final InitialPosition initialPosition,
+    public void asyncOpenCursor(final String cursorName, final InitialPosition initialPosition,
             Map<String, Long> properties, Map<String, String> cursorProperties,
-                                             final OpenCursorCallback callback, final Object ctx) {
-        try {
-            checkManagedLedgerIsOpen();
-            checkFenced();
-        } catch (ManagedLedgerException e) {
-            callback.openCursorFailed(e, ctx);
-            return;
-        }
-
-        if (uninitializedCursors.containsKey(cursorName)) {
-            uninitializedCursors.get(cursorName).thenAccept(cursor -> callback.openCursorComplete(cursor, ctx))
-                    .exceptionally(ex -> {
-                callback.openCursorFailed(ManagedLedgerException
-                        .getManagedLedgerException(FutureUtil.unwrapCompletionException(ex)), ctx);
-                return null;
-            });
-            return;
-        }
-        ManagedCursor cachedCursor = cursors.get(cursorName);
-        if (cachedCursor != null) {
-            log.debug().attr("cursor", cachedCursor).log("Cursor was already created");
-            callback.openCursorComplete(cachedCursor, ctx);
-            return;
-        }
-
-        // Create a new one and persist it
-        log.debug().attr("cursorName", cursorName).log("Creating new cursor");
-        final ManagedCursorImpl cursor = createCursor(bookKeeper, cursorName);
-        CompletableFuture<ManagedCursor> cursorFuture = new CompletableFuture<>();
-        uninitializedCursors.put(cursorName, cursorFuture);
-        Position position = InitialPosition.Earliest == initialPosition ? getFirstPosition() : getLastPosition();
-        cursor.initialize(position, properties, cursorProperties, new VoidCallback() {
-            @Override
-            public void operationComplete() {
-                log.info().attr("cursor", cursor).log("Opened new cursor");
-                cursor.setActive();
-                synchronized (ManagedLedgerImpl.this) {
-                    // Update the ack position (ignoring entries that were written while the cursor was being created)
-                    cursor.initializeCursorPosition(InitialPosition.Earliest == initialPosition
-                            ? getFirstPositionAndCounter()
-                            : getLastPositionAndCounter());
-                    addCursor(cursor);
-                    uninitializedCursors.remove(cursorName).complete(cursor);
+                               final OpenCursorCallback callback, final Object ctx) {
+        CompletableFuture<ManagedCursor> result = null;
+        CursorInitialization initialization = null;
+        Position position = null;
+        ManagedLedgerException rejected = null;
+        synchronized (this) {
+            try {
+                checkManagedLedgerIsOpen();
+                checkFenced();
+                result = uninitializedCursors.get(cursorName);
+                if (result == null) {
+                    ManagedCursor cached = cursors.get(cursorName);
+                    if (cached != null) {
+                        result = CompletableFuture.completedFuture(cached);
+                    } else {
+                        initialization = registerCursorInitialization(createCursor(bookKeeper, cursorName));
+                        result = initialization.result();
+                        position = initialPosition == InitialPosition.Earliest ? getFirstPosition() : getLastPosition();
+                    }
                 }
-                callback.openCursorComplete(cursor, ctx);
+            } catch (ManagedLedgerException error) {
+                rejected = error;
             }
-
-            @Override
-            public void operationFailed(ManagedLedgerException exception) {
-                log.warn().attr("cursor", cursor).log("Failed to open cursor");
-
-                synchronized (ManagedLedgerImpl.this) {
-                    uninitializedCursors.remove(cursorName).completeExceptionally(exception);
-                }
-                callback.openCursorFailed(exception, ctx);
+        }
+        if (rejected != null) {
+            callback.openCursorFailed(rejected, ctx);
+            return;
+        }
+        result.whenComplete((cursor, error) -> {
+            if (error == null) {
+                callback.openCursorComplete(cursor, ctx);
+            } else {
+                callback.openCursorFailed(ManagedLedgerException.getManagedLedgerException(
+                        FutureUtil.unwrapCompletionException(error)), ctx);
             }
         });
+        if (initialization != null) {
+            ManagedCursorImpl cursor = initialization.cursor();
+            VoidCallback initialized = cursorInitializationCallback(initialization,
+                    () -> cursor.initializeCursorPosition(initialPosition == InitialPosition.Earliest
+                            ? getFirstPositionAndCounter() : getLastPositionAndCounter()));
+            try {
+                cursor.initialize(position, properties, cursorProperties, initialized);
+            } catch (Throwable error) {
+                initialized.operationFailed(ManagedLedgerException.getManagedLedgerException(error));
+            }
+        }
     }
 
     protected ManagedCursorImpl createCursor(BookKeeper bookKeeper, String cursorName) {
@@ -1783,6 +1833,10 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 }
                 ledgerToClose = currentLedger;
                 creations = new ArrayList<>(pendingDataLedgerCreations);
+                creations.addAll(pendingCursorInitializations);
+                if (cursorInitializationCleanupFailure != null) {
+                    creations.add(CompletableFuture.failedFuture(cursorInitializationCleanupFailure));
+                }
                 pendingCursorDeletions.values().forEach(deletion -> creations.add(deletion.physicalCompletion()));
                 if (cursorDeletionCleanupFailure != null) {
                     creations.add(CompletableFuture.failedFuture(cursorDeletionCleanupFailure));
