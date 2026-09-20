@@ -1182,35 +1182,45 @@ public class PersistentSubscription extends AbstractSubscription {
      * @return CompletableFuture indicating the completion of the operation.
      */
     @Override
-    public synchronized CompletableFuture<Void> close(boolean disconnectConsumers,
-                                                      Optional<BrokerLookupData> assignedBrokerLookupData) {
-        if (fenceFuture != null) {
-            return fenceFuture;
+    public CompletableFuture<Void> close(boolean disconnectConsumers,
+                                         Optional<BrokerLookupData> assignedBrokerLookupData) {
+        CompletableFuture<Void> closing;
+        Dispatcher dispatcherToClose;
+        synchronized (this) {
+            if (fenceFuture != null) {
+                return disconnectConsumers ? fenceFuture : fenceFuture.copy();
+            }
+            closing = new CompletableFuture<>();
+            fenceFuture = closing;
+            // Block admission before dispatching asynchronous close work outside the subscription monitor.
+            IS_FENCED_UPDATER.set(this, TRUE);
+            dispatcherToClose = dispatcher;
         }
-
-        fenceFuture = new CompletableFuture<>();
-
-        // block any further consumers on this subscription
-        IS_FENCED_UPDATER.set(this, TRUE);
-
-        (dispatcher != null
-                ? dispatcher.close(disconnectConsumers, assignedBrokerLookupData)
-                : CompletableFuture.completedFuture(null))
-                // checkActiveConsumers is false since we just closed all of them if we wanted.
-                .thenCompose(__ -> closeCursor(false)).thenRun(() -> {
-                    log.info()
-                            .log("Successfully closed the subscription");
-                    fenceFuture.complete(null);
-                }).exceptionally(exception -> {
-                    log.error()
-                            .exception(exception)
-                            .log("Error closing the subscription");
-                    fenceFuture.completeExceptionally(exception);
+        CompletableFuture<Void> dispatcherClosed = dispatcherToClose != null
+                ? FutureUtil.supplySafely(() -> dispatcherToClose.close(disconnectConsumers, assignedBrokerLookupData))
+                : CompletableFuture.completedFuture(null);
+        CompletableFuture<Void> resourcesClosed;
+        if (disconnectConsumers) {
+            resourcesClosed = dispatcherClosed.thenCompose(ignored -> closeCursor(false));
+        } else {
+            // A dispatcher failure must not skip pending-ACK storage cleanup or erase its own failure.
+            CompletableFuture<Void> persistenceClosed = dispatcherClosed.handle((ignored, error) -> null)
+                    .thenCompose(ignored -> closeCursor(false));
+            resourcesClosed = CompletableFuture.allOf(dispatcherClosed, persistenceClosed);
+        }
+        resourcesClosed.whenComplete((ignored, error) -> {
+            if (error == null) {
+                log.info().log("Successfully closed the subscription");
+                closing.complete(null);
+            } else {
+                log.error().exception(error).log("Error closing the subscription");
+                closing.completeExceptionally(error);
+                if (disconnectConsumers) {
                     resumeAfterFence();
-                    return null;
-                });
-
-        return fenceFuture;
+                }
+            }
+        });
+        return disconnectConsumers ? closing : closing.copy();
     }
 
     /**

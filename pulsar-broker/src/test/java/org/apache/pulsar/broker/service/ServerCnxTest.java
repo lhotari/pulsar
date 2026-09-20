@@ -114,6 +114,7 @@ import org.apache.pulsar.broker.authentication.AuthenticationService;
 import org.apache.pulsar.broker.authentication.AuthenticationState;
 import org.apache.pulsar.broker.authorization.AuthorizationService;
 import org.apache.pulsar.broker.authorization.PulsarAuthorizationProvider;
+import org.apache.pulsar.broker.loadbalance.impl.ModularLoadManagerWrapper;
 import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.broker.namespace.TopicExistsInfo;
 import org.apache.pulsar.broker.service.BrokerServiceException.ServiceUnitNotReadyException;
@@ -2173,6 +2174,46 @@ public class ServerCnxTest {
         sendMessage();
 
         assertTrue(getResponse() instanceof CommandSendReceipt);
+        channel.finish();
+    }
+
+    @DataProvider
+    public Object[][] legacyTransferCommands() {
+        return new Object[][] {{true}, {false}};
+    }
+
+    @Test(timeOut = 30000, dataProvider = "legacyTransferCommands")
+    public void testLegacyTransferKeepsConnectionAndDoesNotAcknowledgeDroppedWork(boolean send) throws Exception {
+        pulsar.getLoadManager().set(mock(ModularLoadManagerWrapper.class));
+        resetChannel();
+        setChannelConnected();
+        serverCnx.cancelKeepAliveTask();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "prod-name", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 2,
+                SubType.Exclusive, 0, "consumer", 0));
+        assertTrue(getResponse() instanceof CommandSuccess);
+        doAnswer(invocation -> {
+            CloseCallback callback = invocation.getArgument(0);
+            callback.closeComplete(invocation.getArgument(1));
+            return null;
+        }).when(ledgerMock).asyncClose(any(), any());
+        Topic topic = brokerService.getTopicReference(successTopicName).orElseThrow();
+        topic.close(false, false).get(10, TimeUnit.SECONDS);
+        assertTrue(topic.isTransferring());
+        assertTrue(serverCnx.getProducers().containsKey(1));
+        assertTrue(serverCnx.getConsumers().containsKey(1));
+        if (send) {
+            sendMessage();
+        } else {
+            // A request ID asks for an ACK receipt. Dropping this ACK must not issue a successful one.
+            channel.writeInbound(Commands.newAck(1, 0, 0, null, AckType.Individual,
+                    null, Collections.emptyMap(), 10));
+        }
+        channel.runPendingTasks();
+        assertTrue(channel.isActive());
+        assertTrue(channel.outboundMessages().isEmpty());
         channel.finish();
     }
 

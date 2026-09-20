@@ -529,6 +529,10 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
     }
 
 
+    // Guarded by the topic write lock. A transfer never loses its physical close result.
+    private CompletableFuture<Void> transferCloseFuture;
+    private CompletableFuture<Void> transferDisconnectFuture;
+
     @Override
     public CompletableFuture<Void> close(boolean closeWithoutWaitingClientDisconnect) {
         return close(true, closeWithoutWaitingClientDisconnect);
@@ -545,26 +549,43 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
     public CompletableFuture<Void> close(
             boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect) {
         CompletableFuture<Void> closeFuture = new CompletableFuture<>();
-
+        CompletableFuture<Void> storageClosed;
         lock.writeLock().lock();
         try {
-            if (!disconnectClients) {
-                transferring = true;
-            }
-            if (!isFenced || closeWithoutWaitingClientDisconnect) {
-                isFenced = true;
+            if (transferCloseFuture != null) {
+                if (!disconnectClients) {
+                    return transferCloseFuture.copy();
+                }
+                if (transferDisconnectFuture != null) {
+                    return transferDisconnectFuture.copy();
+                }
+                transferDisconnectFuture = closeFuture;
+                storageClosed = transferCloseFuture;
             } else {
-                log.warn("Topic is already being closed or deleted");
-                closeFuture.completeExceptionally(new TopicFencedException("Topic is already fenced"));
-                return closeFuture;
+                if (isFenced && !closeWithoutWaitingClientDisconnect) {
+                    return CompletableFuture.failedFuture(new TopicFencedException("Topic is already fenced"));
+                }
+                isFenced = true;
+                if (!disconnectClients) {
+                    transferring = true;
+                    transferCloseFuture = closeFuture;
+                }
+                storageClosed = CompletableFuture.completedFuture(null);
             }
         } finally {
             lock.writeLock().unlock();
         }
+        FutureUtil.completeAfter(closeFuture, storageClosed.thenCompose(ignored -> FutureUtil.supplySafely(
+                () -> closeResources(disconnectClients, closeWithoutWaitingClientDisconnect))));
+        return transferring ? closeFuture.copy() : closeFuture;
+    }
 
+    private CompletableFuture<Void> closeResources(
+            boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect) {
+        CompletableFuture<Void> closeFuture = new CompletableFuture<>();
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
-        replicators.forEach((cluster, replicator) -> futures.add(replicator.terminate()));
+        replicators.forEach((cluster, replicator) -> futures.add(FutureUtil.supplySafely(replicator::terminate)));
         if (disconnectClients) {
             futures.add(ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(
                 brokerService.getPulsar(), topic).thenCompose(lookupData -> {
@@ -583,7 +604,8 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
                 }
             ));
         } else {
-            subscriptions.forEach((s, sub) -> futures.add(sub.close(false, Optional.empty())));
+            subscriptions.forEach((s, sub) -> futures.add(
+                    FutureUtil.supplySafely(() -> sub.close(false, Optional.empty()))));
         }
 
         if (entryFilters != null) {
@@ -597,7 +619,7 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
         }
 
         CompletableFuture<Void> clientCloseFuture =
-                closeWithoutWaitingClientDisconnect ? CompletableFuture.completedFuture(null)
+                disconnectClients && closeWithoutWaitingClientDisconnect ? CompletableFuture.completedFuture(null)
                         : FutureUtil.waitForAll(futures);
 
         clientCloseFuture.thenRun(() -> {
@@ -615,7 +637,9 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
             });
         }).exceptionally(exception -> {
             log.error().exception(exception).log("Error closing topic");
-            isFenced = false;
+            if (!transferring) {
+                isFenced = false;
+            }
             closeFuture.completeExceptionally(exception);
             return null;
         });

@@ -91,7 +91,7 @@ import org.apache.pulsar.broker.authentication.AuthenticationProvider;
 import org.apache.pulsar.broker.authentication.AuthenticationState;
 import org.apache.pulsar.broker.intercept.BrokerInterceptor;
 import org.apache.pulsar.broker.limiter.ConnectionController;
-import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl;
+import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerWrapper;
 import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
 import org.apache.pulsar.broker.namespace.LookupOptions;
 import org.apache.pulsar.broker.namespace.NamespaceService;
@@ -2965,20 +2965,18 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         Producer producer = producerFuture.getNow(null);
         printSendCommandDebug(send, headersAndPayload);
 
-        // New messages are silently ignored during topic transfer. Note that the transferring flag is only set when the
-        // Extensible Load Manager is enabled.
+        // Preserve the connection while a topic's storage is closed and ownership is moving.
         if (producer.getTopic().isTransferring()) {
             var pulsar = getBrokerService().pulsar();
             var ignoredMsgCount = send.getNumMessages();
-            var ignoredSendMsgTotalCount = ExtensibleLoadManagerImpl.get(pulsar).getIgnoredSendMsgCount().
-                    addAndGet(ignoredMsgCount);
+            if (pulsar.getLoadManager().get() instanceof ExtensibleLoadManagerWrapper wrapper) {
+                wrapper.get().getIgnoredSendMsgCount().addAndGet(ignoredMsgCount);
+            }
             log.debug()
                     .attr("ignoredMsgCount", ignoredMsgCount)
                     .attr("producerId", send.getProducerId())
                     .attr("name", producer.getTopic().getName())
-                    .attr("ignoredSendMsgTotalCount", ignoredSendMsgTotalCount)
-                    .log("Ignoring messages from:: to fenced topic: while transferring."
-                            + "Total ignored message count:.");
+                    .log("Ignoring messages while topic ownership is transferring");
             return;
         }
 
@@ -3052,19 +3050,18 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         if (consumerFuture != null && consumerFuture.isDone() && !consumerFuture.isCompletedExceptionally()) {
             Consumer consumer = consumerFuture.getNow(null);
             Subscription subscription = consumer.getSubscription();
-            // Message acks are silently ignored during topic transfer. Note that the transferring flag is only set when
-            // the Extensible Load Manager is enabled.
+            // Dropped transfer ACKs must not generate successful receipts or close the shared connection.
             if (subscription.getTopic().isTransferring()) {
                 var pulsar = getBrokerService().getPulsar();
                 var ignoredAckCount = ack.getMessageIdsCount();
-                var ignoredAckTotalCount = ExtensibleLoadManagerImpl.get(pulsar).getIgnoredAckCount().
-                        addAndGet(ignoredAckCount);
+                if (pulsar.getLoadManager().get() instanceof ExtensibleLoadManagerWrapper wrapper) {
+                    wrapper.get().getIgnoredAckCount().addAndGet(ignoredAckCount);
+                }
                 log.debug()
                         .attr("subscription", subscription)
                         .attr("consumerId", consumerId)
                         .attr("ignoredAckCount", ignoredAckCount)
-                        .attr("ignoredAckTotalCount", ignoredAckTotalCount)
-                        .log("Ignoring message acks during topic transfer. Total ignored ack count");
+                        .log("Ignoring message acks during topic transfer");
                 return;
             }
             consumer.messageAcked(ack, hasRequestId).thenRun(() -> {
