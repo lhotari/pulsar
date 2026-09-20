@@ -44,6 +44,8 @@ import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.api.CreateBuilder;
+import org.apache.bookkeeper.client.api.OpenBuilder;
+import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.client.api.WriteHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
 import org.apache.bookkeeper.mledger.ManagedCursor;
@@ -1200,6 +1202,136 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
             assertThat(ledger.getState()).isEqualTo(ManagedLedgerImpl.State.Closed);
         } finally {
             release.run();
+        }
+    }
+
+    @Test(dataProvider = "closeFailures")
+    public void testCloseJoinsInitialMetadata(boolean terminated) throws Exception {
+        ManagedLedger original = factory.open("initial-metadata-close", defaultConfig());
+        original.addEntry(new byte[] {1});
+        if (terminated) {
+            original.terminate();
+        }
+        original.close();
+        BookKeeper bookKeeper = spy(bkc);
+        CompletableFuture<ManagedLedgerImpl> created = new CompletableFuture<>();
+        CompletableFuture<Runnable> metadataRead = new CompletableFuture<>();
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bookKeeper) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                MetaStore heldStore = spy(store);
+                doAnswer(invocation -> {
+                    MetaStoreCallback<ManagedLedgerInfo> callback = invocation.getArgument(3);
+                    AtomicBoolean released = new AtomicBoolean();
+                    metadataRead.complete(() -> {
+                        if (released.compareAndSet(false, true)) {
+                            store.getManagedLedgerInfo(name, true, callback);
+                        }
+                    });
+                    return null;
+                }).when(heldStore).getManagedLedgerInfo(any(), anyBoolean(), any(), any());
+                ManagedLedgerImpl ledger = new ManagedLedgerImpl(this, bk, heldStore, config, scheduledExecutor,
+                        name, ownershipChecker);
+                created.complete(ledger);
+                return ledger;
+            }
+        };
+        CompletableFuture<ManagedLedger> opening = openLedger(localFactory, "initial-metadata-close", defaultConfig());
+        ManagedLedgerImpl ledger = created.get(5, TimeUnit.SECONDS);
+        Runnable release = metadataRead.get(5, TimeUnit.SECONDS);
+        try {
+            CloseFuture closing = new CloseFuture();
+            ledger.asyncClose(closing, null);
+            assertPending(closing);
+            release.run();
+            closing.get(5, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> opening.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ManagedLedgerException.ManagedLedgerAlreadyClosedException.class);
+            assertThat(ledger.getState()).isEqualTo(ManagedLedgerImpl.State.Closed);
+            verify(bookKeeper, times(0)).newOpenLedgerOp();
+            verify(bookKeeper, times(0)).newCreateLedgerOp();
+        } finally {
+            release.run();
+        }
+    }
+
+    @DataProvider
+    public Object[][] initialRecoveries() {
+        return new Object[][] {{false, true, false}, {false, true, true}, {false, false, false},
+                {false, false, true}, {true, true, false}, {true, true, true}};
+    }
+
+    @Test(dataProvider = "initialRecoveries")
+    public void testCloseJoinsInitialRecoveryHandle(boolean terminated, boolean closeBeforeRecovery,
+                                                   boolean closeFailure) throws Exception {
+        ManagedLedgerImpl original = (ManagedLedgerImpl) factory.open("initial-recovery-close", defaultConfig());
+        long ledgerId = original.addEntry(new byte[] {1}).getLedgerId();
+        if (terminated) {
+            original.terminate();
+        }
+        original.close();
+        LedgerHandle realHandle = (LedgerHandle) bkc.newOpenLedgerOp().withLedgerId(ledgerId)
+                .withDigestType(BookKeeper.DigestType.CRC32C.toApiDigestType()).withPassword(new byte[0])
+                .withRecovery(true).execute().get(5, TimeUnit.SECONDS);
+        LedgerHandle handle = spy(realHandle);
+        CompletableFuture<Void> handleClosed = new CompletableFuture<>();
+        CompletableFuture<Void> closeStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            closeStarted.complete(null);
+            return handleClosed;
+        }).when(handle).closeAsync();
+        BookKeeper bookKeeper = spy(bkc);
+        OpenBuilder builder = mock(OpenBuilder.class, RETURNS_SELF);
+        CompletableFuture<ReadHandle> opened = new CompletableFuture<>();
+        CompletableFuture<Void> openStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            openStarted.complete(null);
+            return opened;
+        }).when(builder).execute();
+        doReturn(builder).when(bookKeeper).newOpenLedgerOp();
+        CompletableFuture<ManagedLedgerImpl> created = new CompletableFuture<>();
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bookKeeper) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                ManagedLedgerImpl ledger = super.createManagedLedger(bk, store, name, config, ownershipChecker);
+                created.complete(ledger);
+                return ledger;
+            }
+        };
+        CompletableFuture<ManagedLedger> opening = openLedger(localFactory, "initial-recovery-close", defaultConfig());
+        ManagedLedgerImpl ledger = created.get(5, TimeUnit.SECONDS);
+        openStarted.get(5, TimeUnit.SECONDS);
+        try {
+            CloseFuture closing = new CloseFuture();
+            if (closeBeforeRecovery) {
+                ledger.asyncClose(closing, null);
+                assertPending(closing);
+            }
+            opened.complete(handle);
+            closeStarted.get(5, TimeUnit.SECONDS);
+            if (!closeBeforeRecovery) {
+                ledger.asyncClose(closing, null);
+            }
+            assertPending(closing);
+            if (closeFailure) {
+                handleClosed.completeExceptionally(BKException.create(BKException.Code.WriteException));
+            } else {
+                handleClosed.complete(null);
+            }
+            assertResult(closing, closeFailure);
+            assertThatThrownBy(() -> opening.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ManagedLedgerException.class);
+            assertThat(ledger.getState()).isEqualTo(ManagedLedgerImpl.State.Closed);
+            verify(bookKeeper, times(0)).newCreateLedgerOp();
+            verify(handle, times(1)).closeAsync();
+        } finally {
+            opened.complete(handle);
+            handleClosed.complete(null);
+            realHandle.closeAsync().get(5, TimeUnit.SECONDS);
         }
     }
 
