@@ -389,11 +389,9 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
     public CompletableFuture<Optional<T>> getLeaderValue() {
         CompletableFuture<Optional<T>> future;
         synchronized (this) {
-            if (internalState == InternalState.Init || !electionEnabled) {
-                // This instance never participated in the election (a pure observer, e.g.
-                // BookKeeper's MetadataDrivers helpers querying the current auditor): there is no
-                // local election cycle to wait for, so the store content is the authoritative
-                // answer.
+            if (internalState == InternalState.Init || (!electionEnabled && internalState != InternalState.Closed)) {
+                // Pure observers and disabled participants have no local election cycle to wait for.
+                // Read the store directly; a disabled participant must still discover the current leader.
                 return readLeaderValueFromStore();
             }
             future = currentLeaderFuture;
