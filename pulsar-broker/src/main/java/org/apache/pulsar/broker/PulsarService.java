@@ -512,9 +512,9 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                     successors.add(coordinationService.getLockManager(BrokerLookupData.class)
                             .readLock(LoadManager.LOADBALANCE_BROKERS_ROOT + "/" + broker)
                             .thenApply(data -> data.isPresent()
-                                    && ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(this)
-                                    == ExtensibleLoadManagerImpl.class.getName()
-                                            .equals(data.get().getLoadManagerClassName())));
+                                    && sharesLeaderElection(ExtensibleLoadManagerImpl
+                                            .isLoadManagerExtensionEnabled(this),
+                                            data.get().getLoadManagerClassName())));
                 }
             }
             timeout = Math.min(getRemainingShutdownDrainNanos(),
@@ -541,6 +541,22 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
             log.warn().exceptionMessage(e).log("Unable to hand off broker leadership before draining");
+        }
+    }
+
+    @VisibleForTesting
+    static boolean sharesLeaderElection(boolean extensible, String peerLoadManagerClassName) {
+        // Older registrations can omit the class name; those brokers use the legacy election.
+        if (StringUtils.isBlank(peerLoadManagerClassName)) {
+            return !extensible;
+        }
+        try {
+            Class<?> peerLoadManager = Class.forName(peerLoadManagerClassName, false,
+                    Thread.currentThread().getContextClassLoader());
+            return extensible == ExtensibleLoadManagerImpl.class.isAssignableFrom(peerLoadManager);
+        } catch (ClassNotFoundException | LinkageError e) {
+            // An unavailable plugin cannot be classified safely as a successor.
+            return false;
         }
     }
 

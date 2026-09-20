@@ -81,6 +81,21 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         return new Object[][]{{false, false}, {true, false}, {true, true}};
     }
 
+    public static class CustomExtensibleLoadManager extends ExtensibleLoadManagerImpl {
+    }
+
+    @Test
+    public void leadershipSuccessorUsesTheSameElectionIncludingCustomLoadManagers() {
+        assertThat(PulsarService.sharesLeaderElection(true, CustomExtensibleLoadManager.class.getName())).isTrue();
+        assertThat(PulsarService.sharesLeaderElection(false, CustomExtensibleLoadManager.class.getName())).isFalse();
+        assertThat(PulsarService.sharesLeaderElection(true, ExtensibleLoadManagerImpl.class.getName())).isTrue();
+        assertThat(PulsarService.sharesLeaderElection(false, ModularLoadManagerImpl.class.getName())).isTrue();
+        assertThat(PulsarService.sharesLeaderElection(true, ModularLoadManagerImpl.class.getName())).isFalse();
+        assertThat(PulsarService.sharesLeaderElection(false, null)).isTrue();
+        assertThat(PulsarService.sharesLeaderElection(true, null)).isFalse();
+        assertThat(PulsarService.sharesLeaderElection(false, "unavailable.LoadManager")).isFalse();
+    }
+
     @Test(dataProvider = "leadershipSuccessors")
     public void handOffLeadershipBeforeDrainingOnlyWithAnotherBroker(boolean otherBroker,
                                                                    boolean differentElection) throws Exception {
