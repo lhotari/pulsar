@@ -47,6 +47,7 @@ public class ResourceLockImpl<T> implements ResourceLock<T> {
     private volatile T value;
     private long version;
     private final CompletableFuture<Void> expiredFuture;
+    private CompletableFuture<Void> releaseFuture;
     private boolean revalidateAfterReconnection = false;
     private final Backoff backoff;
     private final FutureUtil.Sequencer<Void> sequencer;
@@ -97,40 +98,44 @@ public class ResourceLockImpl<T> implements ResourceLock<T> {
     }
 
     @Override
-    public synchronized CompletableFuture<Void> release() {
-        if (state == State.Released) {
-            return CompletableFuture.completedFuture(null);
+    public CompletableFuture<Void> release() {
+        CompletableFuture<Void> result;
+        long expectedVersion;
+        synchronized (this) {
+            if (releaseFuture != null) {
+                return releaseFuture.copy();
+            }
+            if (state == State.Released) {
+                return CompletableFuture.completedFuture(null);
+            }
+            result = new CompletableFuture<>();
+            releaseFuture = result;
+            state = State.Releasing;
+            expectedVersion = version;
+            if (revalidateTask != null) {
+                revalidateTask.cancel(false);
+            }
         }
 
-        state = State.Releasing;
-        if (revalidateTask != null) {
-            revalidateTask.cancel(true);
-        }
-
-        CompletableFuture<Void> result = new CompletableFuture<>();
-
-        store.delete(path, Optional.of(version))
-                .thenRun(() -> {
-                    synchronized (ResourceLockImpl.this) {
-                        state = State.Released;
-                    }
-                    expiredFuture.complete(null);
-                    result.complete(null);
-                }).exceptionally(ex -> {
-                    if (ex.getCause() instanceof MetadataStoreException.NotFoundException) {
-                        // The lock is not there on release. We can anyway proceed
+        // Release can be requested by both a bundle unload and final LockManager cleanup. Never dispatch
+        // a second delete: the path might already belong to a newer owner, with a reset metadata version.
+        // An ambiguous failure is retained too; it is not permission to retry against that newer owner.
+        FutureUtil.supplySafely(() -> store.delete(path, Optional.of(expectedVersion)))
+                .whenComplete((ignored, error) -> {
+                    if (error == null || FutureUtil.unwrapCompletionException(error)
+                            instanceof MetadataStoreException.NotFoundException) {
                         synchronized (ResourceLockImpl.this) {
                             state = State.Released;
                         }
+                        // Expiry listeners can reenter release(). Run them outside the lifecycle monitor,
+                        // and keep the retained result pending until those listeners have been dispatched.
                         expiredFuture.complete(null);
                         result.complete(null);
                     } else {
-                        result.completeExceptionally(ex);
+                        result.completeExceptionally(error);
                     }
-                    return null;
                 });
-
-        return result;
+        return result.copy();
     }
 
     @Override
