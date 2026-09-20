@@ -19,9 +19,13 @@
 package org.apache.pulsar.broker.service;
 
 import it.unimi.dsi.fastutil.longs.Long2LongAVLTreeMap;
+import it.unimi.dsi.fastutil.longs.Long2LongLinkedOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2LongMap;
+import it.unimi.dsi.fastutil.longs.Long2LongMaps;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2LongRBTreeMap;
 import it.unimi.dsi.fastutil.longs.Long2LongSortedMap;
+import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -43,7 +47,7 @@ import org.openjdk.jmh.annotations.Warmup;
 @Measurement(iterations = 5, time = 1)
 @Fork(2)
 public class PendingAckTreeBenchmark {
-    @Param({"RB", "AVL"})
+    @Param({"RB", "AVL", "OPEN_HASH", "LINKED_HASH"})
     public String implementation;
 
     @Param({"1024", "65536"})
@@ -52,7 +56,7 @@ public class PendingAckTreeBenchmark {
     @Param({"false", "true"})
     public boolean shuffled;
 
-    private Long2LongSortedMap map;
+    private Long2LongMap map;
     private long[] entryIds;
     private long nextEntryId;
     private int cursor;
@@ -60,7 +64,13 @@ public class PendingAckTreeBenchmark {
 
     @Setup
     public void setup() {
-        map = "AVL".equals(implementation) ? new Long2LongAVLTreeMap() : new Long2LongRBTreeMap();
+        map = switch (implementation) {
+            case "AVL" -> new Long2LongAVLTreeMap();
+            case "RB" -> new Long2LongRBTreeMap();
+            case "OPEN_HASH" -> new Long2LongOpenHashMap();
+            case "LINKED_HASH" -> new Long2LongLinkedOpenHashMap();
+            default -> throw new IllegalArgumentException(implementation);
+        };
         map.defaultReturnValue(PendingAckValues.PACKED_NOT_FOUND);
         packedValue = PendingAckValues.pack(1, 0);
         entryIds = new long[windowSize];
@@ -97,8 +107,28 @@ public class PendingAckTreeBenchmark {
     @Benchmark
     public long scanPrefix() {
         long sum = 0;
-        for (Long2LongMap.Entry entry : map.headMap(windowSize / 50).long2LongEntrySet()) {
-            sum += entry.getLongKey();
+        long lastEntryId = windowSize / 50;
+        if (map instanceof Long2LongLinkedOpenHashMap) {
+            ObjectIterator<Long2LongMap.Entry> iterator = Long2LongMaps.fastIterator(map);
+            while (iterator.hasNext()) {
+                long entryId = iterator.next().getLongKey();
+                if (entryId >= lastEntryId) {
+                    break;
+                }
+                sum += entryId;
+            }
+        } else if (map instanceof Long2LongSortedMap sortedMap) {
+            for (Long2LongMap.Entry entry : sortedMap.headMap(lastEntryId).long2LongEntrySet()) {
+                sum += entry.getLongKey();
+            }
+        } else {
+            ObjectIterator<Long2LongMap.Entry> iterator = Long2LongMaps.fastIterator(map);
+            while (iterator.hasNext()) {
+                long entryId = iterator.next().getLongKey();
+                if (entryId < lastEntryId) {
+                    sum += entryId;
+                }
+            }
         }
         return sum;
     }

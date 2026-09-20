@@ -153,6 +153,22 @@ public class PendingAcksMapTest {
     }
 
     @Test
+    public void removeAllUpTo_HandlesOutOfOrderInsertion() {
+        Consumer consumer = createMockConsumer("consumer1");
+        PendingAcksMap pendingAcksMap = new PendingAcksMap(consumer, () -> null, () -> null);
+        pendingAcksMap.addPendingAckIfAllowed(1L, 3L, 1, 123);
+        pendingAcksMap.addPendingAckIfAllowed(1L, 1L, 1, 124);
+        pendingAcksMap.addPendingAckIfAllowed(1L, 2L, 1, 125);
+
+        pendingAcksMap.removeAllUpTo(1L, 2L, null);
+
+        assertFalse(pendingAcksMap.contains(1L, 1L));
+        assertFalse(pendingAcksMap.contains(1L, 2L));
+        assertTrue(pendingAcksMap.contains(1L, 3L));
+        assertEquals(pendingAcksMap.size(), 1);
+    }
+
+    @Test
     public void addPendingAckIfAllowed_InvokesAddHandler() {
         Consumer consumer = createMockConsumer("consumer1");
         PendingAcksMap.PendingAcksAddHandler addHandler = mock(PendingAcksMap.PendingAcksAddHandler.class);
