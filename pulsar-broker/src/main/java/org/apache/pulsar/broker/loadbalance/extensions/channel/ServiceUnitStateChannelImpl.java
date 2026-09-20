@@ -46,6 +46,8 @@ import static org.apache.pulsar.common.naming.NamespaceName.SYSTEM_NAMESPACE;
 import static org.apache.pulsar.metadata.api.extended.SessionEvent.SessionLost;
 import static org.apache.pulsar.metadata.api.extended.SessionEvent.SessionReestablished;
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.util.concurrent.RateLimiter;
+import io.netty.util.concurrent.DefaultThreadFactory;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -58,6 +60,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -127,6 +131,14 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
     private LeaderElectionService leaderElectionService;
 
     private ServiceUnitStateTableView tableview;
+    private final Map<String, CompletableFuture<Void>> shutdownRecoveries = new ConcurrentHashMap<>();
+    private ExecutorService shutdownRecoveryExecutor;
+    private ExecutorService shutdownCloseExecutor;
+    private final Map<String, ShutdownTransfer> shutdownTransfers = new ConcurrentHashMap<>();
+    private final Map<String, ShutdownTerminalClose> shutdownTerminalCloses = new ConcurrentHashMap<>();
+
+    private record ShutdownTransfer(long version, CompletableFuture<Void> completion) { }
+    private record ShutdownTerminalClose(ServiceUnitStateData state, CompletableFuture<?> close) { }
     private ScheduledFuture<?> monitorTask;
     private volatile SessionEvent lastMetadataSessionEvent = SessionReestablished;
     private volatile long lastMetadataSessionEventTimestamp = 0;
@@ -290,14 +302,19 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
         try {
             // A lookup may have selected a broker before disable(). Finish accepted assignment writes
             // before scanning ownership, while rejecting any new assignments after disable().
-            FutureUtil.waitForAll(pending).get(config.getMetadataStoreOperationTimeoutSeconds(), SECONDS);
+            FutureUtil.waitForAll(pending).get(cleanupTimeoutNanos(true,
+                    config.getMetadataStoreOperationTimeoutSeconds(), SECONDS), TimeUnit.NANOSECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn().exception(e).log("Interrupted while waiting for in-flight assignment writes");
         } catch (ExecutionException | TimeoutException e) {
             log.warn().exception(e).log("Failed to finish in-flight assignment writes before ownership cleanup");
         }
-        doCleanup(brokerId, true);
+        if (pulsar.getBrokerAdmission().isClosed()) {
+            drainShutdownOwnerships();
+        } else {
+            doCleanup(brokerId, true);
+        }
     }
 
     @Override
@@ -401,6 +418,14 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
     @Override
     public synchronized void close() throws PulsarServerException {
         channelState = Closed;
+        if (shutdownRecoveryExecutor != null) {
+            shutdownRecoveryExecutor.shutdownNow();
+            shutdownRecoveryExecutor = null;
+        }
+        if (shutdownCloseExecutor != null) {
+            shutdownCloseExecutor.shutdownNow();
+            shutdownCloseExecutor = null;
+        }
         try {
             leaderElectionService = null;
 
@@ -685,6 +710,9 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
     public CompletableFuture<String> publishAssignEventAsync(String serviceUnit, String brokerId) {
         CompletableFuture<Void> published = new CompletableFuture<>();
         synchronized (pendingAssignPublishes) {
+            if (pulsar.getBrokerAdmission().isClosed()) {
+                return FutureUtil.failedFuture(new BrokerServiceException.BrokerDrainingException());
+            }
             if (channelState != Started) {
                 return CompletableFuture.failedFuture(
                         new IllegalStateException("Invalid channel state:" + channelState.name()));
@@ -791,7 +819,15 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
         }
 
         ServiceUnitState state = state(data);
-        if (channelState == Disabled && (data == null || !data.force())) {
+        if (state == Init || state == Deleted) {
+            shutdownTerminalCloses.remove(serviceUnit);
+        }
+        if (rejectIncomingShutdownOwnership(serviceUnit, data)) {
+            return;
+        }
+        boolean outgoingShutdownEvent = pulsar.getBrokerAdmission().isClosed()
+                && (state == Releasing || state == Free || state == Owned);
+        if (channelState == Disabled && !outgoingShutdownEvent && (data == null || !data.force())) {
             final var request = getOwnerRequests.remove(serviceUnit);
             if (request != null) {
                 request.completeExceptionally(new BrokerServiceException.ServiceUnitNotReadyException(
@@ -819,7 +855,136 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
         }
     }
 
+    @VisibleForTesting
+    CompletableFuture<Void> getShutdownRecovery(String serviceUnit) {
+        return shutdownRecoveries.get(serviceUnit);
+    }
+
+    private boolean rejectIncomingShutdownOwnership(String serviceUnit, ServiceUnitStateData data) {
+        if (!pulsar.getBrokerAdmission().isClosed() || data == null || !isTargetBroker(data.dstBroker())
+                || (data.state() != Assigning && data.state() != Owned)) {
+            return false;
+        }
+        var request = getOwnerRequests.get(serviceUnit);
+        if (request != null && getOwnerRequests.remove(serviceUnit, request)) {
+            request.completeExceptionally(new BrokerServiceException.BrokerDrainingException());
+        }
+        if (channelState != Closed && !pulsar.isMetadataSessionsClosing()
+                && pulsar.getRemainingShutdownDrainNanos() > 0) {
+            var recovery = new CompletableFuture<Void>();
+            if (shutdownRecoveries.putIfAbsent(serviceUnit, recovery) == null) {
+                pulsar.getShutdownPreparationComplete().thenRunAsync(
+                        () -> recoverRejectedOwnership(serviceUnit, data), shutdownRecoveryExecutor())
+                        .whenComplete((__, error) -> {
+                            shutdownRecoveries.remove(serviceUnit, recovery);
+                            if (error == null) {
+                                recovery.complete(null);
+                                // An event can arrive between the worker's last read and removal of its dedupe key.
+                                // Recheck after removal so that such a newer generation cannot be lost.
+                                var view = tableview;
+                                if (view != null && canRecoverShutdownOwnership()) {
+                                    rejectIncomingShutdownOwnership(serviceUnit, view.get(serviceUnit));
+                                }
+                            } else {
+                                recovery.completeExceptionally(error);
+                                log.warn().attr("bundle", serviceUnit).exceptionMessage(error)
+                                        .log("Unable to recover ownership rejected during shutdown");
+                            }
+                        });
+            }
+        }
+        return true;
+    }
+
+    private synchronized ExecutorService shutdownRecoveryExecutor() {
+        if (shutdownRecoveryExecutor == null) {
+            shutdownRecoveryExecutor = Executors.newFixedThreadPool(2,
+                    new DefaultThreadFactory("pulsar-shutdown-ownership-recovery", true));
+            if (channelState == Closed) {
+                shutdownRecoveryExecutor.shutdownNow();
+            }
+        }
+        return shutdownRecoveryExecutor;
+    }
+
+    private boolean canRecoverShutdownOwnership() {
+        return channelState != Closed && !pulsar.isMetadataSessionsClosing()
+                && pulsar.getRemainingShutdownDrainNanos() > 0 && !Thread.currentThread().isInterrupted();
+    }
+
+    private void recoverRejectedOwnership(String serviceUnit, ServiceUnitStateData observed) {
+        try {
+            var view = tableview;
+            if (view == null || !canRecoverShutdownOwnership()) {
+                return;
+            }
+            // Close the generation observed by an Owned notification even if its successor has already applied.
+            // New topic loads are fenced at admission cutoff; the snapshot includes pending loads as futures.
+            if (observed.state() == Owned) {
+                closeRejectedOwnershipTopics(serviceUnit);
+            }
+            long closedVersion = observed.state() == Owned ? observed.versionId() : Long.MIN_VALUE;
+            ServiceUnitStateData attempted = null;
+            ServiceUnitStateData override = null;
+            while (canRecoverShutdownOwnership()) {
+                var current = view.get(serviceUnit);
+                if (current == null || !isTargetBroker(current.dstBroker())
+                        || (current.state() != Assigning && current.state() != Owned)) {
+                    return;
+                }
+                if (current.state() == Owned && current.versionId() != closedVersion) {
+                    closeRejectedOwnershipTopics(serviceUnit);
+                    closedVersion = current.versionId();
+                }
+                if (!current.equals(attempted)) {
+                    attempted = current;
+                    String source = current.sourceBroker();
+                    if (current.state() == Owned && isTargetBroker(source)) {
+                        source = null; // This generation was already closed here, outside the table callback.
+                    }
+                    override = new ServiceUnitStateData(Free, null, source, true, getNextVersionId(current));
+                }
+                if (!canRecoverShutdownOwnership()) {
+                    return;
+                }
+                if (!current.equals(view.get(serviceUnit))) {
+                    continue;
+                }
+                publishOverrideEventAsync(serviceUnit, override)
+                        .get(pulsar.getRemainingShutdownDrainNanos(), TimeUnit.NANOSECONDS);
+                // Acknowledgment is not table-view application. Re-publish an unchanged version only after
+                // a bounded wait, retaining the identical override and never overwriting a newer owner.
+                long started = System.nanoTime();
+                while (canRecoverShutdownOwnership() && current.equals(view.get(serviceUnit))
+                        && System.nanoTime() - started < TimeUnit.MILLISECONDS.toNanos(100)) {
+                    TimeUnit.NANOSECONDS.sleep(Math.min(TimeUnit.MILLISECONDS.toNanos(10),
+                            pulsar.getRemainingShutdownDrainNanos()));
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            throw FutureUtil.wrapToCompletionException(e);
+        }
+    }
+
+    private void closeRejectedOwnershipTopics(String serviceUnit) throws Exception {
+        var broker = pulsar.getBrokerService();
+        var bundle = LoadManagerShared.getNamespaceBundle(pulsar, serviceUnit);
+        var snapshot = broker.getTopicFuturesInBundle(bundle);
+        List<CompletableFuture<Void>> closes = new ArrayList<>();
+        for (var topic : snapshot.values()) {
+            closes.add(topic.thenCompose(value -> value.isPresent()
+                    ? value.get().close(true) : CompletableFuture.completedFuture(null)));
+        }
+        FutureUtil.waitForAll(closes).get(pulsar.getRemainingShutdownDrainNanos(), TimeUnit.NANOSECONDS);
+        broker.cleanUnloadedTopicFromCache(bundle, snapshot);
+    }
+
     private void handleExisting(String serviceUnit, ServiceUnitStateData data) {
+        if (rejectIncomingShutdownOwnership(serviceUnit, data)) {
+            return;
+        }
         if (debug()) {
             log.info().attr("serviceUnit", serviceUnit).attr("data", data)
                     .log("Loaded the service unit state data");
@@ -947,6 +1112,7 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
             var isTransfer = isTransferCommand(data) && pulsar.getConfig().isLoadBalancerMultiPhaseBundleUnload();
             var future = isOrphanCleanup || isTransfer
                     ? closeServiceUnit(serviceUnit, true) : CompletableFuture.completedFuture(null);
+            completeShutdownTransfer(serviceUnit, data, future);
             stateChangeListeners.notifyOnCompletion(future, serviceUnit, data)
                     .whenComplete((__, e) -> log(e, serviceUnit, data, null));
         } else {
@@ -980,7 +1146,9 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
             }
             // If the optimized bundle unload is disabled, disconnect the clients at time of RELEASE.
             stateChangeListeners.notifyOnCompletion(unloadFuture
-                            .thenCompose(__ -> pubAsync(serviceUnit, next)), serviceUnit, data)
+                            .thenComposeAsync(__ -> pubAsync(serviceUnit, next),
+                                    pulsar.getBrokerAdmission().isClosed() ? shutdownCloseExecutor() : Runnable::run),
+                            serviceUnit, data)
                     .whenComplete((__, e) -> log(e, serviceUnit, data, next));
         }
     }
@@ -1000,10 +1168,13 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
 
         if (isTargetBroker(data.sourceBroker())) {
             // If data.force(), try closeServiceUnit and tombstone the bundle.
-            CompletableFuture<Void> future =
-                    (data.force() ? closeServiceUnit(serviceUnit, true)
-                            .thenCompose(__ -> tombstoneAsync(serviceUnit))
-                            : CompletableFuture.completedFuture(0)).thenApply(__ -> null);
+            CompletableFuture<Integer> close = data.force() ? closeServiceUnit(serviceUnit, true)
+                    : CompletableFuture.completedFuture(0);
+            completeShutdownTransfer(serviceUnit, data, close);
+            CompletableFuture<Void> future = data.force()
+                    ? close.thenComposeAsync(__ -> tombstoneAsync(serviceUnit),
+                            pulsar.getBrokerAdmission().isClosed() ? shutdownCloseExecutor() : Runnable::run)
+                    : close.thenApply(__ -> null);
             stateChangeListeners.notifyOnCompletion(future, serviceUnit, data)
                     .whenComplete((__, e) -> log(e, serviceUnit, data, null));
             return future;
@@ -1038,6 +1209,9 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
     }
 
     private CompletableFuture<Void> pubAsync(String serviceUnit, ServiceUnitStateData data) {
+        if (pulsar.isMetadataSessionsClosing() || pulsar.getRemainingShutdownDrainNanos() == 0) {
+            return FutureUtil.failedFuture(new BrokerServiceException.BrokerDrainingException());
+        }
         return tableview.put(serviceUnit, data)
                 .whenComplete((__, e) -> {
                     if (e != null) {
@@ -1048,6 +1222,9 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
     }
 
     private CompletableFuture<Void> tombstoneAsync(String serviceUnit) {
+        if (pulsar.isMetadataSessionsClosing() || pulsar.getRemainingShutdownDrainNanos() == 0) {
+            return FutureUtil.failedFuture(new BrokerServiceException.BrokerDrainingException());
+        }
         return tableview.delete(serviceUnit)
                 .whenComplete((__, e) -> {
                     if (e != null) {
@@ -1130,7 +1307,27 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
         }
     }
 
+    private synchronized ExecutorService shutdownCloseExecutor() {
+        if (shutdownCloseExecutor == null) {
+            shutdownCloseExecutor = Executors.newFixedThreadPool(
+                    Math.max(1, config.getBrokerShutdownMaxConcurrentUnload()),
+                    new DefaultThreadFactory("pulsar-shutdown-bundle-close", true));
+            if (channelState == Closed) {
+                shutdownCloseExecutor.shutdownNow();
+            }
+        }
+        return shutdownCloseExecutor;
+    }
+
     private CompletableFuture<Integer> closeServiceUnit(String serviceUnit, boolean disconnectClients) {
+        if (pulsar.getBrokerAdmission().isClosed()) {
+            return CompletableFuture.supplyAsync(() -> doCloseServiceUnit(serviceUnit, disconnectClients),
+                    shutdownCloseExecutor()).thenCompose(future -> future);
+        }
+        return doCloseServiceUnit(serviceUnit, disconnectClients);
+    }
+
+    private CompletableFuture<Integer> doCloseServiceUnit(String serviceUnit, boolean disconnectClients) {
         long startTime = System.nanoTime();
         MutableInt unloadedTopics = new MutableInt();
         NamespaceBundle bundle = LoadManagerShared.getNamespaceBundle(pulsar, serviceUnit);
@@ -1152,9 +1349,10 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
         return pulsar.getBrokerService().unloadServiceUnit(
                         bundle,
                         disconnectClients,
-                        true,
-                        pulsar.getConfig().getNamespaceBundleUnloadingTimeoutMs(),
-                        TimeUnit.MILLISECONDS,
+                        !pulsar.getBrokerAdmission().isClosed() || pulsar.isShutdownForceClose(),
+                        Math.min(pulsar.getRemainingShutdownDrainNanos(), TimeUnit.MILLISECONDS.toNanos(
+                                pulsar.getConfig().getNamespaceBundleUnloadingTimeoutMs())),
+                        TimeUnit.NANOSECONDS,
                         topicFutures)
                 .thenApply(numUnloadedTopics -> {
                     unloadedTopics.setValue(numUnloadedTopics);
@@ -1575,18 +1773,21 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
                                 orphanData.state() == Owned ? orphanData.dstBroker() : orphanData.sourceBroker(),
                                 true,
                                 version)))
-                .thenCompose(override -> {
+                .thenComposeAsync(override -> {
                     log.infof(
                             "Overriding inactiveBroker:%s, ownership serviceUnit:%s from orphanData:%s to "
                                     + "overrideData:%s",
                             inactiveBroker, serviceUnit, orphanData, override);
                     return publishOverrideEventAsync(serviceUnit, override);
-                });
+                }, gracefully && pulsar.getBrokerAdmission().isClosed() ? shutdownCloseExecutor() : Runnable::run);
     }
 
     private void waitForCleanups(String broker, boolean gracefully, int maxWaitTimeInMillis) {
-        long started = System.currentTimeMillis();
-        while (System.currentTimeMillis() - started < maxWaitTimeInMillis) {
+        long started = System.nanoTime();
+        long budget = cleanupTimeoutNanos(gracefully, maxWaitTimeInMillis, MILLISECONDS);
+        while (System.nanoTime() - started < budget
+                && cleanupTimeoutNanos(gracefully, maxWaitTimeInMillis, MILLISECONDS) > 0
+                && !Thread.currentThread().isInterrupted()) {
             boolean cleaned = true;
             List<CompletableFuture<Void>> overrideFutures = new ArrayList<>();
             for (var etr : tableview.entrySet()) {
@@ -1603,17 +1804,19 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
                     // version. A successful publish does not mean the override was accepted. Retry using
                     // the current state, keeping version conflict checks so a new owner's state is safe.
                     overrideFutures.add(overrideOwnership(serviceUnit, data, broker, gracefully));
-                    tryWaitForOverrides(overrideFutures, false);
+                    tryWaitForOverrides(overrideFutures, false, gracefully);
                 }
             }
             if (cleaned) {
                 break;
             } else {
-                tryWaitForOverrides(overrideFutures, true);
+                tryWaitForOverrides(overrideFutures, true, gracefully);
                 try {
-                    tableview.flush(OWNERSHIP_CLEAN_UP_WAIT_RETRY_DELAY_IN_MILLIS / 2);
-                    Thread.sleep(OWNERSHIP_CLEAN_UP_WAIT_RETRY_DELAY_IN_MILLIS / 2);
+                    flushForCleanup(gracefully, OWNERSHIP_CLEAN_UP_WAIT_RETRY_DELAY_IN_MILLIS / 2);
+                    TimeUnit.NANOSECONDS.sleep(cleanupTimeoutNanos(gracefully,
+                            OWNERSHIP_CLEAN_UP_WAIT_RETRY_DELAY_IN_MILLIS / 2, MILLISECONDS));
                 } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                     log.warn().attr("broker", brokerId)
                             .log("Interrupted while delaying the next service unit clean-up. Cleaning broker");
                 } catch (ExecutionException e) {
@@ -1624,7 +1827,7 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
                 }
             }
         }
-        log.info().attr("broker", brokerId).attr("elapsed", System.currentTimeMillis() - started)
+        log.info().attr("broker", brokerId).attr("elapsed", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started))
                 .log("Finished cleanup waiting for orphan broker: . Elapsed ms");
     }
 
@@ -1662,11 +1865,144 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
         }
     }
 
+    private void completeShutdownTransfer(String serviceUnit, ServiceUnitStateData data,
+                                          CompletableFuture<?> localClose) {
+        if (!pulsar.getBrokerAdmission().isClosed()) {
+            return;
+        }
+        shutdownTerminalCloses.put(serviceUnit, new ShutdownTerminalClose(data, localClose));
+        ShutdownTransfer transfer = shutdownTransfers.get(serviceUnit);
+        if (transfer != null && data.versionId() > transfer.version()
+                && isTargetBroker(data.sourceBroker())
+                && (data.state() == Free || data.state() == Owned && !isTargetBroker(data.dstBroker()))) {
+            // The terminal event has applied. Its matching local close is the other half of the transfer.
+            // CompletableFuture's single completion also arbitrates close/terminal/timeout races.
+            localClose.whenComplete((__, error) -> {
+                if (error == null) {
+                    transfer.completion().complete(null);
+                } else {
+                    transfer.completion().completeExceptionally(error);
+                }
+            });
+        }
+    }
+
+    private void drainShutdownOwnerships() {
+        int concurrency = Math.max(1, config.getBrokerShutdownMaxConcurrentUnload());
+        ExecutorService workers = Executors.newFixedThreadPool(concurrency,
+                new DefaultThreadFactory("pulsar-shutdown-transfer", true));
+        RateLimiter rate = pulsar.getShutdownBundleUnloadRate() > 0
+                ? RateLimiter.create(pulsar.getShutdownBundleUnloadRate()) : null;
+        AtomicInteger attempted = new AtomicInteger();
+        AtomicInteger transferred = new AtomicInteger();
+        AtomicInteger failed = new AtomicInteger();
+        try {
+            flushForCleanup(true, OWNERSHIP_CLEAN_UP_MAX_WAIT_TIME_IN_MILLIS);
+            for (boolean system : new boolean[]{false, true}) {
+                List<CompletableFuture<Void>> transfers = new ArrayList<>();
+                for (var entry : tableview.entrySet()) {
+                    var data = entry.getValue();
+                    boolean owned = data.state() == Owned && isTargetBroker(data.dstBroker());
+                    boolean outgoing = isInFlightState(data.state()) && isTargetBroker(data.sourceBroker())
+                            && !isTargetBroker(data.dstBroker());
+                    if ((!owned && !outgoing) || entry.getKey().startsWith(SYSTEM_NAMESPACE.toString()) != system) {
+                        continue;
+                    }
+                    String bundle = entry.getKey();
+                    transfers.add(CompletableFuture.runAsync(() -> {
+                        if (pulsar.getRemainingShutdownDrainNanos() == 0 || Thread.currentThread().isInterrupted()
+                                || rate != null && !rate.tryAcquire(1, pulsar.getRemainingShutdownDrainNanos(),
+                                        TimeUnit.NANOSECONDS)) {
+                            return;
+                        }
+                        attempted.incrementAndGet();
+                        try {
+                            drainShutdownBundle(bundle, data);
+                            transferred.incrementAndGet();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            failed.incrementAndGet();
+                        } catch (Exception e) {
+                            failed.incrementAndGet();
+                            log.warn().attr("bundle", bundle).exceptionMessage(e)
+                                    .log("Bundle did not finish graceful shutdown transfer");
+                        }
+                    }, workers));
+                }
+                FutureUtil.waitForAll(transfers).get(pulsar.getRemainingShutdownDrainNanos(), TimeUnit.NANOSECONDS);
+                // Rejected incoming assignments are recovered independently of the occupied transfer slots.
+                FutureUtil.waitForAll(List.copyOf(shutdownRecoveries.values()))
+                        .get(pulsar.getRemainingShutdownDrainNanos(), TimeUnit.NANOSECONDS);
+            }
+            flushForCleanup(true, OWNERSHIP_CLEAN_UP_MAX_WAIT_TIME_IN_MILLIS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.warn().exceptionMessage(e).log("Extensible bundle drain did not finish within its budget");
+        } finally {
+            workers.shutdownNow();
+            log.info().attr("attempted", attempted.get()).attr("transferred", transferred.get())
+                    .attr("failed", failed.get()).attr("unfinished", attempted.get() - transferred.get() - failed.get())
+                    .log("Extensible shutdown transfer summary");
+        }
+    }
+
+    private void drainShutdownBundle(String serviceUnit, ServiceUnitStateData observed) throws Exception {
+        ShutdownTransfer transfer = new ShutdownTransfer(observed.versionId(), new CompletableFuture<>());
+        if (shutdownTransfers.putIfAbsent(serviceUnit, transfer) != null) {
+            return;
+        }
+        try {
+            var terminal = shutdownTerminalCloses.get(serviceUnit);
+            if (terminal != null) {
+                completeShutdownTransfer(serviceUnit, terminal.state(), terminal.close());
+            }
+            while (pulsar.getRemainingShutdownDrainNanos() > 0 && !Thread.currentThread().isInterrupted()) {
+                var current = tableview.get(serviceUnit);
+                if (current != null && current.state() == Owned && isTargetBroker(current.dstBroker())) {
+                    overrideOwnership(serviceUnit, current, brokerId, true)
+                            .get(pulsar.getRemainingShutdownDrainNanos(), TimeUnit.NANOSECONDS);
+                }
+                try {
+                    transfer.completion().get(Math.min(TimeUnit.MILLISECONDS.toNanos(100),
+                            pulsar.getRemainingShutdownDrainNanos()), TimeUnit.NANOSECONDS);
+                    return;
+                } catch (TimeoutException e) {
+                    // A publish may lose a version conflict. Re-read before retrying, holding the same slot.
+                }
+            }
+            throw new TimeoutException("Shutdown deadline expired before bundle transfer completed");
+        } finally {
+            shutdownTransfers.remove(serviceUnit, transfer);
+        }
+    }
+
+    @VisibleForTesting
+    long cleanupTimeoutNanos(boolean gracefully, long timeout, TimeUnit unit) {
+        return gracefully ? Math.min(unit.toNanos(timeout), pulsar.getRemainingShutdownDrainNanos())
+                : unit.toNanos(timeout);
+    }
+
+    private void flushForCleanup(boolean gracefully, long timeoutMs)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        long remaining = cleanupTimeoutNanos(gracefully, timeoutMs, MILLISECONDS);
+        if (remaining == 0) {
+            throw new TimeoutException("Shutdown drain budget exhausted before state table flush");
+        }
+        tableview.flush(Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining)));
+    }
+
     private void tryWaitForOverrides(List<CompletableFuture<Void>> overrideFutures, boolean force) {
+        tryWaitForOverrides(overrideFutures, force, false);
+    }
+
+    private void tryWaitForOverrides(List<CompletableFuture<Void>> overrideFutures, boolean force,
+                                     boolean gracefully) {
         if (overrideFutures.size() >= config.getLoadBalancerServiceUnitStateMaxConcurrentOverrides() || force) {
             try {
                 FutureUtil.waitForAll(overrideFutures)
-                        .get(config.getMetadataStoreOperationTimeoutSeconds(), SECONDS);
+                        .get(cleanupTimeoutNanos(gracefully, config.getMetadataStoreOperationTimeoutSeconds(), SECONDS),
+                                TimeUnit.NANOSECONDS);
             } catch (Throwable e) {
                 log.error().attr("totalCleanupErrorCnt", totalCleanupErrorCnt.incrementAndGet()).exception(e)
                         .log("Failed to override ownership: totalCleanupErrorCnt");
@@ -1677,8 +2013,12 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
     }
 
     private void doCleanup(String broker, boolean gracefully) {
+        if (cleanupTimeoutNanos(gracefully, Long.MAX_VALUE, TimeUnit.NANOSECONDS) == 0) {
+            return;
+        }
         try {
-            if (getChannelOwnerAsync().get(MAX_CHANNEL_OWNER_ELECTION_WAITING_TIME_IN_SECS, TimeUnit.SECONDS)
+            if (getChannelOwnerAsync().get(cleanupTimeoutNanos(gracefully,
+                    MAX_CHANNEL_OWNER_ELECTION_WAITING_TIME_IN_SECS, SECONDS), TimeUnit.NANOSECONDS)
                     .isEmpty()) {
                 log.error().attr("broker", broker)
                         .log("Found the channel owner is empty. Skip the inactive broker: 's orphan bundle cleanup");
@@ -1719,14 +2059,15 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
         int orphanServiceUnitCleanupCnt = 0;
         long totalCleanupErrorCntStart = totalCleanupErrorCnt.get();
         try {
-            tableview.flush(OWNERSHIP_CLEAN_UP_MAX_WAIT_TIME_IN_MILLIS);
+            flushForCleanup(gracefully, OWNERSHIP_CLEAN_UP_MAX_WAIT_TIME_IN_MILLIS);
         } catch (Exception e) {
             log.error().exception(e).log("Failed to flush");
         }
         List<CompletableFuture<Void>> overrideFutures = new ArrayList<>();
         Map<String, ServiceUnitStateData> orphanSystemServiceUnits = new HashMap<>();
         var iter =  tableview.entrySet().iterator();
-        while (iter.hasNext()) {
+        while (iter.hasNext()
+                && cleanupTimeoutNanos(gracefully, Long.MAX_VALUE, TimeUnit.NANOSECONDS) > 0) {
             var etr = iter.next();
             var stateData = etr.getValue();
             var serviceUnit = etr.getKey();
@@ -1737,14 +2078,14 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
                     orphanSystemServiceUnits.put(serviceUnit, stateData);
                 } else {
                     overrideFutures.add(overrideOwnership(serviceUnit, stateData, broker, gracefully));
-                    tryWaitForOverrides(overrideFutures, !iter.hasNext());
+                    tryWaitForOverrides(overrideFutures, !iter.hasNext(), gracefully);
                 }
                 orphanServiceUnitCleanupCnt++;
             }
         }
 
         try {
-            tableview.flush(OWNERSHIP_CLEAN_UP_MAX_WAIT_TIME_IN_MILLIS);
+            flushForCleanup(gracefully, OWNERSHIP_CLEAN_UP_MAX_WAIT_TIME_IN_MILLIS);
         } catch (Exception e) {
             log.error().exception(e).log("Failed to flush the in-flight non-system bundle override messages");
         }
@@ -1763,17 +2104,18 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
 
         // clean system bundles in the end
         var orphanSystemServiceUnitIter = orphanSystemServiceUnits.entrySet().iterator();
-        while (orphanSystemServiceUnitIter.hasNext()) {
+        while (orphanSystemServiceUnitIter.hasNext()
+                && cleanupTimeoutNanos(gracefully, Long.MAX_VALUE, TimeUnit.NANOSECONDS) > 0) {
             var orphanSystemServiceUnit = orphanSystemServiceUnitIter.next();
             log.info().attr("unit", orphanSystemServiceUnit.getKey()).log("Overriding orphan system service unit");
             overrideFutures.add(
                     overrideOwnership(orphanSystemServiceUnit.getKey(), orphanSystemServiceUnit.getValue(), broker,
                             gracefully));
-            tryWaitForOverrides(overrideFutures, !orphanSystemServiceUnitIter.hasNext());
+            tryWaitForOverrides(overrideFutures, !orphanSystemServiceUnitIter.hasNext(), gracefully);
         }
 
         try {
-            tableview.flush(OWNERSHIP_CLEAN_UP_MAX_WAIT_TIME_IN_MILLIS);
+            flushForCleanup(gracefully, OWNERSHIP_CLEAN_UP_MAX_WAIT_TIME_IN_MILLIS);
         } catch (Exception e) {
             log.error().exception(e).log("Failed to flush the in-flight system bundle override messages");
         }
@@ -1782,8 +2124,10 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
                 .toMillis((System.nanoTime() - startTime));
 
         // clean load data stores
-        getContext().topBundleLoadDataStore().removeAsync(broker);
-        getContext().brokerLoadDataStore().removeAsync(broker);
+        if (cleanupTimeoutNanos(gracefully, Long.MAX_VALUE, TimeUnit.NANOSECONDS) > 0) {
+            getContext().topBundleLoadDataStore().removeAsync(broker);
+            getContext().brokerLoadDataStore().removeAsync(broker);
+        }
 
         log.info().attr("broker", broker).attr("cleanupTimeMs", cleanupTime)
                 .attr("orphanServiceUnitCleanupCnt", orphanServiceUnitCleanupCnt)
@@ -1794,9 +2138,16 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
     }
 
     private CompletableFuture<Optional<String>> selectBroker(String serviceUnit, String inactiveBroker) {
+        Set<String> excluded = new HashSet<>();
+        if (inactiveBroker != null) {
+            excluded.add(inactiveBroker);
+        }
+        if (pulsar.getBrokerAdmission().isClosed()) {
+            excluded.add(brokerId);
+        }
         return getLoadManager().selectAsync(
                 LoadManagerShared.getNamespaceBundle(pulsar, serviceUnit),
-                inactiveBroker == null ? Set.of() : Set.of(inactiveBroker),
+                excluded,
                 LookupOptions.builder().build());
     }
 

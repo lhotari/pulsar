@@ -39,6 +39,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.lessThanOrEqualTo;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -62,6 +63,7 @@ import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -70,6 +72,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -88,8 +91,12 @@ import org.apache.pulsar.broker.loadbalance.extensions.LoadManagerContext;
 import org.apache.pulsar.broker.loadbalance.extensions.models.Split;
 import org.apache.pulsar.broker.loadbalance.extensions.models.Unload;
 import org.apache.pulsar.broker.loadbalance.extensions.store.LoadDataStore;
+import org.apache.pulsar.broker.loadbalance.impl.LoadManagerShared;
 import org.apache.pulsar.broker.namespace.NamespaceService;
+import org.apache.pulsar.broker.service.BrokerAdmission;
+import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.BrokerServiceException;
+import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.broker.testcontext.PulsarTestContext;
 import org.apache.pulsar.client.admin.Brokers;
 import org.apache.pulsar.client.admin.PulsarAdmin;
@@ -169,6 +176,11 @@ public class ServiceUnitStateChannelTest extends MockedPulsarServiceBaseTest {
         conf.setLoadBalancerDebugModeEnabled(true);
         conf.setBrokerServiceCompactionMonitorIntervalInSeconds(10);
         conf.setLoadManagerServiceUnitStateTableViewClassName(serviceUnitStateTableViewClassName);
+    }
+
+    @Override
+    protected BrokerService customizeNewBrokerService(BrokerService brokerService) {
+        return spy(brokerService);
     }
 
     @BeforeClass
@@ -2284,6 +2296,269 @@ public class ServiceUnitStateChannelTest extends MockedPulsarServiceBaseTest {
             channel.enable();
             tableView.delete(serviceUnit).get(10, TimeUnit.SECONDS);
             tableView.delete(lateServiceUnit).get(10, TimeUnit.SECONDS);
+        }
+    }
+
+    @DataProvider
+    public Object[][] rejectedShutdownAssignments() {
+        return new Object[][]{
+                {Assigning, false, false}, {Assigning, true, true},
+                {Owned, false, false}, {Owned, true, true}
+        };
+    }
+
+    @Test(dataProvider = "rejectedShutdownAssignments")
+    public void testShutdownRejectsIncomingOwnership(ServiceUnitState incoming, boolean force, boolean hasSource)
+            throws Exception {
+        var channel = (ServiceUnitStateChannelImpl) channel1;
+        var view = channel.getTableView();
+        String serviceUnit = namespaceName + "/0x10000010_0x10000011";
+        var namespaceBundle = LoadManagerShared.getNamespaceBundle(pulsar1, serviceUnit);
+        var admission = new BrokerAdmission();
+        var preparation = new CompletableFuture<Void>();
+        AtomicInteger installed = new AtomicInteger();
+        var namespaces = pulsar1.getNamespaceService();
+        doAnswer(invocation -> {
+            installed.incrementAndGet();
+            return invocation.callRealMethod();
+        }).when(namespaces).onNamespaceBundleOwned(namespaceBundle);
+        doReturn(admission).when(pulsar1).getBrokerAdmission();
+        doReturn(preparation).when(pulsar1).getShutdownPreparationComplete();
+        try {
+            long version = 1;
+            if (incoming == Owned && !force) {
+                channel.disable();
+                view.put(serviceUnit, new ServiceUnitStateData(Assigning, brokerId1, version++))
+                        .get(5, TimeUnit.SECONDS);
+                Awaitility.await().untilAsserted(() -> assertEquals(Assigning, state(view.get(serviceUnit))));
+            }
+            admission.close().forEach(Runnable::run);
+            channel.enable(); // Test the cutoff before cleanOwnerships disables the channel.
+            CompletableFuture<String> pending = new CompletableFuture<>();
+            channel.getOwnerRequests().put(serviceUnit, pending);
+            ServiceUnitStateData rejected = new ServiceUnitStateData(incoming, brokerId1,
+                    hasSource ? brokerId2 : null, force, version);
+            view.put(serviceUnit, rejected).get(5, TimeUnit.SECONDS);
+            var error = expectThrows(ExecutionException.class, () -> pending.get(5, TimeUnit.SECONDS));
+            assertTrue(error.getCause() instanceof BrokerServiceException.BrokerDrainingException);
+            assertEquals(0, installed.get());
+            // No recovery close or publish can run before early preparation finishes.
+            assertEquals(rejected, view.get(serviceUnit));
+            preparation.complete(null);
+            Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
+                var current = view.get(serviceUnit);
+                assertTrue(current == null || current.state() == Free,
+                        "Rejected ownership must become available for another broker: " + current);
+            });
+            assertEquals(0, installed.get());
+        } finally {
+            preparation.complete(null);
+            doCallRealMethod().when(pulsar1).getBrokerAdmission();
+            doCallRealMethod().when(pulsar1).getShutdownPreparationComplete();
+            doCallRealMethod().when(namespaces).onNamespaceBundleOwned(namespaceBundle);
+            view.delete(serviceUnit).get(5, TimeUnit.SECONDS);
+            channel.enable();
+        }
+    }
+
+    @Test
+    public void testRejectedOwnedClosesBeforeFreeAndDoesNotOverwriteNewOwner() throws Exception {
+        var channel = (ServiceUnitStateChannelImpl) channel1;
+        var view = channel.getTableView();
+        var delayedView = spy(view);
+        String serviceUnit = namespaceName + "/0x10000020_0x10000021";
+        var namespaceBundle = LoadManagerShared.getNamespaceBundle(pulsar1, serviceUnit);
+        var broker = pulsar1.getBrokerService();
+        var topic = mock(Topic.class);
+        var closing = new CompletableFuture<Void>();
+        var closeStarted = new CompletableFuture<Void>();
+        doAnswer(invocation -> {
+            closeStarted.complete(null);
+            return closing;
+        }).when(topic).close(true);
+        doReturn(Map.of("persistent://" + namespaceName + "/rejected-owned",
+                CompletableFuture.completedFuture(Optional.of(topic))))
+                .when(broker).getTopicFuturesInBundle(namespaceBundle);
+        var override = new CompletableFuture<ServiceUnitStateData>();
+        var acknowledged = new CompletableFuture<Void>();
+        AtomicInteger publications = new AtomicInteger();
+        doAnswer(invocation -> {
+            ServiceUnitStateData data = invocation.getArgument(1);
+            publications.incrementAndGet();
+            override.complete(data);
+            return acknowledged; // A successful acknowledgment need not mean conflict resolution applied it.
+        }).when(delayedView).put(eq(serviceUnit), any(ServiceUnitStateData.class));
+        var admission = new BrokerAdmission();
+        admission.close();
+        doReturn(admission).when(pulsar1).getBrokerAdmission();
+        doReturn(CompletableFuture.completedFuture(null)).when(pulsar1).getShutdownPreparationComplete();
+        channel.setTableView(delayedView);
+        CompletableFuture<Void> recovery = null;
+        try {
+            view.put(serviceUnit, new ServiceUnitStateData(Owned, brokerId1, brokerId1, true, 1))
+                    .get(5, TimeUnit.SECONDS);
+            closeStarted.get(5, TimeUnit.SECONDS);
+            recovery = channel.getShutdownRecovery(serviceUnit);
+            assertFalse(override.isDone(), "Owned must not be freed while its local topic close is pending");
+            closing.complete(null);
+            var free = override.get(5, TimeUnit.SECONDS);
+            assertEquals(Free, free.state());
+            assertTrue(free.force());
+            assertNull(free.sourceBroker());
+            assertEquals(2L, free.versionId());
+            // A competing newer owner applies while the old override's acknowledgment is delayed.
+            var newer = new ServiceUnitStateData(Owned, brokerId2, null, true, 2);
+            view.put(serviceUnit, newer).get(5, TimeUnit.SECONDS);
+            Awaitility.await().untilAsserted(() -> assertEquals(newer, view.get(serviceUnit)));
+            acknowledged.complete(null);
+            recovery.get(5, TimeUnit.SECONDS);
+            assertEquals(1, publications.get());
+            assertEquals(newer, view.get(serviceUnit));
+        } finally {
+            closing.complete(null);
+            acknowledged.complete(null);
+            if (recovery != null) {
+                recovery.get(5, TimeUnit.SECONDS);
+            }
+            channel.setTableView(view);
+            doCallRealMethod().when(pulsar1).getBrokerAdmission();
+            doCallRealMethod().when(pulsar1).getShutdownPreparationComplete();
+            doCallRealMethod().when(broker).getTopicFuturesInBundle(namespaceBundle);
+            view.delete(serviceUnit).get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @DataProvider
+    public Object[][] shutdownCloseModes() {
+        return new Object[][]{{false}, {true}};
+    }
+
+    @Test(dataProvider = "shutdownCloseModes", timeOut = 30000)
+    public void testShutdownTransferSlotWaitsForTerminalOwnershipAndClose(boolean multiPhase) throws Exception {
+        var channel = (ServiceUnitStateChannelImpl) channel1;
+        var view = channel.getTableView();
+        var broker = pulsar1.getBrokerService();
+        var namespaces = pulsar1.getNamespaceService();
+        int oldConcurrency = pulsar1.getConfig().getBrokerShutdownMaxConcurrentUnload();
+        boolean oldMultiPhase = pulsar1.getConfig().isLoadBalancerMultiPhaseBundleUnload();
+        pulsar1.getConfig().setBrokerShutdownMaxConcurrentUnload(2);
+        pulsar1.getConfig().setLoadBalancerMultiPhaseBundleUnload(multiPhase);
+        List<String> bundles = List.of(namespaceName + "/0x10000030_0x10000031",
+                namespaceName + "/0x10000032_0x10000033", namespaceName + "/0x10000034_0x10000035");
+        Map<String, CompletableFuture<Integer>> firstCloses = new ConcurrentHashMap<>();
+        Map<String, CompletableFuture<Integer>> finalCloses = new ConcurrentHashMap<>();
+        bundles.forEach(bundle -> {
+            firstCloses.put(bundle, new CompletableFuture<>());
+            finalCloses.put(bundle, new CompletableFuture<>());
+        });
+        BlockingQueue<String> firstStarted = new LinkedBlockingQueue<>();
+        BlockingQueue<String> finalStarted = new LinkedBlockingQueue<>();
+        AtomicInteger installed = new AtomicInteger();
+        doAnswer(invocation -> {
+            if (bundles.contains(invocation.getArgument(0).toString())) {
+                installed.incrementAndGet();
+            }
+            return invocation.callRealMethod();
+        }).when(namespaces).onNamespaceBundleOwned(any());
+        doAnswer(invocation -> {
+            String bundle = invocation.getArgument(0).toString();
+            if (!bundles.contains(bundle)) {
+                return invocation.callRealMethod();
+            }
+            boolean disconnect = invocation.getArgument(1);
+            if (multiPhase && disconnect) {
+                finalStarted.add(bundle);
+                return finalCloses.get(bundle);
+            }
+            firstStarted.add(bundle);
+            return firstCloses.get(bundle);
+        }).when(broker).unloadServiceUnit(any(), anyBoolean(), anyBoolean(), anyLong(), any(), any());
+        doReturn(CompletableFuture.completedFuture(Optional.of(brokerId2)))
+                .when(loadManager).selectAsync(any(), any(), any());
+        var admission = new BrokerAdmission();
+        @Cleanup("shutdownNow")
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        CompletableFuture<Void> draining = null;
+        try {
+            for (String bundle : bundles) {
+                view.put(bundle, new ServiceUnitStateData(Owned, brokerId1, true, 1)).get(5, TimeUnit.SECONDS);
+            }
+            Awaitility.await().untilAsserted(() -> assertEquals(3, installed.get()));
+            admission.close();
+            doReturn(admission).when(pulsar1).getBrokerAdmission();
+            doReturn(CompletableFuture.completedFuture(null)).when(pulsar1).getShutdownPreparationComplete();
+            if (!multiPhase) {
+                ((ServiceUnitStateChannelImpl) channel2).disable(); // Hold the terminal Owned event after source close.
+            }
+            draining = CompletableFuture.runAsync(channel::cleanOwnerships, worker);
+            String first = firstStarted.poll(5, TimeUnit.SECONDS);
+            String second = firstStarted.poll(5, TimeUnit.SECONDS);
+            assertNotNull(first);
+            assertNotNull(second);
+            assertNotEquals(first, second);
+            firstCloses.get(first).complete(0);
+            if (multiPhase) {
+                assertEquals(first, finalStarted.poll(5, TimeUnit.SECONDS));
+            } else {
+                Awaitility.await().untilAsserted(() -> assertEquals(Assigning, state(view.get(first))));
+            }
+            Awaitility.await().during(200, TimeUnit.MILLISECONDS).atMost(1, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertTrue(firstStarted.isEmpty(),
+                            "A third bundle cannot start while either terminal ownership or final close is missing"));
+            if (multiPhase) {
+                finalCloses.get(first).complete(0);
+            } else {
+                var assigning = view.get(first);
+                view.put(first, new ServiceUnitStateData(Owned, brokerId2, brokerId1, assigning.versionId() + 1))
+                        .get(5, TimeUnit.SECONDS);
+            }
+            String third = firstStarted.poll(5, TimeUnit.SECONDS);
+            assertNotNull(third);
+            assertNotEquals(third, first);
+            assertNotEquals(third, second);
+        } finally {
+            firstCloses.values().forEach(future -> future.complete(0));
+            finalCloses.values().forEach(future -> future.complete(0));
+            ((ServiceUnitStateChannelImpl) channel2).enable();
+            if (draining != null) {
+                CompletableFuture<Void> finishing = draining;
+                Awaitility.await().atMost(10, TimeUnit.SECONDS).until(() -> {
+                    for (String bundle : bundles) {
+                        var data = view.get(bundle);
+                        if (data != null && data.state() == Assigning && brokerId2.equals(data.dstBroker())) {
+                            view.put(bundle, new ServiceUnitStateData(Owned, brokerId2, brokerId1,
+                                    data.versionId() + 1)).get(2, TimeUnit.SECONDS);
+                        }
+                    }
+                    return finishing.isDone();
+                });
+                draining.get(5, TimeUnit.SECONDS);
+            }
+            doCallRealMethod().when(pulsar1).getBrokerAdmission();
+            doCallRealMethod().when(pulsar1).getShutdownPreparationComplete();
+            doCallRealMethod().when(broker).unloadServiceUnit(
+                    any(), anyBoolean(), anyBoolean(), anyLong(), any(), any());
+            doCallRealMethod().when(namespaces).onNamespaceBundleOwned(any());
+            pulsar1.getConfig().setBrokerShutdownMaxConcurrentUnload(oldConcurrency);
+            pulsar1.getConfig().setLoadBalancerMultiPhaseBundleUnload(oldMultiPhase);
+            for (String bundle : bundles) {
+                view.delete(bundle).get(5, TimeUnit.SECONDS);
+            }
+            channel.enable();
+        }
+    }
+
+    @Test
+    public void testOnlyGracefulCleanupUsesShutdownRemainder() {
+        var channel = (ServiceUnitStateChannelImpl) channel1;
+        try {
+            doReturn(123L).when(pulsar1).getRemainingShutdownDrainNanos();
+            assertEquals(123L, channel.cleanupTimeoutNanos(true, 5, TimeUnit.SECONDS));
+            assertEquals(TimeUnit.SECONDS.toNanos(5), channel.cleanupTimeoutNanos(false, 5, TimeUnit.SECONDS));
+            doReturn(0L).when(pulsar1).getRemainingShutdownDrainNanos();
+            assertEquals(0L, channel.cleanupTimeoutNanos(true, 5, TimeUnit.SECONDS));
+        } finally {
+            doCallRealMethod().when(pulsar1).getRemainingShutdownDrainNanos();
         }
     }
 
