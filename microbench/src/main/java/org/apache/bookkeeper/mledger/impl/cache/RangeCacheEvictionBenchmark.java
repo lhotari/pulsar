@@ -23,7 +23,6 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import org.apache.bookkeeper.mledger.impl.EntryImpl;
-import org.apache.bookkeeper.mledger.impl.EntryReadCountHandlerImpl;
 import org.apache.commons.lang3.tuple.Pair;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -78,7 +77,9 @@ public class RangeCacheEvictionBenchmark {
             entry.retain();
             rangeCache.put(entry.getPosition(), entry);
             if (useRequeuing) {
-                ((EntryReadCountHandlerImpl) entry.getReadCountHandler()).setExpectedReadCount(1);
+                if (!entry.hasExpectedReads()) {
+                    entry.getReadCountHandler().incrementExpectedReadCount();
+                }
                 if (random.nextDouble() > propabitilyOfExpectedReadsRemaining) {
                     entry.getReadCountHandler().markRead();
                 }

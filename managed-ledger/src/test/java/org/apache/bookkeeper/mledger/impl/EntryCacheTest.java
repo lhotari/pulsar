@@ -47,6 +47,7 @@ import org.apache.bookkeeper.client.impl.LedgerEntryImpl;
 import org.apache.bookkeeper.common.util.ThreadBoundExecutor;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.Entry;
+import org.apache.bookkeeper.mledger.EntryReadCountHandler;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.impl.cache.EntryCache;
@@ -103,13 +104,12 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
 
         EntryCache entryCache = factory.getEntryCacheManager().getEntryCache(ml);
         EntryImpl addedEntry = EntryImpl.create(0, 0, new byte[1], 1);
-        EntryReadCountHandlerImpl readCountHandler =
-                (EntryReadCountHandlerImpl) addedEntry.getReadCountHandler();
         addedEntry.setDecreaseReadCountOnRelease(false);
         assertTrue(entryCache.insert(addedEntry));
         addedEntry.release();
 
         List<Entry> entries = readEntry(entryCache, lh, 0, 0, () -> 1, null);
+        EntryReadCountHandler readCountHandler = entries.get(0).getReadCountHandler();
         entries.forEach(Entry::release);
         assertEquals(readCountHandler.getExpectedReadCount(), 0);
 

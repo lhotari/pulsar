@@ -153,6 +153,30 @@ public class EntryImplTest {
     }
 
     @Test
+    public void testCacheEntryOwnsReadCountUntilCopiesAreReleased() {
+        ByteBuf data = Unpooled.buffer().writeByte(1);
+        EntryImpl source = EntryImpl.create(1, 2, data, 2);
+        data.release();
+        EntryImpl cacheEntry = EntryImpl.createWithRetainedDuplicate(source.getPosition(),
+                source.getDataBuffer(), null, null);
+        cacheEntry.takeReadCountHandlerFrom(source);
+        EntryImpl reader = EntryImpl.create(cacheEntry);
+
+        assertSame(source.getReadCountHandler(), cacheEntry);
+        assertSame(reader.getReadCountHandler(), cacheEntry);
+        assertEquals(cacheEntry.refCnt(), 3);
+
+        cacheEntry.setDecreaseReadCountOnRelease(false);
+        cacheEntry.release();
+        assertEquals(cacheEntry.refCnt(), 2);
+        source.release();
+        assertEquals(cacheEntry.getExpectedReadCount(), 1);
+        assertEquals(cacheEntry.refCnt(), 1);
+        reader.release();
+        assertEquals(cacheEntry.refCnt(), 0);
+    }
+
+    @Test
     public void testCreateFromGenericEntry() {
         // Given
         long ledgerId = 333L;

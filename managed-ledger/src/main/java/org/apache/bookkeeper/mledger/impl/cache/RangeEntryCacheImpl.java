@@ -167,8 +167,9 @@ public class RangeEntryCacheImpl implements EntryCache {
         // same buffer alive. When the payload is copied into a cache owned buffer, the source buffer is released
         // while the cached entry is still in the cache, so the metadata has to be parsed from the copy instead.
         EntryImpl cacheEntry =
-                EntryImpl.createWithRetainedDuplicate(position, cachedData, entry.getReadCountHandler(),
+                EntryImpl.createWithRetainedDuplicate(position, cachedData, null,
                             copy ? null : entry.getMessageMetadata());
+        cacheEntry.takeReadCountHandlerFrom(entry);
         // The cache's retained entry is storage, not an expected reader. Only copies returned to cursors decrement
         // the shared expected-read count.
         cacheEntry.setDecreaseReadCountOnRelease(false);
