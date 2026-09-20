@@ -364,6 +364,27 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
     }
 
     @Test
+    public void testSelectedConsumerDoesNotPreventLookAheadForAnotherConsumer() {
+        persistentDispatcher.addConsumer(consumerMock).join();
+        Consumer consumerWithoutPermits = createMockConsumer();
+        doReturn("consumer-without-permits").when(consumerWithoutPermits).consumerName();
+        doReturn(0).when(consumerWithoutPermits).getAvailablePermits();
+        doReturn(true).when(consumerWithoutPermits).isWritable();
+        persistentDispatcher.addConsumer(consumerWithoutPermits).join();
+        String key = generateKeyForConsumer(persistentDispatcher.getSelector(), consumerWithoutPermits);
+        doReturn(true).when(cursorMock).hasMoreEntries();
+
+        EntryImpl entry = createEntry(1, 1, "message1", 1, key);
+
+        assertTrue(persistentDispatcher.trySendMessagesToConsumers(
+                PersistentDispatcherMultipleConsumers.ReadType.Normal,
+                new ArrayList<>(List.of(entry))));
+        assertFalse(persistentDispatcher.canReplayMessages());
+        assertTrue(persistentDispatcher.canReplayMessages());
+        assertEquals(entry.refCnt(), 0);
+    }
+
+    @Test
     public void testSkipRedeliverTemporally() throws InterruptedException {
         // add first consumer
         persistentDispatcher.addConsumer(consumerMock).join();
