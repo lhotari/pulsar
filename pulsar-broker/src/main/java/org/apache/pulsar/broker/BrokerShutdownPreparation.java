@@ -133,9 +133,6 @@ final class BrokerShutdownPreparation {
     private void probe(BrokerLookupData data, CompletableFuture<BrokerLookupData> route,
                        CompletableFuture<Void> successor) {
         String url = probeRoute(data);
-        if (url != null) {
-            route.complete(data);
-        }
         boolean eligible = false;
         String adminUrl = pulsar.getConfiguration().isBrokerClientTlsEnabled()
                 ? data.getWebServiceUrlTls() : data.getWebServiceUrl();
@@ -146,6 +143,11 @@ final class BrokerShutdownPreparation {
                             Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining()))), TimeUnit.MILLISECONDS)
                     .build()) {
                 await(admin.brokers().checkReadyAsync());
+                // CONNECT is also accepted during broker initialization. Require full readiness before
+                // installing its lookup route; election eligibility is checked separately below.
+                if (url != null) {
+                    route.complete(data);
+                }
                 eligible = await(admin.brokers().isLeaderElectionEnabledAsync());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

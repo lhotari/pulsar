@@ -20,6 +20,7 @@ package org.apache.pulsar.broker;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.RETURNS_SELF;
@@ -52,6 +53,12 @@ import org.apache.pulsar.broker.service.PulsarMetadataEventSynchronizer;
 import org.apache.pulsar.client.admin.Brokers;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.PulsarAdminBuilder;
+import org.apache.pulsar.client.admin.PulsarAdminException;
+import org.apache.pulsar.client.impl.ClientCnx;
+import org.apache.pulsar.client.impl.ConnectionPool;
+import org.apache.pulsar.client.impl.PulsarClientImpl;
+import org.apache.pulsar.client.impl.PulsarServiceNameResolver;
+import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.metadata.BaseMetadataStoreTest;
 import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.MetadataStoreConfig;
@@ -88,6 +95,7 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
                 {true, true, true, true, true},
                 {true, true, false, false, true},
                 {true, true, false, true, false},
+                {true, true, false, true, null},
                 {false, false, false, true, true}
         };
     }
@@ -110,13 +118,22 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
     @Test(dataProvider = "leadershipSuccessors")
     public void handOffLeadershipBeforeDrainingOnlyWithAnotherBroker(boolean leader, boolean otherBroker,
                                                                     boolean differentElection, boolean ready,
-                                                                    boolean eligible) throws Exception {
+                                                                    Boolean eligible) throws Exception {
         LeaderElectionService election = mock(LeaderElectionService.class);
         when(election.isLeader()).thenReturn(leader);
         Brokers brokers = mock(Brokers.class);
         when(brokers.checkReadyAsync()).thenReturn(ready ? CompletableFuture.completedFuture(null)
                 : CompletableFuture.failedFuture(new IllegalStateException("Peer is closing")));
-        when(brokers.isLeaderElectionEnabledAsync()).thenReturn(CompletableFuture.completedFuture(eligible));
+        when(brokers.isLeaderElectionEnabledAsync()).thenReturn(eligible != null
+                ? CompletableFuture.completedFuture(eligible)
+                : CompletableFuture.failedFuture(new PulsarAdminException.NotFoundException(null, "Not found", 404)));
+        PulsarClientImpl probe = mock(PulsarClientImpl.class);
+        ConnectionPool pool = mock(ConnectionPool.class);
+        when(probe.getCnxPool()).thenReturn(pool);
+        ClientCnx connection = mock(ClientCnx.class);
+        when(pool.getConnection(any(PulsarServiceNameResolver.class)))
+                .thenReturn(CompletableFuture.completedFuture(connection));
+        when(probe.closeAsync()).thenReturn(CompletableFuture.completedFuture(null));
         PulsarAdmin admin = mock(PulsarAdmin.class);
         when(admin.brokers()).thenReturn(brokers);
         PulsarAdminBuilder adminBuilder = mock(PulsarAdminBuilder.class, RETURNS_SELF);
@@ -128,6 +145,11 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         config.setClusterName("shutdown-test");
         config.setBrokerShutdownTimeoutMs(10000);
         PulsarService service = new PulsarService(config) {
+            @Override
+            public PulsarClientImpl createClientImpl(ClientConfigurationData clientConfiguration) {
+                return probe;
+            }
+
             @Override
             protected PulsarAdminBuilder getCreateAdminClientBuilder() {
                 return adminBuilder;
@@ -154,6 +176,7 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         when(coordination.getLockManager(BrokerLookupData.class)).thenReturn(registrations);
         BrokerLookupData lookupData = mock(BrokerLookupData.class);
         when(lookupData.getWebServiceUrl()).thenReturn("http://other-broker:8080");
+        when(lookupData.getPulsarServiceUrl()).thenReturn("pulsar://other-broker:6650");
         when(lookupData.getLoadManagerClassName()).thenReturn(differentElection
                 ? ExtensibleLoadManagerImpl.class.getName() : ModularLoadManagerImpl.class.getName());
         when(registrations.readLock(LoadManager.LOADBALANCE_BROKERS_ROOT + "/other-broker:8080"))
@@ -163,13 +186,16 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         when(broker.closeAsync()).thenReturn(CompletableFuture.completedFuture(null));
         CompletableFuture<Void> handoffChecked = new CompletableFuture<>();
         doAnswer(invocation -> {
-            verify(election, times(!leader || otherBroker && !differentElection && ready && eligible ? 1 : 0))
+            verify(election, times(!leader
+                    || otherBroker && !differentElection && ready && Boolean.TRUE.equals(eligible) ? 1 : 0))
                     .setElectionEnabled(false);
             handoffChecked.complete(null);
             return null;
         }).when(broker).unloadNamespaceBundlesGracefully(anyInt(), anyBoolean());
         service.closeAsync().get(10, TimeUnit.SECONDS);
         handoffChecked.get(5, TimeUnit.SECONDS);
+        assertThat(service.getShutdownLookupServiceUrl().isPresent())
+                .isEqualTo(otherBroker && !differentElection && ready);
         awaitWorkerCleanup(service);
     }
 

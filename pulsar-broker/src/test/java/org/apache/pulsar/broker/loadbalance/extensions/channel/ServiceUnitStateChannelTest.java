@@ -2367,6 +2367,14 @@ public class ServiceUnitStateChannelTest extends MockedPulsarServiceBaseTest {
         var view = channel.getTableView();
         var delayedView = spy(view);
         String serviceUnit = namespaceName + "/0x10000024_0x10000025";
+        var bundle = LoadManagerShared.getNamespaceBundle(pulsar1, serviceUnit);
+        var installed = new CompletableFuture<Void>();
+        var namespaces = pulsar1.getNamespaceService();
+        doAnswer(invocation -> {
+            var result = invocation.callRealMethod();
+            installed.complete(null);
+            return result;
+        }).when(namespaces).onNamespaceBundleOwned(bundle);
         var first = new CompletableFuture<ServiceUnitStateData>();
         var retry = new CompletableFuture<ServiceUnitStateData>();
         doAnswer(invocation -> {
@@ -2386,7 +2394,7 @@ public class ServiceUnitStateChannelTest extends MockedPulsarServiceBaseTest {
         ExecutorService worker = Executors.newSingleThreadExecutor();
         try {
             view.put(serviceUnit, new ServiceUnitStateData(Owned, brokerId1, true, 1)).get(5, TimeUnit.SECONDS);
-            Awaitility.await().untilAsserted(() -> assertEquals(Owned, state(view.get(serviceUnit))));
+            installed.get(5, TimeUnit.SECONDS);
             channel.setTableView(delayedView);
             admission.close();
             doReturn(admission).when(pulsar1).getBrokerAdmission();
@@ -2397,6 +2405,7 @@ public class ServiceUnitStateChannelTest extends MockedPulsarServiceBaseTest {
         } finally {
             channel.setTableView(view);
             doCallRealMethod().when(pulsar1).getBrokerAdmission();
+            doCallRealMethod().when(namespaces).onNamespaceBundleOwned(bundle);
             view.delete(serviceUnit).get(5, TimeUnit.SECONDS);
             channel.enable();
         }
