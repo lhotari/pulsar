@@ -533,7 +533,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         }
     }
 
-    void initialize(final ManagedLedgerInitializeLedgerCallback callback, final Object ctx) {
+    final void initialize(final ManagedLedgerInitializeLedgerCallback callback, final Object ctx) {
         final LedgerInitialization operation;
         synchronized (this) {
             if (closeFuture != null || state.isFenced()) {
@@ -554,27 +554,37 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                     scheduleAddEntryTimeoutTask();
                 }
             }
-            store.getManagedLedgerInfo(name, config.isCreateIfMissing(), config.getProperties(),
-                    new MetaStoreCallback<>() {
-                        @Override
-                        public void operationComplete(ManagedLedgerInfo info, Stat stat) {
-                            try {
-                                initializeFromMetadata(operation, info, stat);
-                            } catch (Throwable error) {
-                                operation.initializeFailed(ManagedLedgerException.getManagedLedgerException(error));
-                            }
-                        }
-
-                        @Override
-                        public void operationFailed(MetaStoreException error) {
-                            handleBadVersion(error);
-                            operation.initializeFailed(error instanceof MetadataNotFoundException
-                                    ? new ManagedLedgerNotFoundException(error) : new ManagedLedgerException(error));
-                        }
-                    });
+            initializeMetadata(operation, ctx);
         } catch (Throwable error) {
             operation.initializeFailed(ManagedLedgerException.getManagedLedgerException(error));
         }
+    }
+
+    // Initialization subclasses share one root barrier, including their work before loading local metadata.
+    void initializeMetadata(ManagedLedgerInitializeLedgerCallback callback, Object ctx) {
+        LedgerInitialization operation = (LedgerInitialization) callback;
+        store.getManagedLedgerInfo(name, config.isCreateIfMissing(), config.getProperties(),
+                new MetaStoreCallback<>() {
+                    @Override
+                    public void operationComplete(ManagedLedgerInfo info, Stat stat) {
+                        try {
+                            initializeFromMetadata(operation, info, stat);
+                        } catch (Throwable error) {
+                            operation.initializeFailed(ManagedLedgerException.getManagedLedgerException(error));
+                        }
+                    }
+
+                    @Override
+                    public void operationFailed(MetaStoreException error) {
+                        handleBadVersion(error);
+                        operation.initializeFailed(error instanceof MetadataNotFoundException
+                                ? new ManagedLedgerNotFoundException(error) : new ManagedLedgerException(error));
+                    }
+                });
+    }
+
+    final synchronized boolean isClosing() {
+        return closeFuture != null || state.isFenced();
     }
 
     private void initializeFromMetadata(LedgerInitialization operation, ManagedLedgerInfo info, Stat stat) {
@@ -602,7 +612,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                     }
                 }
                 migrated = info.hasTerminatedPosition() && propertiesMap.containsKey(MIGRATION_STATE_PROPERTY);
-                if (!ledgers.isEmpty()) {
+                // A shadow ledger has already opened its live source without recovery. Reuse that
+                // read handle; reopening it with recovery would fence the source writer.
+                if (!ledgers.isEmpty() && currentLedger == null) {
                     ledgerId = ledgers.lastKey();
                 }
             }
