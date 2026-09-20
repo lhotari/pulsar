@@ -60,7 +60,9 @@ import org.apache.bookkeeper.common.util.OrderedScheduler;
 import org.apache.logging.log4j.Level;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.broker.service.BrokerAdmission;
 import org.apache.pulsar.broker.service.BrokerService;
+import org.apache.pulsar.broker.service.BrokerServiceException.BrokerDrainingException;
 import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.NamespaceBundleFactory;
@@ -102,6 +104,7 @@ public class OwnershipCacheTest {
         selfBrokerUrl = "tcp://localhost:" + port;
         pulsar = mock(PulsarService.class);
         when(pulsar.isRunning()).thenReturn(true);
+        when(pulsar.getBrokerAdmission()).thenReturn(new BrokerAdmission());
         config = new ServiceConfiguration();
         executor = OrderedScheduler.newSchedulerBuilder().numThreads(1).name("test").build();
         zookeeperServer = new ZookeeperServerTest(0);
@@ -947,9 +950,10 @@ public class OwnershipCacheTest {
         OwnershipCache cache = new OwnershipCache(pulsar, nsService);
         NamespaceBundle bundle = new NamespaceBundle(NamespaceName.get("pulsar/ns-shutdown"),
                 Range.closedOpen(0L, (long) Integer.MAX_VALUE), bundleFactory);
+        pulsar.getBrokerAdmission().close();
         when(pulsar.isRunning()).thenReturn(false);
         assertThatThrownBy(() -> cache.tryAcquiringOwnership(bundle).get(5, TimeUnit.SECONDS))
-                .hasCauseInstanceOf(RuntimeException.class);
+                .hasCauseInstanceOf(BrokerDrainingException.class);
         assertThat(store.exists(ServiceUnitUtils.path(bundle)).get(5, TimeUnit.SECONDS)).isFalse();
         verify(nsService, never()).onNamespaceBundleOwned(bundle);
     }
@@ -967,10 +971,11 @@ public class OwnershipCacheTest {
         NamespaceBundle bundle = new NamespaceBundle(NamespaceName.get("pulsar/ns-shutdown-inflight"),
                 Range.closedOpen(0L, (long) Integer.MAX_VALUE), bundleFactory);
         CompletableFuture<NamespaceEphemeralData> result = cache.tryAcquiringOwnership(bundle);
+        pulsar.getBrokerAdmission().close();
         when(pulsar.isRunning()).thenReturn(false);
         ControllableLock lock = new ControllableLock();
         acquisition.complete(lock);
-        assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS)).hasCauseInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS)).hasCauseInstanceOf(BrokerDrainingException.class);
         assertThat(lock.released).isTrue();
         assertThat(cache.getLocallyAcquiredLocks()).isEmpty();
         verify(nsService, never()).onNamespaceBundleOwned(bundle);
