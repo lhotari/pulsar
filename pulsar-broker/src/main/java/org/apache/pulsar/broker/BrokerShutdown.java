@@ -59,7 +59,12 @@ final class BrokerShutdown {
             result.whenComplete((__, error) -> watchdog.shutdownNow());
         }
         newDaemonThread("pulsar-service-close", () -> FutureUtil.supplySafely(closeServices)
-                .whenComplete((__, error) -> finish(error))).start();
+                .whenComplete((__, error) -> {
+                    if (!finish(error) && error != null) {
+                        log.warn().attr("phase", phase).exception(error)
+                                .log("Service cleanup failed after metadata-session cleanup started");
+                    }
+                })).start();
         return result;
     }
 

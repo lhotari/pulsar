@@ -37,7 +37,10 @@ import org.apache.pulsar.client.impl.PulsarServiceNameResolver;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.common.util.FutureUtil;
 
-/** Bounded outbound preparation before shutting down the broker's existing messaging entities. */
+/**
+ * Bounded outbound preparation before shutting down the broker's existing messaging entities.
+ * A lookup peer must expose reachable binary and HTTP(S) readiness endpoints using broker-client TLS settings.
+ */
 @CustomLog
 final class BrokerShutdownPreparation {
     private final PulsarService pulsar;
@@ -107,7 +110,7 @@ final class BrokerShutdownPreparation {
                 // A current leader retains leadership if there is no ready, explicitly eligible peer.
                 if (successor.isDone()) {
                     await(election.setElectionEnabled(false));
-                    handoff = "successor not observed";
+                    handoff = "leader change not observed";
                     while (remaining() > 0) {
                         var leader = await(election.readCurrentLeader());
                         if (leader.isPresent() && !leader.get().getBrokerId().equals(pulsar.getBrokerId())) {
@@ -134,6 +137,7 @@ final class BrokerShutdownPreparation {
                        CompletableFuture<Void> successor) {
         String url = probeRoute(data);
         boolean eligible = false;
+        boolean ready = false;
         String adminUrl = pulsar.getConfiguration().isBrokerClientTlsEnabled()
                 ? data.getWebServiceUrlTls() : data.getWebServiceUrl();
         String adminScheme = pulsar.getConfiguration().isBrokerClientTlsEnabled() ? "https://" : "http://";
@@ -143,6 +147,7 @@ final class BrokerShutdownPreparation {
                             Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining()))), TimeUnit.MILLISECONDS)
                     .build()) {
                 await(admin.brokers().checkReadyAsync());
+                ready = true;
                 // CONNECT is also accepted during broker initialization. Require full readiness before
                 // installing its lookup route; election eligibility is checked separately below.
                 if (url != null) {
@@ -152,9 +157,18 @@ final class BrokerShutdownPreparation {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (Exception e) {
-                log.debug().attr("broker", data.getBrokerId()).exceptionMessage(e)
-                        .log("Peer is not an early shutdown election successor");
+                if (url != null && !ready) {
+                    log.info().attr("broker", data.getBrokerId()).exceptionMessage(e)
+                            .log("Reachable peer was not selected for shutdown routing: readiness check failed");
+                } else {
+                    log.debug().attr("broker", data.getBrokerId()).exceptionMessage(e)
+                            .log("Peer is not an early shutdown election successor");
+                }
             }
+        } else if (url != null) {
+            log.info().attr("broker", data.getBrokerId()).attr("remainingBudgetNanos", remaining())
+                    .log("Reachable peer was not selected for shutdown routing: no matching readiness endpoint "
+                            + "or preparation budget exhausted");
         }
         if (eligible) {
             successor.complete(null);
