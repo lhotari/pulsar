@@ -169,6 +169,9 @@ public class RangeEntryCacheImpl implements EntryCache {
         EntryImpl cacheEntry =
                 EntryImpl.createWithRetainedDuplicate(position, cachedData, entry.getReadCountHandler(),
                             copy ? null : entry.getMessageMetadata());
+        // The cache's retained entry is storage, not an expected reader. Only copies returned to cursors decrement
+        // the shared expected-read count.
+        cacheEntry.setDecreaseReadCountOnRelease(false);
         cachedData.release();
         if (entries.put(position, cacheEntry, entryLength)) {
             totalAddedEntriesSize.add(entryLength);

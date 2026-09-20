@@ -96,6 +96,28 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
     }
 
     @Test(timeOut = 5000)
+    public void testCacheHolderDoesNotCountAsExpectedRead() throws Exception {
+        ReadHandle lh = getLedgerHandle();
+        when(lh.getId()).thenReturn(0L);
+        when(ml.getLastConfirmedEntry()).thenReturn(PositionFactory.create(0, 0));
+
+        EntryCache entryCache = factory.getEntryCacheManager().getEntryCache(ml);
+        EntryImpl addedEntry = EntryImpl.create(0, 0, new byte[1], 1);
+        EntryReadCountHandlerImpl readCountHandler =
+                (EntryReadCountHandlerImpl) addedEntry.getReadCountHandler();
+        addedEntry.setDecreaseReadCountOnRelease(false);
+        assertTrue(entryCache.insert(addedEntry));
+        addedEntry.release();
+
+        List<Entry> entries = readEntry(entryCache, lh, 0, 0, () -> 1, null);
+        entries.forEach(Entry::release);
+        assertEquals(readCountHandler.getExpectedReadCount(), 0);
+
+        entryCache.clear();
+        assertEquals(readCountHandler.getExpectedReadCount(), 0);
+    }
+
+    @Test(timeOut = 5000)
     public void testReadMissingBefore() throws Exception {
         ReadHandle lh = getLedgerHandle();
         when(lh.getId()).thenReturn((long) 0);
