@@ -19,8 +19,10 @@
 package org.apache.bookkeeper.mledger.impl.cache;
 
 import io.netty.util.Recycler;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.Map;
-import java.util.concurrent.locks.StampedLock;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Function;
 import lombok.CustomLog;
 import org.apache.bookkeeper.mledger.Position;
@@ -33,6 +35,17 @@ import org.apache.bookkeeper.mledger.ReferenceCountedEntry;
  */
 @CustomLog
 class RangeCacheEntryWrapper {
+    private static final VarHandle VERSION;
+    private static final int SPIN_LIMIT = 256;
+
+    static {
+        try {
+            VERSION = MethodHandles.lookup().findVarHandle(RangeCacheEntryWrapper.class, "version", int.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
     private final Recycler.Handle<RangeCacheEntryWrapper> recyclerHandle;
     private static final Recycler<RangeCacheEntryWrapper> RECYCLER = new Recycler<RangeCacheEntryWrapper>() {
         @Override
@@ -40,7 +53,9 @@ class RangeCacheEntryWrapper {
             return new RangeCacheEntryWrapper(recyclerHandle);
         }
     };
-    private final StampedLock lock = new StampedLock();
+    // Even values denote a stable state and odd values a mutation. Keeping the state in the
+    // wrapper avoids allocating a separate lock for every recycler miss.
+    private volatile int version;
     Position key;
     ReferenceCountedEntry value;
     RangeCache rangeCache;
@@ -56,9 +71,7 @@ class RangeCacheEntryWrapper {
     static <R> R withNewInstance(RangeCache rangeCache, Position key, ReferenceCountedEntry value, long size,
                                  Function<RangeCacheEntryWrapper, R> function) {
         RangeCacheEntryWrapper entryWrapper = RECYCLER.get();
-        StampedLock lock = entryWrapper.lock;
-        long stamp = lock.writeLock();
-        try {
+        return entryWrapper.withWriteLock(wrapper -> {
             entryWrapper.rangeCache = rangeCache;
             entryWrapper.key = key;
             entryWrapper.value = value;
@@ -67,9 +80,7 @@ class RangeCacheEntryWrapper {
             // This is used for time-based eviction of entries
             entryWrapper.timestampNanos = System.nanoTime();
             return function.apply(entryWrapper);
-        } finally {
-            lock.unlockWrite(stamp);
-        }
+        });
     }
 
     /**
@@ -106,14 +117,21 @@ class RangeCacheEntryWrapper {
      * @return the value associated with the key, or null if the key does not match
      */
     private ReferenceCountedEntry getValueInternal(Position key, boolean requireSameKeyInstance) {
-        long stamp = lock.tryOptimisticRead();
-        Position localKey = this.key;
-        ReferenceCountedEntry localValue = this.value;
-        if (!lock.validate(stamp)) {
-            stamp = lock.readLock();
+        int attempts = 0;
+        Position localKey;
+        ReferenceCountedEntry localValue;
+        while (true) {
+            int stamp = (int) VERSION.getAcquire(this);
+            if ((stamp & 1) != 0) {
+                pauseAfterFailedAttempt(++attempts);
+                continue;
+            }
             localKey = this.key;
             localValue = this.value;
-            lock.unlockRead(stamp);
+            if ((int) VERSION.getAcquire(this) == stamp) {
+                break;
+            }
+            pauseAfterFailedAttempt(++attempts);
         }
         // check that the given key matches the key associated with the value in the entry
         // this is used to detect if the entry has already been recycled and contains another key
@@ -148,11 +166,30 @@ class RangeCacheEntryWrapper {
     }
 
     <R> R withWriteLock(Function<RangeCacheEntryWrapper, R> function) {
-        long stamp = lock.writeLock();
+        int stamp = acquireWriteLock();
         try {
             return function.apply(this);
         } finally {
-            lock.unlockWrite(stamp);
+            VERSION.setRelease(this, stamp + 2);
+        }
+    }
+
+    private int acquireWriteLock() {
+        int attempts = 0;
+        while (true) {
+            int stamp = (int) VERSION.getAcquire(this);
+            if ((stamp & 1) == 0 && VERSION.compareAndSet(this, stamp, stamp + 1)) {
+                return stamp;
+            }
+            pauseAfterFailedAttempt(++attempts);
+        }
+    }
+
+    private static void pauseAfterFailedAttempt(int attempts) {
+        if (attempts <= SPIN_LIMIT) {
+            Thread.onSpinWait();
+        } else {
+            LockSupport.parkNanos(1L);
         }
     }
 

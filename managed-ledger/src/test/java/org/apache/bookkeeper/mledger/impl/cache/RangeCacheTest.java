@@ -31,9 +31,14 @@ import io.netty.buffer.Unpooled;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import lombok.Cleanup;
 import org.apache.bookkeeper.mledger.Entry;
@@ -49,6 +54,45 @@ import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 public class RangeCacheTest {
+
+    @Test(timeOut = 30_000)
+    public void readWaitsForConcurrentWrapperInitialization() throws Exception {
+        RangeCache cache = new RangeCache(createRemovalQueue());
+        Position position = createPosition(1);
+        ReferenceCountedEntry entry = createCachedEntry(position, "one");
+        CountDownLatch initializing = new CountDownLatch(1);
+        CountDownLatch finishInitialization = new CountDownLatch(1);
+        AtomicReference<RangeCacheEntryWrapper> wrapperRef = new AtomicReference<>();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<RangeCacheEntryWrapper> initializer = executor.submit(() ->
+                    RangeCacheEntryWrapper.withNewInstance(cache, position, entry, entry.getLength(), wrapper -> {
+                        wrapperRef.set(wrapper);
+                        initializing.countDown();
+                        try {
+                            if (!finishInitialization.await(5, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException("Timed out waiting to finish initialization");
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException("Interrupted while initializing wrapper", e);
+                        }
+                        return wrapper;
+                    }));
+            assertTrue(initializing.await(5, TimeUnit.SECONDS));
+            Future<ReferenceCountedEntry> reader = executor.submit(() -> wrapperRef.get().getValue(position));
+            assertThatThrownBy(() -> reader.get(100, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+            finishInitialization.countDown();
+            assertThat(initializer.get(5, TimeUnit.SECONDS)).isSameAs(wrapperRef.get());
+            assertThat(reader.get(5, TimeUnit.SECONDS)).isSameAs(entry);
+            wrapperRef.get().recycle();
+        } finally {
+            finishInitialization.countDown();
+            executor.shutdownNow();
+            entry.release();
+        }
+    }
 
     @Test
     public void simple() {
