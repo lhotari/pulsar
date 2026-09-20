@@ -197,6 +197,11 @@ public interface Topic {
 
     CompletableFuture<Void> checkReplication();
 
+    /** Close a topic whose materialization was rejected, without triggering client reconnection or lookup. */
+    default CompletableFuture<Void> closeUnpublished() {
+        return FutureUtil.supplySafely(() -> close(false, false));
+    }
+
     CompletableFuture<Void> close(boolean closeWithoutWaitingClientDisconnect);
 
     CompletableFuture<Void> close(

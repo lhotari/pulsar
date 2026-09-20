@@ -1797,6 +1797,15 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         return close(true, closeWithoutWaitingClientDisconnect);
     }
 
+    @Override
+    public CompletableFuture<Void> closeUnpublished() {
+        return close(false, false).thenCompose(ignored -> {
+            CompletableFuture<Void> disposed = new CompletableFuture<>();
+            disposeTopic(disposed);
+            return disposed;
+        });
+    }
+
     private enum CloseTypes {
         transferring,
         notWaitDisconnectClients,

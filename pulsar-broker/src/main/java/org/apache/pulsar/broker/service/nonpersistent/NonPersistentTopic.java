@@ -529,6 +529,12 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
     }
 
 
+    @Override
+    public CompletableFuture<Void> closeUnpublished() {
+        return close(false, false).thenCompose(ignored -> brokerService.removeTopicFromCache(this))
+                .thenRun(this::unregisterTopicPolicyListener);
+    }
+
     // Guarded by the topic write lock. A transfer never loses its physical close result.
     private CompletableFuture<Void> transferCloseFuture;
     private CompletableFuture<Void> transferDisconnectFuture;

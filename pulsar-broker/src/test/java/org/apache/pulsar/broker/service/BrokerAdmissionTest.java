@@ -18,18 +18,23 @@
  */
 package org.apache.pulsar.broker.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.apache.pulsar.common.naming.TopicName;
 import org.testng.annotations.Test;
 
 @Test(groups = "broker")
@@ -86,4 +91,70 @@ public class BrokerAdmissionTest {
             worker.shutdownNow();
         }
     }
+    @Test
+    public void topicLoadCutoffIncludesPreInsertionAndPublicationRaces() throws Exception {
+        BrokerAdmission gate = new BrokerAdmission();
+        TopicName name = TopicName.get("persistent://tenant/ns/topic");
+        CompletableFuture<Optional<Topic>> preInsertion = new CompletableFuture<>();
+        var waiting = gate.registerTopicLoad(name, preInsertion);
+        CompletableFuture<Optional<Topic>> candidate = new CompletableFuture<>();
+        var materializing = gate.registerTopicLoad(name, candidate);
+        assertTrue(materializing.beginMaterialization());
+        assertTrue(materializing.canPublish());
+        CompletableFuture<Optional<Topic>> acceptedResult = new CompletableFuture<>();
+        var accepted = gate.registerTopicLoad(name, acceptedResult);
+        assertTrue(accepted.beginMaterialization());
+        Topic topic = mock(Topic.class);
+        acceptedResult.complete(Optional.of(topic));
+        gate.close().forEach(Runnable::run);
+        assertThat(gate.getShutdownTopicLoads()).containsExactlyInAnyOrder(waiting, materializing, accepted);
+        assertFalse(waiting.beginMaterialization());
+        assertFalse(materializing.canPublish());
+        assertNull(gate.registerTopicLoad(name, new CompletableFuture<>()));
+        assertThat(waiting.completion().get(1, TimeUnit.SECONDS)).isEmpty();
+        assertThat(candidate).isCompletedExceptionally();
+        assertThat(materializing.completion()).isNotDone();
+        materializing.cleaned(CompletableFuture.completedFuture(null));
+        assertThat(materializing.completion().get(1, TimeUnit.SECONDS)).isEmpty();
+        // Publication accepted before cutoff remains represented until its final bookkeeping completes.
+        accepted.published(topic);
+        assertThat(accepted.completion().get(1, TimeUnit.SECONDS)).contains(topic);
+        assertThat(gate.getShutdownTopicLoads()).hasSize(3);
+    }
+
+    @Test
+    public void failedCleanupRetainedBeforeCutoffAndCallbacksRunOutsideMonitor() throws Exception {
+        BrokerAdmission gate = new BrokerAdmission();
+        TopicName name = TopicName.get("persistent://tenant/ns/topic");
+        var failed = gate.registerTopicLoad(name, new CompletableFuture<>());
+        assertTrue(failed.beginMaterialization());
+        CompletableFuture<Void> cleanup = new CompletableFuture<>();
+        CompletableFuture<Void> callback = failed.completion().handle((ignored, error) -> {
+            assertFalse(Thread.holdsLock(gate));
+            return null;
+        });
+        failed.cleaned(cleanup);
+        cleanup.completeExceptionally(new IllegalStateException("physical close failed"));
+        callback.get(1, TimeUnit.SECONDS);
+        // A later no-resource attempt must not erase an older, failed physical cleanup.
+        var retry = gate.registerTopicLoad(name, new CompletableFuture<>());
+        retry.finishWithoutMaterialization();
+        gate.close();
+        assertThat(gate.getShutdownTopicLoads()).containsExactly(failed);
+        assertThatThrownBy(() -> failed.completion().get(1, TimeUnit.SECONDS))
+                .hasRootCauseMessage("physical close failed");
+    }
+
+    @Test
+    public void canceledBeforeMaterializationCannotStartLater() throws Exception {
+        BrokerAdmission gate = new BrokerAdmission();
+        CompletableFuture<Optional<Topic>> request = new CompletableFuture<>();
+        var load = gate.registerTopicLoad(TopicName.get("persistent://tenant/ns/topic"), request);
+        request.cancel(false);
+        assertFalse(load.beginMaterialization());
+        gate.close();
+        assertThat(gate.getShutdownTopicLoads()).isEmpty();
+        assertThat(load.completion().get(1, TimeUnit.SECONDS)).isEmpty();
+    }
+
 }

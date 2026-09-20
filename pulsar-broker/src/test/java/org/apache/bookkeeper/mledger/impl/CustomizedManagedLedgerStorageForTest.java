@@ -28,6 +28,7 @@ import java.util.NavigableMap;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -99,6 +100,12 @@ public class CustomizedManagedLedgerStorageForTest extends ManagedLedgerClientFa
                 public void openLedgerFailed(ManagedLedgerException exception, Object ctx) {
                     callback.openLedgerFailed(exception, ctx);
                 }
+
+                @Override
+                public void openLedgerFailed(ManagedLedgerException exception, CompletionStage<Void> cleanup,
+                                             Object ctx) {
+                    callback.openLedgerFailed(exception, cleanup, ctx);
+                }
             }, ctx);
         }
 
@@ -115,6 +122,12 @@ public class CustomizedManagedLedgerStorageForTest extends ManagedLedgerClientFa
                 @Override
                 public void openLedgerFailed(ManagedLedgerException exception, Object ctx) {
                     callback.openLedgerFailed(exception, ctx);
+                }
+
+                @Override
+                public void openLedgerFailed(ManagedLedgerException exception, CompletionStage<Void> cleanup,
+                                             Object ctx) {
+                    callback.openLedgerFailed(exception, cleanup, ctx);
                 }
             }, mlOwnershipChecker, ctx);
         }
