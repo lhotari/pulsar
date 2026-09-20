@@ -18,7 +18,12 @@
  */
 package org.apache.pulsar.broker;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.spy;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
@@ -26,17 +31,21 @@ import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 import static org.testng.AssertJUnit.assertSame;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import lombok.Cleanup;
 import lombok.CustomLog;
 import org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest;
+import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.client.admin.PulsarAdminException;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.PulsarClientException;
@@ -47,6 +56,7 @@ import org.apache.pulsar.metadata.api.MetadataCacheConfig;
 import org.apache.pulsar.metadata.api.MetadataSerde;
 import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.Stat;
+import org.awaitility.Awaitility;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.Test;
 
@@ -347,6 +357,35 @@ public class PulsarServiceTest extends MockedPulsarServiceBaseTest {
         } catch (Exception e) {
             assertTrue(e instanceof PulsarClientException.TimeoutException);
         }
+    }
+
+    @Test
+    public void testAdminShutdownBoundsIncompleteBundleUnload() throws Exception {
+        super.internalSetup();
+        super.setupDefaultTenantAndNamespace();
+        String topic = "persistent://public/default/testAdminShutdownBoundsIncompleteBundleUnload";
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer().topic(topic).create();
+        producer.send(new byte[1]);
+        NamespaceService namespaces = mockingDetails(pulsar.getNamespaceService()).isMock()
+                ? pulsar.getNamespaceService() : spy(pulsar.getNamespaceService());
+        pulsar.setNsService(namespaces);
+        CountDownLatch draining = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            // Start real topic cleanup, but hold its acknowledgement forever.
+            invocation.callRealMethod();
+            draining.countDown();
+            return new CompletableFuture<Void>();
+        }).when(namespaces).unloadNamespaceBundle(any(), anyLong(), any(), anyBoolean());
+        pulsar.getConfiguration().setBrokerShutdownTimeoutMs(1000);
+        CompletableFuture<Void> request = admin.brokers().shutDownBrokerGracefully(1, true);
+        assertTrue(draining.await(5, TimeUnit.SECONDS));
+        pulsar.getShutdownFuture().handle((__, error) -> null).get(5, TimeUnit.SECONDS);
+        assertTrue(pulsar.isMetadataSessionsClosing());
+        assertEquals(pulsar.getState(), PulsarService.State.Closed);
+        request.handle((__, error) -> null).get(10, TimeUnit.SECONDS);
+        Awaitility.await().atMost(Duration.ofSeconds(10))
+                .until(() -> pulsar.getIoEventLoopGroup().isTerminated());
     }
 
     @Test

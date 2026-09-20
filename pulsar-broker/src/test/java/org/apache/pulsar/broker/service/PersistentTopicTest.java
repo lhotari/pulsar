@@ -1130,6 +1130,30 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
     }
 
     @Test
+    public void testMetadataSessionCleanupFencesPublish() throws Exception {
+        AtomicBoolean sessionsClosing = new AtomicBoolean();
+        doAnswer(invocation -> sessionsClosing.get())
+                .when(pulsarTestContext.getPulsarService()).isMetadataSessionsClosing();
+        PersistentTopic topic = (PersistentTopic) brokerService.getOrCreateTopic(successTopicName).get();
+        sessionsClosing.set(true);
+        ByteBuf payload = Unpooled.wrappedBuffer(new byte[1]);
+        try {
+            CompletableFuture<Exception> publish = new CompletableFuture<>();
+            topic.publishMessage(payload, (error, ledgerId, entryId) -> publish.complete(error));
+            assertThat(publish.get(5, TimeUnit.SECONDS))
+                    .isInstanceOf(BrokerServiceException.TopicFencedException.class);
+            CompletableFuture<Exception> transaction = new CompletableFuture<>();
+            topic.publishTxnMessage(new TxnID(1, 1), payload,
+                    (error, ledgerId, entryId) -> transaction.complete(error));
+            assertThat(transaction.get(5, TimeUnit.SECONDS))
+                    .isInstanceOf(BrokerServiceException.TopicFencedException.class);
+        } finally {
+            payload.release();
+            topic.close(true).get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     public void testCloseTopic() throws Exception {
         // create topic
         PersistentTopic topic = (PersistentTopic) brokerService.getOrCreateTopic(successTopicName).get();

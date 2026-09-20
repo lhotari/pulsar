@@ -149,6 +149,56 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
     }
 
     @Test
+    public void externallyOwnedLocalStoreRetainsItsCloseHook() throws Exception {
+        ServiceConfiguration config = new ServiceConfiguration();
+        config.setClusterName("external-store-test");
+        config.setMetadataStoreUrl("memory:" + UUID.randomUUID());
+        PulsarService service = new PulsarService(config) {
+            @Override
+            protected CompletableFuture<Void> closeLocalMetadataStore() {
+                return CompletableFuture.completedFuture(null);
+            }
+        };
+        MetadataStoreExtended external = mock(MetadataStoreExtended.class);
+        service.setLocalMetadataStore(external);
+        service.setConfigurationMetadataStore(external);
+        service.closeAsync().get(10, TimeUnit.SECONDS);
+        verify(external, never()).close();
+    }
+
+    @Test
+    public void coordinationCloseFailureStillClosesSessions() throws Exception {
+        PulsarService service = newService(5000);
+        MetadataStoreExtended local = mock(MetadataStoreExtended.class);
+        MetadataStoreExtended configuration = mock(MetadataStoreExtended.class);
+        service.setLocalMetadataStore(local);
+        service.setConfigurationMetadataStore(configuration);
+        service.setShouldShutdownConfigurationMetadataStore(true);
+        CoordinationService coordination = mock(CoordinationService.class);
+        service.setCoordinationService(coordination);
+        doThrow(new IllegalStateException("injected coordination failure")).when(coordination).close();
+        try {
+            assertThatThrownBy(() -> service.closeAsync().get(10, TimeUnit.SECONDS))
+                    .hasRootCauseInstanceOf(IllegalStateException.class);
+            verify(local).close();
+            verify(configuration).close();
+        } finally {
+            service.getIoEventLoopGroup().shutdownGracefully(0, 0, TimeUnit.MILLISECONDS).sync();
+        }
+    }
+
+    @Test
+    public void nonPositiveTimeoutsRetainEmbeddedServiceSemantics() throws Exception {
+        for (long timeoutMs : new long[]{0, -100}) {
+            PulsarService service = newService(timeoutMs);
+            MetadataStoreExtended local = mock(MetadataStoreExtended.class);
+            service.setLocalMetadataStore(local);
+            service.closeAsync().get(10, TimeUnit.SECONDS);
+            verify(local).close();
+        }
+    }
+
+    @Test
     public void storeFailureStillClosesOtherStore() throws Exception {
         PulsarService service = newService(5000);
         MetadataStoreExtended local = mock(MetadataStoreExtended.class);

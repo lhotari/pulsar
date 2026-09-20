@@ -18,6 +18,8 @@
  */
 package org.apache.pulsar.broker.namespace;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -938,6 +940,40 @@ public class OwnershipCacheTest {
         assertSame(cache.getLocallyAcquiredLocks().get(bundle), currentLock);
         assertTrue(store.exists(ServiceUnitUtils.path(bundle)).join());
         assertTrue(cache.checkOwnershipAsync(bundle).get());
+    }
+
+    @Test
+    public void testShutdownRejectsNewOwnershipAcquisition() throws Exception {
+        OwnershipCache cache = new OwnershipCache(pulsar, nsService);
+        NamespaceBundle bundle = new NamespaceBundle(NamespaceName.get("pulsar/ns-shutdown"),
+                Range.closedOpen(0L, (long) Integer.MAX_VALUE), bundleFactory);
+        when(pulsar.isRunning()).thenReturn(false);
+        assertThatThrownBy(() -> cache.tryAcquiringOwnership(bundle).get(5, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(RuntimeException.class);
+        assertThat(store.exists(ServiceUnitUtils.path(bundle)).get(5, TimeUnit.SECONDS)).isFalse();
+        verify(nsService, never()).onNamespaceBundleOwned(bundle);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testShutdownReleasesAcquisitionThatCompletesAfterDrainStarts() throws Exception {
+        CompletableFuture<ResourceLock<NamespaceEphemeralData>> acquisition = new CompletableFuture<>();
+        LockManager<NamespaceEphemeralData> locks = mock(LockManager.class);
+        when(locks.acquireLock(any(), any())).thenReturn(acquisition);
+        CoordinationService coordination = mock(CoordinationService.class);
+        doReturn(locks).when(coordination).getLockManager(NamespaceEphemeralData.class);
+        doReturn(coordination).when(pulsar).getCoordinationService();
+        OwnershipCache cache = new OwnershipCache(pulsar, nsService);
+        NamespaceBundle bundle = new NamespaceBundle(NamespaceName.get("pulsar/ns-shutdown-inflight"),
+                Range.closedOpen(0L, (long) Integer.MAX_VALUE), bundleFactory);
+        CompletableFuture<NamespaceEphemeralData> result = cache.tryAcquiringOwnership(bundle);
+        when(pulsar.isRunning()).thenReturn(false);
+        ControllableLock lock = new ControllableLock();
+        acquisition.complete(lock);
+        assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS)).hasCauseInstanceOf(IllegalStateException.class);
+        assertThat(lock.released).isTrue();
+        assertThat(cache.getLocallyAcquiredLocks()).isEmpty();
+        verify(nsService, never()).onNamespaceBundleOwned(bundle);
     }
 
     private static boolean loggedLockExpiredAtInfo(TestLogAppender logAppender) {

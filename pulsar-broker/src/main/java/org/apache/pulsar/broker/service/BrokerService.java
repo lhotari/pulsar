@@ -1069,8 +1069,8 @@ public class BrokerService implements Closeable {
                                         .timeout(
                                                 Duration.ofMillis(
                                                         (long) (GRACEFUL_SHUTDOWN_TIMEOUT_RATIO_OF_TOTAL_TIMEOUT
-                                                                * pulsar.getConfiguration()
-                                                                .getBrokerShutdownTimeoutMs())))
+                                                                * Math.max(0, pulsar.getConfiguration()
+                                                                .getBrokerShutdownTimeoutMs()))))
                                         .shutdown(
                                                 statsUpdater,
                                                 inactivityMonitor,
@@ -1119,7 +1119,7 @@ public class BrokerService implements Closeable {
     }
 
     CompletableFuture<Void> shutdownEventLoopGracefully(String name, EventLoopGroup eventLoopGroup) {
-        long brokerShutdownTimeoutMs = pulsar.getConfiguration().getBrokerShutdownTimeoutMs();
+        long brokerShutdownTimeoutMs = Math.max(0, pulsar.getConfiguration().getBrokerShutdownTimeoutMs());
         long timeout = (long) (GRACEFUL_SHUTDOWN_TIMEOUT_RATIO_OF_TOTAL_TIMEOUT * brokerShutdownTimeoutMs);
         long periodMs = (timeout > 0) ? 1 : 0;
         long startNs = System.nanoTime();
