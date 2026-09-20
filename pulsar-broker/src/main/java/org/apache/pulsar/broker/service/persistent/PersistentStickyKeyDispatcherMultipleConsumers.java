@@ -500,9 +500,11 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
                         consumersForEntriesForLookaheadCheck.add(consumer);
                     }
                     final var canUpdateBlockedByHash = lookAheadAllowed && readType == ReadType.Normal;
-                    MutableInt permits =
-                            permitsForConsumer.computeIfAbsent(consumer,
-                                    k -> new MutableInt(getAvailablePermits(k)));
+                    MutableInt permits = permitsForConsumer.get(consumer);
+                    if (permits == null) {
+                        permits = new MutableInt(getAvailablePermits(consumer));
+                        permitsForConsumer.put(consumer, permits);
+                    }
                     // a consumer was found for the sticky key hash and the entry can be dispatched
                     if (permits.intValue() > 0) {
                         boolean canDispatchEntry = canDispatchEntry(consumer, entry, readType, stickyKeyHash);
@@ -656,9 +658,11 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             }
 
             // lookup the available permits for the consumer
-            MutableInt availablePermits =
-                    availablePermitsMap.computeIfAbsent(consumer,
-                            k -> new MutableInt(getAvailablePermits(consumer)));
+            MutableInt availablePermits = availablePermitsMap.get(consumer);
+            if (availablePermits == null) {
+                availablePermits = new MutableInt(getAvailablePermits(consumer));
+                availablePermitsMap.put(consumer, availablePermits);
+            }
             // skip replaying the message position if the consumer has no available permits
             if (availablePermits.intValue() <= 0) {
                 blockStickyKeyHashIfOrderingRequired(stickyKeyHash);
