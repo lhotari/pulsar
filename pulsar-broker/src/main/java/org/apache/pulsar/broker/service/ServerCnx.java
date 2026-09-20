@@ -740,7 +740,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             return;
         }
 
-        if (!this.service.getPulsar().isRunning()) {
+        if (!isBrokerAvailableForLookup()) {
             log.debug()
                     .attr("topic", topicName)
                     .attr("state", service.getPulsar().getState())
@@ -1294,7 +1294,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             return;
         }
 
-        if (!this.service.getPulsar().isRunning()) {
+        if (!isBrokerAvailableForLookup()) {
             log.debug()
                     .attr("topic", partitionMetadata.getTopic())
                     .attr("requestId", requestId)
@@ -1758,6 +1758,14 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         }
     }
 
+    private boolean isBrokerAvailableForLookup() {
+        PulsarService pulsar = service.getPulsar();
+        // Internal clients use this broker for lookups while ownership is being transferred. Keep CONNECT and
+        // lookup available during draining, then fence them with all other serving before closing sessions.
+        return pulsar.isRunning()
+                || (pulsar.getState() == PulsarService.State.Closing && !pulsar.isMetadataSessionsClosing());
+    }
+
     private static final byte[] emptyArray = new byte[0];
 
     @Override
@@ -1771,7 +1779,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                 .attr("originalPrincipal", connect.hasOriginalPrincipal() ? connect.getOriginalPrincipal() : null)
                 .log("Received CONNECT");
 
-        if (!this.service.getPulsar().isRunning()) {
+        if (!isBrokerAvailableForLookup()) {
             log.debug()
                     .attr("state", service.getPulsar().getState())
                     .log("Failed CONNECT due to pulsar service is not ready");

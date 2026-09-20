@@ -297,6 +297,29 @@ public class ServerCnxTest {
         channel.finish();
     }
 
+    @Test
+    public void testConnectDuringDrainBeforeMetadataFence() throws Exception {
+        doReturn(false).when(pulsar).isRunning();
+        doReturn(PulsarService.State.Closing).when(pulsar).getState();
+        doReturn(false).when(pulsar).isMetadataSessionsClosing();
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        assertTrue(getResponse() instanceof CommandConnected);
+        channel.finish();
+    }
+
+    @Test
+    public void testConnectRejectedAfterMetadataFence() throws Exception {
+        doReturn(false).when(pulsar).isRunning();
+        doReturn(PulsarService.State.Closing).when(pulsar).getState();
+        doReturn(true).when(pulsar).isMetadataSessionsClosing();
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        CommandError error = (CommandError) getResponse();
+        assertEquals(error.getError(), ServerError.ServiceNotReady);
+        channel.finish();
+    }
+
     private static ByteBuf newConnect(AuthMethod authMethod, String authData, int protocolVersion) {
         BaseCommand cmd = new BaseCommand().setType(Type.CONNECT);
         cmd.setConnect()
