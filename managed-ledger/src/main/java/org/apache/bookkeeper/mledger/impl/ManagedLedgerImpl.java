@@ -335,6 +335,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     private CompletableFuture<Void> closeFuture;
     // Guarded by this. A logical create timeout must not retire the underlying BookKeeper operation.
     private final Set<CompletableFuture<Void>> pendingDataLedgerCreations = new HashSet<>();
+    private Throwable dataLedgerCreationCleanupFailure;
 
     private record DataLedgerCreationContext(Object delegate, CompletableFuture<Void> metadataCompletion) { }
 
@@ -352,6 +353,12 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             });
         }
     }
+
+    static CompletableFuture<Void> getLedgerCreationCompletion(Object context) {
+        return context instanceof LedgerCreationFuture operation
+                ? operation.physicalCompletion : CompletableFuture.completedFuture(null);
+    }
+
     private volatile boolean migrated = false;
 
     @Getter
@@ -1703,6 +1710,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 }
                 ledgerToClose = currentLedger;
                 creations = new ArrayList<>(pendingDataLedgerCreations);
+                if (dataLedgerCreationCleanupFailure != null) {
+                    creations.add(CompletableFuture.failedFuture(dataLedgerCreationCleanupFailure));
+                }
             } else {
                 fenced = false;
                 ledgerToClose = null;
@@ -2110,11 +2120,12 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         CompletableFuture<Void> creation = FutureUtil.waitForAll(List.of(physicalCompletion, metadataCompletion));
         pendingDataLedgerCreations.add(creation);
         creation.whenComplete((__, error) -> {
-            // Keep cleanup failures visible to a subsequent close.
-            if (error == null) {
-                synchronized (ManagedLedgerImpl.this) {
-                    pendingDataLedgerCreations.remove(creation);
+            synchronized (ManagedLedgerImpl.this) {
+                // Retain one failure for close without accumulating completed operations across rollovers.
+                if (error != null && dataLedgerCreationCleanupFailure == null) {
+                    dataLedgerCreationCleanupFailure = FutureUtil.unwrapCompletionException(error);
                 }
+                pendingDataLedgerCreations.remove(creation);
             }
         });
         Runnable create = () -> {

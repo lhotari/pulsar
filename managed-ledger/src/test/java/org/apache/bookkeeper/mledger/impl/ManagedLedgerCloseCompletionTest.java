@@ -34,6 +34,7 @@ import static org.mockito.Mockito.when;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 import lombok.Cleanup;
 import org.apache.bookkeeper.client.AsyncCallback;
@@ -50,6 +51,7 @@ import org.apache.bookkeeper.mledger.ManagedLedgerException.MetaStoreException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl.VoidCallback;
 import org.apache.bookkeeper.mledger.impl.MetaStore.MetaStoreCallback;
+import org.apache.bookkeeper.mledger.proto.ManagedCursorInfo;
 import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo;
 import org.apache.bookkeeper.mledger.util.Futures.CloseFuture;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
@@ -364,6 +366,223 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
                 .hasCauseInstanceOf(ManagedLedgerException.CursorAlreadyClosedException.class);
         switching.operationFailed(new ManagedLedgerException("switch cancelled before physical create"));
         assertThat(cursor.isClosed()).isTrue();
+    }
+
+    @Test(dataProvider = "lateCreates")
+    public void testCursorCloseJoinsLateLedgerCreate(boolean timeout, boolean closeFailure) throws Exception {
+        BookKeeper bookKeeper = spy(bkc);
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bookKeeper);
+        ManagedLedgerConfig config = defaultConfig().setMetadataOperationsTimeoutSeconds(timeout ? 1 : 30);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) localFactory.open("late-cursor-create", config);
+        ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("cursor");
+        Position position = ledger.addEntry(new byte[] {1});
+        LedgerHandle realLateHandle = bkc.createLedger(BookKeeper.DigestType.CRC32C, new byte[0]);
+        LedgerHandle lateHandle = spy(realLateHandle);
+        CompletableFuture<Void> lateClose = new CompletableFuture<>();
+        CompletableFuture<Void> lateCloseStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            lateCloseStarted.complete(null);
+            return lateClose;
+        }).when(lateHandle).closeAsync();
+        CreateBuilder builder = mock(CreateBuilder.class, RETURNS_SELF);
+        CompletableFuture<WriteHandle> createResult = new CompletableFuture<>();
+        CompletableFuture<Void> createStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            createStarted.complete(null);
+            return createResult;
+        }).when(builder).execute();
+        doReturn(builder).when(bookKeeper).newCreateLedgerOp();
+        try {
+            markDelete(cursor, position);
+            createStarted.get(5, TimeUnit.SECONDS);
+            if (timeout) {
+                Awaitility.await().atMost(5, TimeUnit.SECONDS).until(() -> cursor.getState().equals("NoLedger"));
+            }
+            CloseFuture closing = new CloseFuture();
+            cursor.asyncClose(closing, null);
+            assertPending(closing);
+            createResult.complete(lateHandle);
+            lateCloseStarted.get(5, TimeUnit.SECONDS);
+            assertPending(closing);
+            if (closeFailure) {
+                lateClose.completeExceptionally(BKException.create(BKException.Code.WriteException));
+            } else {
+                lateClose.complete(null);
+            }
+            assertResult(closing, closeFailure);
+            verify(lateHandle, times(1)).closeAsync();
+        } finally {
+            createResult.complete(lateHandle);
+            lateClose.complete(null);
+            realLateHandle.closeAsync().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test(dataProvider = "closeFailures")
+    public void testCursorMetadataCloseJoinsWriterHandle(boolean closeFailure) throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("cursor-writer-close", defaultConfig());
+        ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("cursor");
+        cursor.markDelete(ledger.addEntry(new byte[] {1}));
+        LedgerHandle original = cursor.cursorLedger;
+        LedgerHandle handle = spy(original);
+        cursor.cursorLedger = handle;
+        CompletableFuture<Void> handleClosed = new CompletableFuture<>();
+        CompletableFuture<Void> handleCloseStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            handleCloseStarted.complete(null);
+            return handleClosed;
+        }).when(handle).closeAsync();
+        try {
+            CloseFuture closing = new CloseFuture();
+            cursor.asyncClose(closing, null);
+            assertPending(closing);
+            handleCloseStarted.get(5, TimeUnit.SECONDS);
+            if (closeFailure) {
+                handleClosed.completeExceptionally(BKException.create(BKException.Code.WriteException));
+            } else {
+                handleClosed.complete(null);
+            }
+            assertResult(closing, closeFailure);
+        } finally {
+            handleClosed.complete(null);
+            original.closeAsync().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @DataProvider
+    public Object[][] cursorSwitches() {
+        return new Object[][] {{false, false}, {false, true}, {true, false}, {true, true}};
+    }
+
+    @Test(dataProvider = "cursorSwitches")
+    public void testCursorCloseJoinsPublishedSwitch(boolean metadataFailure, boolean rangesInLedger) throws Exception {
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bkc) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                return new ManagedLedgerImpl(this, bk, spy(store), config, scheduledExecutor, name, ownershipChecker);
+            }
+        };
+        ManagedLedgerConfig config = defaultConfig();
+        config.setMaxUnackedRangesToPersistInMetadataStore(rangesInLedger ? 0 : 100);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) localFactory.open("cursor-switch-close", config);
+        ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("cursor");
+        Position first = ledger.addEntry(new byte[] {1});
+        ledger.addEntry(new byte[] {2});
+        Position third = ledger.addEntry(new byte[] {3});
+        cursor.markDelete(first);
+        cursor.delete(third);
+        LedgerHandle original = cursor.cursorLedger;
+        LedgerHandle oldHandle = spy(original);
+        cursor.cursorLedger = oldHandle;
+        CompletableFuture<Void> oldHandleClosed = new CompletableFuture<>();
+        CompletableFuture<Void> oldHandleCloseStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            oldHandleCloseStarted.complete(null);
+            return oldHandleClosed;
+        }).when(oldHandle).closeAsync();
+        CompletableFuture<Runnable> metadataWrite = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            ManagedCursorInfo info = invocation.getArgument(2);
+            if (info.getCursorsLedgerId() < 0 || info.getCursorsLedgerId() == oldHandle.getId()) {
+                return invocation.callRealMethod();
+            }
+            String ledgerName = invocation.getArgument(0);
+            String cursorName = invocation.getArgument(1);
+            Stat stat = invocation.getArgument(3);
+            MetaStoreCallback<Void> callback = invocation.getArgument(4);
+            metadataWrite.complete(() -> {
+                if (metadataFailure) {
+                    callback.operationFailed(new MetaStoreException("held cursor switch failed"));
+                } else {
+                    localFactory.getMetaStore().asyncUpdateCursorInfo(ledgerName, cursorName, info, stat, callback);
+                }
+            });
+            return null;
+        }).when(ledger.store).asyncUpdateCursorInfo(any(), any(), any(), any(), any());
+        Runnable release = null;
+        try {
+            cursor.startCreatingNewMetadataLedger();
+            release = metadataWrite.get(5, TimeUnit.SECONDS);
+            CloseFuture closing = new CloseFuture();
+            cursor.asyncClose(closing, null);
+            assertPending(closing);
+            release.run();
+            release = null;
+            oldHandleCloseStarted.get(5, TimeUnit.SECONDS);
+            assertPending(closing);
+            oldHandleClosed.complete(null);
+            closing.get(5, TimeUnit.SECONDS);
+            if (metadataFailure) {
+                assertThat(cursor.cursorLedger.getId()).isEqualTo(oldHandle.getId());
+            } else {
+                assertThat(cursor.cursorLedger.getId()).isNotEqualTo(oldHandle.getId());
+            }
+            ledger.close();
+            ManagedLedgerImpl reopened = (ManagedLedgerImpl) localFactory.open("cursor-switch-close", config);
+            ManagedCursor recovered = reopened.openCursor("cursor");
+            assertThat(recovered.getNumberOfEntriesInBacklog(false))
+                    .as("final persistence must use the handle actually referenced by cursor metadata").isEqualTo(1);
+        } finally {
+            if (release != null) {
+                release.run();
+            }
+            oldHandleClosed.complete(null);
+            original.closeAsync().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @DataProvider
+    public Object[][] oldHandleFailures() {
+        return new Object[][] {{false, false}, {true, false}, {true, true}};
+    }
+
+    @Test(dataProvider = "oldHandleFailures")
+    public void testCursorSwitchCanServeWhileOldHandleCloses(boolean closeFailure, boolean failBeforeClose)
+            throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("old-cursor-handle", defaultConfig());
+        ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("cursor");
+        Position first = ledger.addEntry(new byte[] {1});
+        Position second = ledger.addEntry(new byte[] {2});
+        cursor.markDelete(first);
+        LedgerHandle original = cursor.cursorLedger;
+        LedgerHandle oldHandle = spy(original);
+        cursor.cursorLedger = oldHandle;
+        CompletableFuture<Void> oldClosed = new CompletableFuture<>();
+        CompletableFuture<Void> closeStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            closeStarted.complete(null);
+            return oldClosed;
+        }).when(oldHandle).closeAsync();
+        try {
+            cursor.startCreatingNewMetadataLedger();
+            closeStarted.get(5, TimeUnit.SECONDS);
+            markDelete(cursor, second).get(5, TimeUnit.SECONDS);
+            assertThat(oldClosed).as("ordinary acknowledgments must not wait for old-handle cleanup").isNotDone();
+            if (failBeforeClose) {
+                oldClosed.completeExceptionally(BKException.create(BKException.Code.WriteException));
+            }
+            CloseFuture closing = new CloseFuture();
+            cursor.asyncClose(closing, null);
+            if (!failBeforeClose) {
+                assertPending(closing);
+            }
+            if (closeFailure) {
+                oldClosed.completeExceptionally(BKException.create(BKException.Code.WriteException));
+            } else {
+                oldClosed.complete(null);
+            }
+            assertResult(closing, closeFailure);
+        } finally {
+            oldClosed.complete(null);
+            original.closeAsync().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    private static void assertPending(CompletableFuture<?> future) {
+        assertThatThrownBy(() -> future.get(200, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
     }
 
     private static CompletableFuture<Void> markDelete(ManagedCursor cursor, Position position) {
