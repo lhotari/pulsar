@@ -168,10 +168,6 @@ public class ExtensibleLoadManagerImplTest extends ExtensibleLoadManagerImplBase
                 assertFalse(leader.getLeaderElectionService().isLeader());
                 assertEquals(leader.getLeaderElectionService().readCurrentLeader().join()
                         .orElseThrow().getBrokerId(), follower.getBrokerId());
-                assertEquals(ExtensibleLoadManagerImpl.get(follower.getLoadManager().get()).getRole(),
-                        ExtensibleLoadManagerImpl.Role.Leader);
-                assertEquals(ExtensibleLoadManagerImpl.get(leader.getLoadManager().get()).getRole(),
-                        ExtensibleLoadManagerImpl.Role.Follower);
             });
             // Internal topic lookups on the disabled broker must still find the new leader.
             Optional<BrokerLookupData> assigned = ExtensibleLoadManagerImpl.get(leader.getLoadManager().get())

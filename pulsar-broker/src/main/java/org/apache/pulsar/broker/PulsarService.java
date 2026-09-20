@@ -98,6 +98,7 @@ import org.apache.pulsar.broker.loadbalance.LoadReportUpdaterTask;
 import org.apache.pulsar.broker.loadbalance.LoadResourceQuotaUpdaterTask;
 import org.apache.pulsar.broker.loadbalance.LoadSheddingTask;
 import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl;
+import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
 import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.broker.protocol.ProtocolHandlers;
 import org.apache.pulsar.broker.qos.DefaultMonotonicClock;
@@ -505,7 +506,23 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             }
             Set<String> available = loadManager.get().getAvailableBrokersAsync().get(timeout, TimeUnit.NANOSECONDS);
             // Retain the last broker's leadership until final cleanup. There is nobody to hand it to.
-            if (available.stream().anyMatch(broker -> !broker.equals(getBrokerId()))) {
+            List<CompletableFuture<Boolean>> successors = new ArrayList<>();
+            for (String broker : available) {
+                if (!broker.equals(getBrokerId())) {
+                    successors.add(coordinationService.getLockManager(BrokerLookupData.class)
+                            .readLock(LoadManager.LOADBALANCE_BROKERS_ROOT + "/" + broker)
+                            .thenApply(data -> data.isPresent()
+                                    && ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(this)
+                                    == ExtensibleLoadManagerImpl.class.getName()
+                                            .equals(data.get().getLoadManagerClassName())));
+                }
+            }
+            timeout = Math.min(getRemainingShutdownDrainNanos(),
+                    TimeUnit.SECONDS.toNanos(config.getMetadataStoreOperationTimeoutSeconds()));
+            FutureUtil.waitForAll(successors).get(Math.max(0, timeout), TimeUnit.NANOSECONDS);
+            // Legacy and extensible load managers have separate elections, even during a migration
+            // when their brokers share the registration directory.
+            if (successors.stream().anyMatch(CompletableFuture::join)) {
                 timeout = Math.min(getRemainingShutdownDrainNanos(),
                         TimeUnit.SECONDS.toNanos(config.getMetadataStoreOperationTimeoutSeconds()));
                 long handoffStarted = System.nanoTime();

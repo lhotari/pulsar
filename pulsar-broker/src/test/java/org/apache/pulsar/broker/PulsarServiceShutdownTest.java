@@ -43,12 +43,16 @@ import java.util.function.Supplier;
 import org.apache.pulsar.broker.loadbalance.LeaderBroker;
 import org.apache.pulsar.broker.loadbalance.LeaderElectionService;
 import org.apache.pulsar.broker.loadbalance.LoadManager;
+import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl;
+import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
+import org.apache.pulsar.broker.loadbalance.impl.ModularLoadManagerImpl;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.PulsarMetadataEventSynchronizer;
 import org.apache.pulsar.metadata.BaseMetadataStoreTest;
 import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.MetadataStoreConfig;
 import org.apache.pulsar.metadata.api.coordination.CoordinationService;
+import org.apache.pulsar.metadata.api.coordination.LockManager;
 import org.apache.pulsar.metadata.api.coordination.ResourceLock;
 import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 import org.apache.pulsar.metadata.coordination.impl.CoordinationServiceImpl;
@@ -72,8 +76,14 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         return new Object[][]{{true}, {false}};
     }
 
-    @Test(dataProvider = "shutdownPaths")
-    public void handOffLeadershipBeforeDrainingOnlyWithAnotherBroker(boolean otherBroker) throws Exception {
+    @DataProvider
+    public Object[][] leadershipSuccessors() {
+        return new Object[][]{{false, false}, {true, false}, {true, true}};
+    }
+
+    @Test(dataProvider = "leadershipSuccessors")
+    public void handOffLeadershipBeforeDrainingOnlyWithAnotherBroker(boolean otherBroker,
+                                                                   boolean differentElection) throws Exception {
         LeaderElectionService election = mock(LeaderElectionService.class);
         when(election.setElectionEnabled(false)).thenReturn(CompletableFuture.completedFuture(null));
         when(election.readCurrentLeader()).thenReturn(CompletableFuture.completedFuture(
@@ -96,11 +106,21 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         service.getLoadManager().set(loadManager);
         when(loadManager.getAvailableBrokersAsync()).thenReturn(CompletableFuture.completedFuture(
                 otherBroker ? Set.of(service.getBrokerId(), "other-broker:8080") : Set.of(service.getBrokerId())));
+        CoordinationService coordination = mock(CoordinationService.class);
+        service.setCoordinationService(coordination);
+        @SuppressWarnings("unchecked")
+        LockManager<BrokerLookupData> registrations = mock(LockManager.class);
+        when(coordination.getLockManager(BrokerLookupData.class)).thenReturn(registrations);
+        BrokerLookupData lookupData = mock(BrokerLookupData.class);
+        when(lookupData.getLoadManagerClassName()).thenReturn(differentElection
+                ? ExtensibleLoadManagerImpl.class.getName() : ModularLoadManagerImpl.class.getName());
+        when(registrations.readLock(LoadManager.LOADBALANCE_BROKERS_ROOT + "/other-broker:8080"))
+                .thenReturn(CompletableFuture.completedFuture(Optional.of(lookupData)));
         BrokerService broker = mock(BrokerService.class);
         service.setBrokerService(broker);
         when(broker.closeAsync()).thenReturn(CompletableFuture.completedFuture(null));
         doAnswer(invocation -> {
-            verify(election, times(otherBroker ? 1 : 0)).setElectionEnabled(false);
+            verify(election, times(otherBroker && !differentElection ? 1 : 0)).setElectionEnabled(false);
             return null;
         }).when(broker).unloadNamespaceBundlesGracefully(anyInt(), anyBoolean());
         service.closeAsync().get(10, TimeUnit.SECONDS);
