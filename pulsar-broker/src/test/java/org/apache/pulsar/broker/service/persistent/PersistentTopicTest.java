@@ -19,6 +19,8 @@
 package org.apache.pulsar.broker.service.persistent;
 
 import static org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsClient.parseMetrics;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
@@ -55,6 +57,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -73,6 +76,8 @@ import org.apache.bookkeeper.mledger.impl.ManagedCursorContainer;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.pulsar.PrometheusMetricsTestUtil;
+import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl;
+import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.BrokerTestBase;
 import org.apache.pulsar.broker.service.Topic;
@@ -105,6 +110,8 @@ import org.apache.pulsar.common.policies.data.TopicStats;
 import org.apache.pulsar.utils.TestLogAppender;
 import org.awaitility.Awaitility;
 import org.mockito.ArgumentCaptor;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -130,6 +137,47 @@ public class PersistentTopicTest extends BrokerTestBase {
     @Override protected void doInitConf() throws Exception {
         super.doInitConf();
         this.conf.setManagedLedgerCursorBackloggedThreshold(10);
+    }
+
+    @Test
+    public void testCloseWaitsForDisconnectsAfterAsyncLookup() throws Exception {
+        String topicName = "persistent://prop/ns-abc/async-disconnect";
+        PersistentTopic topic = (PersistentTopic) pulsar.getBrokerService().getOrCreateTopic(topicName)
+                .get(10, TimeUnit.SECONDS);
+        // The client Producer is imported; this is the distinct broker-side producer.
+        var producer = Mockito.mock(org.apache.pulsar.broker.service.Producer.class);
+        var subscription = Mockito.mock(PersistentSubscription.class);
+        CompletableFuture<Void> producerClosed = new CompletableFuture<>();
+        CompletableFuture<Void> consumersClosed = new CompletableFuture<>();
+        CompletableFuture<Optional<BrokerLookupData>> lookup = new CompletableFuture<>();
+        Mockito.when(producer.disconnect(Optional.empty())).thenReturn(producerClosed);
+        Mockito.when(subscription.close(true, Optional.empty())).thenReturn(consumersClosed);
+        topic.getProducers().put("held-producer", producer);
+        topic.getSubscriptions().put("held-consumers", subscription);
+        try (MockedStatic<ExtensibleLoadManagerImpl> loadManager =
+                     Mockito.mockStatic(ExtensibleLoadManagerImpl.class)) {
+            loadManager.when(() -> ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(pulsar, topicName))
+                    .thenReturn(lookup);
+            CompletableFuture<Void> closing = topic.close(false);
+            assertThat(closing).isNotDone();
+            lookup.complete(Optional.empty());
+            Mockito.verify(producer).disconnect(Optional.empty());
+            Mockito.verify(subscription).close(true, Optional.empty());
+            assertThatThrownBy(() -> closing.get(200, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+            producerClosed.complete(null);
+            assertThatThrownBy(() -> closing.get(200, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+            consumersClosed.complete(null);
+            closing.get(10, TimeUnit.SECONDS);
+        } finally {
+            lookup.complete(Optional.empty());
+            producerClosed.complete(null);
+            consumersClosed.complete(null);
+            topic.getProducers().clear();
+            topic.getSubscriptions().clear();
+            topic.close(true).get(10, TimeUnit.SECONDS);
+        }
     }
 
     /**

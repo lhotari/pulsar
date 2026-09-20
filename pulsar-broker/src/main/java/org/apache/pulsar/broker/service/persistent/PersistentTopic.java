@@ -1865,17 +1865,19 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         shadowReplicators.forEach((__, replicator) -> futures.add(replicator.terminate()));
         if (closeType != CloseTypes.transferring) {
             futures.add(ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(
-                brokerService.getPulsar(), topic).thenAccept(lookupData -> {
-                    producers.values().forEach(producer -> futures.add(producer.disconnect(lookupData)));
+                brokerService.getPulsar(), topic).thenCompose(lookupData -> {
+                    List<CompletableFuture<Void>> disconnects = new ArrayList<>();
+                    producers.values().forEach(producer -> disconnects.add(producer.disconnect(lookupData)));
                     // Topics unloaded due to the ExtensibleLoadManager undergo closing twice: first with
                     // disconnectClients = false, second with disconnectClients = true. The check below identifies the
                     // cases when Topic.close is called outside the scope of the ExtensibleLoadManager. In these
                     // situations, we must pursue the regular Subscription.close, as Topic.close is invoked just once.
                     if (isTransferring()) {
-                        subscriptions.forEach((s, sub) -> futures.add(sub.disconnect(lookupData)));
+                        subscriptions.forEach((s, sub) -> disconnects.add(sub.disconnect(lookupData)));
                     } else {
-                        subscriptions.forEach((s, sub) -> futures.add(sub.close(true, lookupData)));
+                        subscriptions.forEach((s, sub) -> disconnects.add(sub.close(true, lookupData)));
                     }
+                    return FutureUtil.waitForAll(disconnects);
                 }
             ));
         } else {
