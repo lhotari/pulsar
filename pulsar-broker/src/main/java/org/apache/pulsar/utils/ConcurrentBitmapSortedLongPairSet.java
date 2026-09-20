@@ -24,8 +24,7 @@ import java.util.NavigableSet;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.TreeSet;
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.StampedLock;
 import org.apache.commons.lang3.mutable.MutableObject;
 import org.apache.pulsar.common.util.collections.LongPairSet;
 import org.roaringbitmap.PeekableIntIterator;
@@ -38,20 +37,20 @@ import org.roaringbitmap.RoaringBitmap;
 public class ConcurrentBitmapSortedLongPairSet {
 
     private final NavigableMap<Long, RoaringBitmap> map = new TreeMap<>();
-    private final ReadWriteLock lock = new ReentrantReadWriteLock();
+    private final StampedLock lock = new StampedLock();
 
     public void add(long item1, long item2) {
-        lock.writeLock().lock();
+        long stamp = lock.writeLock();
         try {
             RoaringBitmap bitSet = map.computeIfAbsent(item1, k -> new RoaringBitmap());
             bitSet.add(item2, item2 + 1);
         } finally {
-            lock.writeLock().unlock();
+            lock.unlockWrite(stamp);
         }
     }
 
     public void remove(long item1, long item2) {
-        lock.writeLock().lock();
+        long stamp = lock.writeLock();
         try {
             RoaringBitmap bitSet = map.get(item1);
             if (bitSet != null) {
@@ -61,17 +60,17 @@ public class ConcurrentBitmapSortedLongPairSet {
                 }
             }
         } finally {
-            lock.writeLock().unlock();
+            lock.unlockWrite(stamp);
         }
     }
 
     public boolean contains(long item1, long item2) {
-        lock.readLock().lock();
+        long stamp = lock.readLock();
         try {
             RoaringBitmap bitSet = map.get(item1);
             return bitSet != null && bitSet.contains(item2, item2 + 1);
         } finally {
-            lock.readLock().unlock();
+            lock.unlockRead(stamp);
         }
     }
 
@@ -84,7 +83,7 @@ public class ConcurrentBitmapSortedLongPairSet {
      */
     public boolean removeUpTo(long item1, long item2) {
         boolean bitsCleared = false;
-        lock.writeLock().lock();
+        long stamp = lock.writeLock();
         try {
             Map.Entry<Long, RoaringBitmap> firstEntry = map.firstEntry();
             while (firstEntry != null && firstEntry.getKey() <= item1) {
@@ -106,7 +105,7 @@ public class ConcurrentBitmapSortedLongPairSet {
                 firstEntry = map.firstEntry();
             }
         } finally {
-            lock.writeLock().unlock();
+            lock.unlockWrite(stamp);
         }
         return bitsCleared;
     }
@@ -140,7 +139,7 @@ public class ConcurrentBitmapSortedLongPairSet {
 
     public <T extends Comparable<T>> void processItems(LongPairSet.LongPairFunction<T> longPairConverter,
                                                        ItemProcessor<T> itemProcessor) {
-        lock.readLock().lock();
+        long stamp = lock.readLock();
         try {
             for (Map.Entry<Long, RoaringBitmap> entry : map.entrySet()) {
                 PeekableIntIterator intIterator = entry.getValue().getIntIterator();
@@ -156,34 +155,34 @@ public class ConcurrentBitmapSortedLongPairSet {
                 }
             }
         } finally {
-            lock.readLock().unlock();
+            lock.unlockRead(stamp);
         }
     }
 
     public boolean isEmpty() {
-        lock.readLock().lock();
+        long stamp = lock.readLock();
         try {
             return map.isEmpty() || map.values().stream().allMatch(RoaringBitmap::isEmpty);
         } finally {
-            lock.readLock().unlock();
+            lock.unlockRead(stamp);
         }
     }
 
     public void clear() {
-        lock.writeLock().lock();
+        long stamp = lock.writeLock();
         try {
             map.clear();
         } finally {
-            lock.writeLock().unlock();
+            lock.unlockWrite(stamp);
         }
     }
 
     public int size() {
-        lock.readLock().lock();
+        long stamp = lock.readLock();
         try {
             return map.isEmpty() ? 0 : map.values().stream().mapToInt(RoaringBitmap::getCardinality).sum();
         } finally {
-            lock.readLock().unlock();
+            lock.unlockRead(stamp);
         }
     }
 }
