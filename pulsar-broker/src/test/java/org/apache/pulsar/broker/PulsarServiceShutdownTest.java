@@ -29,6 +29,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import io.opentelemetry.api.OpenTelemetry;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
@@ -39,7 +40,9 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import org.apache.pulsar.broker.service.BrokerService;
+import org.apache.pulsar.broker.service.PulsarMetadataEventSynchronizer;
 import org.apache.pulsar.metadata.BaseMetadataStoreTest;
+import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.MetadataStoreConfig;
 import org.apache.pulsar.metadata.api.coordination.CoordinationService;
 import org.apache.pulsar.metadata.api.coordination.ResourceLock;
@@ -145,6 +148,63 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
             if (!owned) {
                 verify(configuration, never()).close();
             }
+        }
+    }
+
+    @Test
+    public void shutdownClosesMetadataClientCreatedByLateStartup() throws Exception {
+        ServiceConfiguration config = new ServiceConfiguration();
+        config.setClusterName("late-startup-test");
+        config.setMetadataStoreUrl("memory:" + UUID.randomUUID());
+        config.setConfigurationMetadataStoreUrl("memory:" + UUID.randomUUID());
+        config.setBrokerShutdownTimeoutMs(500);
+        CountDownLatch creating = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch configurationClosed = new CountDownLatch(1);
+        MetadataStore configuration = mock(MetadataStore.class);
+        doAnswer(invocation -> {
+            configurationClosed.countDown();
+            return null;
+        }).when(configuration).close();
+        PulsarService service = new PulsarService(config) {
+            @Override
+            public MetadataStore createConfigurationMetadataStore(PulsarMetadataEventSynchronizer synchronizer,
+                                                                    OpenTelemetry openTelemetry) {
+                creating.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+                return configuration;
+            }
+        };
+        CompletableFuture<Void> started = new CompletableFuture<>();
+        Thread startup = new Thread(() -> {
+            try {
+                service.start();
+                started.complete(null);
+            } catch (Throwable error) {
+                started.completeExceptionally(error);
+            }
+        }, "late-broker-startup-test");
+        startup.start();
+        try {
+            assertThat(creating.await(10, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> service.closeAsync().get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(TimeoutException.class);
+            release.countDown();
+            assertThatThrownBy(() -> started.get(10, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(PulsarServerException.class);
+            assertThat(configurationClosed.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(service.getState()).isEqualTo(PulsarService.State.Closed);
+            assertThat(service.isRunning()).isFalse();
+            verify(configuration).close();
+        } finally {
+            release.countDown();
+            startup.join(10000);
+            awaitWorkerCleanup(service);
         }
     }
 

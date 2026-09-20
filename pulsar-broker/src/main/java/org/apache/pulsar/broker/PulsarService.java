@@ -823,6 +823,11 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             return FutureUtil.failedFuture(pse);
         } finally {
             mutex.unlock();
+            if (metadataSessionsClosing) {
+                // Startup may have returned a new client after the watchdog's snapshot. The identity-based
+                // registry skips clients already attempted, including ones whose close is still blocked.
+                closeMetadataSessionsAsync();
+            }
         }
     }
 
@@ -833,9 +838,6 @@ public class PulsarService implements AutoCloseable, ShutdownService {
     private CompletableFuture<Void> closeMetadataSessionsAsync() {
         // Publish the irreversible fence before releasing ownership. Neither this path nor its watchdog takes mutex.
         metadataSessionsClosing = true;
-        if (state != State.Closed) {
-            state = State.Closing;
-        }
         List<CompletableFuture<Void>> closes = new ArrayList<>();
         closes.add(closeMetadataStore("local", localMetadataStore, this::closeLocalMetadataStore));
         if (shouldShutdownConfigurationMetadataStore) {
@@ -988,6 +990,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                     : null;
             localMetadataStore = createLocalMetadataStore(localMetadataSynchronizer,
                     openTelemetry.getOpenTelemetryService().getOpenTelemetry());
+            checkNotShuttingDown();
             localMetadataStore.registerSessionListener(this::handleMetadataSessionEvent);
 
             coordinationService = new CoordinationServiceImpl(localMetadataStore);
@@ -1003,6 +1006,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                 configurationMetadataStore = localMetadataStore;
                 shouldShutdownConfigurationMetadataStore = false;
             }
+            checkNotShuttingDown();
             pulsarResources = newPulsarResources();
 
             orderedExecutor = newOrderedExecutor();
@@ -1205,7 +1209,10 @@ public class PulsarService implements AutoCloseable, ShutdownService {
                     .attr("configOverrides", PulsarConfigurationLoader.runtimeConfigurationOverrides(config))
                     .log("Messaging service is ready");
 
-            state = State.Started;
+            synchronized (shutdownLock) {
+                checkNotShuttingDown();
+                state = State.Started;
+            }
         } catch (Exception e) {
             log.error().exception(e).log("Failed to start Pulsar service");
             PulsarServerException startException = PulsarServerException.from(e);
@@ -1213,6 +1220,12 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             throw startException;
         } finally {
             mutex.unlock();
+        }
+    }
+
+    private void checkNotShuttingDown() throws PulsarServerException {
+        if (shutdown != null) {
+            throw new PulsarServerException("Broker shutdown started before startup completed");
         }
     }
 
@@ -1673,7 +1686,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
      * check the current pulsar service is running, including Started and Init state.
      */
     public boolean isRunning() {
-        return this.state == State.Started || this.state == State.Init;
+        return !metadataSessionsClosing && (this.state == State.Started || this.state == State.Init);
     }
 
     /**
