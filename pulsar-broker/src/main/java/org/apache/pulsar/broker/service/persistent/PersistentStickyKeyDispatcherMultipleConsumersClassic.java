@@ -661,7 +661,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersClassic
     protected int getStickyKeyHash(Entry entry) {
         if (entry instanceof EntryAndMetadata entryAndMetadata) {
             // use the cached sticky key hash if available, otherwise calculate the sticky key hash and cache it
-            return entryAndMetadata.getOrUpdateCachedStickyKeyHash(selector::makeStickyKeyHash);
+            return entryAndMetadata.getOrUpdateCachedStickyKeyHash(selector);
         }
         return selector.makeStickyKeyHash(peekStickyKey(entry));
     }

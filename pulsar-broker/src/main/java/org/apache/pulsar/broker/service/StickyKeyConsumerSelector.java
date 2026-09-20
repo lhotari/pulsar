@@ -84,6 +84,13 @@ public interface StickyKeyConsumerSelector {
     }
 
     /**
+     * Make a hash from a UTF-8 string key without creating an intermediate byte array.
+     */
+    default int makeStickyKeyHash(String stickyKey) {
+        return StickyKeyConsumerSelectorUtils.makeStickyKeyHash(stickyKey, getKeyHashRange());
+    }
+
+    /**
      * Select a consumer by hash.
      *
      * @param hash the hash corresponding to the sticky key
