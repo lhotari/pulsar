@@ -232,6 +232,12 @@ public class BrokersImpl extends BaseResource implements Brokers {
     }
 
     @Override
+    public CompletableFuture<Void> checkReadyAsync() {
+        return asyncGetRequest(adminBrokers.path("ready"), new FutureCallback<String>() { })
+                .thenApply(__ -> null);
+    }
+
+    @Override
     public CompletableFuture<Void> setLeaderElectionEnabledAsync(boolean enabled) {
         return asyncPostRequest(adminBrokers.path("leaderElectionEnabled"),
                 Entity.entity(enabled, MediaType.APPLICATION_JSON));

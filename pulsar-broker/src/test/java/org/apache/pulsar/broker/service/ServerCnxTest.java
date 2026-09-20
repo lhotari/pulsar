@@ -42,6 +42,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -298,13 +299,154 @@ public class ServerCnxTest {
     }
 
     @Test
-    public void testConnectDuringDrainBeforeMetadataFence() throws Exception {
+    public void testConnectRejectedDuringDrainBeforeMetadataFence() throws Exception {
         doReturn(false).when(pulsar).isRunning();
         doReturn(PulsarService.State.Closing).when(pulsar).getState();
         doReturn(false).when(pulsar).isMetadataSessionsClosing();
         resetChannel();
         channel.writeInbound(Commands.newConnect("none", "", null));
-        assertTrue(getResponse() instanceof CommandConnected);
+        assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        assertFalse(channel.isActive());
+        channel.finish();
+    }
+
+    @Test(timeOut = 30000)
+    public void testDrainRejectsEntitiesWithoutClosingEstablishedConnection() throws Exception {
+        resetChannel();
+        setChannelConnected();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "established", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        Producer established = serverCnx.getProducers().get(1).join();
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 2,
+                CommandSubscribe.SubType.Shared, 0, "established-consumer", 0));
+        assertTrue(getResponse() instanceof CommandSuccess);
+        Consumer consumer = serverCnx.getConsumers().get(1).join();
+
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        for (int entityId : new int[]{1, 2}) {
+            channel.writeInbound(Commands.newProducer(successTopicName, entityId, 3,
+                    "new-producer", Collections.emptyMap(), false));
+            assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+            channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, entityId, 4,
+                    CommandSubscribe.SubType.Shared, 0, "new-consumer", 0));
+            assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        }
+        assertTrue(channel.isActive());
+        assertEquals(serverCnx.getProducers().size(), 1);
+        assertEquals(serverCnx.getConsumers().size(), 1);
+        assertSame(serverCnx.getProducers().get(1).join(), established);
+        assertSame(serverCnx.getConsumers().get(1).join(), consumer);
+        channel.finish();
+    }
+
+    @Test(timeOut = 30000)
+    public void testDrainDequeuesExclusiveProducer() throws Exception {
+        resetChannel();
+        setChannelConnected();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "established", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        AbstractTopic topic = (AbstractTopic) brokerService.getTopicReference(successTopicName).orElseThrow();
+        channel.writeInbound(Commands.newProducer(successTopicName, 2, 2, "waiting", false,
+                Collections.emptyMap(), null, 0, true, ProducerAccessMode.WaitForExclusive,
+                Optional.empty(), false));
+        CommandProducerSuccess queued = (CommandProducerSuccess) getResponse();
+        assertFalse(queued.isProducerReady());
+        assertEquals(topic.getWaitingExclusiveProducerCount(), 1);
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        channel.runPendingTasks();
+        assertEquals(topic.getWaitingExclusiveProducerCount(), 0);
+        serverCnx.getProducers().get(1).join().closeNow(true);
+        channel.runPendingTasks();
+        assertTrue(topic.getProducers().isEmpty());
+        assertTrue(serverCnx.getProducers().isEmpty());
+        assertTrue(channel.isActive());
+        channel.finish();
+    }
+
+    @Test(timeOut = 30000)
+    public void testDrainRejectsConnectWaitingForAuthentication() throws Exception {
+        AuthenticationService authenticationService = mock(AuthenticationService.class);
+        AuthenticationProvider provider = mock(AuthenticationProvider.class);
+        AuthenticationState authentication = mock(AuthenticationState.class);
+        CompletableFuture<AuthData> authenticated = new CompletableFuture<>();
+        when(brokerService.getAuthenticationService()).thenReturn(authenticationService);
+        when(authenticationService.getAuthenticationProvider("delayed")).thenReturn(provider);
+        when(provider.newAuthState(any(), any(), any())).thenReturn(authentication);
+        when(authentication.authenticateAsync(any())).thenReturn(authenticated);
+        when(authentication.getAuthRole()).thenReturn("delayed-client");
+        svcConfig.setAuthenticationEnabled(true);
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("delayed", "credentials", null));
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        authenticated.complete(null);
+        channel.runPendingTasks();
+        assertEquals(serverCnx.getState(), State.Failed);
+        assertFalse(channel.isActive());
+        channel.finish();
+    }
+
+    @Test(timeOut = 30000)
+    public void testDrainClosesLateConsumerWithoutDeletingSubscription() throws Exception {
+        resetChannel();
+        setChannelConnected();
+        Topic loaded = brokerService.getOrCreateTopic(successTopicName).get(5, TimeUnit.SECONDS);
+        Topic topic = Mockito.mockingDetails(loaded).isMock() ? loaded : Mockito.spy(loaded);
+        doReturn(CompletableFuture.completedFuture(Optional.of(topic)))
+                .when(brokerService).getTopic(eq(successTopicName), anyBoolean());
+        CompletableFuture<Consumer> created = new CompletableFuture<>();
+        CompletableFuture<Consumer> delivered = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            CompletableFuture<Consumer> realSubscribe = (CompletableFuture<Consumer>) invocation.callRealMethod();
+            realSubscribe.whenComplete((consumer, error) -> {
+                if (error == null) {
+                    created.complete(consumer);
+                } else {
+                    created.completeExceptionally(error);
+                }
+            });
+            return delivered;
+        }).when(topic).subscribe(any());
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 1,
+                CommandSubscribe.SubType.Shared, 0, "pending-consumer", 0));
+        Awaitility.await().until(() -> {
+            channel.runPendingTasks();
+            return created.isDone();
+        });
+        Consumer consumer = created.get(5, TimeUnit.SECONDS);
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        delivered.complete(consumer);
+        Awaitility.await().untilAsserted(() -> {
+            channel.runPendingTasks();
+            assertTrue(serverCnx.getConsumers().isEmpty());
+            assertTrue(topic.getSubscription(successSubName).getConsumers().isEmpty());
+        });
+        assertTrue(topic.getSubscriptions().containsKey(successSubName));
+        assertTrue(channel.isActive());
+        channel.finish();
+    }
+
+    @Test(timeOut = 30000)
+    public void testDrainCancelsProducerWaitingForTopic() throws Exception {
+        resetChannel();
+        setChannelConnected();
+        Topic topic = brokerService.getOrCreateTopic(successTopicName).get(5, TimeUnit.SECONDS);
+        CompletableFuture<Topic> topicLoad = new CompletableFuture<>();
+        doReturn(topicLoad).when(brokerService).getOrCreateTopic(successTopicName);
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "pending", Collections.emptyMap(), false));
+        channel.runPendingTasks();
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        topicLoad.complete(topic);
+        channel.runPendingTasks();
+        assertTrue(serverCnx.getProducers().isEmpty());
+        assertTrue(topic.getProducers().isEmpty());
+        assertTrue(channel.isActive());
         channel.finish();
     }
 
@@ -3985,7 +4127,7 @@ public class ServerCnxTest {
         ByteBuf clientCommand = Commands.newConnect("none", "", null);
         channel.writeInbound(clientCommand);
 
-        assertEquals(serverCnx.getState(), State.Start);
+        assertEquals(serverCnx.getState(), State.Failed);
         Object response = getResponse();
         assertTrue(response instanceof CommandError);
         CommandError error = (CommandError) response;

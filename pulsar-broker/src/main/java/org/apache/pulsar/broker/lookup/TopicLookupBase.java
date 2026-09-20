@@ -36,6 +36,7 @@ import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
 import org.apache.pulsar.broker.namespace.LookupOptions;
+import org.apache.pulsar.broker.service.BrokerServiceException.BrokerDrainingException;
 import org.apache.pulsar.broker.web.PulsarWebResource;
 import org.apache.pulsar.broker.web.RestException;
 import org.apache.pulsar.common.api.proto.CommandLookupTopicResponse.LookupType;
@@ -342,7 +343,11 @@ public class TopicLookupBase extends PulsarWebResource {
         if (unwrapEx instanceof PulsarServerException) {
             unwrapEx = FutureUtil.unwrapCompletionException(unwrapEx.getCause());
         }
-        if (unwrapEx instanceof IllegalStateException) {
+        if (unwrapEx instanceof BrokerDrainingException) {
+            // ServiceNotReady closes Java clients' entire pooled connection on lookup. This shutdown-only
+            // failure is retriable without interrupting established entities multiplexed on that channel.
+            lookupFuture.complete(newLookupErrorResponse(ServerError.UnknownError, errorMsg, requestId));
+        } else if (unwrapEx instanceof IllegalStateException) {
             // Current broker still hold the bundle's lock, but the bundle is being unloading.
             LOG.info()
                     .attr("topic", topicName)

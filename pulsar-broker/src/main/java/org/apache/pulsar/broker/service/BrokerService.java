@@ -67,6 +67,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -123,6 +124,7 @@ import org.apache.pulsar.broker.resources.LocalPoliciesResources;
 import org.apache.pulsar.broker.resources.NamespaceResources;
 import org.apache.pulsar.broker.resources.NamespaceResources.PartitionedTopicResources;
 import org.apache.pulsar.broker.resources.ScalableTopicResources;
+import org.apache.pulsar.broker.service.BrokerServiceException.BrokerDrainingException;
 import org.apache.pulsar.broker.service.BrokerServiceException.NamingException;
 import org.apache.pulsar.broker.service.BrokerServiceException.NotAllowedException;
 import org.apache.pulsar.broker.service.BrokerServiceException.PersistenceException;
@@ -346,7 +348,7 @@ public class BrokerService implements Closeable {
 
     private PulsarChannelInitializer.Factory pulsarChannelInitFactory = PulsarChannelInitializer.DEFAULT_FACTORY;
 
-    private final List<Channel> listenChannels = new ArrayList<>(2);
+    private final List<Channel> listenChannels = new CopyOnWriteArrayList<>();
     // PIP-478: the channel initializers that own a PulsarTlsFactory (new-SPI TLS path); closed on shutdown.
     private final List<PulsarChannelInitializer> pulsarChannelInitializers = new ArrayList<>(2);
     private Channel listenChannel;
@@ -675,6 +677,9 @@ public class BrokerService implements Closeable {
             try {
                 Channel ch = b.bind(addr).sync().channel();
                 listenChannels.add(ch);
+                if (pulsar.getBrokerAdmission().isClosed()) {
+                    ch.close();
+                }
 
                 // identify the primary channel. Note that the legacy bindings appear first and have no listener.
                 if (StringUtils.isBlank(a.getListenerName())
@@ -967,6 +972,11 @@ public class BrokerService implements Closeable {
         });
     }
 
+    /** Stop accepting new TCP connections without stopping established channels or their event loops. */
+    public void closeListenChannels() {
+        listenChannels.forEach(Channel::close);
+    }
+
     public CompletableFuture<Void> closeAsync() {
         try {
             log.info("Shutting down Pulsar Broker service");
@@ -1066,10 +1076,10 @@ public class BrokerService implements Closeable {
                                 asyncCloseFutures.add(GracefulExecutorServicesShutdown
                                         .initiate()
                                         .timeout(
-                                                Duration.ofMillis(
-                                                        (long) (GRACEFUL_SHUTDOWN_TIMEOUT_RATIO_OF_TOTAL_TIMEOUT
-                                                                * Math.max(0, pulsar.getConfiguration()
-                                                                .getBrokerShutdownTimeoutMs()))))
+                                                Duration.ofNanos(
+                                                        pulsar.getRemainingShutdownDrainNanos() == Long.MAX_VALUE
+                                                        ? 0 : (long) (GRACEFUL_SHUTDOWN_TIMEOUT_RATIO_OF_TOTAL_TIMEOUT
+                                                                * pulsar.getRemainingShutdownDrainNanos())))
                                         .shutdown(
                                                 statsUpdater,
                                                 inactivityMonitor,
@@ -1118,7 +1128,9 @@ public class BrokerService implements Closeable {
     }
 
     CompletableFuture<Void> shutdownEventLoopGracefully(String name, EventLoopGroup eventLoopGroup) {
-        long brokerShutdownTimeoutMs = Math.max(0, pulsar.getConfiguration().getBrokerShutdownTimeoutMs());
+        long brokerShutdownTimeoutMs = pulsar.getRemainingShutdownDrainNanos() == Long.MAX_VALUE
+                ? Math.max(0, pulsar.getConfiguration().getBrokerShutdownTimeoutMs())
+                : TimeUnit.NANOSECONDS.toMillis(pulsar.getRemainingShutdownDrainNanos());
         long timeout = (long) (GRACEFUL_SHUTDOWN_TIMEOUT_RATIO_OF_TOTAL_TIMEOUT * brokerShutdownTimeoutMs);
         long periodMs = (timeout > 0) ? 1 : 0;
         long startNs = System.nanoTime();
@@ -1177,6 +1189,13 @@ public class BrokerService implements Closeable {
                 } catch (PulsarServerException.NotFoundException ne) {
                     log.warn("Broker load-manager znode doesn't exist");
                     // still continue and release bundle ownership as broker's registration node doesn't exist.
+                } catch (Exception e) {
+                    if (!pulsar.getBrokerAdmission().isClosed()) {
+                        throw e;
+                    }
+                    log.warn().exception(e).log("Load manager drain failed; closing remaining topics locally");
+                    closeTopicsLocally(closeWithoutWaitingClientDisconnect, maxConcurrentUnload);
+                    return;
                 }
             }
             double disableBrokerTimeSeconds =
@@ -1185,6 +1204,11 @@ public class BrokerService implements Closeable {
             log.info()
                     .attr("disableBrokerTimeSeconds", disableBrokerTimeSeconds)
                     .log("Disable broker in load manager completed in seconds");
+
+            if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)) {
+                closeTopicsLocally(closeWithoutWaitingClientDisconnect, maxConcurrentUnload);
+                return;
+            }
 
             // unload all namespace-bundles gracefully
             long closeTopicsStartTime = System.nanoTime();
@@ -1211,6 +1235,31 @@ public class BrokerService implements Closeable {
                     .log("Failed to disable broker from loadbalancer list");
         } finally {
             unloaded = true;
+        }
+    }
+
+    private void closeTopicsLocally(boolean force, int startsPerSecond) throws Exception {
+        Map<NamespaceBundle, List<CompletableFuture<Optional<Topic>>>> bundles = new HashMap<>();
+        // Include topics still loading. The normal topic future's final ownership fence prevents late serving.
+        for (var entry : Map.copyOf(topics).entrySet()) {
+            NamespaceBundle bundle = pulsar.getNamespaceService().getBundle(TopicName.get(entry.getKey()));
+            bundles.computeIfAbsent(bundle, __ -> new ArrayList<>()).add(entry.getValue());
+        }
+        for (boolean system : new boolean[]{false, true}) {
+            var phase = bundles.entrySet().stream()
+                    .filter(entry -> entry.getKey().getNamespaceObject()
+                            .equals(NamespaceName.SYSTEM_NAMESPACE) == system)
+                    .toList();
+            GracefulBundleUnload.drain(phase, (entry, timeout) -> {
+                List<CompletableFuture<Void>> closes = new ArrayList<>();
+                for (var topicFuture : entry.getValue()) {
+                    closes.add(topicFuture.thenCompose(topic -> topic.isPresent()
+                            ? topic.get().close(force) : CompletableFuture.completedFuture(null)));
+                }
+                return FutureUtil.waitForAll(closes);
+            }, Math.max(1, pulsar.getConfiguration().getBrokerShutdownMaxConcurrentUnload()), startsPerSecond,
+                    pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs(),
+                    pulsar::getRemainingShutdownDrainNanos);
         }
     }
 
@@ -1323,6 +1372,9 @@ public class BrokerService implements Closeable {
             if (tp != null) {
                 return tp;
             }
+            if (pulsar.getBrokerAdmission().isClosed()) {
+                return FutureUtil.failedFuture(new BrokerDrainingException());
+            }
             final boolean isPersistentTopic = topicName.isPersistent();
             if (isPersistentTopic) {
                 if (!pulsar.getConfiguration().isEnablePersistentTopics()) {
@@ -1368,6 +1420,9 @@ public class BrokerService implements Closeable {
                     systemTopicLoadFuture.thenRun(() -> {
                         final var inserted = new MutableBoolean(false);
                         final var cachedFuture = topics.computeIfAbsent(topicName.toString(), ___ -> {
+                            if (pulsar.getBrokerAdmission().isClosed()) {
+                                return FutureUtil.failedFuture(new BrokerDrainingException());
+                            }
                             inserted.setTrue();
                             return loadOrCreatePersistentTopic(context);
                         });
@@ -1676,6 +1731,14 @@ public class BrokerService implements Closeable {
                         log.info().attr("nonPersistentTopic", nonPersistentTopic).log("Created topic");
                         long topicLoadLatencyMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime()) - topicCreateTimeMs;
                         pulsarStats.recordTopicLoadTimeValue(topic, topicLoadLatencyMs);
+                        if (pulsar.getBrokerAdmission().isClosed()) {
+                            nonPersistentTopic.close(true).whenComplete((__, error) -> {
+                                topics.remove(topic, topicFuture);
+                                topicFuture.completeExceptionally(
+                                        error == null ? new BrokerDrainingException() : error);
+                            });
+                            return;
+                        }
                         addTopicToStatsMaps(TopicName.get(topic), nonPersistentTopic);
                         topicFuture.complete(Optional.of(nonPersistentTopic));
                     }).exceptionally(ex -> {
@@ -2280,6 +2343,14 @@ public class BrokerService implements Closeable {
                                                     .attr("latency", latency.description())
                                                     .log("Loaded topic");
                                             pulsarStats.recordTopicLoadTimeValue(topic, latency.elapsedInMillis());
+                                            if (pulsar.getBrokerAdmission().isClosed()) {
+                                                persistentTopic.close(true).whenComplete((__, error) -> {
+                                                    topics.remove(topic, topicFuture);
+                                                    topicFuture.completeExceptionally(error == null
+                                                            ? new BrokerDrainingException() : error);
+                                                });
+                                                return;
+                                            }
                                             if (!topicFuture.complete(Optional.of(persistentTopic))) {
                                                 // Check create persistent topic timeout.
                                                 if (topicFuture.isCompletedExceptionally()) {
@@ -2890,8 +2961,12 @@ public class BrokerService implements Closeable {
         ScheduledFuture<?> taskTimeout = executor().schedule(() -> {
             if (!future.isDone()) {
                 log.warn().attr("serviceUnit", serviceUnit).log("Unloading of has timed out");
-                // Complete the future with no error
-                future.complete(0);
+                if (pulsar.getBrokerAdmission().isClosed()) {
+                    future.completeExceptionally(new TimeoutException("Shutdown bundle unload timed out"));
+                } else {
+                    // Preserve the ordinary administrative unload completion contract.
+                    future.complete(0);
+                }
             }
         }, timeout, unit);
 

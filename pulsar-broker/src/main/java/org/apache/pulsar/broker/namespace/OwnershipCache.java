@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import lombok.CustomLog;
 import org.apache.pulsar.broker.PulsarService;
+import org.apache.pulsar.broker.service.BrokerServiceException.BrokerDrainingException;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.NamespaceBundles;
 import org.apache.pulsar.common.stats.CacheMetricsCollector;
@@ -104,18 +105,24 @@ public class OwnershipCache {
 
     private final PulsarService pulsar;
 
+    private RuntimeException ownershipUnavailable() {
+        return pulsar.getBrokerAdmission().isClosed()
+                ? FutureUtil.wrapToCompletionException(new BrokerDrainingException())
+                : new IllegalStateException("Namespace service is not ready for acquiring ownership");
+    }
+
     private class OwnedServiceUnitCacheLoader implements AsyncCacheLoader<NamespaceBundle, OwnedBundle> {
 
         @Override
         public CompletableFuture<OwnedBundle> asyncLoad(NamespaceBundle namespaceBundle, Executor executor) {
             if (!pulsar.isRunning()) {
-                return CompletableFuture.failedFuture(new IllegalStateException("Broker is shutting down"));
+                return CompletableFuture.failedFuture(ownershipUnavailable());
             }
             return lockManager.acquireLock(ServiceUnitUtils.path(namespaceBundle), selfOwnerInfo)
                     .thenApply(rl -> {
                         if (!pulsar.isRunning()) {
                             rl.release();
-                            throw new IllegalStateException("Broker shut down during ownership acquisition");
+                            throw ownershipUnavailable();
                         }
                         locallyAcquiredLocks.put(namespaceBundle, rl);
                         OwnedBundle ownedBundle = new OwnedBundle(namespaceBundle, rl);
@@ -282,7 +289,7 @@ public class OwnershipCache {
     public CompletableFuture<NamespaceEphemeralData> tryAcquiringOwnership(NamespaceBundle bundle) throws Exception {
         if (!pulsar.isRunning() || !refreshSelfOwnerInfo()) {
             return FutureUtil.failedFuture(
-                    new RuntimeException("Namespace service is not ready for acquiring ownership"));
+                    ownershipUnavailable());
         }
 
         log.info().attr("bundle", bundle).log("Trying to acquire ownership");

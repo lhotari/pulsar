@@ -68,6 +68,7 @@ import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl
 import org.apache.pulsar.broker.loadbalance.extensions.manager.RedirectManagerForLoadManagerMigration;
 import org.apache.pulsar.broker.lookup.LookupResult;
 import org.apache.pulsar.broker.resources.NamespaceResources;
+import org.apache.pulsar.broker.service.BrokerServiceException.BrokerDrainingException;
 import org.apache.pulsar.broker.service.BrokerServiceException.ServiceUnitNotReadyException;
 import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.broker.service.nonpersistent.NonPersistentTopic;
@@ -238,7 +239,7 @@ public class NamespaceService implements AutoCloseable {
                             return findBrokerServiceUrl(bundle, options);
                         }
                     });
-                });
+                }).exceptionallyCompose(error -> recoverShutdownLookup(error, options));
 
         future.whenComplete((lookupResult, throwable) -> {
             var latencyNs = System.nanoTime() - startTime;
@@ -362,7 +363,7 @@ public class NamespaceService implements AutoCloseable {
                     ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
                     ? loadManager.get().findBrokerServiceUrl(Optional.ofNullable(topic), bundle, options) :
                     findBrokerServiceUrl(bundle, options);
-            return future;
+            return future.exceptionallyCompose(error -> recoverShutdownLookup(error, options));
         });
     }
 
@@ -580,9 +581,33 @@ public class NamespaceService implements AutoCloseable {
         future.complete(Optional.of(result));
     }
 
+    private CompletableFuture<Optional<LookupResult>> recoverShutdownLookup(Throwable error, LookupOptions options) {
+        if (FutureUtil.unwrapCompletionException(error) instanceof BrokerDrainingException
+                && !pulsar.isMetadataSessionsClosing()) {
+            return redirectShutdownLookup(options);
+        }
+        return FutureUtil.failedFuture(error);
+    }
+
+    private CompletableFuture<Optional<LookupResult>> redirectShutdownLookup(LookupOptions options) {
+        return pulsar.getShutdownLookupBroker()
+                .map(peer -> CompletableFuture.completedFuture(Optional.of(LookupResult.create(peer, options, false))))
+                .orElseGet(() -> FutureUtil.failedFuture(new BrokerDrainingException()));
+    }
+
     private void searchForCandidateBroker(NamespaceBundle bundle,
                                           CompletableFuture<Optional<LookupResult>> lookupFuture,
                                           LookupOptions options) {
+        if (pulsar.getBrokerAdmission().isClosed()) {
+            redirectShutdownLookup(options).whenComplete((result, error) -> {
+                if (error != null) {
+                    lookupFuture.completeExceptionally(error);
+                } else {
+                    lookupFuture.complete(result);
+                }
+            });
+            return;
+        }
         LeaderElectionService les = pulsar.getLeaderElectionService();
         if (les == null) {
             log.warn()
@@ -687,6 +712,10 @@ public class NamespaceService implements AutoCloseable {
     private void acquireOwnershipOrRedirect(NamespaceBundle bundle, LookupOptions options,
                                             CandidateBrokerSelection selection,
                                             CompletableFuture<Optional<LookupResult>> lookupFuture) {
+        if (pulsar.getBrokerAdmission().isClosed()) {
+            lookupFuture.completeExceptionally(new BrokerDrainingException());
+            return;
+        }
         final String candidateBroker = selection.candidateBroker();
         final boolean authoritativeRedirect = selection.authoritativeRedirect();
         try {
@@ -702,7 +731,7 @@ public class NamespaceService implements AutoCloseable {
                     } else {
                         // Found owner for the namespace bundle
 
-                        if (options.isLoadTopicsInBundle()) {
+                        if (options.isLoadTopicsInBundle() && !pulsar.getBrokerAdmission().isClosed()) {
                             // Schedule the task to preload topics
                             pulsar.loadNamespaceTopics(bundle);
                         }
@@ -1344,6 +1373,9 @@ public class NamespaceService implements AutoCloseable {
     }
 
     public void onNamespaceBundleOwned(NamespaceBundle bundle) {
+        if (pulsar.getBrokerAdmission().isClosed()) {
+            return;
+        }
         for (NamespaceBundleOwnershipListener bundleOwnedListener : bundleOwnershipListeners) {
             notifyNamespaceBundleOwnershipListener(bundle, bundleOwnedListener);
         }

@@ -88,6 +88,8 @@ public class Producer {
             .newUpdater(Producer.class, "pendingPublishAcks");
 
     private boolean isClosed = false;
+    private volatile boolean admissionCancelled;
+
     private final CompletableFuture<Void> closeFuture;
 
     private final PublisherStatsImpl stats;
@@ -752,6 +754,14 @@ public class Producer {
             }
         }
         return closeFuture;
+    }
+
+    boolean isAdmissionCancelled() {
+        return admissionCancelled;
+    }
+
+    void cancelAdmission() {
+        admissionCancelled = true;
     }
 
     public void closeNow(boolean removeFromTopic) {

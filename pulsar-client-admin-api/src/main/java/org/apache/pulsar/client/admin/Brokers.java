@@ -352,6 +352,14 @@ public interface Brokers {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Shutdown timeout is not supported"));
     }
 
+    /**
+     * Check the target broker's uncached readiness endpoint. Completes exceptionally when it is not ready.
+     * Unlike a health check, this does not create messaging entities.
+     */
+    default CompletableFuture<Void> checkReadyAsync() {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Readiness check is not supported"));
+    }
+
     /** Get whether this broker can be elected leader. */
     default CompletableFuture<Boolean> isLeaderElectionEnabledAsync() {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Election control is not supported"));

@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -48,6 +49,9 @@ import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
 import org.apache.pulsar.broker.loadbalance.impl.ModularLoadManagerImpl;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.PulsarMetadataEventSynchronizer;
+import org.apache.pulsar.client.admin.Brokers;
+import org.apache.pulsar.client.admin.PulsarAdmin;
+import org.apache.pulsar.client.admin.PulsarAdminBuilder;
 import org.apache.pulsar.metadata.BaseMetadataStoreTest;
 import org.apache.pulsar.metadata.api.MetadataStore;
 import org.apache.pulsar.metadata.api.MetadataStoreConfig;
@@ -78,7 +82,14 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
 
     @DataProvider
     public Object[][] leadershipSuccessors() {
-        return new Object[][]{{false, false}, {true, false}, {true, true}};
+        return new Object[][]{
+                {true, false, false, true, true},
+                {true, true, false, true, true},
+                {true, true, true, true, true},
+                {true, true, false, false, true},
+                {true, true, false, true, false},
+                {false, false, false, true, true}
+        };
     }
 
     public static class CustomExtensibleLoadManager extends ExtensibleLoadManagerImpl {
@@ -97,9 +108,19 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
     }
 
     @Test(dataProvider = "leadershipSuccessors")
-    public void handOffLeadershipBeforeDrainingOnlyWithAnotherBroker(boolean otherBroker,
-                                                                   boolean differentElection) throws Exception {
+    public void handOffLeadershipBeforeDrainingOnlyWithAnotherBroker(boolean leader, boolean otherBroker,
+                                                                    boolean differentElection, boolean ready,
+                                                                    boolean eligible) throws Exception {
         LeaderElectionService election = mock(LeaderElectionService.class);
+        when(election.isLeader()).thenReturn(leader);
+        Brokers brokers = mock(Brokers.class);
+        when(brokers.checkReadyAsync()).thenReturn(ready ? CompletableFuture.completedFuture(null)
+                : CompletableFuture.failedFuture(new IllegalStateException("Peer is closing")));
+        when(brokers.isLeaderElectionEnabledAsync()).thenReturn(CompletableFuture.completedFuture(eligible));
+        PulsarAdmin admin = mock(PulsarAdmin.class);
+        when(admin.brokers()).thenReturn(brokers);
+        PulsarAdminBuilder adminBuilder = mock(PulsarAdminBuilder.class, RETURNS_SELF);
+        when(adminBuilder.build()).thenReturn(admin);
         when(election.setElectionEnabled(false)).thenReturn(CompletableFuture.completedFuture(null));
         when(election.readCurrentLeader()).thenReturn(CompletableFuture.completedFuture(
                 Optional.of(new LeaderBroker("other-broker:8080", "http://other-broker:8080"))));
@@ -107,6 +128,11 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         config.setClusterName("shutdown-test");
         config.setBrokerShutdownTimeoutMs(10000);
         PulsarService service = new PulsarService(config) {
+            @Override
+            protected PulsarAdminBuilder getCreateAdminClientBuilder() {
+                return adminBuilder;
+            }
+
             @Override
             public LeaderElectionService getLeaderElectionService() {
                 return election;
@@ -127,6 +153,7 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         LockManager<BrokerLookupData> registrations = mock(LockManager.class);
         when(coordination.getLockManager(BrokerLookupData.class)).thenReturn(registrations);
         BrokerLookupData lookupData = mock(BrokerLookupData.class);
+        when(lookupData.getWebServiceUrl()).thenReturn("http://other-broker:8080");
         when(lookupData.getLoadManagerClassName()).thenReturn(differentElection
                 ? ExtensibleLoadManagerImpl.class.getName() : ModularLoadManagerImpl.class.getName());
         when(registrations.readLock(LoadManager.LOADBALANCE_BROKERS_ROOT + "/other-broker:8080"))
@@ -135,7 +162,8 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         service.setBrokerService(broker);
         when(broker.closeAsync()).thenReturn(CompletableFuture.completedFuture(null));
         doAnswer(invocation -> {
-            verify(election, times(otherBroker && !differentElection ? 1 : 0)).setElectionEnabled(false);
+            verify(election, times(!leader || otherBroker && !differentElection && ready && eligible ? 1 : 0))
+                    .setElectionEnabled(false);
             return null;
         }).when(broker).unloadNamespaceBundlesGracefully(anyInt(), anyBoolean());
         service.closeAsync().get(10, TimeUnit.SECONDS);

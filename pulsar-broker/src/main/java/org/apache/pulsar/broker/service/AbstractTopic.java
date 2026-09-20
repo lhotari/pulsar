@@ -930,6 +930,9 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
                 .thenCompose(producerEpoch -> {
                     lock.writeLock().lock();
                     try {
+                        if (producer.isAdmissionCancelled() || brokerService.pulsar().getBrokerAdmission().isClosed()) {
+                            return FutureUtil.failedFuture(new BrokerServiceException.BrokerDrainingException());
+                        }
                         checkTopicFenced();
                         if (isMigrated()) {
                             log.warn("Attempting to add producer to a migrated topic");
@@ -958,6 +961,9 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
             CompletableFuture<Void> producerQueuedFuture) {
         lock.writeLock().lock();
         try {
+            if (producer.isAdmissionCancelled() || brokerService.pulsar().getBrokerAdmission().isClosed()) {
+                return FutureUtil.failedFuture(new BrokerServiceException.BrokerDrainingException());
+            }
             switch (producer.getAccessMode()) {
             case Shared:
                 if (hasExclusiveProducer || !waitingExclusiveProducers.isEmpty()) {
@@ -1190,6 +1196,37 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
     }
 
 
+    @VisibleForTesting
+    int getWaitingExclusiveProducerCount() {
+        lock.readLock().lock();
+        try {
+            return waitingExclusiveProducers.size();
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /** Cancel a shutdown-rejected producer, including a queued exclusive producer not in the active map. */
+    void cancelPendingProducer(Producer producer) {
+        List<CompletableFuture<Optional<Long>>> removed = new ArrayList<>();
+        lock.writeLock().lock();
+        try {
+            producer.cancelAdmission();
+            waitingExclusiveProducers.removeIf(waiting -> {
+                if (waiting.getKey() == producer) {
+                    removed.add(waiting.getValue());
+                    return true;
+                }
+                return false;
+            });
+        } finally {
+            lock.writeLock().unlock();
+        }
+        // Completing an add future can re-enter topic and connection code. Never do it under the topic lock.
+        removed.forEach(future -> future.completeExceptionally(new BrokerServiceException.BrokerDrainingException()));
+        producer.closeNow(true);
+    }
+
     @Override
     public void removeProducer(Producer producer) {
         checkArgument(producer.getTopic() == this);
@@ -1209,7 +1246,8 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
         // and execute following routine when:
         // 1. If there was an exclusive producer before.
         // 2. If this was the last producer closed and there are waiting exclusive producers
-        if (hasExclusiveProducer || (producers.isEmpty() && !waitingExclusiveProducers.isEmpty())) {
+        if (!brokerService.pulsar().getBrokerAdmission().isClosed()
+                && (hasExclusiveProducer || (producers.isEmpty() && !waitingExclusiveProducers.isEmpty()))) {
             lock.writeLock().lock();
             try {
                 hasExclusiveProducer = false;
