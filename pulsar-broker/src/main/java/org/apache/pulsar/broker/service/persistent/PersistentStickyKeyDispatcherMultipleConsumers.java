@@ -473,8 +473,6 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         boolean lookAheadAllowed = isReplayQueueSizeBelowLimit();
         // in normal read mode, keep track of consumers that are blocked by hash, to check if look-ahead could be useful
         Set<Consumer> blockedByHashConsumers = lookAheadAllowed && readType == ReadType.Normal ? new HashSet<>() : null;
-        // in replay read mode, keep track of consumers for entries, used for look-ahead check
-        Set<Consumer> consumersForEntriesForLookaheadCheck = lookAheadAllowed ? new HashSet<>() : null;
         // track already blocked hashes to block any further messages with the same hash
         IntOpenHashSet alreadyBlockedHashes = new IntOpenHashSet();
 
@@ -496,9 +494,6 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             if (!hashIsAlreadyBlocked) {
                 consumer = selector.select(stickyKeyHash);
                 if (consumer != null) {
-                    if (lookAheadAllowed) {
-                        consumersForEntriesForLookaheadCheck.add(consumer);
-                    }
                     final var canUpdateBlockedByHash = lookAheadAllowed && readType == ReadType.Normal;
                     MutableInt permits =
                             permitsForConsumer.computeIfAbsent(consumer,
@@ -565,7 +560,8 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             if (!triggerLookAhead.booleanValue()) {
                 for (Consumer consumer : getConsumers()) {
                     // filter out the consumers that are already checked when the entries were processed for entries
-                    if (!consumersForEntriesForLookaheadCheck.contains(consumer)) {
+                    // permitsForConsumer records every selected consumer before the dispatch decision
+                    if (!permitsForConsumer.containsKey(consumer)) {
                         // if another consumer has available permits, then look-ahead could be useful
                         if (getAvailablePermits(consumer) > 0) {
                             triggerLookAhead.setTrue();
