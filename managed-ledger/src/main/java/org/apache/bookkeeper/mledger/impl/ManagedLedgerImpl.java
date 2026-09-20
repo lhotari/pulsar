@@ -54,6 +54,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -332,6 +333,25 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     // Guarded by this; logical Closed state precedes physical ledger/cursor completion.
     private CompletableFuture<Void> closeFuture;
+    // Guarded by this. A logical create timeout must not retire the underlying BookKeeper operation.
+    private final Set<CompletableFuture<Void>> pendingDataLedgerCreations = new HashSet<>();
+
+    private record DataLedgerCreationContext(Object delegate, CompletableFuture<Void> metadataCompletion) { }
+
+    private static final class LedgerCreationFuture extends CompletableFuture<LedgerHandle> {
+        private final CompletableFuture<Void> physicalCompletion = new CompletableFuture<>();
+        private CompletableFuture<Void> discardedHandleClose = CompletableFuture.completedFuture(null);
+
+        void completePhysicalOperation() {
+            discardedHandleClose.whenComplete((__, error) -> {
+                if (error == null) {
+                    physicalCompletion.complete(null);
+                } else {
+                    physicalCompletion.completeExceptionally(error);
+                }
+            });
+        }
+    }
     private volatile boolean migrated = false;
 
     @Getter
@@ -919,7 +939,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 log.info("Creating a new ledger");
                 this.lastLedgerCreationInitiationTimestamp = System.currentTimeMillis();
                 mbean.startDataLedgerCreateOp();
-                asyncCreateLedger(bookKeeper, config, digestType, this, Collections.emptyMap(), log);
+                createDataLedger(false);
             }
         } else {
             checkArgument(state == State.LedgerOpened, "ledger=%s is not opened", state);
@@ -1672,6 +1692,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         final boolean initiateClose;
         final boolean fenced;
         final LedgerHandle ledgerToClose;
+        final List<CompletableFuture<Void>> creations;
         synchronized (this) {
             initiateClose = closeFuture == null;
             if (initiateClose) {
@@ -1681,9 +1702,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                     STATE_UPDATER.set(this, State.Closed);
                 }
                 ledgerToClose = currentLedger;
+                creations = new ArrayList<>(pendingDataLedgerCreations);
             } else {
                 fenced = false;
                 ledgerToClose = null;
+                creations = List.of();
             }
             closing = closeFuture;
         }
@@ -1702,17 +1725,21 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         try {
             factory.close(this);
             cancelScheduledTasks();
-            if (fenced) {
-                closing.completeExceptionally(new ManagedLedgerFencedException());
-                return;
-            }
             log.info("Closing managed ledger");
             clearPendingAddEntries(new ManagedLedgerAlreadyClosedException("Managed ledger is closed"));
             Futures.CloseFuture ledgerClosed = new Futures.CloseFuture();
             Futures.CloseFuture cursorsClosed = new Futures.CloseFuture();
             // Even a failed ledger close must join cursor cleanup before the physical operation settles.
             ledgerClosed.whenComplete((__, error) -> closeAllCursors(cursorsClosed, null));
-            FutureUtil.waitForAll(List.of(ledgerClosed, cursorsClosed)).whenComplete((__, error) -> {
+            List<CompletableFuture<Void>> storageOperations = new ArrayList<>(creations);
+            storageOperations.add(ledgerClosed);
+            storageOperations.add(cursorsClosed);
+            if (fenced) {
+                storageOperations.add(CompletableFuture.failedFuture(new ManagedLedgerFencedException()));
+            }
+            // Creation callbacks can settle under the lifecycle monitor. Dispatch final completion so
+            // client close callbacks never run inline under that monitor (or depend on its executor surviving).
+            FutureUtil.waitForAll(storageOperations).whenCompleteAsync((__, error) -> {
                 if (error == null) {
                     closing.complete(null);
                 } else {
@@ -1768,22 +1795,19 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     @Override
     public synchronized void createComplete(int rc, final LedgerHandle lh, Object ctx) {
-        if (STATE_UPDATER.get(this) == State.Closed) {
-            if (lh != null) {
-                log.warn().attr("rc", rc)
-                        .attr("ledgerId", lh != null ? lh.getId() : -1)
-                        .log("Ledger create completed after the managed ledger is closed,"
-                                + " so just close this ledger handle");
-                lh.closeAsync();
-            }
+        CompletableFuture<Void> metadataCompletion = ctx instanceof DataLedgerCreationContext creation
+                ? creation.metadataCompletion() : new CompletableFuture<>();
+        Object operationContext = ctx instanceof DataLedgerCreationContext creation ? creation.delegate() : ctx;
+        // Resolve the timeout race first, including a late handle returned after logical shutdown.
+        if (checkAndCompleteLedgerOpTask(rc, lh, operationContext)) {
+            return;
+        }
+        if (STATE_UPDATER.get(this) == State.Closed || STATE_UPDATER.get(this).isFenced()) {
+            completeAfterHandleClose(lh, metadataCompletion);
             return;
         }
 
         log.debug().attr("rc", rc).attr("ledgerId", lh != null ? lh.getId() : -1).log("createComplete");
-
-        if (checkAndCompleteLedgerOpTask(rc, lh, ctx)) {
-            return;
-        }
 
         mbean.endDataLedgerCreateOp();
         if (rc != BKException.Code.OK) {
@@ -1800,6 +1824,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             // Empty the list of pending requests and make all of them fail
             clearPendingAddEntries(status);
             lastLedgerCreationFailureTimestamp = clock.millis();
+            metadataCompletion.complete(null);
         } else {
             log.info().attr("ledgerId", lh.getId()).log("Created new ledger");
             LedgerInfo newLedger = new LedgerInfo().setLedgerId(lh.getId()).setTimestamp(0);
@@ -1808,20 +1833,13 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 public void operationComplete(Void v, Stat stat) {
                     log.debug().attr("version", stat).log("Updating of ledgers list after create complete");
                     ledgersStat = stat;
+                    boolean closeCreatedLedger;
                     synchronized (ManagedLedgerImpl.this) {
                         try {
                             State state = STATE_UPDATER.get(ManagedLedgerImpl.this);
-                            if (state == State.Closed || state.isFenced()) {
+                            closeCreatedLedger = state == State.Closed || state.isFenced();
+                            if (closeCreatedLedger) {
                                 log.debug().log("skip ledger update after create complete ledger is closed or fenced");
-                                lh.closeAsync().exceptionally(e -> {
-                                    if (e != null) {
-                                        log.error()
-                                            .attr("ledgerId", lh.getId())
-                                            .attr("error", e.getMessage())
-                                            .log("Failed to close ledger");
-                                    }
-                                    return null;
-                                });
                             } else {
                                 LedgerHandle originalCurrentLedger = currentLedger;
                                 ledgers.put(lh.getId(), newLedger);
@@ -1839,6 +1857,8 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                             metadataMutex.unlock();
                         }
                     }
+                    // Do not complete the retained operation while holding the lifecycle monitor.
+                    completeAfterHandleClose(closeCreatedLedger ? lh : null, metadataCompletion);
                 }
 
                 @Override
@@ -1863,17 +1883,21 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                             clearPendingAddEntries(new ManagedLedgerFencedException(e));
                             // Do not need to unlock metadataMutex here because we are going to close to topic
                             // anyways
-                            return;
                         }
+                        completeAfterHandleClose(lh, metadataCompletion);
+                        return;
                     }
 
                     metadataMutex.unlock();
 
                     synchronized (ManagedLedgerImpl.this) {
                         lastLedgerCreationFailureTimestamp = clock.millis();
-                        STATE_UPDATER.set(ManagedLedgerImpl.this, State.ClosedLedger);
+                        if (closeFuture == null && !STATE_UPDATER.get(ManagedLedgerImpl.this).isFenced()) {
+                            STATE_UPDATER.set(ManagedLedgerImpl.this, State.ClosedLedger);
+                        }
                         clearPendingAddEntries(e);
                     }
+                    completeAfterHandleClose(lh, metadataCompletion);
                 }
             };
 
@@ -2075,14 +2099,77 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             mbean.startDataLedgerCreateOp();
             // Use the executor here is to avoid use the Zookeeper thread to create the ledger which will lead
             // to deadlock at the zookeeper client, details to see https://github.com/apache/pulsar/issues/13736
-            this.executor.execute(() ->
-                    asyncCreateLedger(bookKeeper, config, digestType, this, Collections.emptyMap(), log));
+            createDataLedger(true);
         }
+    }
+
+    /** Called with the lifecycle monitor held, before a create can be queued or started. */
+    private void createDataLedger(boolean dispatch) {
+        CompletableFuture<Void> physicalCompletion = new CompletableFuture<>();
+        CompletableFuture<Void> metadataCompletion = new CompletableFuture<>();
+        CompletableFuture<Void> creation = FutureUtil.waitForAll(List.of(physicalCompletion, metadataCompletion));
+        pendingDataLedgerCreations.add(creation);
+        creation.whenComplete((__, error) -> {
+            // Keep cleanup failures visible to a subsequent close.
+            if (error == null) {
+                synchronized (ManagedLedgerImpl.this) {
+                    pendingDataLedgerCreations.remove(creation);
+                }
+            }
+        });
+        Runnable create = () -> {
+            try {
+                asyncCreateLedger(bookKeeper, config, digestType, (rc, handle, context) -> {
+                    if (context instanceof LedgerCreationFuture operation) {
+                        operation.physicalCompletion.whenComplete((__, error) -> {
+                            if (error == null) {
+                                physicalCompletion.complete(null);
+                            } else {
+                                physicalCompletion.completeExceptionally(error);
+                            }
+                        });
+                    } else {
+                        physicalCompletion.complete(null);
+                    }
+                    try {
+                        createComplete(rc, handle, new DataLedgerCreationContext(context, metadataCompletion));
+                    } catch (Throwable error) {
+                        metadataCompletion.completeExceptionally(error);
+                        throw error;
+                    }
+                }, Collections.emptyMap(), log);
+            } catch (Throwable error) {
+                physicalCompletion.completeExceptionally(error);
+                metadataCompletion.completeExceptionally(error);
+            }
+        };
+        if (dispatch) {
+            try {
+                executor.execute(create);
+            } catch (Throwable error) {
+                physicalCompletion.completeExceptionally(error);
+                metadataCompletion.completeExceptionally(error);
+            }
+        } else {
+            create.run();
+        }
+    }
+
+    private static void completeAfterHandleClose(LedgerHandle handle, CompletableFuture<Void> completion) {
+        CompletableFuture<Void> closed = handle == null ? CompletableFuture.completedFuture(null) : handle.closeAsync();
+        closed.whenComplete((__, error) -> {
+            if (error == null) {
+                completion.complete(null);
+            } else {
+                completion.completeExceptionally(error);
+            }
+        });
     }
 
     boolean isNeededCreateNewLedgerAfterCloseLedger() {
         final State state = STATE_UPDATER.get(this);
-        if (state != State.CreatingLedger && state != State.LedgerOpened) {
+        if (closeFuture == null && !state.isFenced()
+                && state != State.CreatingLedger && state != State.LedgerOpened) {
             return true;
         }
         return false;
@@ -4767,7 +4854,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
      */
     protected void asyncCreateLedger(BookKeeper bookKeeper, ManagedLedgerConfig config, DigestType digestType,
             CreateCallback cb, Map<String, byte[]> metadata, Logger ctxLogger) {
-        CompletableFuture<LedgerHandle> ledgerFutureHook = new CompletableFuture<>();
+        LedgerCreationFuture ledgerFutureHook = new LedgerCreationFuture();
         Map<String, byte[]> finalMetadata = new HashMap<>();
         finalMetadata.putAll(ledgerMetadata);
         finalMetadata.putAll(metadata);
@@ -4781,6 +4868,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             } catch (EnsemblePlacementPolicyConfig.ParseEnsemblePlacementPolicyConfigException e) {
                 log.error().exception(e).log("Serialize the placement configuration failed");
                 cb.createComplete(Code.UnexpectedConditionException, null, ledgerFutureHook);
+                ledgerFutureHook.completePhysicalOperation();
                 return;
             }
         }
@@ -4797,32 +4885,43 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                     .withOrderingKey(name)
                     .execute()
                     .whenComplete((writeHandle, ex) -> {
-                        if (ex != null) {
-                            cb.createComplete(BKException.getExceptionCode(ex), null, ledgerFutureHook);
-                        } else {
-                            cb.createComplete(Code.OK, (LedgerHandle) writeHandle, ledgerFutureHook);
+                        try {
+                            if (ex != null) {
+                                cb.createComplete(BKException.getExceptionCode(ex), null, ledgerFutureHook);
+                            } else {
+                                cb.createComplete(Code.OK, (LedgerHandle) writeHandle, ledgerFutureHook);
+                            }
+                            ledgerFutureHook.completePhysicalOperation();
+                        } catch (Throwable error) {
+                            ledgerFutureHook.physicalCompletion.completeExceptionally(error);
                         }
                     });
         } catch (Throwable cause) {
             log.error().exception(cause).log("Encountered unexpected error when creating ledger");
-            ledgerFutureHook.completeExceptionally(cause);
             cb.createComplete(Code.UnexpectedConditionException, null, ledgerFutureHook);
+            ledgerFutureHook.completePhysicalOperation();
             return;
         }
 
-        ScheduledFuture<?> timeoutChecker = scheduledExecutor.schedule(() -> {
-            if (!ledgerFutureHook.isDone()
-                    && ledgerFutureHook.completeExceptionally(new TimeoutException(name + " Create ledger timeout"))) {
-                log.debug("Timeout creating ledger");
-                cb.createComplete(BKException.Code.TimeoutException, null, ledgerFutureHook);
-            } else {
-                log.debug("Ledger already created when timeout task is triggered");
-            }
-        }, config.getMetadataOperationsTimeoutSeconds(), TimeUnit.SECONDS);
+        try {
+            ScheduledFuture<?> timeoutChecker = scheduledExecutor.schedule(() -> {
+                if (!ledgerFutureHook.isDone()
+                        && ledgerFutureHook.completeExceptionally(
+                                new TimeoutException(name + " Create ledger timeout"))) {
+                    log.debug("Timeout creating ledger");
+                    cb.createComplete(BKException.Code.TimeoutException, null, ledgerFutureHook);
+                } else {
+                    log.debug("Ledger already created when timeout task is triggered");
+                }
+            }, config.getMetadataOperationsTimeoutSeconds(), TimeUnit.SECONDS);
 
-        ledgerFutureHook.whenComplete((ignore, ex) -> {
-            timeoutChecker.cancel(false);
-        });
+            ledgerFutureHook.whenComplete((ignore, ex) -> timeoutChecker.cancel(false));
+        } catch (RejectedExecutionException error) {
+            // The BookKeeper operation is already running. Its physical completion still owns cleanup.
+            if (ledgerFutureHook.completeExceptionally(error)) {
+                cb.createComplete(BKException.Code.TimeoutException, null, ledgerFutureHook);
+            }
+        }
     }
 
     public Clock getClock() {
@@ -4842,7 +4941,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             } else {
                 if (rc == BKException.Code.OK) {
                     log.warn().attr("ledgerId", lh.getId()).log("Ledger creation timed-out, deleting ledger");
-                    asyncDeleteLedger(lh.getId(), DEFAULT_LEDGER_DELETE_RETRIES);
+                    CompletableFuture<Void> closed = lh.closeAsync();
+                    if (ctx instanceof LedgerCreationFuture operation) {
+                        operation.discardedHandleClose = closed;
+                    }
+                    closed.whenComplete((__, error) -> asyncDeleteLedger(lh.getId(), DEFAULT_LEDGER_DELETE_RETRIES));
                 }
                 return true;
             }
