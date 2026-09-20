@@ -364,6 +364,19 @@ public class Consumer {
                                      long epoch) {
         this.lastConsumedTimestamp = System.currentTimeMillis();
 
+        if (subscription.getTopic().getBrokerService().getPulsar().isMetadataSessionsClosing()) {
+            entries.forEach(entry -> {
+                if (entry != null) {
+                    entry.release();
+                }
+            });
+            batchSizes.recyle();
+            if (batchIndexesAcks != null) {
+                batchIndexesAcks.recycle();
+            }
+            return cnx.newPromise().setFailure(new BrokerServiceException.ServiceUnitNotReadyException(
+                    "Broker is shutting down"));
+        }
         if (entries.isEmpty() || totalMessages == 0) {
             log.debug("List of messages is empty, triggering write future immediately");
             batchSizes.recyle();

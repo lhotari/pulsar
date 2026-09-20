@@ -2744,6 +2744,10 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
     }
     @Override
     protected void handleSend(CommandSend send, ByteBuf headersAndPayload) {
+        if (service.getPulsar().isMetadataSessionsClosing()) {
+            ctx.close();
+            return;
+        }
         checkArgument(state == State.Connected);
 
         CompletableFuture<Producer> producerFuture = producers.get(send.getProducerId());

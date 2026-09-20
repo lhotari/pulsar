@@ -198,6 +198,10 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
 
     @Override
     public void publishMessage(ByteBuf data, PublishContext callback) {
+        if (brokerService.pulsar().isMetadataSessionsClosing()) {
+            callback.completed(new TopicFencedException("Broker is shutting down"), -1, -1);
+            return;
+        }
         if (isExceedMaximumMessageSize(data.readableBytes(), callback)) {
             callback.completed(new NotAllowedException("Exceed maximum message size")
                     , -1, -1);

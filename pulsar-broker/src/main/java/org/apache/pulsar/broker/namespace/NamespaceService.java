@@ -1274,6 +1274,9 @@ public class NamespaceService implements AutoCloseable {
     }
 
     public CompletableFuture<Boolean> isServiceUnitOwnedAsync(ServiceUnitId suName) {
+        if (pulsar.isMetadataSessionsClosing()) {
+            return CompletableFuture.completedFuture(false);
+        }
         if (suName instanceof TopicName) {
             return isTopicOwnedAsync((TopicName) suName);
         }

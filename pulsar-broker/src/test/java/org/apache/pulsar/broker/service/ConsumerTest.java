@@ -31,9 +31,12 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import io.netty.util.concurrent.DefaultPromise;
+import io.netty.util.concurrent.ImmediateEventExecutor;
 import java.net.SocketAddress;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
@@ -75,6 +78,21 @@ public class ConsumerTest {
         consumer =
                 new Consumer(subscription, Exclusive, "topic", 1, 0, "Cons1", true, cnx, "myrole-1", emptyMap(), false,
                         new KeySharedMeta().setKeySharedMode(AUTO_SPLIT), latest, DEFAULT_CONSUMER_EPOCH);
+    }
+
+    @Test
+    public void testSessionCleanupFencesDispatchAndReleasesEntries() {
+        when(subscription.getTopic().getBrokerService().getPulsar().isMetadataSessionsClosing()).thenReturn(true);
+        when(cnx.newPromise()).thenReturn(new DefaultPromise<>(ImmediateEventExecutor.INSTANCE));
+        Entry entry = mock(Entry.class);
+        EntryBatchSizes sizes = mock(EntryBatchSizes.class);
+        EntryBatchIndexesAcks acks = mock(EntryBatchIndexesAcks.class);
+        var result = consumer.sendMessages(List.of(entry), null, sizes, acks, 1, 1, 0, null, 0);
+        assertThat(result.isDone()).isTrue();
+        assertThat(result.cause()).isInstanceOf(BrokerServiceException.ServiceUnitNotReadyException.class);
+        verify(entry).release();
+        verify(sizes).recyle();
+        verify(acks).recycle();
     }
 
     @Test

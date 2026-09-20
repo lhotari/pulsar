@@ -501,7 +501,9 @@ public class ExtensibleLoadManagerImpl implements ExtensibleLoadManager, BrokerS
     public CompletableFuture<Optional<BrokerLookupData>> assign(Optional<ServiceUnitId> topic,
                                                                 ServiceUnitId serviceUnit,
                                                                 LookupOptions options) {
-
+        if (pulsar.isMetadataSessionsClosing()) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Broker is shutting down"));
+        }
         final String bundle = serviceUnit.toString();
 
         return dedupeLookupRequest(bundle, k -> {
