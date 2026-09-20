@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.tests.performance.tools;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.time.Duration;
@@ -26,6 +27,8 @@ import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.PulsarClient;
@@ -49,17 +52,23 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         List<ClientAndConsumer> pods = new ArrayList<>(scenario.clientsPerApplication());
         AtomicBoolean stopping = new AtomicBoolean();
         AtomicReference<Throwable> restarterFailure = new AtomicReference<>();
+        HdrLatencyRecorder receiveLatency = new HdrLatencyRecorder();
+        AtomicLong firstMeasurementReceiptEpochMs = new AtomicLong();
+        AtomicLong lastMeasurementReceiptEpochMs = new AtomicLong();
+        AtomicInteger nextWarmupRound = new AtomicInteger(1);
         Thread restarter = null;
 
         PulsarClientSharedResources sharedResources = SharedClientResources.create(scenario);
         try {
             for (int pod = 0; pod < scenario.clientsPerApplication(); pod++) {
-                pods.add(createPod(scenario, sharedResources, tracker, pod));
+                pods.add(createPod(scenario, sharedResources, tracker, receiveLatency,
+                        firstMeasurementReceiptEpochMs, lastMeasurementReceiptEpochMs, nextWarmupRound, pod));
             }
             System.out.println("READY application=" + applicationIndex + " clients=" + pods.size());
             if (scenario.clientRestartIntervalSeconds() > 0 && scenario.clientRestartFraction() > 0) {
                 restarter = new Thread(() -> restartClients(scenario, sharedResources, tracker, pods, stopping,
-                                restarterFailure),
+                                restarterFailure, receiveLatency, firstMeasurementReceiptEpochMs,
+                                lastMeasurementReceiptEpochMs, nextWarmupRound),
                         "iot-client-restarter");
                 restarter.start();
             }
@@ -80,6 +89,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                 restarter.join(TimeUnit.SECONDS.toMillis(10));
             }
             DeviceSequenceTracker.Summary summary = tracker.summary();
+            receiveLatency.write(output.resolve("consume-latency.hdr"),
+                    firstMeasurementReceiptEpochMs.get(), lastMeasurementReceiptEpochMs.get());
             tracker.writeState(output.resolve("consumed-state.bin"));
             tracker.writeViolationSamples(output.resolve("ordering-violations.txt"));
             Files.writeString(output.resolve("consumer-summary.json"), "{\n"
@@ -87,7 +98,11 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     + "  \"uniqueMessages\": " + summary.uniqueMessages() + ",\n"
                     + "  \"duplicates\": " + summary.duplicates() + ",\n"
                     + "  \"orderingViolations\": " + summary.orderingViolations() + ",\n"
-                    + "  \"invalidMessages\": " + summary.invalidMessages() + "\n}\n");
+                    + "  \"invalidMessages\": " + summary.invalidMessages() + ",\n"
+                    + "  \"firstMeasurementMessageReceivedEpochMs\": "
+                    + firstMeasurementReceiptEpochMs.get() + ",\n"
+                    + "  \"lastMeasurementMessageReceivedEpochMs\": "
+                    + lastMeasurementReceiptEpochMs.get() + "\n}\n");
             return summary.valid() && summary.uniqueMessages() == scenario.messageCount() ? 0 : 1;
         } finally {
             stopping.set(true);
@@ -101,7 +116,10 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
     }
 
     private ClientAndConsumer createPod(IotScenario scenario, PulsarClientSharedResources sharedResources,
-                                        DeviceSequenceTracker tracker, int podIndex) throws Exception {
+                                        DeviceSequenceTracker tracker, HdrLatencyRecorder receiveLatency,
+                                        AtomicLong firstMeasurementReceiptEpochMs,
+                                        AtomicLong lastMeasurementReceiptEpochMs, AtomicInteger nextWarmupRound,
+                                        int podIndex) throws Exception {
         PulsarClient client = PulsarClient.builder()
                 .serviceUrl(scenario.serviceUrl())
                 .sharedResources(sharedResources)
@@ -114,6 +132,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     .subscriptionType(SubscriptionType.Key_Shared)
                     .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
                     .messageListener((currentConsumer, message) -> {
+                        long receivedEpochMs = System.currentTimeMillis();
                         try {
                             TelemetryMessage.Decoded decoded = TelemetryMessage.decode(message.getData());
                             byte[] key = message.getKeyBytes();
@@ -121,8 +140,15 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                                     || ByteBuffer.wrap(key).getLong() != decoded.deviceId()) {
                                 throw new IllegalArgumentException("Telemetry key does not match payload device ID");
                             }
+                            if (decoded.measurement()) {
+                                firstMeasurementReceiptEpochMs.accumulateAndGet(receivedEpochMs,
+                                        (current, received) -> current == 0 ? received : Math.min(current, received));
+                                lastMeasurementReceiptEpochMs.accumulateAndGet(receivedEpochMs, Math::max);
+                                receiveLatency.recordMillis(receivedEpochMs - message.getPublishTime());
+                            }
                             tracker.received(decoded.deviceId(), decoded.sequence(), message.getMessageId(),
                                     decoded.sentNanos(), message.getTopicName(), Thread.currentThread().getName());
+                            markCompletedWarmupRounds(scenario, tracker, nextWarmupRound);
                             currentConsumer.acknowledgeAsync(message);
                         } catch (RuntimeException error) {
                             tracker.invalidMessage();
@@ -139,7 +165,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
 
     private void restartClients(IotScenario scenario, PulsarClientSharedResources sharedResources,
                                 DeviceSequenceTracker tracker, List<ClientAndConsumer> pods,
-                                AtomicBoolean stopping, AtomicReference<Throwable> failure) {
+                                AtomicBoolean stopping, AtomicReference<Throwable> failure,
+                                HdrLatencyRecorder receiveLatency, AtomicLong firstMeasurementReceiptEpochMs,
+                                AtomicLong lastMeasurementReceiptEpochMs, AtomicInteger nextWarmupRound) {
         int restartCount = Math.max(1,
                 (int) Math.ceil(scenario.clientsPerApplication() * scenario.clientRestartFraction()));
         while (!stopping.get()) {
@@ -150,7 +178,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     synchronized (pods) {
                         ClientAndConsumer previous = pods.get(index);
                         previous.close();
-                        pods.set(index, createPod(scenario, sharedResources, tracker, index));
+                        pods.set(index, createPod(scenario, sharedResources, tracker, receiveLatency,
+                                firstMeasurementReceiptEpochMs, lastMeasurementReceiptEpochMs, nextWarmupRound,
+                                index));
                     }
                 }
             } catch (InterruptedException interrupted) {
@@ -159,6 +189,25 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             } catch (Exception error) {
                 failure.compareAndSet(null, error);
                 return;
+            }
+        }
+    }
+
+    private void markCompletedWarmupRounds(IotScenario scenario, DeviceSequenceTracker tracker,
+                                           AtomicInteger nextWarmupRound) {
+        long messagesPerRound = scenario.warmupMessageCountPerRound();
+        if (messagesPerRound == 0) {
+            return;
+        }
+        int round;
+        while ((round = nextWarmupRound.get()) <= scenario.warmupRounds()
+                && tracker.uniqueMessages() >= Math.multiplyExact(messagesPerRound, round)) {
+            if (nextWarmupRound.compareAndSet(round, round + 1)) {
+                try {
+                    WarmupBarrier.markApplicationComplete(coordinationDirectory, round, applicationIndex);
+                } catch (IOException error) {
+                    throw new IllegalStateException("Cannot mark warmup round complete", error);
+                }
             }
         }
     }

@@ -80,6 +80,17 @@ file without interpreting unrelated sections. The launcher writes the fully reso
 `resolved-config.yaml` in the run directory and mounts that file into workload containers. A workload command can
 select its subtree with `--config-path`.
 
+The `iotTelemetry` workload can run traffic before measurements begin. Use `warmupSeconds` with a positive `rate`,
+or use `warmupMessages` when `rate: 0`; the two settings are mutually exclusive. `warmupRounds` repeats that
+traffic, and `warmupRoundDelaySeconds` adds an idle stabilization period after each fully drained round, including
+the final round. A round is fully drained only after every backend application has uniquely received its cumulative
+warmup message count; producer send completions alone do not release the barrier. The default is one round with no
+delay. Warmup traffic remains part of delivery and ordering validation. Producer throughput and the
+epoch-millisecond measurement boundaries in
+`producer-summary.json` cover only the configured measurement messages. Every consumer summary records its first
+and last measured-message receipt as metadata. The launcher cuts from the producer measurement start through the
+latest last receipt across all backend applications.
+
 Use a top-level `extends` entry to inherit one file or an ordered list of files:
 
 ```yaml
@@ -91,6 +102,8 @@ workloads:
 profiling:
   brokerOptions: event=cpu,interval=10ms,jfrsync=profile
   producerOptions: ~
+  retainOriginalRecording: true
+  createMeasurementRecording: true
 output:
   directory: build/performance/iot-restart-profile
 ```
@@ -99,6 +112,52 @@ Each inherited path is resolved relative to the file that declares it; absolute 
 inherit other files recursively. Parents are applied in list order and the current file is applied last. Mappings
 merge recursively, while scalar values and lists replace earlier values. An explicit YAML `null` or `~` removes
 an inherited entry. Cycles, missing files, non-mapping roots and invalid `extends` entries are rejected.
+
+Profiled standalone runs retain the complete JFR and also create a sibling whose name ends in
+`.measurement.jfr`. The measurement recording contains events from the producer's recorded measurement start through
+the latest measured-message receipt across all backend applications. This excludes startup, warmup, and shutdown
+while retaining the broker and consumer work needed to deliver every measured message. One-time JVM, host, recording
+setting and runtime configuration events are copied from the beginning of the complete recording so JDK Mission
+Control can describe the source JVM. Set
+`profiling.retainOriginalRecording: false` to remove the complete
+recording after a successful cut, or `profiling.createMeasurementRecording: false` to keep only the complete
+recording. Both options default to `true` and apply to broker, producer and consumer recordings.
+
+Every IoT run writes `producer/produce-latency.hdr` with successful measured-message send-completion latency and
+one `consumer-*/consume-latency.hdr` per backend application with measured-message broker-publish-to-listener
+latency. Both use microseconds internally and three significant digits. Warmup messages are tagged in the payload
+and excluded. Consumer latency is recorded on listener entry before sequence validation, acknowledgment, or backend
+processing, so configured processing delays do not inflate messaging latency.
+
+Render the producer distribution together with the count-weighted merge of all backend-application consumer
+histograms as PNG and SVG:
+
+```bash
+./gradlew :tests:performance:launcher:renderHdrHistograms \
+  --args='--run-directory tests/performance/build/iot-telemetry-high-rate-profile'
+```
+
+The default outputs are `latency-histograms.png` and `latency-histograms.svg` in the run directory. Pass
+`--output-prefix /path/to/name` or `--title 'Comparison label'` to change them.
+
+Use the same cutter independently to select a different interval from an existing recording. `--from` and `--to`
+accept ISO-8601 instants, epoch milliseconds, or offsets from the recording start such as `500ms`, `5s`, `2m`, `1h`,
+or `PT5S`. Omit `--from` to select from the beginning, or omit `--to` to select through the end. Use `--info`
+without either boundary to display the actual recording start, end and total duration from the JFR chunk headers;
+it can also accompany a cut. JFR cutting preserves those source chunk timestamps, so the original recording period
+remains available in the cut file and in JDK Mission Control. The
+task requires JDK 19 or newer because it uses the public JFR recording writer added in that release:
+
+```bash
+./gradlew :tests:performance:launcher:runJfrCut \
+  --args='--input /tmp/full.jfr --from 5s --to 2m --output /tmp/measurement.jfr --info'
+```
+
+Java code can call `JfrCut.cut(Path input, Instant from, Instant to, Path output)` or
+`JfrCut.cutFrom(Path input, Instant from, Path output)` directly without invoking the command-line entry point.
+`JfrCut.cutUsingTimeExpressions(...)` provides the relative and omitted-boundary syntax,
+and `JfrCut.recordingInfo(...)` returns the event range. Events overlapping the half-open interval `[from, to)`
+are retained.
 
 For one-off standalone overrides, prefix an existing scalar path with `PULSAR_PERFORMANCE_`, uppercase it and
 separate path elements with underscores. The loader preserves the scalar's YAML type. For example:
