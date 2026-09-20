@@ -360,18 +360,27 @@ public interface Brokers {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("Readiness check is not supported"));
     }
 
-    /** Get whether this broker can be elected leader. */
-    default CompletableFuture<Boolean> isLeaderElectionEnabledAsync() {
-        return CompletableFuture.failedFuture(new UnsupportedOperationException("Election control is not supported"));
+    /**
+     * Get whether the named broker may become the leader broker returned by {@link #getLeaderBroker()}.
+     * Requests sent to another broker are redirected to the named broker. Requires super-user access.
+     * @param brokerId broker ID returned by {@link #getActiveBrokers()}
+     */
+    default CompletableFuture<Boolean> isLeaderBrokerEligibleAsync(String brokerId) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Leader-broker eligibility control is not supported"));
     }
 
     /**
-     * Enable or disable this broker's leadership eligibility until it restarts.
-     * Disabling releases leadership even if no other broker is available. The broker still serves its topics.
+     * Enable or disable the named broker's eligibility for the leader-broker role until it restarts.
+     * Disabling releases this role if held, even if no other broker is available. The broker still serves its topics.
+     * Requests sent to another broker are redirected to the named broker. Other coordination roles are unaffected.
      * This requires super-user access and is rejected once shutdown has started.
+     * @param brokerId broker ID returned by {@link #getActiveBrokers()}
+     * @param enabled whether the broker may hold the leader-broker role
      */
-    default CompletableFuture<Void> setLeaderElectionEnabledAsync(boolean enabled) {
-        return CompletableFuture.failedFuture(new UnsupportedOperationException("Election control is not supported"));
+    default CompletableFuture<Void> setLeaderBrokerEligibleAsync(String brokerId, boolean enabled) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Leader-broker eligibility control is not supported"));
     }
 
     /**

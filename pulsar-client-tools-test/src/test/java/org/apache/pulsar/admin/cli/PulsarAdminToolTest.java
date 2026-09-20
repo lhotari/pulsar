@@ -180,15 +180,15 @@ public class PulsarAdminToolTest {
         brokers.run(split("shutdown --timeout-ms 30000"));
         verify(mockBrokers).shutDownBrokerGracefully(0, false, 30000L);
 
-        doReturn(CompletableFuture.completedFuture(true)).when(mockBrokers).isLeaderElectionEnabledAsync();
-        brokers.run(split("get-leader-election-enabled"));
-        verify(mockBrokers).isLeaderElectionEnabledAsync();
+        doReturn(CompletableFuture.completedFuture(true)).when(mockBrokers).isLeaderBrokerEligibleAsync("broker:8080");
+        brokers.run(split("get-leader-broker-eligible broker:8080"));
+        verify(mockBrokers).isLeaderBrokerEligibleAsync("broker:8080");
         doReturn(CompletableFuture.completedFuture(null)).when(mockBrokers)
-                .setLeaderElectionEnabledAsync(anyBoolean());
-        brokers.run(split("set-leader-election-enabled --enabled false"));
-        verify(mockBrokers).setLeaderElectionEnabledAsync(false);
-        brokers.run(split("set-leader-election-enabled --enabled true"));
-        verify(mockBrokers).setLeaderElectionEnabledAsync(true);
+                .setLeaderBrokerEligibleAsync(anyString(), anyBoolean());
+        brokers.run(split("set-leader-broker-eligible broker:8080 --enabled false"));
+        verify(mockBrokers).setLeaderBrokerEligibleAsync("broker:8080", false);
+        brokers.run(split("set-leader-broker-eligible broker:8080 --enabled true"));
+        verify(mockBrokers).setLeaderBrokerEligibleAsync("broker:8080", true);
     }
 
     @Test

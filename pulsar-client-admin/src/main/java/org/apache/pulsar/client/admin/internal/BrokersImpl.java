@@ -226,8 +226,11 @@ public class BrokersImpl extends BaseResource implements Brokers {
     }
 
     @Override
-    public CompletableFuture<Boolean> isLeaderElectionEnabledAsync() {
-        return asyncGetRequest(adminBrokers.path("leaderElectionEnabled"),
+    public CompletableFuture<Boolean> isLeaderBrokerEligibleAsync(String brokerId) {
+        if (brokerId == null || brokerId.isBlank()) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Broker ID is required"));
+        }
+        return asyncGetRequest(adminBrokers.path(brokerId).path("leaderBrokerEligible"),
                 new FutureCallback<Boolean>() { });
     }
 
@@ -238,8 +241,11 @@ public class BrokersImpl extends BaseResource implements Brokers {
     }
 
     @Override
-    public CompletableFuture<Void> setLeaderElectionEnabledAsync(boolean enabled) {
-        return asyncPostRequest(adminBrokers.path("leaderElectionEnabled"),
+    public CompletableFuture<Void> setLeaderBrokerEligibleAsync(String brokerId, boolean enabled) {
+        if (brokerId == null || brokerId.isBlank()) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Broker ID is required"));
+        }
+        return asyncPostRequest(adminBrokers.path(brokerId).path("leaderBrokerEligible"),
                 Entity.entity(enabled, MediaType.APPLICATION_JSON));
     }
 

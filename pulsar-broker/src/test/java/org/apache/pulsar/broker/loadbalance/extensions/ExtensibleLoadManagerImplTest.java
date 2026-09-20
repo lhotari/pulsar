@@ -161,21 +161,30 @@ public class ExtensibleLoadManagerImplTest extends ExtensibleLoadManagerImplBase
     public void testLeadershipEligibilityHandoff() throws Exception {
         PulsarService leader = pulsar1.getLeaderElectionService().isLeader() ? pulsar1 : pulsar2;
         PulsarService follower = leader == pulsar1 ? pulsar2 : pulsar1;
-        try {
-            leader.setLeaderElectionEnabled(false).get(10, TimeUnit.SECONDS);
+        // Send both the query and mutation to the other broker: the API must redirect by broker ID.
+        try (PulsarAdmin viaFollower = PulsarAdmin.builder().serviceHttpUrl(follower.getWebServiceAddress()).build()) {
+            assertTrue(viaFollower.brokers().isLeaderBrokerEligibleAsync(leader.getBrokerId())
+                    .get(10, TimeUnit.SECONDS));
+            viaFollower.brokers().setLeaderBrokerEligibleAsync(leader.getBrokerId(), false)
+                    .get(10, TimeUnit.SECONDS);
+            assertFalse(viaFollower.brokers().isLeaderBrokerEligibleAsync(leader.getBrokerId())
+                    .get(10, TimeUnit.SECONDS));
+            assertTrue(viaFollower.brokers().isLeaderBrokerEligibleAsync(follower.getBrokerId())
+                    .get(10, TimeUnit.SECONDS));
             Awaitility.await().atMost(30, TimeUnit.SECONDS).untilAsserted(() -> {
                 assertTrue(follower.getLeaderElectionService().isLeader());
                 assertFalse(leader.getLeaderElectionService().isLeader());
-                assertEquals(leader.getLeaderElectionService().readCurrentLeader().join()
-                        .orElseThrow().getBrokerId(), follower.getBrokerId());
+                assertEquals(viaFollower.brokers().getLeaderBroker().getBrokerId(), follower.getBrokerId());
             });
             // Internal topic lookups on the disabled broker must still find the new leader.
             Optional<BrokerLookupData> assigned = ExtensibleLoadManagerImpl.get(leader.getLoadManager().get())
                     .assign(Optional.of(TopicName.get(TOPIC)), getBundleAsync(leader, TopicName.get(TOPIC)).get(),
                             LookupOptions.builder().build()).get(10, TimeUnit.SECONDS);
             assertEquals(assigned.orElseThrow().getWebServiceUrlTls(), follower.getSafeWebServiceAddress());
-            leader.setLeaderElectionEnabled(true).get(10, TimeUnit.SECONDS);
-            follower.setLeaderElectionEnabled(false).get(10, TimeUnit.SECONDS);
+            viaFollower.brokers().setLeaderBrokerEligibleAsync(leader.getBrokerId(), true)
+                    .get(10, TimeUnit.SECONDS);
+            viaFollower.brokers().setLeaderBrokerEligibleAsync(follower.getBrokerId(), false)
+                    .get(10, TimeUnit.SECONDS);
             Awaitility.await().until(() -> leader.getLeaderElectionService().isLeader());
         } finally {
             leader.setLeaderElectionEnabled(true).get(10, TimeUnit.SECONDS);

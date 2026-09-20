@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker.admin;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -547,16 +548,25 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
 
     @Test
     public void leadershipEligibility() throws Exception {
-        assertTrue(admin.brokers().isLeaderElectionEnabledAsync().get());
+        assertThatThrownBy(() -> admin.brokers().isLeaderBrokerEligibleAsync(null).get())
+                .hasCauseInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> admin.brokers().setLeaderBrokerEligibleAsync(" ", false).get())
+                .hasCauseInstanceOf(IllegalArgumentException.class);
+        assertTrue(admin.brokers().isLeaderBrokerEligibleAsync(pulsar.getBrokerId()).get());
         try {
-            admin.brokers().setLeaderElectionEnabledAsync(false).get();
-            assertFalse(admin.brokers().isLeaderElectionEnabledAsync().get());
+            admin.brokers().setLeaderBrokerEligibleAsync(pulsar.getBrokerId(), false).get();
+            assertFalse(admin.brokers().isLeaderBrokerEligibleAsync(pulsar.getBrokerId()).get());
             assertFalse(pulsar.getLeaderElectionService().isLeader());
         } finally {
-            admin.brokers().setLeaderElectionEnabledAsync(true).get();
+            admin.brokers().setLeaderBrokerEligibleAsync(pulsar.getBrokerId(), true).get();
         }
-        assertTrue(admin.brokers().isLeaderElectionEnabledAsync().get());
+        assertTrue(admin.brokers().isLeaderBrokerEligibleAsync(pulsar.getBrokerId()).get());
         Awaitility.await().until(() -> pulsar.getLeaderElectionService().isLeader());
+        assertThatThrownBy(() -> admin.brokers().isLeaderBrokerEligibleAsync("missing-broker:8080").get())
+                .hasCauseInstanceOf(PulsarAdminException.NotFoundException.class);
+        assertThatThrownBy(() -> admin.brokers().setLeaderBrokerEligibleAsync("missing-broker:8080", false).get())
+                .hasCauseInstanceOf(PulsarAdminException.NotFoundException.class);
+        assertTrue(admin.brokers().isLeaderBrokerEligibleAsync(pulsar.getBrokerId()).get());
     }
 
     @Test

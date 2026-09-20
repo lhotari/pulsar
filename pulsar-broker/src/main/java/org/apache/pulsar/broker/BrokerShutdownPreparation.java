@@ -93,7 +93,7 @@ final class BrokerShutdownPreparation {
                                             PulsarService.sharesLeaderElection(
                                                     ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar),
                                                     data.getLoadManagerClassName()))
-                                    .ifPresent(data -> probe(data, route, successor)), probes)
+                                    .ifPresent(data -> probe(broker, data, route, successor)), probes)
                             .exceptionally(error -> null));
                 }
             }
@@ -133,7 +133,7 @@ final class BrokerShutdownPreparation {
         }
     }
 
-    private void probe(BrokerLookupData data, CompletableFuture<BrokerLookupData> route,
+    private void probe(String brokerId, BrokerLookupData data, CompletableFuture<BrokerLookupData> route,
                        CompletableFuture<Void> successor) {
         String url = probeRoute(data);
         boolean eligible = false;
@@ -153,7 +153,7 @@ final class BrokerShutdownPreparation {
                 if (url != null) {
                     route.complete(data);
                 }
-                eligible = await(admin.brokers().isLeaderElectionEnabledAsync());
+                eligible = await(admin.brokers().isLeaderBrokerEligibleAsync(brokerId));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (Exception e) {

@@ -162,10 +162,17 @@ public class BrokersBase extends AdminResource {
     }
 
     @GET
-    @Path("/leaderElectionEnabled")
-    @Operation(summary = "Get this broker's leadership eligibility.")
-    public void getLeaderElectionEnabled(@Suspended final AsyncResponse response) {
+    @Path("/{brokerId}/leaderBrokerEligible")
+    @Operation(summary = "Get the named broker's eligibility for the leader-broker role.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Whether the broker is eligible"),
+            @ApiResponse(responseCode = "307", description = "Redirect to the named broker"),
+            @ApiResponse(responseCode = "403", description = "This operation requires super-user access"),
+            @ApiResponse(responseCode = "404", description = "Broker not found")})
+    public void getLeaderBrokerEligible(@PathParam("brokerId") String brokerId,
+                                        @Suspended final AsyncResponse response) {
         validateSuperUserAccessAsync()
+                .thenCompose(__ -> maybeRedirectToBroker(brokerId))
                 .thenAccept(__ -> response.resume(pulsar().getLeaderElectionService().isElectionEnabled()))
                 .exceptionally(error -> {
                     resumeAsyncResponseExceptionally(response, error);
@@ -174,14 +181,19 @@ public class BrokersBase extends AdminResource {
     }
 
     @POST
-    @Path("/leaderElectionEnabled")
-    @Operation(summary = "Enable or disable this broker's leadership eligibility until it restarts.")
+    @Path("/{brokerId}/leaderBrokerEligible")
+    @Operation(summary = "Enable or disable the named broker's eligibility for the leader-broker role "
+            + "until it restarts.")
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "204", description = "Leadership eligibility changed"),
+            @ApiResponse(responseCode = "204", description = "Leader-broker eligibility changed"),
+            @ApiResponse(responseCode = "307", description = "Redirect to the named broker"),
+            @ApiResponse(responseCode = "404", description = "Broker not found"),
             @ApiResponse(responseCode = "403", description = "This operation requires super-user access"),
             @ApiResponse(responseCode = "409", description = "Broker shutdown is already in progress")})
-    public void setLeaderElectionEnabled(boolean enabled, @Suspended final AsyncResponse response) {
+    public void setLeaderBrokerEligible(@PathParam("brokerId") String brokerId, boolean enabled,
+                                        @Suspended final AsyncResponse response) {
         validateSuperUserAccessAsync()
+                .thenCompose(__ -> maybeRedirectToBroker(brokerId))
                 .thenCompose(__ -> pulsar().setLeaderElectionEnabled(enabled))
                 .thenAccept(__ -> response.resume(Response.noContent().build()))
                 .exceptionally(error -> {

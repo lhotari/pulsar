@@ -156,23 +156,30 @@ public class CmdBrokers extends CmdBase {
 
     }
 
-    @Command(description = "Get this broker's leadership eligibility.")
-    private class GetLeaderElectionEnabled extends CliCommand {
+    @Command(description = "Get the named broker's eligibility for the leader-broker role.")
+    private class GetLeaderBrokerEligible extends CliCommand {
+        @Parameters(description = "Broker ID", arity = "1")
+        private String brokerId;
+
         @Override
         void run() throws Exception {
-            print(sync(() -> getAdmin().brokers().isLeaderElectionEnabledAsync()));
+            print(sync(() -> getAdmin().brokers().isLeaderBrokerEligibleAsync(brokerId)));
         }
     }
 
-    @Command(description = "Enable or disable this broker's leadership eligibility until it restarts.")
-    private class SetLeaderElectionEnabled extends CliCommand {
+    @Command(description = "Enable or disable the named broker's eligibility for the leader-broker role "
+            + "until it restarts.")
+    private class SetLeaderBrokerEligible extends CliCommand {
+        @Parameters(description = "Broker ID", arity = "1")
+        private String brokerId;
+
         @Option(names = "--enabled", required = true, arity = "1",
-                description = "Whether this broker may become leader (true or false)")
+                description = "Whether this broker may hold the leader-broker role (true or false)")
         private boolean enabled;
 
         @Override
         void run() throws Exception {
-            sync(() -> getAdmin().brokers().setLeaderElectionEnabledAsync(enabled));
+            sync(() -> getAdmin().brokers().setLeaderBrokerEligibleAsync(brokerId, enabled));
         }
     }
 
@@ -200,8 +207,8 @@ public class CmdBrokers extends CmdBase {
         super("brokers", admin);
         addCommand("list", new List());
         addCommand("leader-broker", new LeaderBroker());
-        addCommand("get-leader-election-enabled", new GetLeaderElectionEnabled());
-        addCommand("set-leader-election-enabled", new SetLeaderElectionEnabled());
+        addCommand("get-leader-broker-eligible", new GetLeaderBrokerEligible());
+        addCommand("set-leader-broker-eligible", new SetLeaderBrokerEligible());
         addCommand("namespaces", new Namespaces());
         addCommand("update-dynamic-config", new UpdateConfigurationCmd());
         addCommand("delete-dynamic-config", new DeleteConfigurationCmd());

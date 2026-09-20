@@ -124,7 +124,7 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         Brokers brokers = mock(Brokers.class);
         when(brokers.checkReadyAsync()).thenReturn(ready ? CompletableFuture.completedFuture(null)
                 : CompletableFuture.failedFuture(new IllegalStateException("Peer is closing")));
-        when(brokers.isLeaderElectionEnabledAsync()).thenReturn(eligible != null
+        when(brokers.isLeaderBrokerEligibleAsync("other-broker:8080")).thenReturn(eligible != null
                 ? CompletableFuture.completedFuture(eligible)
                 : CompletableFuture.failedFuture(new PulsarAdminException.NotFoundException(null, "Not found", 404)));
         PulsarClientImpl probe = mock(PulsarClientImpl.class);
