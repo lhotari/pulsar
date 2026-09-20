@@ -350,6 +350,9 @@ public class ManagedCursorImpl implements ManagedCursor {
         AtomicReferenceFieldUpdater.newUpdater(ManagedCursorImpl.class, State.class, "state");
     protected volatile State state = State.Uninitialized;
 
+    // Guarded by this; retain physical persistence completion, including a failed close.
+    private CompletableFuture<Void> closeFuture;
+
     protected final ManagedCursorMXBean mbean;
 
     private volatile ManagedCursorAttributes managedCursorAttributes;
@@ -3111,34 +3114,60 @@ public class ManagedCursorImpl implements ManagedCursor {
 
     @Override
     public void asyncClose(final AsyncCallbacks.CloseCallback callback, final Object ctx) {
-        boolean alreadyClosing = !trySetStateToClosing();
-        if (alreadyClosing) {
-            log.info("State is already closed");
-            callback.closeComplete(ctx);
+        final CompletableFuture<Void> closing;
+        final boolean initiateClose;
+        final boolean alreadyClosed;
+        synchronized (this) {
+            initiateClose = closeFuture == null;
+            if (initiateClose) {
+                closeFuture = new CompletableFuture<>();
+                alreadyClosed = !trySetStateToClosing();
+            } else {
+                alreadyClosed = false;
+            }
+            closing = closeFuture;
+        }
+        // A repeat caller observes the same physical outcome, not merely State.Closing/Closed.
+        closing.whenComplete((__, error) -> {
+            if (error == null) {
+                callback.closeComplete(ctx);
+            } else {
+                callback.closeFailed(ManagedLedgerException.getManagedLedgerException(error), ctx);
+            }
+        });
+        if (alreadyClosed) {
+            // Deleting/Deleted/DeletingFailed must not issue another cursor metadata write.
+            closing.complete(null);
             return;
         }
-        closeWaitingCursor();
-        setInactive();
-        persistPositionWhenClosing(lastMarkDeleteEntry.newPosition, lastMarkDeleteEntry.properties,
-                new AsyncCallbacks.CloseCallback(){
-
-                    @Override
-                    public void closeComplete(Object ctx) {
-                        if (!STATE_UPDATER.compareAndSet(ManagedCursorImpl.this, State.Closing, State.Closed)) {
-                            log.warn().attr("state", state).log("State was modified from closing while closing");
-                            state = State.Closed;
+        if (!initiateClose) {
+            return;
+        }
+        try {
+            closeWaitingCursor();
+            setInactive();
+            persistPositionWhenClosing(lastMarkDeleteEntry.newPosition, lastMarkDeleteEntry.properties,
+                    new AsyncCallbacks.CloseCallback() {
+                        @Override
+                        public void closeComplete(Object ignored) {
+                            if (!STATE_UPDATER.compareAndSet(ManagedCursorImpl.this, State.Closing, State.Closed)) {
+                                log.warn().attr("state", state).log("State was modified from closing while closing");
+                                state = State.Closed;
+                            }
+                            closing.complete(null);
                         }
-                        callback.closeComplete(ctx);
-                    }
 
-                    @Override
-                    public void closeFailed(ManagedLedgerException exception, Object ctx) {
-                        log.warn("Persistent position failure when closing,"
-                                + " the state will remain in state-closing"
-                                + " and will no longer work");
-                        callback.closeFailed(exception, ctx);
-                    }
-                }, ctx);
+                        @Override
+                        public void closeFailed(ManagedLedgerException exception, Object ignored) {
+                            log.warn("Persistent position failure when closing,"
+                                    + " the state will remain in state-closing"
+                                    + " and will no longer work");
+                            closing.completeExceptionally(exception);
+                        }
+                    }, null);
+        } catch (Throwable error) {
+            closing.completeExceptionally(error);
+        }
     }
 
     protected void closeWaitingCursor() {
