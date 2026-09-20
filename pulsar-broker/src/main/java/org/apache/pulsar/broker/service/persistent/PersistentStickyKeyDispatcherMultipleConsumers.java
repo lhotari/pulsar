@@ -21,6 +21,8 @@ package org.apache.pulsar.broker.service.persistent;
 import static org.apache.pulsar.broker.service.StickyKeyConsumerSelector.STICKY_KEY_HASH_NOT_SET;
 import com.google.common.annotations.VisibleForTesting;
 import io.github.merlimat.slog.Logger;
+import io.netty.util.concurrent.Future;
+import io.netty.util.concurrent.GenericFutureListener;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -75,6 +77,11 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
     private final DrainingHashesTracker drainingHashesTracker;
 
     private final RescheduleReadHandler rescheduleReadHandler;
+    private final GenericFutureListener<Future<? super Void>> sendMessagesCompleteListener = future -> {
+        // One blocked socket must not hold up consumers whose writes have completed.
+        // The conflated read loop rechecks writability and permits before selecting a consumer.
+        readMoreEntriesAsync();
+    };
 
     PersistentStickyKeyDispatcherMultipleConsumers(PersistentTopic topic, ManagedCursor cursor,
             Subscription subscription, ServiceConfiguration conf, KeySharedMeta ksm) {
@@ -337,11 +344,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             consumer.sendMessages(entriesForConsumer, batchSizes, batchIndexesAcks,
                     sendMessageInfo.getTotalMessages(),
                     sendMessageInfo.getTotalBytes(), sendMessageInfo.getTotalChunkedMessages(),
-                    getRedeliveryTracker()).addListener(future -> {
-                // One blocked socket must not hold up consumers whose writes have completed.
-                // The conflated read loop rechecks writability and permits before selecting a consumer.
-                readMoreEntriesAsync();
-            });
+                    getRedeliveryTracker()).addListener(sendMessagesCompleteListener);
 
             TOTAL_AVAILABLE_PERMITS_UPDATER.getAndAdd(this,
                     -(sendMessageInfo.getTotalMessages() - batchIndexesAcks.getTotalAckedIndexCount()));
