@@ -24,6 +24,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.util.Recycler;
 import io.netty.util.Recycler.Handle;
 import io.netty.util.ReferenceCounted;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import lombok.CustomLog;
 import lombok.Getter;
 import lombok.Setter;
@@ -41,7 +42,10 @@ import org.apache.pulsar.common.protocol.Commands;
 
 @CustomLog
 public final class EntryImpl extends AbstractCASReferenceCounted
-        implements ReferenceCountedEntry, Comparable<EntryImpl> {
+        implements ReferenceCountedEntry, Comparable<EntryImpl>, EntryReadCountHandler {
+
+    private static final AtomicIntegerFieldUpdater<EntryImpl> EXPECTED_READ_COUNT_UPDATER =
+            AtomicIntegerFieldUpdater.newUpdater(EntryImpl.class, "expectedReadCount");
 
     private static final Recycler<EntryImpl> RECYCLER = new Recycler<EntryImpl>() {
         @Override
@@ -56,6 +60,7 @@ public final class EntryImpl extends AbstractCASReferenceCounted
     private Position position;
     ByteBuf data;
     private EntryReadCountHandler readCountHandler;
+    private volatile int expectedReadCount;
     private boolean decreaseReadCountOnRelease = true;
     // Cache readers publish metadata lazily; entry copies must see a fully initialized instance.
     @Getter @Setter
@@ -70,7 +75,7 @@ public final class EntryImpl extends AbstractCASReferenceCounted
         entry.entryId = ledgerEntry.getEntryId();
         entry.data = ledgerEntry.getEntryBuffer();
         entry.data.retain();
-        entry.readCountHandler = EntryReadCountHandlerImpl.maybeCreate(expectedReadCount);
+        entry.initializeReadCountHandler(expectedReadCount);
         entry.setRefCnt(1);
         return entry;
     }
@@ -108,7 +113,7 @@ public final class EntryImpl extends AbstractCASReferenceCounted
         entry.ledgerId = ledgerId;
         entry.entryId = entryId;
         entry.data = Unpooled.wrappedBuffer(data);
-        entry.readCountHandler = EntryReadCountHandlerImpl.maybeCreate(expectedReadCount);
+        entry.initializeReadCountHandler(expectedReadCount);
         entry.setRefCnt(1);
         return entry;
     }
@@ -123,7 +128,7 @@ public final class EntryImpl extends AbstractCASReferenceCounted
         entry.entryId = entryId;
         entry.data = data;
         entry.data.retain();
-        entry.readCountHandler = EntryReadCountHandlerImpl.maybeCreate(expectedReadCount);
+        entry.initializeReadCountHandler(expectedReadCount);
         entry.setRefCnt(1);
         return entry;
     }
@@ -135,7 +140,7 @@ public final class EntryImpl extends AbstractCASReferenceCounted
         entry.entryId = position.getEntryId();
         entry.data = data;
         entry.data.retain();
-        entry.readCountHandler = EntryReadCountHandlerImpl.maybeCreate(expectedReadCount);
+        entry.initializeReadCountHandler(expectedReadCount);
         entry.setRefCnt(1);
         return entry;
     }
@@ -146,7 +151,7 @@ public final class EntryImpl extends AbstractCASReferenceCounted
         entry.ledgerId = position.getLedgerId();
         entry.entryId = position.getEntryId();
         entry.data = data.retainedDuplicate();
-        entry.readCountHandler = EntryReadCountHandlerImpl.maybeCreate(expectedReadCount);
+        entry.initializeReadCountHandler(expectedReadCount);
         entry.setRefCnt(1);
         return entry;
     }
@@ -159,7 +164,7 @@ public final class EntryImpl extends AbstractCASReferenceCounted
         entry.ledgerId = position.getLedgerId();
         entry.entryId = position.getEntryId();
         entry.data = data.retainedDuplicate();
-        entry.readCountHandler = entryReadCountHandler;
+        entry.setReadCountHandler(entryReadCountHandler);
         entry.messageMetadata = messageMetadata;
         entry.setRefCnt(1);
         return entry;
@@ -172,7 +177,7 @@ public final class EntryImpl extends AbstractCASReferenceCounted
         entry.ledgerId = other.ledgerId;
         entry.entryId = other.entryId;
         entry.data = other.data.retainedDuplicate();
-        entry.readCountHandler = other.readCountHandler;
+        entry.setReadCountHandler(other.readCountHandler);
         entry.messageMetadata = other.messageMetadata;
         entry.setRefCnt(1);
         return entry;
@@ -184,7 +189,7 @@ public final class EntryImpl extends AbstractCASReferenceCounted
         entry.ledgerId = other.getLedgerId();
         entry.entryId = other.getEntryId();
         entry.data = other.getDataBuffer().retainedDuplicate();
-        entry.readCountHandler = other.getReadCountHandler();
+        entry.setReadCountHandler(other.getReadCountHandler());
         entry.messageMetadata = other.getMessageMetadata();
         entry.setRefCnt(1);
         return entry;
@@ -192,6 +197,37 @@ public final class EntryImpl extends AbstractCASReferenceCounted
 
     private EntryImpl(Recycler.Handle<EntryImpl> recyclerHandle) {
         this.recyclerHandle = recyclerHandle;
+    }
+
+    private void initializeReadCountHandler(int count) {
+        expectedReadCount = count;
+        readCountHandler = count > 0 ? this : null;
+    }
+
+    private void setReadCountHandler(EntryReadCountHandler handler) {
+        readCountHandler = handler;
+        if (handler instanceof EntryImpl owner && owner != this) {
+            owner.retain();
+        }
+    }
+
+    /**
+     * Makes this cache-owned entry the stable owner of the source entry's expected-read counter.
+     */
+    public void takeReadCountHandlerFrom(Entry source) {
+        EntryReadCountHandler sourceHandler = source.getReadCountHandler();
+        if (source instanceof EntryImpl sourceEntry && sourceHandler == sourceEntry) {
+            expectedReadCount = sourceEntry.expectedReadCount;
+            readCountHandler = this;
+            if (sourceEntry.decreaseReadCountOnRelease) {
+                sourceEntry.setReadCountHandler(this);
+            } else {
+                // Added-entry cache insertion uses a temporary source that is not itself a reader.
+                sourceEntry.readCountHandler = null;
+            }
+        } else {
+            setReadCountHandler(sourceHandler);
+        }
     }
 
     public void onDeallocate(Runnable r) {
@@ -273,8 +309,9 @@ public final class EntryImpl extends AbstractCASReferenceCounted
 
     @Override
     protected void deallocate() {
-        if (decreaseReadCountOnRelease && readCountHandler != null) {
-            readCountHandler.markRead();
+        EntryReadCountHandler handler = readCountHandler;
+        if (decreaseReadCountOnRelease && handler != null) {
+            handler.markRead();
         }
         // This method is called whenever the ref-count of the EntryImpl reaches 0, so that now we can recycle it
         if (onDeallocate != null) {
@@ -290,9 +327,13 @@ public final class EntryImpl extends AbstractCASReferenceCounted
         entryId = -1;
         position = null;
         readCountHandler = null;
+        expectedReadCount = 0;
         decreaseReadCountOnRelease = true;
         messageMetadata = null;
         messageMetadataInitializationFailed = false;
+        if (handler instanceof EntryImpl owner && owner != this) {
+            owner.release();
+        }
         recyclerHandle.recycle(this);
     }
 
@@ -304,6 +345,26 @@ public final class EntryImpl extends AbstractCASReferenceCounted
     @Override
     public EntryReadCountHandler getReadCountHandler() {
         return readCountHandler;
+    }
+
+    @Override
+    public int getExpectedReadCount() {
+        return expectedReadCount;
+    }
+
+    @Override
+    public void incrementExpectedReadCount() {
+        EXPECTED_READ_COUNT_UPDATER.incrementAndGet(this);
+    }
+
+    @Override
+    public void markRead() {
+        EXPECTED_READ_COUNT_UPDATER.decrementAndGet(this);
+    }
+
+    @Override
+    public boolean hasExpectedReads() {
+        return readCountHandler != null && readCountHandler.getExpectedReadCount() >= 1;
     }
 
     public void setDecreaseReadCountOnRelease(boolean enabled) {
