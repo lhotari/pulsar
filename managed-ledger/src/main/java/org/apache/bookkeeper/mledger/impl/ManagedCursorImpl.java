@@ -350,8 +350,9 @@ public class ManagedCursorImpl implements ManagedCursor {
         AtomicReferenceFieldUpdater.newUpdater(ManagedCursorImpl.class, State.class, "state");
     protected volatile State state = State.Uninitialized;
 
-    // Guarded by this; retain physical persistence completion, including a failed close.
+    // Guarded by pendingMarkDeleteOps, together with submission and the close boundary.
     private CompletableFuture<Void> closeFuture;
+    private CompletableFuture<Void> submittedMarkDeletesDrained;
 
     protected final ManagedCursorMXBean mbean;
 
@@ -3115,17 +3116,27 @@ public class ManagedCursorImpl implements ManagedCursor {
     @Override
     public void asyncClose(final AsyncCallbacks.CloseCallback callback, final Object ctx) {
         final CompletableFuture<Void> closing;
+        final CompletableFuture<Void> submitted;
+        final List<MarkDeleteEntry> queued;
         final boolean initiateClose;
         final boolean alreadyClosed;
-        synchronized (this) {
+        synchronized (pendingMarkDeleteOps) {
             initiateClose = closeFuture == null;
             if (initiateClose) {
                 closeFuture = new CompletableFuture<>();
                 alreadyClosed = !trySetStateToClosing();
+                submittedMarkDeletesDrained = new CompletableFuture<>();
+                if (PENDING_MARK_DELETED_SUBMITTED_COUNT_UPDATER.get(this) == 0) {
+                    submittedMarkDeletesDrained.complete(null);
+                }
+                queued = new ArrayList<>(pendingMarkDeleteOps);
+                pendingMarkDeleteOps.clear();
             } else {
                 alreadyClosed = false;
+                queued = List.of();
             }
             closing = closeFuture;
+            submitted = submittedMarkDeletesDrained;
         }
         // A repeat caller observes the same physical outcome, not merely State.Closing/Closed.
         closing.whenComplete((__, error) -> {
@@ -3135,39 +3146,59 @@ public class ManagedCursorImpl implements ManagedCursor {
                 callback.closeFailed(ManagedLedgerException.getManagedLedgerException(error), ctx);
             }
         });
-        if (alreadyClosed) {
-            // Deleting/Deleted/DeletingFailed must not issue another cursor metadata write.
-            closing.complete(null);
-            return;
-        }
         if (!initiateClose) {
             return;
         }
         try {
-            closeWaitingCursor();
-            setInactive();
-            persistPositionWhenClosing(lastMarkDeleteEntry.newPosition, lastMarkDeleteEntry.properties,
-                    new AsyncCallbacks.CloseCallback() {
-                        @Override
-                        public void closeComplete(Object ignored) {
-                            if (!STATE_UPDATER.compareAndSet(ManagedCursorImpl.this, State.Closing, State.Closed)) {
-                                log.warn().attr("state", state).log("State was modified from closing while closing");
-                                state = State.Closed;
-                            }
-                            closing.complete(null);
-                        }
-
-                        @Override
-                        public void closeFailed(ManagedLedgerException exception, Object ignored) {
-                            log.warn("Persistent position failure when closing,"
-                                    + " the state will remain in state-closing"
-                                    + " and will no longer work");
-                            closing.completeExceptionally(exception);
-                        }
-                    }, null);
+            if (alreadyClosed) {
+                // Deleting/Deleted/DeletingFailed must not issue another cursor metadata write.
+                submitted.thenRunAsync(() -> closing.complete(null));
+            } else {
+                closeWaitingCursor();
+                setInactive();
+                // Submitted writes can still fall back to the metadata store. They must settle before the
+                // final position write, even if that final write no longer references a cursor ledger.
+                // Dispatch outside the submission monitor because completion can run inline in a callback.
+                submitted.thenRunAsync(() -> persistFinalPosition(closing))
+                        .exceptionally(error -> {
+                            closing.completeExceptionally(error);
+                            return null;
+                        });
+            }
         } catch (Throwable error) {
             closing.completeExceptionally(error);
         }
+        // Start cleanup before invoking request callbacks: a callback may re-enter close.
+        CursorAlreadyClosedException closed = new CursorAlreadyClosedException("Cursor is closing");
+        for (MarkDeleteEntry entry : queued) {
+            try {
+                entry.triggerFailed(closed);
+            } catch (Throwable error) {
+                log.debug().exception(error).log("Queued mark-delete callback failed during cursor close");
+            }
+        }
+    }
+
+    private void persistFinalPosition(CompletableFuture<Void> closing) {
+        persistPositionWhenClosing(lastMarkDeleteEntry.newPosition, lastMarkDeleteEntry.properties,
+                new AsyncCallbacks.CloseCallback() {
+                    @Override
+                    public void closeComplete(Object ignored) {
+                        if (!STATE_UPDATER.compareAndSet(ManagedCursorImpl.this, State.Closing, State.Closed)) {
+                            log.warn().attr("state", state).log("State was modified from closing while closing");
+                            state = State.Closed;
+                        }
+                        closing.complete(null);
+                    }
+
+                    @Override
+                    public void closeFailed(ManagedLedgerException exception, Object ignored) {
+                        log.warn("Persistent position failure when closing,"
+                                + " the state will remain in state-closing"
+                                + " and will no longer work");
+                        closing.completeExceptionally(exception);
+                    }
+                }, null);
     }
 
     protected void closeWaitingCursor() {
@@ -3336,7 +3367,7 @@ public class ManagedCursorImpl implements ManagedCursor {
     }
 
     private void flushPendingMarkDeletes() {
-        if (!pendingMarkDeleteOps.isEmpty()) {
+        if (!state.isClosed() && !pendingMarkDeleteOps.isEmpty()) {
             internalFlushPendingMarkDeletes();
         }
     }
@@ -3790,12 +3821,18 @@ public class ManagedCursorImpl implements ManagedCursor {
     }
 
     void decrementPendingMarkDeleteCount() {
-        if (PENDING_MARK_DELETED_SUBMITTED_COUNT_UPDATER.decrementAndGet(this) == 0) {
-            if (state == State.SwitchingLedger) {
-                // A metadata ledger switch was pending and now we can do it since we don't have any more
-                // outstanding mark-delete requests
-                createNewMetadataLedger();
+        CompletableFuture<Void> drained = null;
+        synchronized (pendingMarkDeleteOps) {
+            if (PENDING_MARK_DELETED_SUBMITTED_COUNT_UPDATER.decrementAndGet(this) == 0) {
+                drained = submittedMarkDeletesDrained;
+                if (state == State.SwitchingLedger) {
+                    // A metadata ledger switch was pending until all submitted writes completed.
+                    createNewMetadataLedger();
+                }
             }
+        }
+        if (drained != null) {
+            drained.complete(null);
         }
     }
 

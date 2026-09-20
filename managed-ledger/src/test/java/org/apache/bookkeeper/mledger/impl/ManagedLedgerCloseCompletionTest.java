@@ -22,6 +22,7 @@ import static org.apache.bookkeeper.mledger.util.ManagedLedgerTestUtil.defaultCo
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
@@ -46,6 +47,8 @@ import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.MetaStoreException;
+import org.apache.bookkeeper.mledger.Position;
+import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl.VoidCallback;
 import org.apache.bookkeeper.mledger.impl.MetaStore.MetaStoreCallback;
 import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo;
 import org.apache.bookkeeper.mledger.util.Futures.CloseFuture;
@@ -289,6 +292,94 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
                 release.run();
             }
         }
+    }
+
+    @Test(dataProvider = "closeFailures")
+    public void testCursorCloseWaitsForSubmittedMarkDelete(boolean markDeleteFailure) throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("submitted-mark-delete", defaultConfig());
+        ManagedCursorImpl original = (ManagedCursorImpl) ledger.openCursor("cursor");
+        Position first = ledger.addEntry(new byte[] {1});
+        Position second = ledger.addEntry(new byte[] {2});
+        original.markDelete(first);
+        ManagedCursorImpl cursor = spy(original);
+        ledger.getCursors().removeCursor(cursor.getName());
+        ledger.getCursors().add(cursor, cursor.getMarkDeletedPosition());
+        CompletableFuture<VoidCallback> submitted = new CompletableFuture<>();
+        CompletableFuture<Void> finalWriteStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            submitted.complete(invocation.getArgument(2));
+            return null;
+        }).when(cursor).persistPositionToLedger(any(), any(), any(), anyBoolean());
+        doAnswer(invocation -> {
+            finalWriteStarted.complete(null);
+            return invocation.callRealMethod();
+        }).when(cursor).persistPositionWhenClosing(any(), any(), any(), any());
+        CompletableFuture<Void> acknowledged = markDelete(cursor, second);
+        VoidCallback write = submitted.get(5, TimeUnit.SECONDS);
+        boolean released = false;
+        try {
+            CloseFuture closing = new CloseFuture();
+            cursor.asyncClose(closing, null);
+            assertThat(finalWriteStarted).as("final metadata cannot overtake a submitted acknowledgment").isNotDone();
+            assertThat(closing).isNotDone();
+            released = true;
+            if (markDeleteFailure) {
+                write.operationFailed(new ManagedLedgerException("held mark-delete failed"));
+                assertThatThrownBy(() -> acknowledged.get(5, TimeUnit.SECONDS))
+                        .hasCauseInstanceOf(ManagedLedgerException.class);
+            } else {
+                write.operationComplete();
+                acknowledged.get(5, TimeUnit.SECONDS);
+            }
+            closing.get(5, TimeUnit.SECONDS);
+            assertThat(finalWriteStarted).isCompleted();
+        } finally {
+            if (!released) {
+                write.operationComplete();
+            }
+        }
+    }
+
+    @Test
+    public void testCursorCloseRejectsQueuedMarkDelete() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("queued-mark-delete", defaultConfig());
+        ManagedCursorImpl cursor = spy((ManagedCursorImpl) ledger.openCursor("cursor"));
+        ledger.getCursors().removeCursor(cursor.getName());
+        ledger.getCursors().add(cursor, cursor.getMarkDeletedPosition());
+        Position position = ledger.addEntry(new byte[] {1});
+        // Pause before a cursor-ledger create is issued: the mark-delete is queued behind the switch.
+        CompletableFuture<VoidCallback> switchStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            switchStarted.complete(invocation.getArgument(0));
+            return null;
+        }).when(cursor).createNewMetadataLedger(any());
+        CompletableFuture<Void> acknowledged = markDelete(cursor, position);
+        VoidCallback switching = switchStarted.get(5, TimeUnit.SECONDS);
+        CloseFuture closing = new CloseFuture();
+        cursor.asyncClose(closing, null);
+        closing.get(5, TimeUnit.SECONDS);
+        assertThat(acknowledged).as("a queued acknowledgment must not be abandoned at the close boundary")
+                .isCompletedExceptionally();
+        assertThatThrownBy(() -> acknowledged.get(5, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(ManagedLedgerException.CursorAlreadyClosedException.class);
+        switching.operationFailed(new ManagedLedgerException("switch cancelled before physical create"));
+        assertThat(cursor.isClosed()).isTrue();
+    }
+
+    private static CompletableFuture<Void> markDelete(ManagedCursor cursor, Position position) {
+        CompletableFuture<Void> acknowledged = new CompletableFuture<>();
+        cursor.asyncMarkDelete(position, new AsyncCallbacks.MarkDeleteCallback() {
+            @Override
+            public void markDeleteComplete(Object ctx) {
+                acknowledged.complete(null);
+            }
+
+            @Override
+            public void markDeleteFailed(ManagedLedgerException exception, Object ctx) {
+                acknowledged.completeExceptionally(exception);
+            }
+        }, null);
+        return acknowledged;
     }
 
     private static CompletableFuture<Void> observeCurrentLedgerClose(ManagedLedgerImpl ledger) {
