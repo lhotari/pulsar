@@ -545,7 +545,7 @@ public class PendingAcksMap {
     }
 
     private static final class LedgerPendingAcks {
-        private final Long2LongLinkedOpenHashMap entries = new Long2LongLinkedOpenHashMap();
+        private final Long2LongLinkedOpenHashMap entries = new RetainedCapacityLong2LongLinkedOpenHashMap();
         // Selective redelivery can insert an older entry after newer entries. Prefix removal then scans the whole map.
         private boolean insertionOrderSorted = true;
 
@@ -590,6 +590,18 @@ public class PendingAcksMap {
 
         ObjectIterator<Long2LongMap.Entry> iterator() {
             return Long2LongMaps.fastIterator(entries);
+        }
+    }
+
+    /** Retains small pending-ack windows while allowing unusually large spikes to shrink. */
+    static final class RetainedCapacityLong2LongLinkedOpenHashMap extends Long2LongLinkedOpenHashMap {
+        private static final int MIN_RETAINED_CAPACITY = 4096;
+
+        @Override
+        protected void rehash(int newCapacity) {
+            if (newCapacity >= n || newCapacity >= MIN_RETAINED_CAPACITY) {
+                super.rehash(newCapacity);
+            }
         }
     }
 

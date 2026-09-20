@@ -47,7 +47,7 @@ import org.openjdk.jmh.annotations.Warmup;
 @Measurement(iterations = 5, time = 1)
 @Fork(2)
 public class PendingAckTreeBenchmark {
-    @Param({"RB", "AVL", "OPEN_HASH", "LINKED_HASH"})
+    @Param({"RB", "AVL", "OPEN_HASH", "LINKED_HASH", "RETAINED_LINKED_HASH"})
     public String implementation;
 
     @Param({"1024", "65536"})
@@ -69,6 +69,7 @@ public class PendingAckTreeBenchmark {
             case "RB" -> new Long2LongRBTreeMap();
             case "OPEN_HASH" -> new Long2LongOpenHashMap();
             case "LINKED_HASH" -> new Long2LongLinkedOpenHashMap();
+            case "RETAINED_LINKED_HASH" -> new PendingAcksMap.RetainedCapacityLong2LongLinkedOpenHashMap();
             default -> throw new IllegalArgumentException(implementation);
         };
         map.defaultReturnValue(PendingAckValues.PACKED_NOT_FOUND);
@@ -102,6 +103,20 @@ public class PendingAckTreeBenchmark {
         map.put(newEntryId, packedValue);
         entryIds[index] = newEntryId;
         return value;
+    }
+
+    @Benchmark
+    public long drainAndRefillWindow() {
+        long sum = 0;
+        for (long entryId : entryIds) {
+            sum += map.remove(entryId);
+        }
+        for (int i = 0; i < entryIds.length; i++) {
+            long entryId = nextEntryId++;
+            map.put(entryId, packedValue);
+            entryIds[i] = entryId;
+        }
+        return sum;
     }
 
     @Benchmark
