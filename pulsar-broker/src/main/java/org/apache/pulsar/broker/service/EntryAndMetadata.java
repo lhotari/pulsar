@@ -134,6 +134,21 @@ public class EntryAndMetadata implements Entry {
     }
 
     /**
+     * Get the cached sticky-key hash or calculate it without materializing a UTF-8 byte array for a plain string key.
+     */
+    public int getOrUpdateCachedStickyKeyHash(StickyKeyConsumerSelector selector) {
+        if (stickyKeyHash == STICKY_KEY_HASH_NOT_INITIALIZED) {
+            if (metadata != null && metadata.hasPartitionKey() && !metadata.isPartitionKeyB64Encoded()
+                    && !metadata.hasOrderingKey()) {
+                stickyKeyHash = selector.makeStickyKeyHash(metadata.getPartitionKey());
+            } else {
+                stickyKeyHash = selector.makeStickyKeyHash(getStickyKey());
+            }
+        }
+        return stickyKeyHash;
+    }
+
+    /**
      * Get cached sticky key hash or return STICKY_KEY_HASH_NOT_SET if it's not cached.
      *
      * @return the cached sticky key hash or STICKY_KEY_HASH_NOT_SET if it's not cached

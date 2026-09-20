@@ -22,6 +22,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 import java.nio.charset.StandardCharsets;
+import java.util.Random;
 import org.testng.annotations.Test;
 
 @SuppressWarnings("checkstyle:TypeName")
@@ -69,5 +70,28 @@ public class Murmur3_32HashTest {
         assertTrue(rawReachesUpperHalf, "raw hash high 16 bits should span the full range");
         assertFalse(maskedReachesUpperHalf,
                 "makeHash high 16 bits should never reach 0x8000 (bit 31 is cleared)");
+    }
+
+    @Test
+    public void testUtf8StringHashMatchesByteArrayHash() {
+        Hash hash = Murmur3_32Hash.getInstance();
+        String[] fixedValues = {
+                "", "plain-ascii", "España", "漢字", "emoji-🚀", "\ud800", "\udc00", "a\ud800b"
+        };
+        for (String value : fixedValues) {
+            assertEquals(Murmur3_32Hash.makeHashUtf8(value), hash.makeHash(b(value)), value);
+        }
+
+        Random random = new Random(1);
+        for (int sample = 0; sample < 10_000; sample++) {
+            int length = random.nextInt(40);
+            StringBuilder value = new StringBuilder(length);
+            for (int i = 0; i < length; i++) {
+                value.append((char) random.nextInt(Character.MAX_VALUE + 1));
+            }
+            String string = value.toString();
+            assertEquals(Murmur3_32Hash.makeHashUtf8(string), hash.makeHash(b(string)),
+                    "sample " + sample);
+        }
     }
 }

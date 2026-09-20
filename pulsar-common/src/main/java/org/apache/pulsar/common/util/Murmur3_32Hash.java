@@ -64,6 +64,62 @@ public class Murmur3_32Hash implements Hash {
         return instance.makeHash0(b);
     }
 
+    /**
+     * Hashes the UTF-8 representation of a string without creating an intermediate byte array.
+     *
+     * <p>The result is identical to {@code makeHash(value.getBytes(StandardCharsets.UTF_8))}, including Java's
+     * replacement of unpaired UTF-16 surrogates with {@code '?'}.
+     */
+    public static int makeHashUtf8(String value) {
+        int h1 = instance.seed;
+        int k1 = 0;
+        int bytesInChunk = 0;
+        int utf8Length = 0;
+
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            int encoded;
+            int encodedLength;
+            if (ch < 0x80) {
+                encoded = ch;
+                encodedLength = 1;
+            } else if (ch < 0x800) {
+                encoded = (0xc0 | ch >>> 6) | (0x80 | ch & 0x3f) << 8;
+                encodedLength = 2;
+            } else if (Character.isHighSurrogate(ch) && i + 1 < value.length()
+                    && Character.isLowSurrogate(value.charAt(i + 1))) {
+                int codePoint = Character.toCodePoint(ch, value.charAt(++i));
+                encoded = (0xf0 | codePoint >>> 18)
+                        | (0x80 | codePoint >>> 12 & 0x3f) << 8
+                        | (0x80 | codePoint >>> 6 & 0x3f) << 16
+                        | (0x80 | codePoint & 0x3f) << 24;
+                encodedLength = 4;
+            } else if (Character.isSurrogate(ch)) {
+                encoded = '?';
+                encodedLength = 1;
+            } else {
+                encoded = (0xe0 | ch >>> 12)
+                        | (0x80 | ch >>> 6 & 0x3f) << 8
+                        | (0x80 | ch & 0x3f) << 16;
+                encodedLength = 3;
+            }
+
+            utf8Length += encodedLength;
+            for (int byteIndex = 0; byteIndex < encodedLength; byteIndex++) {
+                k1 |= (encoded >>> (byteIndex * 8) & 0xff) << (bytesInChunk * 8);
+                if (++bytesInChunk == CHUNK_SIZE) {
+                    h1 = instance.mixH1(h1, instance.mixK1(k1));
+                    k1 = 0;
+                    bytesInChunk = 0;
+                }
+            }
+        }
+
+        h1 ^= instance.mixK1(k1);
+        h1 ^= utf8Length;
+        return instance.fmix(h1) & Integer.MAX_VALUE;
+    }
+
     private int makeHash0(byte[] bytes) {
         int len = bytes.length;
         int reminder = len % CHUNK_SIZE;
