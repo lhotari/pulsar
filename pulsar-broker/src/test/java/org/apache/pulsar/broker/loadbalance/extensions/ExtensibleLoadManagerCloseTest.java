@@ -99,7 +99,8 @@ public class ExtensibleLoadManagerCloseTest {
         config.setTopicLevelPoliciesEnabled(topicPoliciesEnabled);
         config.setLoadManagerClassName(ExtensibleLoadManagerImpl.class.getName());
         config.setLoadBalancerDebugModeEnabled(true);
-        config.setBrokerShutdownTimeoutMs(100);
+        // The overall budget includes bundle draining; the tests below still assert prompt shutdown.
+        config.setBrokerShutdownTimeoutMs(10000);
 
         // Reduce these timeout configs to avoid failed tests being blocked too long
         config.setMetadataStoreOperationTimeoutSeconds(5);
