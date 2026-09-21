@@ -2539,7 +2539,7 @@ public class ServiceUnitStateChannelTest extends MockedPulsarServiceBaseTest {
         doAnswer(invocation -> {
             closeStarted.complete(null);
             return closing;
-        }).when(topic).close(false, false);
+        }).when(topic).closeForShutdownTransfer();
         doReturn(CompletableFuture.completedFuture(null)).when(topic).disposeAfterTransfer();
         doReturn(Map.of("persistent://" + namespaceName + "/rejected-owned",
                 CompletableFuture.completedFuture(Optional.of(topic))))

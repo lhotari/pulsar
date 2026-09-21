@@ -1830,13 +1830,15 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     public CompletableFuture<Void> disposeAfterTransfer() {
         if (!producers.isEmpty()
                 || subscriptions.values().stream().anyMatch(sub -> !sub.getConsumers().isEmpty())) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Transfer clients remain registered"));
+            return completeShutdownTransferDisposal(CompletableFuture.failedFuture(
+                    new IllegalStateException("Transfer clients remain registered")));
         }
-        return close(true, false, true);
+        return completeShutdownTransferDisposal(close(true, false, true));
     }
 
     private CompletableFuture<Void> close(boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect,
                                           boolean clientsRemoved) {
+        CompletableFuture<Void> disposalToJoin = null;
         lock.writeLock().lock();
         // Choose the close type.
         CloseTypes closeType;
@@ -1857,35 +1859,50 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 return CompletableFuture.failedFuture(new IllegalStateException(
                         "Transfer disposal requires fenced storage and removed clients"));
             }
-            // Return in-progress future if exists.
-            if (isClosingOrDeleting) {
-                if (closeType == CloseTypes.transferring) {
-                    return closeFutures.transferring.copy();
-                }
-                if (closeType == CloseTypes.notWaitDisconnectClients && closeFutures.notWaitDisconnectClients != null) {
-                    return transferring ? closeFutures.notWaitDisconnectClients.copy()
-                            : closeFutures.notWaitDisconnectClients;
-                }
-                if (closeType == CloseTypes.waitDisconnectClients && closeFutures.waitDisconnectClients != null) {
-                    return transferring ? closeFutures.waitDisconnectClients.copy()
-                            : closeFutures.waitDisconnectClients;
-                }
-                if (transferring) {
-                    inProgressTransferCloseTask = closeFutures.transferring;
-                }
-            }
-            fenceTopicToCloseOrDelete();
-            if (closeType == CloseTypes.transferring) {
-                transferring = true;
-                this.closeFutures = new CloseFutures(new CompletableFuture<>(), null, null);
+            if (disconnectClients && !clientsRemoved && shutdownTransferDisposed != null) {
+                // Do not install an ordinary close generation: shutdown's own disposal must not join it.
+                disposalToJoin = shutdownTransferDisposed;
+                operation = closeFutures;
             } else {
-                this.closeFutures = new CloseFutures(
-                        inProgressTransferCloseTask != null ? inProgressTransferCloseTask : new CompletableFuture<>(),
-                        new CompletableFuture<>(), new CompletableFuture<>());
+                // Return in-progress future if exists.
+                if (isClosingOrDeleting) {
+                    if (closeType == CloseTypes.transferring) {
+                        return closeFutures.transferring.copy();
+                    }
+                    if (closeType == CloseTypes.notWaitDisconnectClients
+                            && closeFutures.notWaitDisconnectClients != null) {
+                        return transferring && !clientsRemoved ? closeFutures.notWaitDisconnectClients.copy()
+                                : closeFutures.notWaitDisconnectClients;
+                    }
+                    if (closeType == CloseTypes.waitDisconnectClients && closeFutures.waitDisconnectClients != null) {
+                        return transferring && !clientsRemoved ? closeFutures.waitDisconnectClients.copy()
+                                : closeFutures.waitDisconnectClients;
+                    }
+                    if (transferring) {
+                        inProgressTransferCloseTask = closeFutures.transferring;
+                    }
+                }
+                fenceTopicToCloseOrDelete();
+                if (closeType == CloseTypes.transferring) {
+                    transferring = true;
+                    if (shutdownTransferRequested) {
+                        shutdownTransferDisposed = new CompletableFuture<>();
+                    }
+                    this.closeFutures = new CloseFutures(new CompletableFuture<>(), null, null);
+                } else {
+                    this.closeFutures = new CloseFutures(
+                            inProgressTransferCloseTask != null
+                                    ? inProgressTransferCloseTask : new CompletableFuture<>(),
+                            new CompletableFuture<>(), new CompletableFuture<>());
+                }
+                operation = closeFutures;
             }
-            operation = closeFutures;
         } finally {
             lock.writeLock().unlock();
+        }
+
+        if (disposalToJoin != null) {
+            return observeShutdownTransfer(operation.transferring, disposalToJoin);
         }
 
         CompletableFuture<Void> previous = inProgressTransferCloseTask != null
@@ -1905,7 +1922,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             }
         });
         // A canceled request must not cancel or poison the shared physical transfer barrier.
-        return transferring ? result.copy() : result;
+        return transferring && !clientsRemoved ? result.copy() : result;
     }
 
     private CompletableFuture<Void> closeResources(

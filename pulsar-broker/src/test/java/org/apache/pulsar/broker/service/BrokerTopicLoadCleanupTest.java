@@ -306,7 +306,7 @@ public class BrokerTopicLoadCleanupTest {
             Topic replacement = mock(Topic.class);
             CompletableFuture<Void> storage = new CompletableFuture<>();
             CompletableFuture<Void> notifications = new CompletableFuture<>();
-            when(original.close(false, false)).thenReturn(storage);
+            when(original.closeForShutdownTransfer()).thenReturn(storage);
             when(original.disposeAfterTransfer()).thenReturn(notifications);
             broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(original)));
             context.getPulsarService().getBrokerAdmission().close().forEach(Runnable::run);
@@ -322,7 +322,7 @@ public class BrokerTopicLoadCleanupTest {
                 CompletableFuture<Void> second = unload.disconnectClients();
                 assertThat(second.cancel(false)).isTrue();
                 second = unload.disconnectClients();
-                verify(original, timeout(10000)).close(false, false);
+                verify(original, timeout(10000)).closeForShutdownTransfer();
                 assertPending(first);
                 assertPending(second);
                 verify(original, never()).disposeAfterTransfer();
@@ -342,8 +342,8 @@ public class BrokerTopicLoadCleanupTest {
                     notifications.complete(null);
                     second.get(10, TimeUnit.SECONDS);
                 }
-                verify(original).close(false, false);
-                verify(replacement, never()).close(false, false);
+                verify(original).closeForShutdownTransfer();
+                verify(replacement, never()).closeForShutdownTransfer();
                 verify(replacement, never()).disposeAfterTransfer();
                 assertThat(broker.getTopics().get(NAME.toString())).isSameAs(replacementFuture);
             } finally {
@@ -360,7 +360,7 @@ public class BrokerTopicLoadCleanupTest {
             BrokerService broker = context.getBrokerService();
             Topic topic = mock(Topic.class);
             CompletableFuture<Void> physical = new CompletableFuture<>();
-            when(topic.close(false, false)).thenReturn(physical);
+            when(topic.closeForShutdownTransfer()).thenReturn(physical);
             CompletableFuture<Optional<Topic>> canceled = new CompletableFuture<>();
             canceled.cancel(false);
             broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(topic)));
@@ -371,7 +371,7 @@ public class BrokerTopicLoadCleanupTest {
             when(bundle.includes(any(TopicName.class))).thenReturn(true);
             try {
                 CompletableFuture<Void> closing = broker.captureShutdownBundle(bundle).closeStorage();
-                verify(topic, timeout(10000)).close(false, false);
+                verify(topic, timeout(10000)).closeForShutdownTransfer();
                 assertPending(closing);
                 physical.complete(null);
                 assertThatThrownBy(() -> closing.get(10, TimeUnit.SECONDS))
@@ -391,8 +391,8 @@ public class BrokerTopicLoadCleanupTest {
             Topic firstTopic = mock(Topic.class);
             Topic secondTopic = mock(Topic.class);
             CompletableFuture<Void> physical = new CompletableFuture<>();
-            when(firstTopic.close(false, false)).thenReturn(physical);
-            when(secondTopic.close(false, false)).thenReturn(CompletableFuture.completedFuture(null));
+            when(firstTopic.closeForShutdownTransfer()).thenReturn(physical);
+            when(secondTopic.closeForShutdownTransfer()).thenReturn(CompletableFuture.completedFuture(null));
             String secondName = NAME + "-second";
             broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(firstTopic)));
             broker.getTopics().put(secondName, CompletableFuture.completedFuture(Optional.of(secondTopic)));
@@ -405,21 +405,21 @@ public class BrokerTopicLoadCleanupTest {
             BrokerService.BundleUnload second = broker.captureShutdownBundle(secondBundle);
             try {
                 CompletableFuture<Void> firstClose = first.closeStorage();
-                verify(firstTopic, timeout(10000)).close(false, false);
+                verify(firstTopic, timeout(10000)).closeForShutdownTransfer();
                 CompletableFuture<Void> canceledPreparation = second.prepareStorage();
                 assertThat(canceledPreparation.cancel(false)).isTrue();
                 CompletableFuture<Void> prepared = second.prepareStorage();
                 assertPending(prepared);
                 firstClose.cancel(false);
                 assertPending(prepared);
-                verify(secondTopic, never()).close(false, false);
+                verify(secondTopic, never()).closeForShutdownTransfer();
                 physical.complete(null);
                 prepared.get(10, TimeUnit.SECONDS);
-                verify(secondTopic, never()).close(false, false);
+                verify(secondTopic, never()).closeForShutdownTransfer();
                 second.closeStorage().get(10, TimeUnit.SECONDS);
                 first.closeStorage().get(10, TimeUnit.SECONDS);
-                verify(firstTopic).close(false, false);
-                verify(secondTopic).close(false, false);
+                verify(firstTopic).closeForShutdownTransfer();
+                verify(secondTopic).closeForShutdownTransfer();
             } finally {
                 physical.complete(null);
                 second.cancelPreparation();
@@ -439,12 +439,12 @@ public class BrokerTopicLoadCleanupTest {
             CompletableFuture<Void> secondPhysical = new CompletableFuture<>();
             CompletableFuture<Boolean> firstStarted = new CompletableFuture<>();
             AtomicInteger started = new AtomicInteger();
-            when(firstTopic.close(false, false)).thenAnswer(ignored -> {
+            when(firstTopic.closeForShutdownTransfer()).thenAnswer(ignored -> {
                 started.incrementAndGet();
                 firstStarted.complete(true);
                 return firstPhysical;
             });
-            when(secondTopic.close(false, false)).thenAnswer(ignored -> {
+            when(secondTopic.closeForShutdownTransfer()).thenAnswer(ignored -> {
                 started.incrementAndGet();
                 firstStarted.complete(false);
                 return secondPhysical;
@@ -462,10 +462,10 @@ public class BrokerTopicLoadCleanupTest {
                 assertThat(started).hasValue(1);
                 if (first) {
                     firstPhysical.complete(null);
-                    verify(secondTopic, timeout(10000)).close(false, false);
+                    verify(secondTopic, timeout(10000)).closeForShutdownTransfer();
                 } else {
                     secondPhysical.complete(null);
-                    verify(firstTopic, timeout(10000)).close(false, false);
+                    verify(firstTopic, timeout(10000)).closeForShutdownTransfer();
                 }
                 assertPending(closing);
                 firstPhysical.complete(null);
@@ -496,8 +496,8 @@ public class BrokerTopicLoadCleanupTest {
             Topic original = mock(Topic.class);
             Topic otherTopic = mock(Topic.class);
             Topic replacement = mock(Topic.class);
-            when(original.close(false, false)).thenReturn(CompletableFuture.completedFuture(null));
-            when(otherTopic.close(false, false)).thenReturn(CompletableFuture.completedFuture(null));
+            when(original.closeForShutdownTransfer()).thenReturn(CompletableFuture.completedFuture(null));
+            when(otherTopic.closeForShutdownTransfer()).thenReturn(CompletableFuture.completedFuture(null));
             broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(original)));
             broker.getTopics().put(otherName, CompletableFuture.completedFuture(Optional.of(otherTopic)));
             context.getPulsarService().getBrokerAdmission().close().forEach(Runnable::run);
@@ -507,12 +507,12 @@ public class BrokerTopicLoadCleanupTest {
                 NamespaceBundle owner = first.includes(NAME) ? first : second;
                 NamespaceBundle empty = owner == first ? second : first;
                 captured.get(empty).closeStorage().get(10, TimeUnit.SECONDS);
-                verify(original, never()).close(false, false);
+                verify(original, never()).closeForShutdownTransfer();
                 captured.get(owner).closeStorage().get(10, TimeUnit.SECONDS);
-                verify(original).close(false, false);
-                verify(otherTopic, never()).close(false, false);
+                verify(original).closeForShutdownTransfer();
+                verify(otherTopic, never()).closeForShutdownTransfer();
                 captured.get(other).closeStorage().get(10, TimeUnit.SECONDS);
-                verify(otherTopic).close(false, false);
+                verify(otherTopic).closeForShutdownTransfer();
                 verify(replacement, never()).close(anyBoolean(), anyBoolean());
                 NamespaceBundle overlapping = factory.getBundle(NAME.getNamespaceObject(),
                         Range.closed(0L, 0xffffffffL));
@@ -550,19 +550,19 @@ public class BrokerTopicLoadCleanupTest {
             Topic secondTopic = mock(Topic.class);
             CompletableFuture<Void> firstClosed = new CompletableFuture<>();
             CompletableFuture<Void> secondClosed = new CompletableFuture<>();
-            when(firstTopic.close(false, false)).thenReturn(firstClosed);
-            when(secondTopic.close(false, false)).thenReturn(secondClosed);
+            when(firstTopic.closeForShutdownTransfer()).thenReturn(firstClosed);
+            when(secondTopic.closeForShutdownTransfer()).thenReturn(secondClosed);
             String secondName = "persistent://prop/zzz/topic";
             broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(firstTopic)));
             broker.getTopics().put(secondName, CompletableFuture.completedFuture(Optional.of(secondTopic)));
             context.getPulsarService().getBrokerAdmission().close().forEach(Runnable::run);
             try {
                 CompletableFuture<Void> result = broker.drainLegacyBundles(0);
-                verify(firstTopic, timeout(10000)).close(false, false);
+                verify(firstTopic, timeout(10000)).closeForShutdownTransfer();
                 assertPending(result);
-                verify(secondTopic, never()).close(false, false);
+                verify(secondTopic, never()).closeForShutdownTransfer();
                 firstClosed.complete(null);
-                verify(secondTopic, timeout(10000)).close(false, false);
+                verify(secondTopic, timeout(10000)).closeForShutdownTransfer();
                 assertPending(result);
                 secondClosed.complete(null);
                 result.get(10, TimeUnit.SECONDS);
@@ -592,8 +592,8 @@ public class BrokerTopicLoadCleanupTest {
             Topic internal = mock(Topic.class);
             CompletableFuture<Void> userClosed = new CompletableFuture<>();
             CompletableFuture<Void> internalClosed = new CompletableFuture<>();
-            when(user.close(false, false)).thenReturn(userClosed);
-            when(internal.close(false, false)).thenReturn(internalClosed);
+            when(user.closeForShutdownTransfer()).thenReturn(userClosed);
+            when(internal.closeForShutdownTransfer()).thenReturn(internalClosed);
             String internalName = ExtensibleLoadManagerImpl.BROKER_LOAD_DATA_STORE_TOPIC;
             broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(user)));
             broker.getTopics().put(internalName, CompletableFuture.completedFuture(Optional.of(internal)));
@@ -602,13 +602,13 @@ public class BrokerTopicLoadCleanupTest {
                 NamespaceBundle system = factory.getBundle(NamespaceName.SYSTEM_NAMESPACE,
                         Range.closed(0L, 0xffffffffL));
                 broker.captureShutdownBundle(system).closeStorage().get(10, TimeUnit.SECONDS);
-                verify(internal, never()).close(false, false);
+                verify(internal, never()).closeForShutdownTransfer();
                 CompletableFuture<Void> result = broker.closeShutdownTopicsLocally(0);
-                verify(user, timeout(10000)).close(false, false);
+                verify(user, timeout(10000)).closeForShutdownTransfer();
                 assertPending(result);
-                verify(internal, never()).close(false, false);
+                verify(internal, never()).closeForShutdownTransfer();
                 userClosed.complete(null);
-                verify(internal, timeout(10000)).close(false, false);
+                verify(internal, timeout(10000)).closeForShutdownTransfer();
                 assertPending(result);
                 internalClosed.complete(null);
                 result.get(10, TimeUnit.SECONDS);

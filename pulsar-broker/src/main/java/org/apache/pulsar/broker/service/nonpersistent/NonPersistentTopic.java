@@ -561,13 +561,15 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
     public CompletableFuture<Void> disposeAfterTransfer() {
         if (!producers.isEmpty()
                 || subscriptions.values().stream().anyMatch(sub -> !sub.getConsumers().isEmpty())) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Transfer clients remain registered"));
+            return completeShutdownTransferDisposal(CompletableFuture.failedFuture(
+                    new IllegalStateException("Transfer clients remain registered")));
         }
-        return close(true, false, true);
+        return completeShutdownTransferDisposal(close(true, false, true));
     }
 
     private CompletableFuture<Void> close(boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect,
                                           boolean clientsRemoved) {
+        CompletableFuture<Void> disposalToJoin = null;
         CompletableFuture<Void> closeFuture = new CompletableFuture<>();
         CompletableFuture<Void> storageClosed;
         lock.writeLock().lock();
@@ -576,12 +578,16 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
                 return CompletableFuture.failedFuture(new IllegalStateException(
                         "Transfer disposal requires fenced storage and removed clients"));
             }
-            if (transferCloseFuture != null) {
+            if (disconnectClients && !clientsRemoved && shutdownTransferDisposed != null) {
+                // Observe the shutdown owner without installing transferDisconnectFuture.
+                disposalToJoin = shutdownTransferDisposed;
+                storageClosed = transferCloseFuture;
+            } else if (transferCloseFuture != null) {
                 if (!disconnectClients) {
                     return transferCloseFuture.copy();
                 }
                 if (transferDisconnectFuture != null) {
-                    return transferDisconnectFuture.copy();
+                    return clientsRemoved ? transferDisconnectFuture : transferDisconnectFuture.copy();
                 }
                 transferDisconnectFuture = closeFuture;
                 storageClosed = transferCloseFuture;
@@ -592,6 +598,9 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
                 isFenced = true;
                 if (!disconnectClients) {
                     transferring = true;
+                    if (shutdownTransferRequested) {
+                        shutdownTransferDisposed = new CompletableFuture<>();
+                    }
                     transferCloseFuture = closeFuture;
                 }
                 storageClosed = CompletableFuture.completedFuture(null);
@@ -599,9 +608,12 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
         } finally {
             lock.writeLock().unlock();
         }
+        if (disposalToJoin != null) {
+            return observeShutdownTransfer(storageClosed, disposalToJoin);
+        }
         FutureUtil.completeAfter(closeFuture, storageClosed.thenCompose(ignored -> FutureUtil.supplySafely(
                 () -> closeResources(disconnectClients, closeWithoutWaitingClientDisconnect, clientsRemoved))));
-        return transferring ? closeFuture.copy() : closeFuture;
+        return transferring && !clientsRemoved ? closeFuture.copy() : closeFuture;
     }
 
     private CompletableFuture<Void> closeResources(

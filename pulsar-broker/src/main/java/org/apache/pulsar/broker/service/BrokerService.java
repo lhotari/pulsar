@@ -3464,11 +3464,11 @@ public class BrokerService implements Closeable {
         private CompletableFuture<Void> closeStorageTopic(Topic topic) {
             if (topic == firstTopic && firstPermitConsumed.compareAndSet(false, true)) {
                 return firstStoragePermit.thenCompose(permit -> permit.run(bundle.toString(), this::remainingNanos,
-                        () -> topic.close(false, false)))
+                        topic::closeForShutdownTransfer))
                         .whenComplete((ignored, error) -> remainingTopics.decrementAndGet());
             }
             return shutdownTopicCloseLimiter.reserve().thenCompose(permit -> permit.run(bundle.toString(),
-                    this::remainingNanos, () -> topic.close(false, false)))
+                    this::remainingNanos, topic::closeForShutdownTransfer))
                     .whenComplete((ignored, error) -> remainingTopics.decrementAndGet());
         }
 

@@ -65,6 +65,7 @@ import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl
 import org.apache.pulsar.broker.resourcegroup.ResourceGroup;
 import org.apache.pulsar.broker.resourcegroup.ResourceGroupPublishLimiter;
 import org.apache.pulsar.broker.resources.NamespaceResources;
+import org.apache.pulsar.broker.service.BrokerServiceException.BrokerDrainingException;
 import org.apache.pulsar.broker.service.BrokerServiceException.ConsumerBusyException;
 import org.apache.pulsar.broker.service.BrokerServiceException.ProducerBusyException;
 import org.apache.pulsar.broker.service.BrokerServiceException.ProducerFencedException;
@@ -129,6 +130,9 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
     protected final String replicatorPrefix;
 
     protected final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    // Installed under the topic write lock only for a shutdown-owned transfer generation.
+    protected volatile CompletableFuture<Void> shutdownTransferDisposed;
+    protected boolean shutdownTransferRequested;
 
     @VisibleForTesting
     @Getter
@@ -931,7 +935,7 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
                     lock.writeLock().lock();
                     try {
                         if (producer.isAdmissionCancelled() || brokerService.pulsar().getBrokerAdmission().isClosed()) {
-                            return FutureUtil.failedFuture(new BrokerServiceException.BrokerDrainingException());
+                            return FutureUtil.failedFuture(new BrokerDrainingException());
                         }
                         checkTopicFenced();
                         if (isMigrated()) {
@@ -962,7 +966,7 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
         lock.writeLock().lock();
         try {
             if (producer.isAdmissionCancelled() || brokerService.pulsar().getBrokerAdmission().isClosed()) {
-                return FutureUtil.failedFuture(new BrokerServiceException.BrokerDrainingException());
+                return FutureUtil.failedFuture(new BrokerDrainingException());
             }
             switch (producer.getAccessMode()) {
             case Shared:
@@ -1223,7 +1227,7 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
             lock.writeLock().unlock();
         }
         // Completing an add future can re-enter topic and connection code. Never do it under the topic lock.
-        removed.forEach(future -> future.completeExceptionally(new BrokerServiceException.BrokerDrainingException()));
+        removed.forEach(future -> future.completeExceptionally(new BrokerDrainingException()));
         producer.closeNow(true);
     }
 
@@ -1435,6 +1439,41 @@ public abstract class AbstractTopic implements Topic, TopicPolicyListener {
     protected abstract boolean isTerminated();
 
     protected abstract boolean isMigrated();
+
+    @Override
+    public CompletableFuture<Void> closeForShutdownTransfer() {
+        lock.writeLock().lock();
+        try {
+            shutdownTransferRequested = true;
+        } finally {
+            lock.writeLock().unlock();
+        }
+        // Preserve existing subclass overrides. The native close captures this request only when
+        // selecting a new transfer generation under the write lock; an earlier ordinary close wins.
+        return FutureUtil.supplySafely(() -> close(false, false));
+    }
+
+    protected CompletableFuture<Void> observeShutdownTransfer(CompletableFuture<Void> storage,
+                                                               CompletableFuture<Void> disposed) {
+        CompletableFuture<Void> result = storage.thenCompose(ignored -> disposed.copy());
+        long remaining = brokerService.pulsar().getRemainingShutdownDrainNanos();
+        if (remaining != Long.MAX_VALUE) {
+            result.orTimeout(Math.max(0, remaining), TimeUnit.NANOSECONDS);
+        }
+        // Local-only shutdown has no transfer disposal. This also settles observers of an abandoned
+        // transfer when embedded shutdown has no deadline; physical storage and disposal stay untouched.
+        brokerService.pulsar().getShutdownFuture().whenComplete((ignored, error) -> result.completeExceptionally(
+                new BrokerDrainingException()));
+        return result;
+    }
+
+    protected CompletableFuture<Void> completeShutdownTransferDisposal(CompletableFuture<Void> result) {
+        CompletableFuture<Void> disposed = shutdownTransferDisposed;
+        if (disposed != null) {
+            FutureUtil.completeAfter(disposed, result);
+        }
+        return result.copy();
+    }
 
     public boolean isTransferring() {
         return transferring;

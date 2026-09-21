@@ -202,6 +202,11 @@ public interface Topic {
         return FutureUtil.supplySafely(() -> close(false, false));
     }
 
+    /** Close storage for a shutdown-owned transfer, retaining notification ownership until disposal. */
+    default CompletableFuture<Void> closeForShutdownTransfer() {
+        return FutureUtil.supplySafely(() -> close(false, false));
+    }
+
     CompletableFuture<Void> close(boolean closeWithoutWaitingClientDisconnect);
 
     CompletableFuture<Void> close(
