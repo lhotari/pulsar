@@ -59,6 +59,7 @@ import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.transaction.coordinator.TransactionCoordinatorID;
 import org.apache.pulsar.transaction.coordinator.TransactionMetadataStore;
 import org.apache.pulsar.transaction.coordinator.TransactionMetadataStoreOpening;
+import org.apache.pulsar.transaction.coordinator.TransactionMetadataStoreOpening.UnreportedFailedOpenCleanupException;
 import org.apache.pulsar.transaction.coordinator.TransactionMetadataStoreProvider;
 import org.apache.pulsar.transaction.coordinator.TransactionRecoverTracker;
 import org.apache.pulsar.transaction.coordinator.TransactionSubscription;
@@ -83,6 +84,9 @@ public class TransactionMetadataStoreService {
     private final Object lifecycle = new Object();
     // A failed physical close remains registered even after the public store has been removed.
     private final Map<TransactionCoordinatorID, Generation> generations = new HashMap<>();
+    // Legacy providers may retry failed opens, but cannot prove earlier storage was disposed. Keep one
+    // ownership-release barrier per coordinator even after a later generation has closed successfully.
+    private final Map<TransactionCoordinatorID, Throwable> unsafeHistory = new HashMap<>();
     private final ExecutorService internalPinnedExecutor;
     private CompletableFuture<Void> closeFuture;
 
@@ -120,8 +124,17 @@ public class TransactionMetadataStoreService {
             generation.start();
         }
         if (waitForRemoval) {
-            // A normal reconnect can retry only after physical disposal, with a fresh ownership check.
-            return generation.closed.thenCompose(__ -> handleTcClientConnect(tcId));
+            Generation previous = generation;
+            return previous.closed.handle((__, error) -> {
+                boolean removed;
+                synchronized (lifecycle) {
+                    removed = generations.get(tcId) != previous;
+                }
+                // Failed physical cleanup remains pinned. Retired legacy failures can retry with a fresh
+                // ownership check, while their historical barrier still prevents graceful handoff.
+                return removed ? handleTcClientConnect(tcId)
+                        : CompletableFuture.<Void>failedFuture(FutureUtil.unwrapCompletionException(error));
+            }).thenCompose(result -> result);
         }
         return generation.ready.copy();
     }
@@ -176,30 +189,47 @@ public class TransactionMetadataStoreService {
 
     public CompletableFuture<Void> removeTransactionMetadataStore(TransactionCoordinatorID tcId) {
         Generation generation;
+        Throwable historicalFailure;
         synchronized (lifecycle) {
             generation = generations.get(tcId);
+            historicalFailure = unsafeHistory.get(tcId);
             if (generation != null) {
                 seal(generation);
             }
         }
-        return generation == null ? CompletableFuture.completedFuture(null) : closeGeneration(generation);
+        return closeSnapshot(generation == null ? List.of() : List.of(generation),
+                historicalFailure == null ? List.of() : List.of(historicalFailure));
     }
 
     /** Includes admitted openings and retained cleanup failures, using the coordinator assignment bundle. */
     public CompletableFuture<Integer> closeStoresForBundle(NamespaceBundle bundle) {
         List<Generation> snapshot;
+        List<Throwable> historicalFailures;
         synchronized (lifecycle) {
-            snapshot = generations.values().stream().filter(generation -> generation.belongsTo(bundle)).toList();
+            snapshot = generations.values().stream().filter(generation -> belongsTo(generation.id, bundle)).toList();
+            historicalFailures = unsafeHistory.entrySet().stream().filter(entry -> belongsTo(entry.getKey(), bundle))
+                    .map(Map.Entry::getValue).toList();
             snapshot.forEach(this::seal);
         }
-        return FutureUtil.waitForAll(snapshot.stream().map(this::closeGeneration).toList())
-                .thenApply(__ -> snapshot.size());
+        return closeSnapshot(snapshot, historicalFailures).thenApply(__ -> snapshot.size());
     }
 
     public boolean hasStoresInBundle(NamespaceBundle bundle) {
         synchronized (lifecycle) {
-            return generations.values().stream().anyMatch(generation -> generation.belongsTo(bundle));
+            return generations.keySet().stream().anyMatch(id -> belongsTo(id, bundle))
+                    || unsafeHistory.keySet().stream().anyMatch(id -> belongsTo(id, bundle));
         }
+    }
+
+    private static boolean belongsTo(TransactionCoordinatorID id, NamespaceBundle bundle) {
+        return bundle.includes(SystemTopicNames.TRANSACTION_COORDINATOR_ASSIGN.getPartition((int) id.getId()));
+    }
+
+    private CompletableFuture<Void> closeSnapshot(List<Generation> snapshot, List<Throwable> historicalFailures) {
+        List<CompletableFuture<Void>> closing = new ArrayList<>();
+        snapshot.forEach(generation -> closing.add(closeGeneration(generation)));
+        historicalFailures.forEach(error -> closing.add(CompletableFuture.failedFuture(error)));
+        return FutureUtil.waitForAll(closing);
     }
 
     // Caller holds lifecycle. No future completion, resource calls or callbacks here.
@@ -221,8 +251,11 @@ public class TransactionMetadataStoreService {
             generation.ready.completeExceptionally(new ServiceUnitNotReadyException("Coordinator is unloading"));
             generation.prepared.thenCompose(__ -> generation.store == null
                     ? generation.failedOpenCleanup.toCompletableFuture()
-                    : FutureUtil.supplySafely(generation.store::closeAsync)).handle((__, error) -> {
+                    : FutureUtil.supplySafely(generation.store::closeAsync)).whenComplete((__, error) -> {
                         Throwable failure = error == null ? null : FutureUtil.unwrapCompletionException(error);
+                        boolean unreportedCleanup = generation.store == null
+                                && failure instanceof UnreportedFailedOpenCleanupException;
+                        boolean trackerClosed = true;
                         try {
                             // The service always allocates the native, idempotently closeable tracker.
                             // Also covers pre-provider failure and providers that do not own their tracker.
@@ -230,24 +263,27 @@ public class TransactionMetadataStoreService {
                                 generation.timeoutTracker.close();
                             }
                         } catch (Throwable trackerError) {
+                            trackerClosed = false;
                             if (failure == null) {
                                 failure = trackerError;
                             } else if (failure != trackerError) {
                                 failure.addSuppressed(trackerError);
                             }
                         }
-                        if (failure != null) {
-                            throw FutureUtil.wrapToCompletionException(failure);
-                        }
-                        return (Void) null;
-                    }).whenComplete((__, error) -> {
-                        if (error == null) {
-                            synchronized (lifecycle) {
+                        synchronized (lifecycle) {
+                            if (unreportedCleanup && trackerClosed) {
+                                // Publish the barrier and retire the exact generation atomically: a bundle
+                                // snapshot must see either the old generation or its historical failure.
+                                unsafeHistory.putIfAbsent(generation.id, failure);
+                                generations.remove(generation.id, generation);
+                            } else if (failure == null) {
                                 generations.remove(generation.id, generation);
                             }
+                        }
+                        if (failure == null) {
                             generation.closed.complete(null);
                         } else {
-                            generation.closed.completeExceptionally(FutureUtil.unwrapCompletionException(error));
+                            generation.closed.completeExceptionally(failure);
                         }
                     });
         }
@@ -269,10 +305,6 @@ public class TransactionMetadataStoreService {
 
         private Generation(TransactionCoordinatorID id) {
             this.id = id;
-        }
-
-        private boolean belongsTo(NamespaceBundle bundle) {
-            return bundle.includes(SystemTopicNames.TRANSACTION_COORDINATOR_ASSIGN.getPartition((int) id.getId()));
         }
 
         private void start() {
@@ -599,6 +631,7 @@ public class TransactionMetadataStoreService {
     public CompletableFuture<Void> closeAsync() {
         CompletableFuture<Void> result;
         List<Generation> snapshot;
+        List<Throwable> historicalFailures;
         synchronized (lifecycle) {
             if (closeFuture != null) {
                 return closeFuture.copy();
@@ -606,9 +639,10 @@ public class TransactionMetadataStoreService {
             result = new CompletableFuture<>();
             closeFuture = result;
             snapshot = new ArrayList<>(generations.values());
+            historicalFailures = new ArrayList<>(unsafeHistory.values());
             snapshot.forEach(this::seal);
         }
-        FutureUtil.waitForAll(snapshot.stream().map(this::closeGeneration).toList()).whenComplete((__, error) -> {
+        closeSnapshot(snapshot, historicalFailures).whenComplete((__, error) -> {
             internalPinnedExecutor.shutdown();
             if (error == null) {
                 result.complete(null);

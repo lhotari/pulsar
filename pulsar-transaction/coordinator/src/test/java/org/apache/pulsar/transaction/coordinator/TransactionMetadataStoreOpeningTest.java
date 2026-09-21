@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import org.apache.pulsar.transaction.coordinator.TransactionMetadataStoreOpening.UnreportedFailedOpenCleanupException;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -85,6 +86,6 @@ public class TransactionMetadataStoreOpeningTest {
         assertThatThrownBy(() -> adapted.store().toCompletableFuture().get(5, TimeUnit.SECONDS))
                 .hasCause(openError);
         assertThatThrownBy(() -> adapted.failedOpenCleanup().toCompletableFuture().get(5, TimeUnit.SECONDS))
-                .hasCauseInstanceOf(IllegalStateException.class).hasRootCause(openError);
+                .hasCauseInstanceOf(UnreportedFailedOpenCleanupException.class).hasRootCause(openError);
     }
 }

@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -45,6 +46,7 @@ import org.apache.pulsar.broker.service.BrokerAdmission;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.storage.ManagedLedgerStorage;
 import org.apache.pulsar.broker.storage.ManagedLedgerStorageClass;
+import org.apache.pulsar.broker.transaction.timeout.TransactionTimeoutTrackerImpl;
 import org.apache.pulsar.client.api.transaction.TransactionBufferClient;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.SystemTopicNames;
@@ -52,6 +54,7 @@ import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.transaction.coordinator.TransactionCoordinatorID;
 import org.apache.pulsar.transaction.coordinator.TransactionMetadataStore;
 import org.apache.pulsar.transaction.coordinator.TransactionMetadataStoreOpening;
+import org.apache.pulsar.transaction.coordinator.TransactionMetadataStoreOpening.UnreportedFailedOpenCleanupException;
 import org.apache.pulsar.transaction.coordinator.TransactionMetadataStoreProvider;
 import org.apache.pulsar.transaction.coordinator.TransactionRecoverTracker;
 import org.apache.pulsar.transaction.coordinator.proto.TxnStatus;
@@ -282,7 +285,90 @@ public class TransactionMetadataStoreShutdownTest {
             assertThatThrownBy(() -> fixture.service.handleTcClientConnect(TC).get(5, TimeUnit.SECONDS))
                     .hasRootCauseMessage("legacy provider failed");
             assertThatThrownBy(() -> fixture.service.closeStoresForBundle(fixture.bundle).get(5, TimeUnit.SECONDS))
-                    .hasCauseInstanceOf(IllegalStateException.class).hasRootCauseMessage("legacy provider failed");
+                    .hasCauseInstanceOf(UnreportedFailedOpenCleanupException.class)
+                    .hasRootCauseMessage("legacy provider failed");
+            TransactionMetadataStore retry = mock(TransactionMetadataStore.class);
+            when(retry.closeAsync()).thenReturn(CompletableFuture.completedFuture(null));
+            doReturn(CompletableFuture.completedFuture(retry)).when(fixture.provider)
+                    .openStore(any(), any(), any(), any(), any(), anyLong(), any(), any());
+            fixture.service.handleTcClientConnect(TC).get(5, TimeUnit.SECONDS);
+            verify(fixture.broker, times(2)).checkTopicNsOwnership(any());
+            assertThatThrownBy(() -> fixture.service.removeTransactionMetadataStore(TC).get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(UnreportedFailedOpenCleanupException.class);
+        }
+    }
+
+    @DataProvider
+    public Object[][] legacyFailures() {
+        return new Object[][] {{false, false}, {false, true}, {true, false}, {true, true}};
+    }
+
+    @Test(dataProvider = "legacyFailures")
+    public void testLegacyFailureAllowsRetryWithoutLosingHistoricalBarrier(boolean transformed,
+                                                                          boolean waitingReconnect) throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            Opening failed = fixture.next();
+            failed.legacy = !transformed;
+            failed.transformed = transformed;
+            CompletableFuture<Void> ready = fixture.service.handleTcClientConnect(TC);
+            IllegalArgumentException original = new IllegalArgumentException("legacy open failed");
+            CompletableFuture<Void> oldRemoval = waitingReconnect
+                    ? fixture.service.removeTransactionMetadataStore(TC) : null;
+            CompletableFuture<Integer> oldSnapshot = waitingReconnect
+                    ? fixture.service.closeStoresForBundle(fixture.bundle) : null;
+            Opening retry = fixture.next();
+            retry.result.complete(retry.store);
+            CompletableFuture<Void> reconnect = waitingReconnect ? fixture.service.handleTcClientConnect(TC) : null;
+            if (waitingReconnect) {
+                assertThat(reconnect).isNotDone();
+            }
+            failed.result.completeExceptionally(original);
+            if (waitingReconnect) {
+                assertThatThrownBy(() -> oldRemoval.get(5, TimeUnit.SECONDS))
+                        .hasCauseInstanceOf(UnreportedFailedOpenCleanupException.class).hasRootCause(original);
+                assertThatThrownBy(() -> oldSnapshot.get(5, TimeUnit.SECONDS)).hasRootCause(original);
+            } else {
+                assertThatThrownBy(() -> ready.get(5, TimeUnit.SECONDS)).hasCause(original);
+                reconnect = fixture.service.handleTcClientConnect(TC);
+            }
+            reconnect.get(5, TimeUnit.SECONDS);
+            assertThat(original.getSuppressed()).isEmpty();
+            assertThat(fixture.service.getStores().get(TC)).isSameAs(retry.store);
+            verify(fixture.broker, times(2)).checkTopicNsOwnership(any());
+            assertThat(fixture.service.hasStoresInBundle(fixture.bundle)).isTrue();
+            CompletableFuture<Void> removal = fixture.service.removeTransactionMetadataStore(TC);
+            assertThat(removal).isNotDone();
+            retry.closed.complete(null);
+            assertThatThrownBy(() -> removal.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(UnreportedFailedOpenCleanupException.class).hasRootCause(original);
+            assertThat(fixture.service.getStores()).isEmpty();
+            assertThat(fixture.service.hasStoresInBundle(fixture.bundle)).isTrue();
+            assertThatThrownBy(() -> fixture.service.closeStoresForBundle(fixture.bundle).get(5, TimeUnit.SECONDS))
+                    .hasRootCause(original);
+            assertThatThrownBy(() -> fixture.service.removeTransactionMetadataStore(TC).get(5, TimeUnit.SECONDS))
+                    .hasRootCause(original);
+            assertThatThrownBy(() -> fixture.service.closeAsync().get(5, TimeUnit.SECONDS)).hasRootCause(original);
+        }
+    }
+
+    @Test
+    public void testTrackerFailureDoesNotRetireLegacyFailedGeneration() throws Exception {
+        IllegalStateException trackerFailure = new IllegalStateException("tracker close failed");
+        try (var trackers = mockConstruction(TransactionTimeoutTrackerImpl.class,
+                (tracker, context) -> doThrow(trackerFailure).when(tracker).close());
+             Fixture fixture = new Fixture()) {
+            Opening failed = fixture.next();
+            failed.legacy = true;
+            CompletableFuture<Void> ready = fixture.service.handleTcClientConnect(TC);
+            IllegalArgumentException original = new IllegalArgumentException("legacy failed");
+            failed.result.completeExceptionally(original);
+            assertThatThrownBy(() -> ready.get(5, TimeUnit.SECONDS)).hasCause(original);
+            assertThatThrownBy(() -> fixture.service.handleTcClientConnect(TC).get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(UnreportedFailedOpenCleanupException.class)
+                    .satisfies(error -> assertThat(error.getCause().getSuppressed()).containsExactly(trackerFailure));
+            verify(fixture.broker, times(1)).checkTopicNsOwnership(any());
+            assertThat(trackers.constructed()).hasSize(1);
+            assertThat(fixture.service.hasStoresInBundle(fixture.bundle)).isTrue();
         }
     }
 
@@ -292,6 +378,8 @@ public class TransactionMetadataStoreShutdownTest {
         private final CompletableFuture<Void> cleanup = new CompletableFuture<>();
         private final CompletableFuture<Void> closed = new CompletableFuture<>();
         private boolean activateRecovery;
+        private boolean legacy;
+        private boolean transformed;
 
         private Opening() {
             when(store.closeAsync()).thenReturn(closed);
@@ -330,7 +418,12 @@ public class TransactionMetadataStoreShutdownTest {
                     TransactionRecoverTracker recovery = invocation.getArgument(4);
                     recovery.updateTransactionStatus(1, TxnStatus.COMMITTING);
                 }
-                return new TransactionMetadataStoreOpening(opening.result, opening.cleanup);
+                if (opening.legacy) {
+                    return opening.result;
+                }
+                TransactionMetadataStoreOpening retained =
+                        new TransactionMetadataStoreOpening(opening.result, opening.cleanup);
+                return opening.transformed ? retained.thenApply(store -> store) : retained;
             });
             service = new TransactionMetadataStoreService(provider, pulsar, mock(TransactionBufferClient.class),
                     mock(HashedWheelTimer.class));

@@ -57,6 +57,13 @@ public final class TransactionMetadataStoreOpening extends CompletableFuture<Tra
         return failedOpenCleanup;
     }
 
+    /** Legacy provider failure without a physical-cleanup result; the original open failure is unchanged. */
+    public static final class UnreportedFailedOpenCleanupException extends IllegalStateException {
+        private UnreportedFailedOpenCleanupException(Throwable cause) {
+            super("Transaction provider did not report failed-open cleanup", cause);
+        }
+    }
+
     /**
      * Adapt immediately after the virtual provider call, before a future transformation loses the capability.
      * Legacy providers keep their original result, but a failed open supplies no physical-cleanup proof.
@@ -67,7 +74,7 @@ public final class TransactionMetadataStoreOpening extends CompletableFuture<Tra
         }
         CompletableFuture<Void> cleanup = result.handle((store, error) -> {
             if (error != null) {
-                throw new IllegalStateException("Transaction provider did not report failed-open cleanup", error);
+                throw new UnreportedFailedOpenCleanupException(error);
             }
             return null;
         });
