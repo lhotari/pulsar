@@ -21,6 +21,7 @@ package org.apache.pulsar.broker.loadbalance.extensions;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doReturn;
@@ -43,7 +44,9 @@ import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.loadbalance.extensions.channel.ServiceUnitStateMetadataStoreTableViewImpl;
 import org.apache.pulsar.broker.loadbalance.extensions.channel.ServiceUnitStateTableViewImpl;
+import org.apache.pulsar.broker.namespace.LookupOptions;
 import org.apache.pulsar.broker.service.BrokerService;
+import org.apache.pulsar.broker.service.BrokerServiceException.BrokerDrainingException;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.impl.ConsumerImpl;
@@ -162,6 +165,28 @@ public class BrokerTrafficDrainTest extends ExtensibleLoadManagerImplBaseTest {
                     .get(5, TimeUnit.SECONDS));
             assertNotNull(connection.newLookup(Commands.newPartitionMetadataRequest(firstTopic, 10002, false), 10002)
                     .get(5, TimeUnit.SECONDS));
+            // Empty ownership and unexpected failures can occur while assignments are moving. Their
+            // lookup errors must preserve this same connection, including its unaffected bundle.
+            var namespace = pulsar1.getNamespaceService();
+            TopicName requested = TopicName.get(firstTopic);
+            try {
+                for (int failure = 0; failure < 3; failure++) {
+                    CompletableFuture<?> lookup = failure == 0
+                            ? CompletableFuture.completedFuture(Optional.empty())
+                            : CompletableFuture.failedFuture(failure == 1 ? new RuntimeException("Lookup failed")
+                                    : new BrokerDrainingException());
+                    doReturn(lookup).when(namespace).getBrokerServiceUrlAsync(eq(requested), any(LookupOptions.class));
+                    long requestId = 20000L + failure;
+                    var lookupError = expectThrows(ExecutionException.class, () -> connection.newLookup(
+                            Commands.newLookup(firstTopic, false, requestId), requestId).get(5, TimeUnit.SECONDS));
+                    assertTrue(lookupError.getCause() instanceof PulsarClientException.BrokerMetadataException,
+                            lookupError.toString());
+                    assertTrue(connection.ctx().channel().isActive());
+                    assertSame(connection, ((ProducerImpl<?>) producer2).getClientCnx());
+                }
+            } finally {
+                doCallRealMethod().when(namespace).getBrokerServiceUrlAsync(eq(requested), any(LookupOptions.class));
+            }
             for (int i = 0; i < 3; i++) {
                 producer1.send(new byte[]{(byte) i});
                 producer2.send(new byte[]{(byte) i});

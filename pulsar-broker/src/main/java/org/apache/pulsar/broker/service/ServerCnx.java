@@ -97,6 +97,7 @@ import org.apache.pulsar.broker.intercept.BrokerInterceptor;
 import org.apache.pulsar.broker.limiter.ConnectionController;
 import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerWrapper;
 import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
+import org.apache.pulsar.broker.lookup.TopicLookupBase;
 import org.apache.pulsar.broker.namespace.LookupOptions;
 import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.broker.resources.ScalableTopicResources;
@@ -797,7 +798,8 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
 
                                             .exception(ex)
                                             .log("lookup failed with error");
-                                    writeAndFlush(newLookupErrorResponse(ServerError.ServiceNotReady,
+                                    writeAndFlush(newLookupErrorResponse(
+                                            TopicLookupBase.unavailableLookupError(service.getPulsar()),
                                             ex.getMessage(), requestId));
                                 }
                                 lookupSemaphore.release();
@@ -1463,7 +1465,8 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                                             commandSender.sendPartitionMetadataResponse(ServerError.AuthorizationError,
                                                     ex.getMessage(), requestId);
                                         } else {
-                                            ServerError error = ServerError.ServiceNotReady;
+                                            ServerError error = TopicLookupBase.unavailableLookupError(
+                                                    service.getPulsar());
                                             if (ex instanceof MetadataStoreException) {
                                                 error = ServerError.MetadataError;
                                             } else if (ex instanceof RestException restException){
