@@ -24,16 +24,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import io.netty.buffer.ByteBuf;
 import io.netty.util.Timeout;
 import io.netty.util.Timer;
 import java.util.ArrayDeque;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import org.apache.bookkeeper.common.util.ThreadBoundExecutor;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
@@ -41,8 +44,10 @@ import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.ManagedLedgerFactory;
+import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.pulsar.transaction.coordinator.TransactionCoordinatorID;
+import org.apache.pulsar.transaction.coordinator.proto.TransactionMetadataEntry;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -153,6 +158,92 @@ public class MLTransactionLogCloseTest {
         verify(fixture.ledger, never()).asyncClose(any(), any());
     }
 
+    @Test
+    public void testRejectedWriterCleanupStillJoinsLedgerClose() throws Exception {
+        Fixture fixture = new Fixture(true);
+        fixture.initialize();
+        ThreadBoundExecutor executor = fixture.ledger.getExecutor();
+        doThrow(new RejectedExecutionException("writer executor closed")).when(executor).execute(any());
+        CompletableFuture<Void> closing = fixture.log.closeAsync();
+        AsyncCallbacks.CloseCallback callback = fixture.closed.get(5, TimeUnit.SECONDS);
+        assertThat(closing).isNotDone();
+        fixture.finishClose(callback, false);
+        assertThatThrownBy(() -> closing.get(5, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(RejectedExecutionException.class);
+        assertThatThrownBy(() -> fixture.log.closeAsync().get(5, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(RejectedExecutionException.class);
+        verify(fixture.ledger, times(1)).asyncClose(any(), any());
+    }
+
+    @Test
+    public void testCloseFailsBufferedAndLateAppendBeforeLedgerCompletion() throws Exception {
+        Fixture fixture = new Fixture(true);
+        fixture.initialize();
+        CompletableFuture<Position> buffered = fixture.log.append(entry());
+        fixture.tasks.remove().run();
+        assertThat(buffered).isNotDone();
+        CompletableFuture<Void> closing = fixture.log.closeAsync();
+        CompletableFuture<Position> late = fixture.log.append(entry());
+        assertThat(buffered).isNotDone();
+        fixture.tasks.remove().run();
+        assertThatThrownBy(() -> buffered.get(5, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(ManagedLedgerException.ManagedLedgerFencedException.class);
+        fixture.tasks.remove().run();
+        assertThatThrownBy(() -> late.get(5, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(ManagedLedgerException.ManagedLedgerFencedException.class);
+        assertThat(closing).isNotDone();
+        verify(fixture.ledger, never()).asyncAddEntry(any(ByteBuf.class), any(), any());
+        fixture.finishClose(fixture.closed.get(5, TimeUnit.SECONDS), false);
+        closing.get(5, TimeUnit.SECONDS);
+        verify(fixture.ledger, times(1)).asyncClose(any(), any());
+    }
+
+    @Test
+    public void testCloseSealsLateAppendWhileAnEarlierAppendIsInFlight() throws Exception {
+        Fixture fixture = new Fixture(false);
+        fixture.initialize();
+        CompletableFuture<Runnable> failAppend = new CompletableFuture<>();
+        CompletableFuture<ByteBuf> appendedBuffer = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            ByteBuf buffer = invocation.getArgument(0);
+            AsyncCallbacks.AddEntryCallback callback = invocation.getArgument(1);
+            Object context = invocation.getArgument(2);
+            appendedBuffer.complete(buffer);
+            failAppend.complete(() -> callback.addFailed(new ManagedLedgerException.ManagedLedgerFencedException(),
+                    context));
+            return null;
+        }).when(fixture.ledger).asyncAddEntry(any(ByteBuf.class), any(), any());
+        CompletableFuture<Position> writing = fixture.log.append(entry());
+        CompletableFuture<Void> closing = fixture.log.closeAsync();
+        try {
+            CompletableFuture<Position> late = fixture.log.append(entry());
+            assertThat(writing).isNotDone();
+            assertThatThrownBy(() -> late.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ManagedLedgerException.ManagedLedgerFencedException.class);
+            failAppend.get(5, TimeUnit.SECONDS).run();
+            assertThatThrownBy(() -> writing.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ManagedLedgerException.ManagedLedgerFencedException.class);
+            assertThat(appendedBuffer.get(5, TimeUnit.SECONDS).refCnt()).isZero();
+            assertThat(closing).isNotDone();
+            fixture.finishClose(fixture.closed.get(5, TimeUnit.SECONDS), false);
+            closing.get(5, TimeUnit.SECONDS);
+            verify(fixture.ledger, times(1)).asyncAddEntry(any(ByteBuf.class), any(), any());
+            verify(fixture.ledger, never()).readyToCreateNewLedger();
+        } finally {
+            if (!writing.isDone()) {
+                failAppend.get(5, TimeUnit.SECONDS).run();
+            }
+            if (!closing.isDone()) {
+                fixture.finishClose(fixture.closed.get(5, TimeUnit.SECONDS), false);
+            }
+        }
+    }
+
+    private static TransactionMetadataEntry entry() {
+        return new TransactionMetadataEntry().setTxnidMostBits(0).setTxnidLeastBits(1)
+                .setMetadataOp(TransactionMetadataEntry.TransactionMetadataOp.NEW);
+    }
+
     private static void assertCloseResult(CompletableFuture<Void> future, boolean failure) throws Exception {
         if (failure) {
             assertThatThrownBy(() -> future.get(5, TimeUnit.SECONDS)).hasCauseInstanceOf(ManagedLedgerException.class);
@@ -199,6 +290,13 @@ public class MLTransactionLogCloseTest {
                 closed.complete(invocation.getArgument(0));
                 return null;
             }).when(ledger).asyncClose(any(), any());
+        }
+
+        private void initialize() throws Exception {
+            CompletableFuture<Void> opening = log.initialize();
+            opened.get(5, TimeUnit.SECONDS).openLedgerComplete(ledger, null);
+            cursor.get(5, TimeUnit.SECONDS).openCursorComplete(mock(ManagedCursor.class), null);
+            opening.get(5, TimeUnit.SECONDS);
         }
 
         private void finishClose(AsyncCallbacks.CloseCallback callback, boolean failure) {

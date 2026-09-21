@@ -28,15 +28,19 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import org.apache.pulsar.client.api.transaction.TxnID;
 import org.apache.pulsar.transaction.coordinator.TransactionCoordinatorID;
 import org.apache.pulsar.transaction.coordinator.TransactionLogReplayCallback;
 import org.apache.pulsar.transaction.coordinator.TransactionMetadataStore;
 import org.apache.pulsar.transaction.coordinator.TransactionMetadataStoreState.State;
 import org.apache.pulsar.transaction.coordinator.TransactionRecoverTracker;
 import org.apache.pulsar.transaction.coordinator.TransactionTimeoutTracker;
+import org.apache.pulsar.transaction.coordinator.proto.TxnStatus;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -104,6 +108,17 @@ public class MLTransactionMetadataStoreCloseTest {
                 repeated.get(5, TimeUnit.SECONDS);
                 store.closeAsync().get(5, TimeUnit.SECONDS);
                 assertThat(store.getState()).isEqualTo(State.Close);
+            }
+            // These invocations must return failed futures, including when physical close failed
+            // and the store remains Closing with its executor already shut down.
+            TxnID txnID = new TxnID(0, 0);
+            List<CompletableFuture<?>> rejected = List.of(store.newTransaction(1000, null),
+                    store.addProducedPartitionToTxn(txnID, List.of("topic")),
+                    store.addAckedPartitionToTxn(txnID, List.of()),
+                    store.updateTxnStatus(txnID, TxnStatus.COMMITTING, TxnStatus.OPEN, false));
+            for (CompletableFuture<?> operation : rejected) {
+                assertThatThrownBy(() -> operation.get(5, TimeUnit.SECONDS))
+                        .hasCauseInstanceOf(RejectedExecutionException.class);
             }
             verify(log, times(1)).closeAsync();
             verify(tracker, times(1)).close();

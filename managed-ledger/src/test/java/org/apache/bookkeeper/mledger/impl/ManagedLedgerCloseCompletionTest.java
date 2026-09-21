@@ -1449,6 +1449,14 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
             verify(handle, times(1)).closeAsync();
             verify(cursorBookKeeper, times(0)).newCreateLedgerOp();
             assertThat(ledger.getCursors().get("cursor")).isNull();
+            if (closeFailure) {
+                assertThatThrownBy(() -> opening.get(5, TimeUnit.SECONDS)).satisfies(error -> {
+                    assertThat(error.getCause().getSuppressed()).hasSize(failure == 0 ? 0 : 1);
+                    if (failure == 5) {
+                        assertThat(error.getCause().getSuppressed()[0]).hasRootCauseMessage("read submission failed");
+                    }
+                });
+            }
             // No rollback metadata update may run after failed cleanup.
             if (closeFailure) {
                 verify(ledger.store, times(0)).asyncUpdateCursorInfo(any(), any(), any(), any(), any());

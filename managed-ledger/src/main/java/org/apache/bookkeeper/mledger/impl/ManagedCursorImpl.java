@@ -670,7 +670,7 @@ public class ManagedCursorImpl implements ManagedCursor {
                 // Rewind to last cursor snapshot available
                 discardRecoveryHandle(lh,
                         () -> initialize(getRollbackPosition(info), rollbackProperties, cursorProperties, callback),
-                        callback);
+                        callback, null);
                 return;
             }
 
@@ -684,7 +684,7 @@ public class ManagedCursorImpl implements ManagedCursor {
                     // Rewind to the oldest entry available
                     discardRecoveryHandle(lh,
                             () -> initialize(getRollbackPosition(info), rollbackProperties, cursorProperties, callback),
-                            callback);
+                            callback, createManagedLedgerException(rc1));
                     return;
                 } else if (rc1 != BKException.Code.OK) {
                     log.warn()
@@ -692,8 +692,9 @@ public class ManagedCursorImpl implements ManagedCursor {
                             .attr("errorMessage", BKException.getMessage(rc1))
                             .log("Error reading from metadata ledger");
 
-                    discardRecoveryHandle(lh, () -> callback.operationFailed(createManagedLedgerException(rc1)),
-                            callback);
+                    ManagedLedgerException recoveryFailure = createManagedLedgerException(rc1);
+                    discardRecoveryHandle(lh, () -> callback.operationFailed(recoveryFailure),
+                            callback, recoveryFailure);
                     return;
                 }
 
@@ -703,7 +704,9 @@ public class ManagedCursorImpl implements ManagedCursor {
                     mbean.addReadCursorLedgerSize(entry.getLength());
                     positionInfo.parseFrom(entry.getEntry());
                 } catch (Exception e) {
-                    discardRecoveryHandle(lh, () -> callback.operationFailed(new ManagedLedgerException(e)), callback);
+                    ManagedLedgerException recoveryFailure = new ManagedLedgerException(e);
+                    discardRecoveryHandle(lh, () -> callback.operationFailed(recoveryFailure),
+                            callback, recoveryFailure);
                     return;
                 }
 
@@ -723,7 +726,9 @@ public class ManagedCursorImpl implements ManagedCursor {
             try {
                 lh.asyncReadEntries(lastEntryInLedger, lastEntryInLedger, readCallback, null);
             } catch (Exception error) {
-                discardRecoveryHandle(lh, () -> callback.operationFailed(new ManagedLedgerException(error)), callback);
+                ManagedLedgerException recoveryFailure = new ManagedLedgerException(error);
+                discardRecoveryHandle(lh, () -> callback.operationFailed(recoveryFailure),
+                            callback, recoveryFailure);
             }
         };
         try {
@@ -744,7 +749,8 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
     }
 
-    private void discardRecoveryHandle(LedgerHandle handle, Runnable afterClose, VoidCallback callback) {
+    private void discardRecoveryHandle(LedgerHandle handle, Runnable afterClose, VoidCallback callback,
+                                       Throwable recoveryFailure) {
         CompletableFuture<Void> closed = new CompletableFuture<>();
         synchronized (pendingMarkDeleteOps) {
             // Recovery has not published this cursor yet. Retain failed cleanup for initialization's close barrier.
@@ -753,7 +759,11 @@ public class ManagedCursorImpl implements ManagedCursor {
         closeLedgerHandle(handle).whenComplete((__, error) -> {
             if (error != null) {
                 closed.completeExceptionally(error);
-                callback.operationFailed(createManagedLedgerException(error));
+                ManagedLedgerException failure = createManagedLedgerException(error);
+                if (recoveryFailure != null && recoveryFailure != failure) {
+                    failure.addSuppressed(recoveryFailure);
+                }
+                callback.operationFailed(failure);
             } else {
                 closed.complete(null);
                 afterClose.run();

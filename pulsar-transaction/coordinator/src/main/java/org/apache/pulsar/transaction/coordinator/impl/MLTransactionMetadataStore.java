@@ -127,7 +127,7 @@ public class MLTransactionMetadataStore
             return completableFuture.copy();
         } else {
             recoverTime.setRecoverStartTime(System.currentTimeMillis());
-            FutureUtil.safeRunAsync(() -> transactionLog.replayAsync(new TransactionLogReplayCallback() {
+            runAsync(() -> transactionLog.replayAsync(new TransactionLogReplayCallback() {
                 @Override
                 public void replayComplete() {
                     recoverTracker.appendOpenTransactionToTimeoutTracker();
@@ -221,7 +221,7 @@ public class MLTransactionMetadataStore
                         log.error().exception(e).log(e.getMessage());
                     }
                 }
-            }), internalPinnedExecutor, completableFuture);
+            }), completableFuture);
         }
         return completableFuture.exceptionallyCompose(error -> closeAsync().handle((__, closeError) -> {
             Throwable cause = FutureUtil.unwrapCompletionException(error);
@@ -254,7 +254,7 @@ public class MLTransactionMetadataStore
         if (this.maxActiveTransactionsPerCoordinator == 0
                 || this.maxActiveTransactionsPerCoordinator > onGoingTxnCount.longValue()) {
             CompletableFuture<TxnID> completableFuture = new CompletableFuture<>();
-            FutureUtil.safeRunAsync(() -> {
+            runAsync(() -> {
                 if (!checkIfReady()) {
                     completableFuture.completeExceptionally(new CoordinatorException
                             .TransactionMetadataStoreStateException(tcID, State.Ready, getState(), "new Transaction"));
@@ -297,7 +297,7 @@ public class MLTransactionMetadataStore
                                 completableFuture.complete(txnID);
                             }
                         });
-            }, internalPinnedExecutor, completableFuture);
+            }, completableFuture);
             return completableFuture;
         } else {
             return FutureUtil.failedFuture(new CoordinatorException.ReachMaxActiveTxnException("New txn op "
@@ -308,7 +308,7 @@ public class MLTransactionMetadataStore
     @Override
     public CompletableFuture<Void> addProducedPartitionToTxn(TxnID txnID, List<String> partitions) {
         CompletableFuture<Void> promise = new CompletableFuture<>();
-        FutureUtil.safeRunAsync(() -> {
+        runAsync(() -> {
             if (!checkIfReady()) {
                 promise
                         .completeExceptionally(new CoordinatorException.TransactionMetadataStoreStateException(tcID,
@@ -346,7 +346,7 @@ public class MLTransactionMetadataStore
                 promise.completeExceptionally(ex);
                 return null;
             });
-        }, internalPinnedExecutor, promise);
+        }, promise);
         return promise;
     }
 
@@ -354,7 +354,7 @@ public class MLTransactionMetadataStore
     public CompletableFuture<Void> addAckedPartitionToTxn(TxnID txnID,
                                                           List<TransactionSubscription> txnSubscriptions) {
         CompletableFuture<Void> promise = new CompletableFuture<>();
-        FutureUtil.safeRunAsync(() -> {
+        runAsync(() -> {
             if (!checkIfReady()) {
                 promise.completeExceptionally(new CoordinatorException
                         .TransactionMetadataStoreStateException(tcID, State.Ready, getState(), "add acked partition"));
@@ -391,7 +391,7 @@ public class MLTransactionMetadataStore
                 promise.completeExceptionally(ex);
                 return null;
             });
-        }, internalPinnedExecutor, promise);
+        }, promise);
         return promise;
     }
 
@@ -399,7 +399,7 @@ public class MLTransactionMetadataStore
     public CompletableFuture<Void> updateTxnStatus(TxnID txnID, TxnStatus newStatus,
                                                                 TxnStatus expectedStatus, boolean isTimeout) {
         CompletableFuture<Void> promise = new CompletableFuture<>();
-        FutureUtil.safeRunAsync(() -> {
+        runAsync(() -> {
             if (!checkIfReady()) {
                 promise.completeExceptionally(new CoordinatorException
                         .TransactionMetadataStoreStateException(tcID,
@@ -464,7 +464,7 @@ public class MLTransactionMetadataStore
                 promise.completeExceptionally(ex);
                 return null;
             });
-        }, internalPinnedExecutor, promise);
+        }, promise);
        return promise;
     }
 
@@ -505,6 +505,16 @@ public class MLTransactionMetadataStore
         return completableFuture;
     }
 
+    private void runAsync(Runnable runnable, CompletableFuture<?> result) {
+        // Executor shutdown can race submission. CompletableFuture.runAsync throws on rejection,
+        // so capture that failure as well as failures from an accepted task.
+        FutureUtil.supplySafely(() -> CompletableFuture.runAsync(runnable, internalPinnedExecutor))
+                .exceptionally(error -> {
+                    result.completeExceptionally(error);
+                    return null;
+                });
+    }
+
     @Override
     public CompletableFuture<Void> closeAsync() {
         CompletableFuture<Void> result;
@@ -521,7 +531,7 @@ public class MLTransactionMetadataStore
         // Join already queued work without blocking a callback/event-loop thread. Closing the log also lets
         // an in-progress replay stop reading; waiting for this queue before starting that close can deadlock.
         CompletableFuture<Void> drained = new CompletableFuture<>();
-        FutureUtil.safeRunAsync(() -> drained.complete(null), internalPinnedExecutor, drained);
+        runAsync(() -> drained.complete(null), drained);
         internalPinnedExecutor.shutdown();
         CompletableFuture<Void> logClosed = FutureUtil.supplySafely(transactionLog::closeAsync);
         FutureUtil.waitForAll(List.of(drained, logClosed)).whenComplete((__, error) -> {
