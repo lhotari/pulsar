@@ -88,6 +88,7 @@ import org.asynchttpclient.AsyncHttpClient;
 import org.asynchttpclient.BoundRequestBuilder;
 import org.asynchttpclient.DefaultAsyncHttpClient;
 import org.asynchttpclient.Response;
+import org.awaitility.Awaitility;
 import org.eclipse.jetty.util.component.Graceful;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
@@ -125,7 +126,7 @@ public class WebServiceTest {
                 {60_000L, TimeUnit.MICROSECONDS.toNanos(200), 1L},
                 {60_000L, 0L, 1L},
                 {60_000L, Long.MAX_VALUE, 60_000L},
-                {100L, TimeUnit.SECONDS.toNanos(1), 100L},
+                {100L, TimeUnit.SECONDS.toNanos(1), 1000L},
                 {0L, TimeUnit.MILLISECONDS.toNanos(250), 250L}
         };
     }
@@ -151,6 +152,36 @@ public class WebServiceTest {
         } finally {
             server.removeBean(activeRequest);
             doReturn(Long.MAX_VALUE).when(pulsar).getRemainingShutdownDrainNanos();
+        }
+    }
+
+    @Test
+    public void testDetachedWebCloseUsesTotalBudget() throws Exception {
+        setupEnv(false, false, false, false, -1, false);
+        WebService webService = pulsar.getWebService();
+        var server = webService.getServer();
+        Graceful activeRequest = mock(Graceful.class);
+        CompletableFuture<Void> pendingRequest = new CompletableFuture<>();
+        CompletableFuture<Long> observedTimeout = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            observedTimeout.complete(server.getStopTimeout());
+            return pendingRequest;
+        }).when(activeRequest).shutdown();
+        server.addBean(activeRequest);
+        doReturn(0L).when(pulsar).getRemainingShutdownDrainNanos();
+        doReturn(TimeUnit.SECONDS.toNanos(5)).when(pulsar).getRemainingShutdownNanos();
+        try {
+            webService.close(false);
+            assertEquals(observedTimeout.get(5, TimeUnit.SECONDS).longValue(), 5000L);
+            pendingRequest.complete(null);
+            Awaitility.await().untilAsserted(() -> assertFalse(
+                    pulsarTestContext.getOpenTelemetryMetricReader().collectAllMetrics().stream()
+                            .anyMatch(metric -> metric.getName().equals(WebExecutorThreadPoolStats.LIMIT_COUNTER))));
+        } finally {
+            pendingRequest.complete(null);
+            server.removeBean(activeRequest);
+            doReturn(Long.MAX_VALUE).when(pulsar).getRemainingShutdownDrainNanos();
+            doReturn(Long.MAX_VALUE).when(pulsar).getRemainingShutdownNanos();
         }
     }
 

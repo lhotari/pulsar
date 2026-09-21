@@ -506,11 +506,11 @@ public class WebService implements AutoCloseable {
     public void close(boolean waitUtilServerStopped) throws PulsarServerException {
         try {
             if (waitUtilServerStopped) {
-                doClose();
+                doClose(true);
             } else {
                 Thread webServiceTerminator = new Thread(() -> {
                     try {
-                        doClose();
+                        doClose(false);
                     } catch (Exception e) {
                         log.error().exception(e).log("Error while closing web service");
                     }
@@ -528,14 +528,15 @@ public class WebService implements AutoCloseable {
         return server;
     }
 
-    private void doClose() throws Exception {
-        long remainingNanos = pulsar.getRemainingShutdownDrainNanos();
+    private void doClose(boolean synchronous) throws Exception {
+        // The detached terminator must allow the admin response to finish after metadata cleanup.
+        // A synchronous close instead spends service-cleanup time and must preserve that reserve.
+        long remainingNanos = synchronous ? pulsar.getRemainingShutdownDrainNanos()
+                : pulsar.getRemainingShutdownNanos();
         if (remainingNanos != Long.MAX_VALUE) {
-            // Include HTTP cleanup in the same budget as bundle drain, preserving the metadata-session reserve.
             // Jetty skips graceful shutdown notifications for zero, so retain a positive floor even after expiry.
             long remainingMs = Math.max(1, TimeUnit.NANOSECONDS.toMillis(remainingNanos));
-            long configuredMs = server.getStopTimeout();
-            server.setStopTimeout(configuredMs > 0 ? Math.min(configuredMs, remainingMs) : remainingMs);
+            server.setStopTimeout(remainingMs);
         }
         try {
             server.stop();

@@ -133,6 +133,7 @@ public class BrokerShutdownTest {
             BrokerShutdown shutdown = new BrokerShutdown(timeout, () -> CompletableFuture.completedFuture(null));
             CompletableFuture<Void> result = shutdown.start(() -> services);
             assertThat(shutdown.remainingDrainNanos()).isEqualTo(Long.MAX_VALUE);
+            assertThat(shutdown.remainingNanos()).isEqualTo(Long.MAX_VALUE);
             assertThat(result).isNotDone();
             services.complete(null);
             result.get(5, TimeUnit.SECONDS);

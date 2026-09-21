@@ -92,8 +92,9 @@ final class BrokerShutdown {
         finish();
     }
 
-    private long remainingNanos() {
-        return Math.max(0, timeoutNanos - (System.nanoTime() - startedNanos));
+    long remainingNanos() {
+        return timeoutNanos == Long.MAX_VALUE ? Long.MAX_VALUE
+                : Math.max(0, timeoutNanos - (System.nanoTime() - startedNanos));
     }
 
     void servicesClosing() {

@@ -652,6 +652,12 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         return current == null ? System.nanoTime() : current.startedNanos();
     }
 
+    /** Remaining total shutdown budget, including metadata cleanup, for independently closing components. */
+    public long getRemainingShutdownNanos() {
+        BrokerShutdown current = shutdown;
+        return current == null ? Long.MAX_VALUE : current.remainingNanos();
+    }
+
     public long getRemainingShutdownDrainNanos() {
         BrokerShutdown current = shutdown;
         return current == null ? Long.MAX_VALUE : current.remainingDrainNanos();

@@ -360,6 +360,37 @@ public class PulsarServiceTest extends MockedPulsarServiceBaseTest {
     }
 
     @Test
+    public void testAdminShutdownResponseIncludesMetadataCleanupReserve() throws Exception {
+        super.internalSetup();
+        super.setupDefaultTenantAndNamespace();
+        CompletableFuture<Void> releaseMetadataClose = new CompletableFuture<>();
+        CountDownLatch metadataClosing = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            CompletableFuture<Void> closing = (CompletableFuture<Void>) invocation.callRealMethod();
+            return closing.thenCompose(ignored -> {
+                metadataClosing.countDown();
+                return releaseMetadataClose;
+            });
+        }).when(pulsar).closeLocalMetadataStore();
+        CompletableFuture<Void> request = admin.brokers().shutDownBrokerGracefully(0, false, 10_000L);
+        try {
+            assertTrue(metadataClosing.await(5, TimeUnit.SECONDS));
+            long deadline = pulsar.getShutdownStartedFuture().get(5, TimeUnit.SECONDS);
+            // The 10-second request reserves two seconds for metadata cleanup. Keep its acknowledgement
+            // pending until inside that reserve, while the HTTP request must still be able to receive 204.
+            Awaitility.await().atMost(Duration.ofSeconds(10)).until(
+                    () -> System.nanoTime() - (deadline - TimeUnit.SECONDS.toNanos(1)) >= 0);
+            assertFalse(request.isDone(), "HTTP connection must remain open throughout metadata cleanup");
+            releaseMetadataClose.complete(null);
+            request.get(5, TimeUnit.SECONDS);
+        } finally {
+            releaseMetadataClose.complete(null);
+            pulsar.getShutdownFuture().handle((ignored, error) -> null).get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     public void testAdminShutdownBoundsIncompleteBundleUnload() throws Exception {
         super.internalSetup();
         super.setupDefaultTenantAndNamespace();
