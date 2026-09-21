@@ -256,9 +256,7 @@ public class OwnedBundle {
             if (budget <= 0) {
                 return CompletableFuture.failedFuture(new TimeoutException("Bundle shutdown admission timed out"));
             }
-            // The CAS also arbitrates with an ordinary administrative unload. No external code runs here,
-            // and shutdown never waits on a bundle lock on an asynchronous completion thread.
-            if (!IS_ACTIVE_UPDATER.compareAndSet(this, TRUE, FALSE)) {
+            if (!isActive()) {
                 return CompletableFuture.failedFuture(new IllegalStateException(
                         "Bundle already has an unload in progress: " + bundle));
             }
@@ -269,12 +267,27 @@ public class OwnedBundle {
             OwnershipCache ownership = pulsar.getNamespaceService().getOwnershipCache();
             ownership.registerShutdownBundle(this);
             BrokerService.BundleUnload unload = pulsar.getBrokerService().captureShutdownBundle(bundle);
-            return unload.closeStorage().thenCompose(ignored -> ownership.removeOwnership(this,
-                            () -> deadline - System.nanoTime() > 0 && pulsar.getRemainingShutdownDrainNanos() > 0))
-                    .thenCompose(ignored -> unload.disconnectClients().whenCompleteAsync((closed, error) -> {
-                        finishShutdownNotifications();
-                        ownership.completeShutdownBundle(this);
-                    }, pulsar.getExecutor()));
+            return unload.prepareStorage().thenCompose(prepared -> {
+                // Reserve the first topic slot before deactivating the bundle. The CAS still arbitrates
+                // with an ordinary administrative unload that started just before admission was sealed.
+                if (deadline - System.nanoTime() <= 0 || pulsar.getRemainingShutdownDrainNanos() <= 0) {
+                    return CompletableFuture.failedFuture(new TimeoutException("Bundle shutdown admission timed out"));
+                }
+                if (!IS_ACTIVE_UPDATER.compareAndSet(this, TRUE, FALSE)) {
+                    return CompletableFuture.failedFuture(new IllegalStateException(
+                            "Bundle already has an unload in progress: " + bundle));
+                }
+                return unload.closeStorage().thenCompose(ignored -> ownership.removeOwnership(this,
+                                () -> deadline - System.nanoTime() > 0 && pulsar.getRemainingShutdownDrainNanos() > 0))
+                        .thenCompose(ignored -> unload.disconnectClients().whenCompleteAsync((closed, error) -> {
+                            finishShutdownNotifications();
+                            ownership.completeShutdownBundle(this);
+                        }, pulsar.getExecutor()));
+            }).whenComplete((ignored, error) -> {
+                if (error != null) {
+                    unload.cancelPreparation();
+                }
+            });
         }));
         return result.copy();
     }

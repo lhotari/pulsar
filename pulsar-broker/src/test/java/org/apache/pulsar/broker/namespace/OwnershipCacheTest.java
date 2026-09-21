@@ -986,7 +986,7 @@ public class OwnershipCacheTest {
 
     @DataProvider
     public Object[][] shutdownPhases() {
-        return new Object[][] {{0, false}, {1, false}, {2, false}, {3, false},
+        return new Object[][] {{0, false}, {1, false}, {2, false}, {3, false}, {4, false},
                 {0, true}, {1, true}, {3, true}};
     }
 
@@ -1011,6 +1011,8 @@ public class OwnershipCacheTest {
         doReturn(unload).when(brokerService).captureShutdownBundle(bundle);
         CompletableFuture<Void> storage = new CompletableFuture<>();
         CompletableFuture<Void> notifications = new CompletableFuture<>();
+        CompletableFuture<Void> prepared = new CompletableFuture<>();
+        when(unload.prepareStorage()).thenReturn(prepared);
         when(unload.closeStorage()).thenReturn(storage);
         when(unload.disconnectClients()).thenReturn(notifications);
         when(pulsar.getRemainingShutdownDrainNanos()).thenReturn(TimeUnit.SECONDS.toNanos(30));
@@ -1029,6 +1031,20 @@ public class OwnershipCacheTest {
         assertThat(canceled.cancel(false)).isTrue();
         CompletableFuture<Void> result = owned.handleUnloadRequest(pulsar, 30, TimeUnit.SECONDS);
         assertThat(result).isNotDone();
+        assertThat(owned.isActive()).isTrue();
+        verify(unload, never()).closeStorage();
+        if (failure == 4) {
+            when(pulsar.getRemainingShutdownDrainNanos()).thenReturn(0L);
+            prepared.complete(null);
+            assertThatThrownBy(() -> result.get(10, TimeUnit.SECONDS)).hasCauseInstanceOf(TimeoutException.class);
+            assertThat(owned.isActive()).isTrue();
+            verify(unload).cancelPreparation();
+            verify(unload, never()).closeStorage();
+            verify(lock, never()).release();
+            return;
+        }
+        prepared.complete(null);
+        assertThat(owned.isActive()).isFalse();
         verify(lock, never()).release();
         verify(unload, never()).disconnectClients();
         if (expireEarly) {

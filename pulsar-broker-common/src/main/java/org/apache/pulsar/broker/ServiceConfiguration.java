@@ -626,6 +626,14 @@ public class ServiceConfiguration implements PulsarConfiguration {
 
     @FieldContext(
         category = CATEGORY_SERVER,
+        minValue = 1,
+        doc = "Maximum concurrent topic storage closes initiated by broker shutdown or rejected topic-load cleanup. "
+                + "A request timeout does not release a slot while its physical close remains pending."
+    )
+    private int brokerShutdownMaxConcurrentTopicClose = 32;
+
+    @FieldContext(
+        category = CATEGORY_SERVER,
         dynamic = true,
         doc = "Flag to skip broker shutdown when broker handles Out of memory error"
     )

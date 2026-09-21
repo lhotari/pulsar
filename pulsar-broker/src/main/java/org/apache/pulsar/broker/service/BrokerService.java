@@ -83,6 +83,7 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import lombok.AccessLevel;
@@ -366,6 +367,7 @@ public class BrokerService implements Closeable {
 
     private final TopicEventsDispatcher topicEventsDispatcher = new TopicEventsDispatcher();
     private volatile boolean unloaded = false;
+    private final ShutdownTopicCloseLimiter shutdownTopicCloseLimiter;
 
     // semaphore for limiting the concurrency of ledger deletion at broker level,
     // thus all managed ledgers sharing the same semaphore
@@ -375,6 +377,9 @@ public class BrokerService implements Closeable {
 
     public BrokerService(PulsarService pulsar, EventLoopGroup eventLoopGroup) throws Exception {
         this.pulsar = pulsar;
+        this.shutdownTopicCloseLimiter = new ShutdownTopicCloseLimiter(
+                pulsar.getConfiguration().getBrokerShutdownMaxConcurrentTopicClose(),
+                pulsar.getExecutor(), pulsar::getRemainingShutdownDrainNanos);
         this.clock = pulsar.getClock();
         this.dynamicConfigurationMap = prepareDynamicConfigurationMap();
         this.brokerPublishRateLimiter = new PublishRateLimiterImpl(pulsar.getMonotonicClock(), producer -> {
@@ -995,7 +1000,11 @@ public class BrokerService implements Closeable {
             pendingLookupRequests.unregister();
 
             // unloads all namespaces gracefully without disrupting mutually
-            unloadNamespaceBundlesGracefully();
+            try {
+                unloadNamespaceBundlesGracefully();
+            } finally {
+                shutdownTopicCloseLimiter.close();
+            }
 
             // close replication clients
             replicationClients.forEach((cluster, client) -> {
@@ -1787,8 +1796,7 @@ public class BrokerService implements Closeable {
     private CompletableFuture<Void> closeRejectedLoad(Supplier<CompletableFuture<Void>> close,
                                                       BrokerAdmission.TopicLoad load) {
         // Closure can take lifecycle locks; do not run it on a metadata callback thread.
-        CompletableFuture<Void> cleanup = FutureUtil.supplySafely(() -> CompletableFuture.supplyAsync(
-                () -> FutureUtil.supplySafely(close), pulsar.getExecutor()).thenCompose(f -> f));
+        CompletableFuture<Void> cleanup = shutdownTopicCloseLimiter.run(close);
         if (load != null) {
             load.cleaned(cleanup);
         }
@@ -2435,6 +2443,7 @@ public class BrokerService implements Closeable {
                         @Override
                         public void openLedgerFailed(ManagedLedgerException exception, CompletionStage<Void> cleanup,
                                                      Object ctx) {
+                            shutdownTopicCloseLimiter.observeExisting(cleanup);
                             if (topicLoad != null) {
                                 topicLoad.cleaned(cleanup);
                             }
@@ -3034,6 +3043,13 @@ public class BrokerService implements Closeable {
     private CompletableFuture<Integer> unloadServiceUnit(NamespaceBundle serviceUnit, boolean disconnectClients,
             boolean closeWithoutWaitingClientDisconnect, Map<String, CompletableFuture<Optional<Topic>>> topicFutures,
             List<BrokerAdmission.TopicLoad> loads) {
+        return unloadServiceUnit(serviceUnit, topicFutures, loads,
+                topic -> closeTopicForUnload(topic, disconnectClients, closeWithoutWaitingClientDisconnect));
+    }
+
+    private CompletableFuture<Integer> unloadServiceUnit(NamespaceBundle serviceUnit,
+            Map<String, CompletableFuture<Optional<Topic>>> topicFutures, List<BrokerAdmission.TopicLoad> loads,
+            Function<Topic, CompletableFuture<Void>> topicClose) {
         List<CompletableFuture<Void>> closeFutures = new ArrayList<>();
         Map<CompletableFuture<Optional<Topic>>, BrokerAdmission.TopicLoad> pendingLoads = new IdentityHashMap<>();
         loads.forEach(load -> {
@@ -3073,8 +3089,7 @@ public class BrokerService implements Closeable {
                 }
             }
             closeFutures.add(physicalTopic
-                    .thenCompose(t -> t.isPresent() ? t.get().close(
-                            disconnectClients, closeWithoutWaitingClientDisconnect)
+                    .thenCompose(t -> t.isPresent() ? topicClose.apply(t.get())
                             : CompletableFuture.completedFuture(null))
                     .exceptionally(e -> {
                         if (trackedLoad == null
@@ -3094,7 +3109,7 @@ public class BrokerService implements Closeable {
                 return;
             }
             closeFutures.add(load.completion().thenCompose(topic -> topic.isPresent()
-                    ? topic.get().close(disconnectClients, closeWithoutWaitingClientDisconnect)
+                    ? topicClose.apply(topic.get())
                     : CompletableFuture.completedFuture(null)));
         });
 
@@ -3113,6 +3128,13 @@ public class BrokerService implements Closeable {
         return FutureUtil.waitForAll(closeFutures).thenApply(v -> closeFutures.size());
     }
 
+    private CompletableFuture<Void> closeTopicForUnload(Topic topic, boolean disconnectClients, boolean force) {
+        if (pulsar.getBrokerAdmission().isClosed() && !disconnectClients) {
+            return shutdownTopicCloseLimiter.run(() -> topic.close(false, false));
+        }
+        return FutureUtil.supplySafely(() -> topic.close(disconnectClients, force));
+    }
+
     /** Capture the same cache and materialization identities for both shutdown close phases. */
     public BundleUnload captureShutdownBundle(NamespaceBundle bundle) {
         List<BrokerAdmission.TopicLoad> loads = pulsar.getBrokerAdmission().getShutdownTopicLoads().stream()
@@ -3125,6 +3147,9 @@ public class BrokerService implements Closeable {
         private final NamespaceBundle bundle;
         private final Map<String, CompletableFuture<Optional<Topic>>> topics;
         private final List<BrokerAdmission.TopicLoad> loads;
+        private final Topic firstTopic;
+        private final AtomicBoolean firstPermitConsumed = new AtomicBoolean();
+        private CompletableFuture<ShutdownTopicCloseLimiter.Permit> firstStoragePermit;
         private CompletableFuture<Void> storageClosed;
         private CompletableFuture<Void> clientsClosed;
 
@@ -3133,6 +3158,64 @@ public class BrokerService implements Closeable {
             this.bundle = bundle;
             this.topics = topics;
             this.loads = loads;
+            this.firstTopic = findReadyTopic();
+        }
+
+        private Topic findReadyTopic() {
+            Map<CompletableFuture<Optional<Topic>>, CompletableFuture<Optional<Topic>>> tracked =
+                    new IdentityHashMap<>();
+            loads.forEach(load -> tracked.put(load.request(), load.completion()));
+            for (var entry : topics.entrySet()) {
+                if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
+                        && ExtensibleLoadManagerImpl.isInternalTopic(entry.getKey())) {
+                    continue;
+                }
+                CompletableFuture<Optional<Topic>> future = tracked.getOrDefault(entry.getValue(), entry.getValue());
+                if (future.isDone() && !future.isCompletedExceptionally()) {
+                    Optional<Topic> topic = future.getNow(Optional.empty());
+                    if (topic.isPresent()) {
+                        return topic.get();
+                    }
+                }
+            }
+            // Pending materializations clean themselves up through the same limiter. Reserving a slot while
+            // waiting for their cleanup would deadlock at capacity one; they are joined without another slot.
+            return null;
+        }
+
+        public CompletableFuture<Void> prepareStorage() {
+            CompletableFuture<ShutdownTopicCloseLimiter.Permit> result;
+            synchronized (this) {
+                if (firstStoragePermit != null) {
+                    return firstStoragePermit.thenAccept(ignored -> { });
+                }
+                result = new CompletableFuture<>();
+                firstStoragePermit = result;
+            }
+            FutureUtil.completeAfter(result, firstTopic == null
+                    ? CompletableFuture.completedFuture(null) : shutdownTopicCloseLimiter.reserve());
+            return result.thenAccept(ignored -> { });
+        }
+
+        public void cancelPreparation() {
+            CompletableFuture<ShutdownTopicCloseLimiter.Permit> reservation;
+            synchronized (this) {
+                reservation = firstStoragePermit;
+            }
+            if (reservation != null && firstPermitConsumed.compareAndSet(false, true)) {
+                reservation.thenAccept(permit -> {
+                    if (permit != null) {
+                        permit.close();
+                    }
+                });
+            }
+        }
+
+        private CompletableFuture<Void> closeStorageTopic(Topic topic) {
+            if (topic == firstTopic && firstPermitConsumed.compareAndSet(false, true)) {
+                return firstStoragePermit.thenCompose(permit -> permit.run(() -> topic.close(false, false)));
+            }
+            return shutdownTopicCloseLimiter.run(() -> topic.close(false, false));
         }
 
         public CompletableFuture<Void> closeStorage() {
@@ -3144,9 +3227,13 @@ public class BrokerService implements Closeable {
                 result = new CompletableFuture<>();
                 storageClosed = result;
             }
-            FutureUtil.completeAfter(result, FutureUtil.supplySafely(() -> CompletableFuture.supplyAsync(
-                    () -> unloadServiceUnit(bundle, false, false, topics, loads), pulsar.getExecutor())
-                    .thenCompose(future -> future).thenAccept(ignored -> { })));
+            FutureUtil.completeAfter(result, prepareStorage().thenComposeAsync(
+                    ignored -> unloadServiceUnit(bundle, topics, loads, this::closeStorageTopic), pulsar.getExecutor())
+                    .thenAccept(ignored -> { }).whenComplete((ignored, error) -> {
+                        if (error != null) {
+                            cancelPreparation();
+                        }
+                    }));
             return result.copy();
         }
 

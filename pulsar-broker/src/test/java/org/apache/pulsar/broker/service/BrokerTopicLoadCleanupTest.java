@@ -35,6 +35,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.CloseCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.OpenLedgerCallback;
 import org.apache.bookkeeper.mledger.ManagedLedger;
@@ -371,6 +372,103 @@ public class BrokerTopicLoadCleanupTest {
         }
     }
 
+    @Test
+    public void testQueuedBundleReservationDoesNotCloseTopicsOrLoseCanceledSlot() throws Exception {
+        try (PulsarTestContext context = context()) {
+            BrokerService broker = context.getBrokerService();
+            Topic firstTopic = mock(Topic.class);
+            Topic secondTopic = mock(Topic.class);
+            CompletableFuture<Void> physical = new CompletableFuture<>();
+            when(firstTopic.close(false, false)).thenReturn(physical);
+            when(secondTopic.close(false, false)).thenReturn(CompletableFuture.completedFuture(null));
+            String secondName = NAME + "-second";
+            broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(firstTopic)));
+            broker.getTopics().put(secondName, CompletableFuture.completedFuture(Optional.of(secondTopic)));
+            context.getPulsarService().getBrokerAdmission().close().forEach(Runnable::run);
+            NamespaceBundle firstBundle = mock(NamespaceBundle.class);
+            when(firstBundle.includes(NAME)).thenReturn(true);
+            NamespaceBundle secondBundle = mock(NamespaceBundle.class);
+            when(secondBundle.includes(TopicName.get(secondName))).thenReturn(true);
+            BrokerService.BundleUnload first = broker.captureShutdownBundle(firstBundle);
+            BrokerService.BundleUnload second = broker.captureShutdownBundle(secondBundle);
+            try {
+                CompletableFuture<Void> firstClose = first.closeStorage();
+                verify(firstTopic, timeout(10000)).close(false, false);
+                CompletableFuture<Void> canceledPreparation = second.prepareStorage();
+                assertThat(canceledPreparation.cancel(false)).isTrue();
+                CompletableFuture<Void> prepared = second.prepareStorage();
+                assertPending(prepared);
+                firstClose.cancel(false);
+                assertPending(prepared);
+                verify(secondTopic, never()).close(false, false);
+                physical.complete(null);
+                prepared.get(10, TimeUnit.SECONDS);
+                verify(secondTopic, never()).close(false, false);
+                second.closeStorage().get(10, TimeUnit.SECONDS);
+                first.closeStorage().get(10, TimeUnit.SECONDS);
+                verify(firstTopic).close(false, false);
+                verify(secondTopic).close(false, false);
+            } finally {
+                physical.complete(null);
+                second.cancelPreparation();
+                broker.getTopics().remove(NAME.toString());
+                broker.getTopics().remove(secondName);
+            }
+        }
+    }
+
+    @Test
+    public void testBundleClosesOnlyOneTopicAtATimeAtCapacityOne() throws Exception {
+        try (PulsarTestContext context = context()) {
+            BrokerService broker = context.getBrokerService();
+            Topic firstTopic = mock(Topic.class);
+            Topic secondTopic = mock(Topic.class);
+            CompletableFuture<Void> firstPhysical = new CompletableFuture<>();
+            CompletableFuture<Void> secondPhysical = new CompletableFuture<>();
+            CompletableFuture<Boolean> firstStarted = new CompletableFuture<>();
+            AtomicInteger started = new AtomicInteger();
+            when(firstTopic.close(false, false)).thenAnswer(ignored -> {
+                started.incrementAndGet();
+                firstStarted.complete(true);
+                return firstPhysical;
+            });
+            when(secondTopic.close(false, false)).thenAnswer(ignored -> {
+                started.incrementAndGet();
+                firstStarted.complete(false);
+                return secondPhysical;
+            });
+            String secondName = NAME + "-second";
+            broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(firstTopic)));
+            broker.getTopics().put(secondName, CompletableFuture.completedFuture(Optional.of(secondTopic)));
+            context.getPulsarService().getBrokerAdmission().close().forEach(Runnable::run);
+            NamespaceBundle bundle = mock(NamespaceBundle.class);
+            when(bundle.includes(any(TopicName.class))).thenReturn(true);
+            try {
+                CompletableFuture<Void> closing = broker.captureShutdownBundle(bundle).closeStorage();
+                boolean first = firstStarted.get(10, TimeUnit.SECONDS);
+                assertPending(closing);
+                assertThat(started).hasValue(1);
+                if (first) {
+                    firstPhysical.complete(null);
+                    verify(secondTopic, timeout(10000)).close(false, false);
+                } else {
+                    secondPhysical.complete(null);
+                    verify(firstTopic, timeout(10000)).close(false, false);
+                }
+                assertPending(closing);
+                firstPhysical.complete(null);
+                secondPhysical.complete(null);
+                closing.get(10, TimeUnit.SECONDS);
+                assertThat(started).hasValue(2);
+            } finally {
+                firstPhysical.complete(null);
+                secondPhysical.complete(null);
+                broker.getTopics().remove(NAME.toString());
+                broker.getTopics().remove(secondName);
+            }
+        }
+    }
+
     private static CompletableFuture<Integer> unload(PulsarTestContext context) {
         NamespaceBundle bundle = mock(NamespaceBundle.class);
         doReturn(true).when(bundle).includes(any(TopicName.class));
@@ -394,6 +492,7 @@ public class BrokerTopicLoadCleanupTest {
         PulsarTestContext context = PulsarTestContext.builderForNonStartableContext().spyByDefault()
                 .configCustomizer(config -> {
                     config.setTopicLoadTimeoutSeconds(1);
+                    config.setBrokerShutdownMaxConcurrentTopicClose(1);
                     config.setBrokerShutdownTimeoutMs(0L);
                 }).build();
         NamespaceService namespace = context.getPulsarService().getNamespaceService();
