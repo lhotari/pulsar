@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
@@ -31,6 +32,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -1328,6 +1330,129 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
             assertThat(ledger.getState()).isEqualTo(ManagedLedgerImpl.State.Closed);
             verify(bookKeeper, times(0)).newCreateLedgerOp();
             verify(handle, times(1)).closeAsync();
+        } finally {
+            opened.complete(handle);
+            handleClosed.complete(null);
+            realHandle.closeAsync().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @DataProvider
+    public Object[][] discardedRecoveries() {
+        return new Object[][] {{0, false}, {0, true}, {1, false}, {1, true}, {2, false}, {2, true},
+                {3, false}, {3, true}, {4, false}, {4, true}, {5, false}, {5, true}, {6, false}, {6, true}};
+    }
+
+    @Test(dataProvider = "discardedRecoveries")
+    public void testCloseJoinsDiscardedCursorRecoveryHandle(int failure, boolean closeFailure) throws Exception {
+        String name = "cursor-discarded-recovery";
+        ManagedLedgerImpl original = (ManagedLedgerImpl) factory.open(name, defaultConfig());
+        original.openCursor("cursor").putCursorProperty("preserved", "value").get(5, TimeUnit.SECONDS);
+        original.close();
+        LedgerHandle writer = bkc.createLedger(BookKeeper.DigestType.CRC32C, new byte[0]);
+        // The malformed record is read through a real recovery handle, not a new cursor writer.
+        if (failure != 0) {
+            writer.addEntry(new byte[] {(byte) 0xff});
+        }
+        writer.close();
+        LedgerHandle realHandle = (LedgerHandle) bkc.newOpenLedgerOp().withLedgerId(writer.getId())
+                .withDigestType(BookKeeper.DigestType.CRC32C.toApiDigestType()).withPassword(new byte[0])
+                .withRecovery(true).execute().get(5, TimeUnit.SECONDS);
+        LedgerHandle handle = spy(realHandle);
+        CompletableFuture<Void> handleClosed = new CompletableFuture<>();
+        CompletableFuture<Void> closeStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            closeStarted.complete(null);
+            return handleClosed;
+        }).when(handle).closeAsync();
+        if (failure >= 1 && failure <= 3) {
+            doAnswer(invocation -> {
+                AsyncCallback.ReadCallback callback = invocation.getArgument(2);
+                callback.readComplete(failure == 1 ? BKException.Code.NoSuchEntryException
+                        : BKException.Code.ReadException, handle, null, null);
+                return null;
+            }).when(handle).asyncReadEntries(anyLong(), anyLong(), any(), any());
+        } else if (failure == 5 || failure == 6) {
+            doAnswer(invocation -> {
+                if (failure == 5) {
+                    throw new IllegalStateException("read submission failed");
+                }
+                AsyncCallback.ReadCallback callback = invocation.getArgument(2);
+                callback.readComplete(BKException.Code.OK, handle, Collections.emptyEnumeration(), null);
+                return null;
+            }).when(handle).asyncReadEntries(anyLong(), anyLong(), any(), any());
+        }
+        BookKeeper cursorBookKeeper = spy(bkc);
+        OpenBuilder builder = mock(OpenBuilder.class, RETURNS_SELF);
+        CompletableFuture<ReadHandle> opened = new CompletableFuture<>();
+        CompletableFuture<Void> openStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            openStarted.complete(null);
+            return opened;
+        }).when(builder).execute();
+        doReturn(builder).when(cursorBookKeeper).newOpenLedgerOp();
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bkc) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String ledgerName,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                MetaStore recoveryStore = spy(store);
+                doAnswer(invocation -> {
+                    MetaStoreCallback<ManagedCursorInfo> callback = invocation.getArgument(2);
+                    store.asyncGetCursorInfo(invocation.getArgument(0), invocation.getArgument(1),
+                            new MetaStoreCallback<>() {
+                                @Override
+                                public void operationComplete(ManagedCursorInfo info, Stat stat) {
+                                    info.setCursorsLedgerId(writer.getId());
+                                    callback.operationComplete(info, stat);
+                                }
+
+                                @Override
+                                public void operationFailed(MetaStoreException error) {
+                                    callback.operationFailed(error);
+                                }
+                            });
+                    return null;
+                }).when(recoveryStore).asyncGetCursorInfo(any(), any(), any());
+                return new ManagedLedgerImpl(this, bk, recoveryStore, config, scheduledExecutor, ledgerName,
+                        ownershipChecker) {
+                    @Override
+                    protected ManagedCursorImpl createCursor(BookKeeper ignored, String cursorName) {
+                        return new ManagedCursorImpl(cursorBookKeeper, this, cursorName);
+                    }
+                };
+            }
+        };
+        ManagedLedgerConfig recoveryConfig = defaultConfig().setLazyCursorRecovery(true);
+        recoveryConfig.setLedgerForceRecovery(failure == 2);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) localFactory.open(name, recoveryConfig);
+        openStarted.get(5, TimeUnit.SECONDS);
+        CompletableFuture<ManagedCursor> opening = openCursor(ledger, "cursor");
+        try {
+            CloseFuture closing = new CloseFuture();
+            ledger.asyncClose(closing, null);
+            opened.complete(handle);
+            closeStarted.get(5, TimeUnit.SECONDS);
+            assertPending(opening);
+            assertPending(closing);
+            if (closeFailure) {
+                handleClosed.completeExceptionally(BKException.create(BKException.Code.ReadException));
+            } else {
+                handleClosed.complete(null);
+            }
+            assertResult(closing, closeFailure);
+            assertThatThrownBy(() -> opening.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ManagedLedgerException.class);
+            CloseFuture repeated = new CloseFuture();
+            ledger.asyncClose(repeated, null);
+            assertResult(repeated, closeFailure);
+            verify(handle, times(1)).closeAsync();
+            verify(cursorBookKeeper, times(0)).newCreateLedgerOp();
+            assertThat(ledger.getCursors().get("cursor")).isNull();
+            // No rollback metadata update may run after failed cleanup.
+            if (closeFailure) {
+                verify(ledger.store, times(0)).asyncUpdateCursorInfo(any(), any(), any(), any(), any());
+            }
         } finally {
             opened.complete(handle);
             handleClosed.complete(null);

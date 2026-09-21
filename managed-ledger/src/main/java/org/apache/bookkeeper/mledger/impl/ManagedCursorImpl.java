@@ -65,6 +65,7 @@ import java.util.function.Predicate;
 import java.util.stream.LongStream;
 import lombok.Getter;
 import org.apache.bookkeeper.client.AsyncCallback.OpenCallback;
+import org.apache.bookkeeper.client.AsyncCallback.ReadCallback;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerEntry;
@@ -354,6 +355,7 @@ public class ManagedCursorImpl implements ManagedCursor {
     private CompletableFuture<Void> submittedMarkDeletesDrained;
     private final Set<CompletableFuture<Void>> pendingPersistenceOperations = new HashSet<>();
     private Throwable ledgerCreationCleanupFailure;
+    private CompletableFuture<Void> discardedRecoveryHandleClose = CompletableFuture.completedFuture(null);
 
     protected final ManagedCursorMXBean mbean;
 
@@ -666,11 +668,13 @@ public class ManagedCursorImpl implements ManagedCursor {
             if (lastEntryInLedger < 0) {
                 log.warn().attr("ledgerId", ledgerId).log("Error reading from metadata ledger: no entries in ledger");
                 // Rewind to last cursor snapshot available
-                initialize(getRollbackPosition(info), rollbackProperties, cursorProperties, callback);
+                discardRecoveryHandle(lh,
+                        () -> initialize(getRollbackPosition(info), rollbackProperties, cursorProperties, callback),
+                        callback);
                 return;
             }
 
-            lh.asyncReadEntries(lastEntryInLedger, lastEntryInLedger, (rc1, lh1, seq, ctx1) -> {
+            ReadCallback readCallback = (rc1, lh1, seq, ctx1) -> {
                 log.debug().attr("rc", rc1).attr("entryId", lh1.getLastAddConfirmed()).log("readComplete");
                 if (isBkErrorNotRecoverable(rc1) || (rc1 != BKException.Code.OK && ledgerForceRecovery)) {
                     log.error()
@@ -678,7 +682,9 @@ public class ManagedCursorImpl implements ManagedCursor {
                             .attr("errorMessage", BKException.getMessage(rc1))
                             .log("Error reading from metadata ledger");
                     // Rewind to the oldest entry available
-                    initialize(getRollbackPosition(info), rollbackProperties, cursorProperties, callback);
+                    discardRecoveryHandle(lh,
+                            () -> initialize(getRollbackPosition(info), rollbackProperties, cursorProperties, callback),
+                            callback);
                     return;
                 } else if (rc1 != BKException.Code.OK) {
                     log.warn()
@@ -686,17 +692,18 @@ public class ManagedCursorImpl implements ManagedCursor {
                             .attr("errorMessage", BKException.getMessage(rc1))
                             .log("Error reading from metadata ledger");
 
-                    callback.operationFailed(createManagedLedgerException(rc1));
+                    discardRecoveryHandle(lh, () -> callback.operationFailed(createManagedLedgerException(rc1)),
+                            callback);
                     return;
                 }
 
-                LedgerEntry entry = seq.nextElement();
-                mbean.addReadCursorLedgerSize(entry.getLength());
                 PositionInfo positionInfo = new PositionInfo();
                 try {
+                    LedgerEntry entry = seq.nextElement();
+                    mbean.addReadCursorLedgerSize(entry.getLength());
                     positionInfo.parseFrom(entry.getEntry());
                 } catch (Exception e) {
-                    callback.operationFailed(new ManagedLedgerException(e));
+                    discardRecoveryHandle(lh, () -> callback.operationFailed(new ManagedLedgerException(e)), callback);
                     return;
                 }
 
@@ -712,7 +719,12 @@ public class ManagedCursorImpl implements ManagedCursor {
                 }
                 recoveredCursor(position, recoveredProperties, cursorProperties, lh);
                 callback.operationComplete();
-            }, null);
+            };
+            try {
+                lh.asyncReadEntries(lastEntryInLedger, lastEntryInLedger, readCallback, null);
+            } catch (Exception error) {
+                discardRecoveryHandle(lh, () -> callback.operationFailed(new ManagedLedgerException(error)), callback);
+            }
         };
         try {
             bookkeeper.newOpenLedgerOp()
@@ -730,6 +742,23 @@ public class ManagedCursorImpl implements ManagedCursor {
             log.error().attr("ledgerId", ledgerId).exception(t).log("Encountered error on opening cursor ledger");
             openCallback.openComplete(BKException.Code.UnexpectedConditionException, null, null);
         }
+    }
+
+    private void discardRecoveryHandle(LedgerHandle handle, Runnable afterClose, VoidCallback callback) {
+        CompletableFuture<Void> closed = new CompletableFuture<>();
+        synchronized (pendingMarkDeleteOps) {
+            // Recovery has not published this cursor yet. Retain failed cleanup for initialization's close barrier.
+            discardedRecoveryHandleClose = closed;
+        }
+        closeLedgerHandle(handle).whenComplete((__, error) -> {
+            if (error != null) {
+                closed.completeExceptionally(error);
+                callback.operationFailed(createManagedLedgerException(error));
+            } else {
+                closed.complete(null);
+                afterClose.run();
+            }
+        });
     }
 
     public void recoverIndividualDeletedMessages(PositionInfo positionInfo) {
@@ -3188,6 +3217,7 @@ public class ManagedCursorImpl implements ManagedCursor {
             closing = closeFuture;
             List<CompletableFuture<Void>> pending = new ArrayList<>(pendingPersistenceOperations);
             pending.add(submittedMarkDeletesDrained);
+            pending.add(discardedRecoveryHandleClose);
             if (ledgerCreationCleanupFailure != null) {
                 pending.add(CompletableFuture.failedFuture(ledgerCreationCleanupFailure));
             }
