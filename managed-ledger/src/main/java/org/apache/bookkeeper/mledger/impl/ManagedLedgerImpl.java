@@ -335,6 +335,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     // Guarded by this; logical Closed state precedes physical ledger/cursor completion.
     private CompletableFuture<Void> closeFuture;
     private CompletableFuture<Void> physicalCloseFuture;
+    // Cache eviction does not mean that an admitted read handle has finished opening or closing.
+    private final Map<CompletableFuture<ReadHandle>, ReadHandleLifecycle> readHandleOperations =
+            new IdentityHashMap<>();
+    private Throwable readHandleCleanupFailure;
+
     private LedgerInitialization initialization;
 
     private final class LedgerInitialization implements ManagedLedgerInitializeLedgerCallback {
@@ -2002,6 +2007,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         final boolean fenced;
         final LedgerHandle ledgerToClose;
         final List<CompletableFuture<Void>> creations;
+        final List<ReadHandleLifecycle> readHandles;
         synchronized (this) {
             initiateClose = closeFuture == null;
             if (initiateClose) {
@@ -2013,6 +2019,14 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 }
                 ledgerToClose = currentLedger;
                 creations = new ArrayList<>(pendingDataLedgerCreations);
+                readHandles = new ArrayList<>(readHandleOperations.values());
+                for (ReadHandleLifecycle readHandle : readHandles) {
+                    creations.add(readHandle.closed);
+                    ledgerCache.remove(readHandle.ledgerId, readHandle.result);
+                }
+                if (readHandleCleanupFailure != null) {
+                    creations.add(CompletableFuture.failedFuture(readHandleCleanupFailure));
+                }
                 if (initialization != null) {
                     creations.add(initialization.physicalCompletion);
                 }
@@ -2031,6 +2045,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 fenced = false;
                 ledgerToClose = null;
                 creations = List.of();
+                readHandles = List.of();
             }
             closing = closeFuture;
             physicallyClosed = physicalCloseFuture;
@@ -2081,6 +2096,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 physicallyClosed.completeExceptionally(FutureUtil.unwrapCompletionException(error));
             }
         });
+        for (ReadHandleLifecycle readHandle : readHandles) {
+            readHandle.close();
+        }
         try {
             factory.close(this);
             cancelScheduledTasks();
@@ -2101,7 +2119,6 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 try {
                     log.debug().attr("ledgerId", ledgerToClose.getId()).attr("rc", rc).log("Close complete for ledger");
                     mbean.endDataLedgerCloseOp();
-                    ledgerCache.forEach((ledgerId, readHandle) -> invalidateReadHandle(ledgerId));
                     if (rc == BKException.Code.OK) {
                         ledgerClosed.complete(null);
                     } else {
@@ -2735,113 +2752,219 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     public CompletableFuture<ReadHandle> reopenReadHandle(long ledgerId) {
         invalidateReadHandle(ledgerId);
-        return getLedgerHandle(ledgerId);
+        return getLedgerHandle(ledgerId).copy();
     }
 
     CompletableFuture<ReadHandle> getLedgerHandle(long ledgerId) {
-        CompletableFuture<ReadHandle> ledgerHandle = ledgerCache.get(ledgerId);
-        if (ledgerHandle != null) {
-            return ledgerHandle;
+        State currentState = STATE_UPDATER.get(this);
+        if (currentState == State.Closed || currentState.isFenced()) {
+            return CompletableFuture.failedFuture(new ManagedLedgerFencedException());
+        }
+        CompletableFuture<ReadHandle> cached = ledgerCache.get(ledgerId);
+        if (cached != null) {
+            return cached;
+        }
+        final ReadHandleLifecycle operation;
+        synchronized (this) {
+            if (closeFuture != null || state == State.Closed || state.isFenced()) {
+                return CompletableFuture.failedFuture(new ManagedLedgerFencedException());
+            }
+            cached = ledgerCache.get(ledgerId);
+            if (cached != null) {
+                return cached;
+            }
+            operation = new ReadHandleLifecycle(ledgerId);
+            readHandleOperations.put(operation.result, operation);
+            ledgerCache.put(ledgerId, operation.result);
+        }
+        // Some metadata/maintenance continuations enter here while holding the ledger monitor.
+        if (Thread.holdsLock(this)) {
+            CompletableFuture.runAsync(operation::open);
+        } else {
+            operation.open();
+        }
+        return operation.result;
+    }
+
+    private CompletableFuture<ReadHandle> openReadHandle(long ledgerId) {
+        LedgerInfo info = ledgers.get(ledgerId);
+        CompletableFuture<ReadHandle> openFuture;
+
+        if (config.getLedgerOffloader() != null
+                && config.getLedgerOffloader().getOffloadPolicies() != null
+                && config.getLedgerOffloader().getOffloadPolicies()
+                .getManagedLedgerOffloadedReadPriority() == OffloadedReadPriority.BOOKKEEPER_FIRST
+                && info != null && info.hasOffloadContext()
+                && !info.getOffloadContext().isBookkeeperDeleted()) {
+            openFuture = bookKeeper.newOpenLedgerOp()
+                    .withRecovery(!isReadOnly())
+                    .withLedgerId(ledgerId)
+                    .withDigestType(config.getDigestType())
+                    .withPassword(config.getPassword())
+                    .withLoggerContext(log)
+                    .withOrderingKey(name)
+                    .execute();
+
+        } else if (info != null && info.hasOffloadContext() && info.getOffloadContext().isComplete()) {
+
+            UUID uid = new UUID(info.getOffloadContext().getUidMsb(), info.getOffloadContext().getUidLsb());
+            // TODO: improve this to load ledger offloader by driver name recorded in metadata
+            Map<String, String> offloadDriverMetadata = OffloadUtils.getOffloadDriverMetadata(info);
+            offloadDriverMetadata.put("ManagedLedgerName", name);
+            log.info().attr("ledgerId", ledgerId)
+                    .attr("driver", config.getLedgerOffloader().getOffloadDriverName())
+                    .attr("uid", uid).log("Opening ledger from offload driver");
+            openFuture = config.getLedgerOffloader().readOffloaded(ledgerId, uid,
+                    offloadDriverMetadata);
+        } else {
+            openFuture = bookKeeper.newOpenLedgerOp()
+                    .withRecovery(!isReadOnly())
+                    .withLedgerId(ledgerId)
+                    .withDigestType(config.getDigestType())
+                    .withPassword(config.getPassword())
+                    .withLoggerContext(log)
+                    .withOrderingKey(name)
+                    .execute();
+        }
+        return openFuture;
+    }
+
+    private final class ReadHandleLifecycle {
+        private final long ledgerId;
+        private final CompletableFuture<ReadHandle> result = new CompletableFuture<>();
+        private final CompletableFuture<ReadHandle> materialized = new CompletableFuture<>();
+        private final CompletableFuture<Void> closed = new CompletableFuture<>();
+        // Guarded by the ledger lifecycle monitor.
+        private boolean closeStarted;
+
+        private ReadHandleLifecycle(long ledgerId) {
+            this.ledgerId = ledgerId;
         }
 
-        // If not present try again and create if necessary
-        return ledgerCache.computeIfAbsent(ledgerId, lid -> {
-            // Open the ledger for reading if it was not already opened
-            log.debug().attr("ledgerId", ledgerId).log("Asynchronously opening ledger for read");
-            mbean.startDataLedgerOpenOp();
+        private void open() {
+            FutureUtil.supplySafely(() -> {
+                log.debug().attr("ledgerId", ledgerId).log("Asynchronously opening ledger for read");
+                mbean.startDataLedgerOpenOp();
+                return openReadHandle(ledgerId);
+            }).whenComplete((handle, error) -> {
+                if (Thread.holdsLock(ManagedLedgerImpl.this)) {
+                    CompletableFuture.runAsync(() -> completeMaterialization(handle, error));
+                } else {
+                    completeMaterialization(handle, error);
+                }
+            });
+        }
 
-            CompletableFuture<ReadHandle> promise = new CompletableFuture<>();
-
-            LedgerInfo info = ledgers.get(ledgerId);
-            CompletableFuture<ReadHandle> openFuture;
-
-            if (config.getLedgerOffloader() != null
-                    && config.getLedgerOffloader().getOffloadPolicies() != null
-                    && config.getLedgerOffloader().getOffloadPolicies()
-                    .getManagedLedgerOffloadedReadPriority() == OffloadedReadPriority.BOOKKEEPER_FIRST
-                    && info != null && info.hasOffloadContext()
-                    && !info.getOffloadContext().isBookkeeperDeleted()) {
-                openFuture = bookKeeper.newOpenLedgerOp()
-                        .withRecovery(!isReadOnly())
-                        .withLedgerId(ledgerId)
-                        .withDigestType(config.getDigestType())
-                        .withPassword(config.getPassword())
-                        .withLoggerContext(log)
-                        .withOrderingKey(name)
-                        .execute();
-
-            } else if (info != null && info.hasOffloadContext() && info.getOffloadContext().isComplete()) {
-
-                UUID uid = new UUID(info.getOffloadContext().getUidMsb(), info.getOffloadContext().getUidLsb());
-                // TODO: improve this to load ledger offloader by driver name recorded in metadata
-                Map<String, String> offloadDriverMetadata = OffloadUtils.getOffloadDriverMetadata(info);
-                offloadDriverMetadata.put("ManagedLedgerName", name);
-                log.info().attr("ledgerId", ledgerId)
-                        .attr("driver", config.getLedgerOffloader().getOffloadDriverName())
-                        .attr("uid", uid).log("Opening ledger from offload driver");
-                openFuture = config.getLedgerOffloader().readOffloaded(ledgerId, uid,
-                        offloadDriverMetadata);
+        private void completeMaterialization(ReadHandle handle, Throwable error) {
+            mbean.endDataLedgerOpenOp();
+            if (error == null) {
+                materialized.complete(handle);
             } else {
-                openFuture = bookKeeper.newOpenLedgerOp()
-                        .withRecovery(!isReadOnly())
-                        .withLedgerId(ledgerId)
-                        .withDigestType(config.getDigestType())
-                        .withPassword(config.getPassword())
-                        .withLoggerContext(log)
-                        .withOrderingKey(name)
-                        .execute();
+                materialized.completeExceptionally(error);
             }
-            openFuture.whenCompleteAsync((res, ex) -> {
-                mbean.endDataLedgerOpenOp();
-                if (ex != null) {
-                    ledgerCache.remove(ledgerId, promise);
-                    promise.completeExceptionally(createManagedLedgerException(ex));
+            try {
+                executor.execute(() -> publishResult(handle, error));
+            } catch (Throwable dispatchError) {
+                failResult(dispatchError);
+            }
+        }
+
+        private void publishResult(ReadHandle handle, Throwable error) {
+            try {
+                Throwable failure = error;
+                synchronized (ManagedLedgerImpl.this) {
+                    if (failure == null && (closeStarted || closeFuture != null || state.isFenced())) {
+                        failure = new ManagedLedgerAlreadyClosedException("Read handle was closed while opening");
+                    }
+                }
+                if (failure != null) {
+                    failResult(failure);
                 } else {
                     log.debug().attr("ledgerId", ledgerId).log("Successfully opened ledger for reading");
-                    promise.complete(res);
+                    result.complete(handle);
                 }
-            }, executor);
-            return promise;
-        });
+            } catch (Throwable failure) {
+                failResult(failure);
+            }
+        }
+
+        private void failResult(Throwable error) {
+            synchronized (ManagedLedgerImpl.this) {
+                ledgerCache.remove(ledgerId, result);
+            }
+            // Start cleanup before invoking a request callback that might re-enter ledger close.
+            close();
+            result.completeExceptionally(createManagedLedgerException(error));
+        }
+
+        private void close() {
+            synchronized (ManagedLedgerImpl.this) {
+                if (closeStarted) {
+                    return;
+                }
+                closeStarted = true;
+            }
+            // A failed open acquired no handle. A successful late open is always closed, even if
+            // its public result was canceled or callback dispatch was rejected.
+            materialized.handleAsync((handle, error) -> handle).thenCompose(handle -> handle == null
+                    ? CompletableFuture.completedFuture(null) : FutureUtil.supplySafely(handle::closeAsync))
+                    .whenComplete((__, error) -> {
+                        synchronized (ManagedLedgerImpl.this) {
+                            readHandleOperations.remove(result);
+                            if (error != null && readHandleCleanupFailure == null) {
+                                readHandleCleanupFailure = FutureUtil.unwrapCompletionException(error);
+                            }
+                        }
+                        if (error == null) {
+                            closed.complete(null);
+                        } else {
+                            log.warn().attr("ledgerId", ledgerId).exception(error)
+                                    .log("Failed to close ledger ReadHandle");
+                            closed.completeExceptionally(FutureUtil.unwrapCompletionException(error));
+                        }
+                    });
+        }
+    }
+
+    @VisibleForTesting
+    synchronized int pendingReadHandleOperations() {
+        return readHandleOperations.size();
     }
 
     void invalidateReadHandle(long ledgerId) {
-        CompletableFuture<ReadHandle> rhf = ledgerCache.remove(ledgerId);
-        if (rhf != null) {
-            rhf.thenCompose(r -> {
-                if (r instanceof OffloadedLedgerHandle) {
-                    log.info().attr("ledgerId", ledgerId)
-                            .attr("driver", config.getLedgerOffloader().getOffloadDriverName())
-                            .log("Closing ledger from offload driver");
-                }
-                return r.closeAsync().exceptionally(ex -> {
-                    log.warn().attr("ledgerId", ledgerId)
-                            .attr("type", r.getClass().getName()).exception(ex)
-                            .log("Failed to close ledger ReadHandle");
-                    return null;
-                });
-            }).exceptionally(ex -> {
-                log.warn().attr("ledgerId", ledgerId).exception(ex).log("Failed to close Ledger ReadHandle");
-                return null;
-            });
+        final ReadHandleLifecycle operation;
+        synchronized (this) {
+            CompletableFuture<ReadHandle> cached = ledgerCache.remove(ledgerId);
+            operation = cached == null ? null : readHandleOperations.get(cached);
+        }
+        if (operation != null) {
+            operation.close();
         }
     }
 
     public void invalidateLedgerHandle(ReadHandle ledgerHandle) {
-        long ledgerId = ledgerHandle.getId();
         LedgerHandle currentLedger = this.currentLedger;
-
-        if (currentLedger != null && ledgerId != currentLedger.getId()) {
-            // remove handle from ledger cache since we got a (read) error
-            ledgerCache.remove(ledgerId);
-            log.debug().attr("ledgerId", ledgerId).log("Removed ledger read handle from cache");
-            ledgerHandle.closeAsync()
-                    .exceptionally(ex -> {
-                        log.warn().exception(ex).log("Failed to close a Ledger ReadHandle");
-                        return null;
-                    });
-        } else {
+        if (currentLedger == null || ledgerHandle.getId() == currentLedger.getId()) {
             log.debug("Ledger that encountered read error is current ledger");
+            return;
+        }
+        ReadHandleLifecycle operation = null;
+        synchronized (this) {
+            for (ReadHandleLifecycle candidate : readHandleOperations.values()) {
+                if (candidate.materialized.isDone() && !candidate.materialized.isCompletedExceptionally()
+                        && candidate.materialized.getNow(null) == ledgerHandle) {
+                    operation = candidate;
+                    ledgerCache.remove(candidate.ledgerId, candidate.result);
+                    break;
+                }
+            }
+        }
+        if (operation != null) {
+            // Remove only this handle's cache generation; a newer read open may already be cached.
+            operation.close();
+        } else {
+            // A read error can arrive after maintenance already finished closing this handle.
+            log.debug().attr("ledgerId", ledgerHandle.getId()).log("Read handle was already released");
         }
     }
 
