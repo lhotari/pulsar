@@ -537,31 +537,35 @@ public class WebService implements AutoCloseable {
             long configuredMs = server.getStopTimeout();
             server.setStopTimeout(configuredMs > 0 ? Math.min(configuredMs, remainingMs) : remainingMs);
         }
-        server.stop();
-        // unregister statistics from Prometheus client's default CollectorRegistry singleton
-        // to prevent memory leaks in tests
-        if (jettyStatisticsCollector != null) {
-            try {
-                CollectorRegistry.defaultRegistry.unregister(jettyStatisticsCollector);
-            } catch (Exception e) {
-                // ignore any exception happening in unregister
-                // exception will be thrown for 2. instance of WebService in tests since
-                // the register supports a single JettyStatisticsCollector
+        try {
+            server.stop();
+        } finally {
+            // Jetty can stop its components and then throw a graceful-stop timeout. Always release our resources.
+            // unregister statistics from Prometheus client's default CollectorRegistry singleton
+            // to prevent memory leaks in tests
+            if (jettyStatisticsCollector != null) {
+                try {
+                    CollectorRegistry.defaultRegistry.unregister(jettyStatisticsCollector);
+                } catch (Exception e) {
+                    // ignore any exception happening in unregister
+                    // exception will be thrown for 2. instance of WebService in tests since
+                    // the register supports a single JettyStatisticsCollector
+                }
+                jettyStatisticsCollector = null;
             }
-            jettyStatisticsCollector = null;
+            webServiceExecutor.join();
+            // PIP-478: dispose the TLS factory subscription and close the factory, if the new path was used.
+            if (this.reloadableServerTls != null) {
+                this.reloadableServerTls.subscription().dispose();
+                this.reloadableServerTls = null;
+            }
+            if (this.tlsFactory != null) {
+                this.tlsFactory.close();
+                this.tlsFactory = null;
+            }
+            webExecutorThreadPoolStats.close();
+            this.executorStats.close();
         }
-        webServiceExecutor.join();
-        // PIP-478: dispose the TLS factory subscription and close the factory, if the new path was used.
-        if (this.reloadableServerTls != null) {
-            this.reloadableServerTls.subscription().dispose();
-            this.reloadableServerTls = null;
-        }
-        if (this.tlsFactory != null) {
-            this.tlsFactory.close();
-            this.tlsFactory = null;
-        }
-        webExecutorThreadPoolStats.close();
-        this.executorStats.close();
         log.info("Web service closed");
     }
 
