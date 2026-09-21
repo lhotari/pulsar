@@ -26,6 +26,7 @@ import static org.apache.pulsar.common.api.proto.KeySharedMode.AUTO_SPLIT;
 import static org.apache.pulsar.common.protocol.Commands.DEFAULT_CONSUMER_EPOCH;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -101,12 +102,13 @@ public class ConsumerTest {
                 assertThat(release.await(5, TimeUnit.SECONDS)).isTrue();
             }
             return null;
-        }).when(subscription).removeConsumer(eq(consumer), any(Boolean.class));
+        }).when(subscription).removeConsumer(eq(consumer), anyBoolean());
         try {
             var first = closer.submit(() -> consumer.disconnect(true, Optional.empty()));
             assertThat(removing.await(5, TimeUnit.SECONDS)).isTrue();
             BrokerLookupData target = mock(BrokerLookupData.class);
             consumer.disconnect(false, Optional.of(target));
+            verify(cnx).closeConsumer(consumer, Optional.empty());
             verify(cnx).closeConsumer(consumer, Optional.of(target));
             verify(subscription, never()).removeConsumer(consumer, false);
             release.countDown();

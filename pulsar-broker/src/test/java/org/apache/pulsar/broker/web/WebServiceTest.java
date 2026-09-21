@@ -23,6 +23,7 @@ import static org.apache.pulsar.broker.stats.BrokerOpenTelemetryTestUtil.assertM
 import static org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsClient.Metric;
 import static org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsClient.parseMetrics;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -155,7 +156,7 @@ public class WebServiceTest {
             verify(activeRequest).shutdown();
         } finally {
             server.removeBean(activeRequest);
-            doReturn(Long.MAX_VALUE).when(pulsar).getRemainingShutdownDrainNanos();
+            doCallRealMethod().when(pulsar).getRemainingShutdownDrainNanos();
         }
     }
 
@@ -184,8 +185,8 @@ public class WebServiceTest {
         } finally {
             pendingRequest.complete(null);
             server.removeBean(activeRequest);
-            doReturn(Long.MAX_VALUE).when(pulsar).getRemainingShutdownDrainNanos();
-            doReturn(Long.MAX_VALUE).when(pulsar).getRemainingShutdownNanos();
+            doCallRealMethod().when(pulsar).getRemainingShutdownDrainNanos();
+            doCallRealMethod().when(pulsar).getRemainingShutdownNanos();
         }
     }
 
@@ -211,7 +212,7 @@ public class WebServiceTest {
         } finally {
             pendingRequest.complete(null);
             server.removeBean(activeRequest);
-            doReturn(Long.MAX_VALUE).when(pulsar).getRemainingShutdownDrainNanos();
+            doCallRealMethod().when(pulsar).getRemainingShutdownDrainNanos();
         }
     }
 
@@ -243,7 +244,7 @@ public class WebServiceTest {
             releaseHandler.countDown();
             pendingRequest.complete(null);
             server.removeBean(activeRequest);
-            doReturn(Long.MAX_VALUE).when(pulsar).getRemainingShutdownDrainNanos();
+            doCallRealMethod().when(pulsar).getRemainingShutdownDrainNanos();
             closer.shutdownNow();
             assertTrue(closer.awaitTermination(5, TimeUnit.SECONDS));
         }
