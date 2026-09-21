@@ -1844,17 +1844,26 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
                 tryWaitForOverrides(overrideFutures, true, gracefully);
                 try {
                     flushForCleanup(gracefully, OWNERSHIP_CLEAN_UP_WAIT_RETRY_DELAY_IN_MILLIS / 2);
-                    TimeUnit.NANOSECONDS.sleep(cleanupTimeoutNanos(gracefully,
-                            OWNERSHIP_CLEAN_UP_WAIT_RETRY_DELAY_IN_MILLIS / 2, MILLISECONDS));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     log.warn().attr("broker", brokerId)
                             .log("Interrupted while delaying the next service unit clean-up. Cleaning broker");
+                    break;
                 } catch (ExecutionException e) {
                     log.error().exception(e.getCause()).log("Failed to flush table view");
                 } catch (TimeoutException e) {
                     log.warn().attr("timeoutMs", OWNERSHIP_CLEAN_UP_WAIT_RETRY_DELAY_IN_MILLIS)
                             .log("Failed to flush the table view");
+                }
+                // A failed refresh must not turn ownership recovery into a tight publication loop.
+                long delay = Math.min(Math.max(0, budget - (System.nanoTime() - started)),
+                        cleanupTimeoutNanos(gracefully,
+                                OWNERSHIP_CLEAN_UP_WAIT_RETRY_DELAY_IN_MILLIS / 2, MILLISECONDS));
+                try {
+                    TimeUnit.NANOSECONDS.sleep(delay);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
                 }
             }
         }
@@ -2035,6 +2044,9 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
 
     @VisibleForTesting
     long cleanupTimeoutNanos(boolean gracefully, long timeout, TimeUnit unit) {
+        if (channelState == Closed) {
+            return 0;
+        }
         return gracefully ? Math.min(unit.toNanos(timeout), pulsar.getRemainingShutdownDrainNanos())
                 : unit.toNanos(timeout);
     }

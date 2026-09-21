@@ -2746,6 +2746,17 @@ public class ServiceUnitStateChannelTest extends MockedPulsarServiceBaseTest {
         return new Object[][]{{false}, {true}};
     }
 
+    @Test
+    public void testClosingChannelStopsBothCleanupBudgets() throws Exception {
+        var channel = createChannel(pulsar);
+        assertEquals(TimeUnit.SECONDS.toNanos(5), channel.cleanupTimeoutNanos(false, 5, TimeUnit.SECONDS));
+
+        channel.close();
+
+        assertEquals(0L, channel.cleanupTimeoutNanos(false, 5, TimeUnit.SECONDS));
+        assertEquals(0L, channel.cleanupTimeoutNanos(true, 5, TimeUnit.SECONDS));
+    }
+
     @Test(dataProvider = "cleanupDestination")
     public void testCleanupRetriesConcurrentAssignment(boolean hasDestinationBroker) throws Exception {
         var channel = (ServiceUnitStateChannelImpl) channel1;
