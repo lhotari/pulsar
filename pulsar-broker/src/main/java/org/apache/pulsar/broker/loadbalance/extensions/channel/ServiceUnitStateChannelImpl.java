@@ -133,6 +133,7 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
 
     private ServiceUnitStateTableView tableview;
     private final Map<String, CompletableFuture<Void>> shutdownRecoveries = new ConcurrentHashMap<>();
+    private final Object shutdownRecoveryExecutorLock = new Object();
     private ExecutorService shutdownRecoveryExecutor;
     private final Map<String, ShutdownTransfer> shutdownTransfers = new ConcurrentHashMap<>();
     private final Map<String, ShutdownTerminalClose> shutdownTerminalCloses = new ConcurrentHashMap<>();
@@ -434,9 +435,13 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
     @Override
     public synchronized void close() throws PulsarServerException {
         channelState = Closed;
-        if (shutdownRecoveryExecutor != null) {
-            shutdownRecoveryExecutor.shutdownNow();
+        ExecutorService recoveryExecutor;
+        synchronized (shutdownRecoveryExecutorLock) {
+            recoveryExecutor = shutdownRecoveryExecutor;
             shutdownRecoveryExecutor = null;
+        }
+        if (recoveryExecutor != null) {
+            recoveryExecutor.shutdownNow();
         }
         try {
             leaderElectionService = null;
@@ -908,15 +913,22 @@ public class ServiceUnitStateChannelImpl implements ServiceUnitStateChannel {
         return true;
     }
 
-    private synchronized ExecutorService shutdownRecoveryExecutor() {
-        if (shutdownRecoveryExecutor == null) {
-            shutdownRecoveryExecutor = Executors.newFixedThreadPool(2,
-                    new DefaultThreadFactory("pulsar-shutdown-ownership-recovery", true));
-            if (channelState == Closed) {
-                shutdownRecoveryExecutor.shutdownNow();
+    @VisibleForTesting
+    ExecutorService shutdownRecoveryExecutor() {
+        // Reader close waits for its callbacks. They must not acquire the channel monitor held by close().
+        synchronized (shutdownRecoveryExecutorLock) {
+            ExecutorService executor = shutdownRecoveryExecutor;
+            if (executor == null) {
+                executor = Executors.newFixedThreadPool(2,
+                        new DefaultThreadFactory("pulsar-shutdown-ownership-recovery", true));
+                if (channelState == Closed) {
+                    executor.shutdownNow();
+                } else {
+                    shutdownRecoveryExecutor = executor;
+                }
             }
+            return executor;
         }
-        return shutdownRecoveryExecutor;
     }
 
     private boolean canRecoverShutdownOwnership() {

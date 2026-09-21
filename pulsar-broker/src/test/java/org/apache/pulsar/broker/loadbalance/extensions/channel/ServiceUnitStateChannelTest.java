@@ -2757,6 +2757,27 @@ public class ServiceUnitStateChannelTest extends MockedPulsarServiceBaseTest {
         assertEquals(0L, channel.cleanupTimeoutNanos(true, 5, TimeUnit.SECONDS));
     }
 
+    @Test
+    public void testClosingReaderCanFinishRecoveryExecutorAdmission() throws Exception {
+        var channel = createChannel(pulsar);
+        var tableView = mock(ServiceUnitStateTableView.class);
+        channel.setTableView(tableView);
+        ExecutorService reader = Executors.newSingleThreadExecutor();
+        doAnswer(invocation -> {
+            // A listener can pass its open-state check just before close takes the channel monitor.
+            // Consumer close waits for that listener's executor to finish pending receives.
+            var recovery = reader.submit(channel::shutdownRecoveryExecutor).get(5, TimeUnit.SECONDS);
+            assertTrue(recovery.isShutdown());
+            return null;
+        }).when(tableView).close();
+        try {
+            channel.close();
+        } finally {
+            reader.shutdownNow();
+            assertTrue(reader.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
     @Test(dataProvider = "cleanupDestination")
     public void testCleanupRetriesConcurrentAssignment(boolean hasDestinationBroker) throws Exception {
         var channel = (ServiceUnitStateChannelImpl) channel1;
