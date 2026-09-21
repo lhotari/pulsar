@@ -43,6 +43,13 @@ final class ShutdownDrainController {
         String id();
         ShutdownBundleCost.Load load();
         long remainingTopics();
+        default boolean hasHandoff() {
+            return false;
+        }
+        /** Monotonic time when all storage closed, or Long.MIN_VALUE while it remains pending. */
+        default long handoffStartedNanos() {
+            return Long.MIN_VALUE;
+        }
         default boolean unpaced() {
             return false;
         }
@@ -60,12 +67,14 @@ final class ShutdownDrainController {
     private static final long REFRESH_NANOS = TimeUnit.SECONDS.toNanos(1);
     private final class Entry {
         final Work work;
+        final long observationId;
         State state = State.WAITING;
         ShutdownBundleCost.Load load;
         ShutdownDrainPlanner.Job job;
 
         Entry(Work work) {
             this.work = work;
+            observationId = entries.size();
         }
     }
 
@@ -81,6 +90,8 @@ final class ShutdownDrainController {
     private final boolean rateLimited;
     private final ShutdownDrainPlanner planner;
     private final ShutdownCloseTimeEstimator estimator = new ShutdownCloseTimeEstimator(
+            TimeUnit.MILLISECONDS.toNanos(100));
+    private final ShutdownCloseTimeEstimator handoffEstimator = new ShutdownCloseTimeEstimator(
             TimeUnit.MILLISECONDS.toNanos(100));
     private final CompletableFuture<Void> result = new CompletableFuture<>();
     private final AtomicBoolean requested = new AtomicBoolean();
@@ -202,6 +213,14 @@ final class ShutdownDrainController {
         for (int i = 0; i < progress.reserved(); i++) {
             background.add(estimate.nanos());
         }
+        Map<Long, Long> outstandingHandoffs = new HashMap<>();
+        for (Entry entry : entries.values()) {
+            long started = entry.work.handoffStartedNanos();
+            if (entry.state == State.RUNNING && entry.work.hasHandoff() && started != Long.MIN_VALUE) {
+                outstandingHandoffs.put(entry.observationId, Math.max(0, now - started));
+            }
+        }
+        long handoffEstimate = handoffEstimator.estimate(outstandingHandoffs).nanos();
         List<ShutdownDrainPlanner.Job> pending = new ArrayList<>();
         List<ShutdownDrainPlanner.Active> active = new ArrayList<>();
         int preparing = 0;
@@ -210,12 +229,15 @@ final class ShutdownDrainController {
                 // Dependency work reserves storage capacity in the tail, without delaying user work by its impact.
                 boolean unpaced = entry.load.idle() || entry.work.dependent() || entry.work.unpaced();
                 entry.job = new ShutdownDrainPlanner.Job(entry.work.id(), unpaced ? 0 : normalizer.impact(entry.load),
-                        entry.work.remainingTopics(), estimate.nanos(), 0, unpaced);
+                        entry.work.remainingTopics(), estimate.nanos(), 0, unpaced,
+                        entry.work.hasHandoff() ? handoffEstimate : 0);
                 pending.add(entry.job);
             } else if (entry.state != State.DONE) {
                 List<Long> topics = activeTopics.getOrDefault(entry.work.id(), List.of());
                 active.add(new ShutdownDrainPlanner.Active(entry.work.id(), topics,
-                        Math.max(0, entry.work.remainingTopics() - topics.size()), 0));
+                        Math.max(0, entry.work.remainingTopics() - topics.size()), 0,
+                        entry.work.hasHandoff() ? Math.max(1, handoffEstimate
+                                - outstandingHandoffs.getOrDefault(entry.observationId, 0L)) : 0));
                 preparing += entry.state == State.PREPARING ? 1 : 0;
             }
         }
@@ -257,7 +279,8 @@ final class ShutdownDrainController {
                     boolean unpaced = entry.load.idle() || entry.work.dependent() || entry.work.unpaced();
                     entry.job = new ShutdownDrainPlanner.Job(entry.work.id(), unpaced ? 0
                             : normalizer.impact(entry.load), entry.work.remainingTopics(),
-                            entry.job.longestTopicNanos(), entry.job.minimumDurationNanos(), unpaced);
+                            entry.job.longestTopicNanos(), entry.job.minimumDurationNanos(), unpaced,
+                            entry.job.handoffNanos());
                     entry.state = State.RUNNING;
                     planner.started(entry.job, Math.max(0, clock.getAsLong() - origin));
                     FutureUtil.supplySafely(() -> entry.work.start(Math.min(bundleBudget, remaining.getAsLong())))
@@ -271,6 +294,11 @@ final class ShutdownDrainController {
     }
 
     private void completed(Entry entry, Throwable error) {
+        long started = entry.work.handoffStartedNanos();
+        if (entry.work.hasHandoff() && started != Long.MIN_VALUE) {
+            handoffEstimator.observe(entry.observationId, Math.max(0, clock.getAsLong() - started), error == null
+                    ? ShutdownCloseTimeEstimator.Outcome.SUCCESS : ShutdownCloseTimeEstimator.Outcome.FAILURE);
+        }
         entry.work.cancelPreparation();
         entry.state = State.DONE;
         if (error != null && failure == null) {

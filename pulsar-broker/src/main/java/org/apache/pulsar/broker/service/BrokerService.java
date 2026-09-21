@@ -1311,6 +1311,16 @@ public class BrokerService implements Closeable {
                 }
 
                 @Override
+                public boolean hasHandoff() {
+                    return !unpaced;
+                }
+
+                @Override
+                public long handoffStartedNanos() {
+                    return unload.storageClosedNanos;
+                }
+
+                @Override
                 public CompletableFuture<Void> prepare() {
                     return unload.prepareStorage();
                 }
@@ -3315,6 +3325,7 @@ public class BrokerService implements Closeable {
         private final List<CompletableFuture<Optional<Topic>>> materializations;
         private final AtomicInteger remainingTopics;
         private volatile long storageStartedNanos;
+        private volatile long storageClosedNanos = Long.MIN_VALUE;
         private boolean budgetStarted;
         private volatile long storageBudgetNanos = Long.MAX_VALUE;
         private final AtomicBoolean firstPermitConsumed = new AtomicBoolean();
@@ -3484,7 +3495,7 @@ public class BrokerService implements Closeable {
             FutureUtil.completeAfter(result, prepareStorage().thenComposeAsync(
                     ignored -> unloadServiceUnit(bundle, topics, loads, this::closeStorageTopic, includeInternalTopics),
                     pulsar.getExecutor())
-                    .thenAccept(ignored -> { }).whenComplete((ignored, error) -> {
+                    .thenAccept(ignored -> storageClosedNanos = System.nanoTime()).whenComplete((ignored, error) -> {
                         if (error != null) {
                             cancelPreparation();
                         }

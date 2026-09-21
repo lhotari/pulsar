@@ -53,6 +53,33 @@ public class ShutdownDrainPlannerTest {
     }
 
     @Test
+    public void testStorageFinishesBeforeHandoffWithoutHoldingTopicCapacity() {
+        ShutdownDrainPlanner planner = new ShutdownDrainPlanner(seconds(10), 0, 1, 2, 0);
+        Job first = new Job("first", 8, 2, 0, 0, false, seconds(4));
+        Job second = new Job("second", 1, 2, 0, 0, false, seconds(4));
+        Plan plan = planner.plan(0, List.of(first, second), List.of(), List.of(), estimate(1));
+        // One storage lane serves both two-second closes by second6; their handoffs overlap.
+        assertThat(plan.workConserving()).isFalse();
+        assertThat(scheduled(plan, "first").latestNanos()).isEqualTo(seconds(2));
+        assertThat(scheduled(plan, "second").latestNanos()).isEqualTo(seconds(4));
+    }
+
+    @Test
+    public void testActiveHandoffKeepsBundleLaneAndCanExhaustDeadline() {
+        ShutdownDrainPlanner planner = new ShutdownDrainPlanner(seconds(10), 0, 1, 1, 0);
+        Active active = new Active("running", List.of(seconds(1)), 0, 0, seconds(4));
+        Job next = new Job("next", 1, 1, 0, 0, false, seconds(4));
+        Plan plan = planner.plan(0, List.of(next), List.of(active), List.of(), estimate(1));
+        assertThat(plan.workConserving()).isFalse();
+        assertThat(scheduled(plan, "next").latestNanos()).isEqualTo(seconds(5));
+        Plan overrun = planner.plan(seconds(1), List.of(next),
+                List.of(new Active("running", List.of(), 0, 0, seconds(11))), List.of(), estimate(1));
+        assertThat(overrun.workConserving()).isTrue();
+        assertThat(overrun.reasons()).contains(Reason.CAPACITY);
+        assertThat(overrun.shortfallLowerBoundNanos()).isPositive();
+    }
+
+    @Test
     public void testWeightedStartsIdleLaneAndFixedAnchor() {
         ShutdownDrainPlanner planner = new ShutdownDrainPlanner(seconds(50), seconds(10), 16, 16, 0);
         Job a = job("a", 8, 1);

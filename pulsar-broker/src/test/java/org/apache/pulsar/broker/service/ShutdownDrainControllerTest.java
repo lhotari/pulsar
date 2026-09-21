@@ -185,6 +185,35 @@ public class ShutdownDrainControllerTest {
         }
     }
 
+    @Test
+    public void testObservedHandoffDurationAdvancesRemainingBundles() throws Exception {
+        try (Harness harness = new Harness(11 * SECOND, 1, 0, 10 * SECOND)) {
+            Work first = harness.work("first", 8);
+            Work second = harness.work("second", 1);
+            Work third = harness.work("third", 1);
+            harness.work.forEach(work -> work.hasHandoff = true);
+            first.handoffStarted = 0;
+            harness.start();
+            assertThat(first.starts).isEqualTo(1);
+            harness.advance(2 * SECOND);
+            first.closed.complete(null);
+            harness.flush();
+            harness.advance(5 * SECOND);
+            assertThat(second.starts).isZero();
+            harness.advance(6 * SECOND);
+            // Nominal impact pacing is at8s, but two observed two-second handoffs need4s before the10s cutoff.
+            assertThat(second.starts).isEqualTo(1);
+            assertThat(third.starts).isZero();
+            second.handoffStarted = 6 * SECOND;
+            harness.advance(8 * SECOND);
+            second.closed.complete(null);
+            harness.flush();
+            assertThat(third.starts).isEqualTo(1);
+            third.closed.complete(null);
+            harness.result.get(5, TimeUnit.SECONDS);
+        }
+    }
+
     private static final class Work implements ShutdownDrainController.Work {
         final String id;
         long producers;
@@ -194,6 +223,8 @@ public class ShutdownDrainControllerTest {
         long budget;
         boolean canceled;
         boolean dependent;
+        boolean hasHandoff;
+        volatile long handoffStarted = Long.MIN_VALUE;
         Runnable cancelReservation = () -> { };
 
         Work(String id, long producers) {
@@ -219,6 +250,16 @@ public class ShutdownDrainControllerTest {
         @Override
         public boolean dependent() {
             return dependent;
+        }
+
+        @Override
+        public boolean hasHandoff() {
+            return hasHandoff;
+        }
+
+        @Override
+        public long handoffStartedNanos() {
+            return handoffStarted;
         }
 
         @Override

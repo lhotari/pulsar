@@ -35,20 +35,30 @@ import java.util.TreeMap;
  * The shared fluid forecast is approximate; physical admission and completion remain the controller's job.
  */
 final class ShutdownDrainPlanner {
-    record Job(String id, double impact, long topics, long longestTopicNanos, long minimumDurationNanos, boolean idle) {
+    record Job(String id, double impact, long topics, long longestTopicNanos, long minimumDurationNanos,
+               boolean idle, long handoffNanos) {
+        Job(String id, double impact, long topics, long longestTopicNanos, long minimumDurationNanos, boolean idle) {
+            this(id, impact, topics, longestTopicNanos, minimumDurationNanos, idle, 0);
+        }
+
         Job {
             if (id == null || !Double.isFinite(impact) || impact < 0 || (!idle && impact == 0)
-                    || topics < 0 || longestTopicNanos < 0 || minimumDurationNanos < 0) {
+                    || topics < 0 || longestTopicNanos < 0 || minimumDurationNanos < 0 || handoffNanos < 0) {
                 throw new IllegalArgumentException("Invalid shutdown job");
             }
         }
     }
 
     /** Remaining predictions for actual occupied topic slots; Long.MAX_VALUE means unavailable capacity. */
-    record Active(String id, List<Long> topicRemainingNanos, long queuedTopics, long minimumRemainingNanos) {
+    record Active(String id, List<Long> topicRemainingNanos, long queuedTopics, long minimumRemainingNanos,
+                  long handoffRemainingNanos) {
+        Active(String id, List<Long> topicRemainingNanos, long queuedTopics, long minimumRemainingNanos) {
+            this(id, topicRemainingNanos, queuedTopics, minimumRemainingNanos, 0);
+        }
+
         Active {
             topicRemainingNanos = List.copyOf(topicRemainingNanos);
-            if (id == null || queuedTopics < 0 || minimumRemainingNanos < 0
+            if (id == null || queuedTopics < 0 || minimumRemainingNanos < 0 || handoffRemainingNanos < 0
                     || topicRemainingNanos.stream().anyMatch(remaining -> remaining < 0)) {
                 throw new IllegalArgumentException("Invalid active shutdown work");
             }
@@ -128,14 +138,17 @@ final class ShutdownDrainPlanner {
             List<Long> availableBundles = new ArrayList<>();
             for (Active job : active) {
                 Allocation queued = capacity.forward(job.queuedTopics() * (double) estimate.nanos());
-                long finish = add(now, job.minimumRemainingNanos());
+                long finish = now;
                 for (long remaining : job.topicRemainingNanos()) {
                     finish = Math.max(finish, add(now, remaining));
                 }
                 if (job.queuedTopics() > 0) {
                     finish = Math.max(finish, Math.max(queued.finish(), add(queued.start(), estimate.nanos())));
                 }
+                // Ownership release and client disposal follow storage, but occupy no topic-close slot.
+                finish = Math.max(add(finish, job.handoffRemainingNanos()), add(now, job.minimumRemainingNanos()));
                 availableBundles.add(finish);
+                shortfall = Math.max(shortfall, difference(finish, workCutoff));
                 shortfall = Math.max(shortfall, queued.shortfall());
             }
             int lanes = Math.min(bundleCapacity, Math.max(1, ordered.size() + active.size()));
@@ -151,14 +164,14 @@ final class ShutdownDrainPlanner {
             Arrays.fill(laneEnd, workCutoff);
             for (int i = ordered.size() - 1; i >= 0; i--) {
                 Job job = ordered.get(i);
-                long critical = Math.max(job.minimumDurationNanos(), job.topics() == 0 ? 0
-                        : Math.max(estimate.nanos(), job.longestTopicNanos()));
+                long critical = job.topics() == 0 ? 0 : Math.max(estimate.nanos(), job.longestTopicNanos());
                 double work = job.topics() == 0 ? 0 : (job.topics() - 1) * (double) estimate.nanos()
                         + Math.max(estimate.nanos(), job.longestTopicNanos());
-                long duration = Math.max(critical, nanos(work / topicCapacity));
+                long duration = Math.max(job.minimumDurationNanos(),
+                        add(Math.max(critical, nanos(work / topicCapacity)), job.handoffNanos()));
                 int lane = chooseLane(laneEnd, availableBundles, duration);
                 long firstSlot = capacity.free.isEmpty() ? Long.MAX_VALUE : capacity.free.firstKey();
-                Allocation allocation = capacity.backward(work, laneEnd[lane]);
+                Allocation allocation = capacity.backward(work, subtract(laneEnd[lane], job.handoffNanos()));
                 long latestStart = Math.min(allocation.start(), subtract(laneEnd[lane], duration));
                 if (work > 0 && latestStart < firstSlot) {
                     shortfall = Math.max(shortfall, difference(firstSlot, latestStart));
