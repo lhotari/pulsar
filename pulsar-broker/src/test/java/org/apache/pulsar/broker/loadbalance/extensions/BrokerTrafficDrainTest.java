@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.loadbalance.extensions;
 
+import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -25,9 +26,11 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.spy;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
@@ -47,6 +50,8 @@ import org.apache.pulsar.broker.loadbalance.extensions.channel.ServiceUnitStateT
 import org.apache.pulsar.broker.namespace.LookupOptions;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.BrokerServiceException.BrokerDrainingException;
+import org.apache.pulsar.broker.service.persistent.PersistentSubscription;
+import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.impl.ConsumerImpl;
@@ -63,8 +68,9 @@ import org.testng.annotations.Test;
 /** Verifies admission and existing traffic over a shared real binary connection. */
 @Test(groups = "broker")
 public class BrokerTrafficDrainTest extends ExtensibleLoadManagerImplBaseTest {
-    private final CompletableFuture<Void> drainEntered = new CompletableFuture<>();
-    private final CompletableFuture<Void> resumeDrain = new CompletableFuture<>();
+    private CompletableFuture<Void> drainEntered;
+
+    private CompletableFuture<Void> resumeDrain;
     private volatile BrokerService heldBroker;
 
     private final boolean tls;
@@ -96,6 +102,9 @@ public class BrokerTrafficDrainTest extends ExtensibleLoadManagerImplBaseTest {
     @Override
     @BeforeClass(alwaysRun = true)
     protected void setup() throws Exception {
+        drainEntered = new CompletableFuture<>();
+        resumeDrain = new CompletableFuture<>();
+        heldBroker = null;
         updateConfig(conf);
         super.setup();
     }
@@ -124,6 +133,8 @@ public class BrokerTrafficDrainTest extends ExtensibleLoadManagerImplBaseTest {
         doReturn(CompletableFuture.completedFuture(Optional.of(pulsar1.getBrokerId())))
                 .when(secondaryLoadManager).selectAsync(any(), any(), any());
         CompletableFuture<Void> shutdown = null;
+        CompletableFuture<PersistentTopic> storageEntered = new CompletableFuture<>();
+        CompletableFuture<Void> resumeStorage = new CompletableFuture<>();
         try (PulsarClient client = PulsarClient.builder().serviceUrl(tls
                 ? pulsar1.getBrokerServiceUrlTls() : pulsar1.getBrokerServiceUrl()).tlsTrustCertsFilePath(caCertPath)
                 .connectionsPerBroker(1).operationTimeout(10, TimeUnit.SECONDS).build();
@@ -140,9 +151,26 @@ public class BrokerTrafficDrainTest extends ExtensibleLoadManagerImplBaseTest {
             doCallRealMethod().when(primaryLoadManager).selectAsync(any(), any(), any());
             doCallRealMethod().when(secondaryLoadManager).selectAsync(any(), any(), any());
             heldBroker = pulsar1.getBrokerService();
+            assertSame(heldBroker.pulsar(), pulsar1);
+            // Hold the real per-topic storage phase after dispatcher/cursor closure has started. A single
+            // bundle lane keeps the other bundle ACTIVE, so pooled-connection traffic remains observable.
+            for (String name : new String[]{firstTopic, secondTopic}) {
+                PersistentTopic topic = (PersistentTopic) heldBroker.getTopicIfExists(name)
+                        .get(5, TimeUnit.SECONDS).orElseThrow();
+                PersistentSubscription subscription = topic.getSubscription("drain");
+                PersistentSubscription observed = mock(PersistentSubscription.class, delegatesTo(subscription));
+                doAnswer(invocation -> {
+                    CompletableFuture<Void> closing = subscription.close(false, Optional.empty());
+                    storageEntered.complete(topic);
+                    return closing.thenCompose(__ -> resumeStorage);
+                }).when(observed).close(eq(false), any());
+                topic.getSubscriptions().put("drain", observed);
+            }
+            pulsar1.getConfig().setBrokerShutdownMaxConcurrentUnload(1);
             pulsar1.getConfig().setBrokerShutdownTimeoutMs(30000);
             shutdown = pulsar1.closeAsync();
             drainEntered.get(10, TimeUnit.SECONDS);
+            assertTrue(pulsar1.getShutdownPreparationComplete().isDone(), "Drain must follow shutdown preparation");
             assertEquals(pulsar1.getShutdownLookupServiceUrl().orElseThrow(),
                     tls ? pulsar2.getBrokerServiceUrlTls() : pulsar2.getBrokerServiceUrl());
             URI endpoint = URI.create(tls ? pulsar1.getBrokerServiceUrlTls() : pulsar1.getBrokerServiceUrl());
@@ -230,6 +258,46 @@ public class BrokerTrafficDrainTest extends ExtensibleLoadManagerImplBaseTest {
                 assertSame(connection, ((ConsumerImpl<?>) consumer1).getClientCnx());
             }
             resumeDrain.complete(null);
+            PersistentTopic transferring = storageEntered.get(5, TimeUnit.SECONDS);
+            boolean firstTransfers = transferring.getName().equals(firstTopic);
+            var affectedProducer = firstTransfers ? producer1 : producer2;
+            var unaffectedProducer = firstTransfers ? producer2 : producer1;
+            var affectedConsumer = firstTransfers ? consumer1 : consumer2;
+            var unaffectedConsumer = firstTransfers ? consumer2 : consumer1;
+            CompletableFuture<Void> forcedClose = transferring.close(true);
+            var pendingSend = affectedProducer.sendAsync(new byte[]{77});
+            Awaitility.await().during(300, TimeUnit.MILLISECONDS).atMost(2, TimeUnit.SECONDS).untilAsserted(() -> {
+                assertFalse(forcedClose.isDone());
+                assertFalse(pendingSend.isDone());
+                assertTrue(connection.ctx().channel().isActive());
+                assertSame(connection, ((ConsumerImpl<?>) affectedConsumer).getClientCnx());
+                assertSame(connection, ((ProducerImpl<?>) affectedProducer).getClientCnx());
+            });
+            unaffectedProducer.send(new byte[]{78});
+            var unaffected = unaffectedConsumer.receive(5, TimeUnit.SECONDS);
+            assertNotNull(unaffected);
+            assertEquals(unaffected.getData(), new byte[]{78});
+            unaffectedConsumer.acknowledge(unaffected);
+            assertSame(connection, ((ConsumerImpl<?>) unaffectedConsumer).getClientCnx());
+            assertSame(connection, ((ProducerImpl<?>) unaffectedProducer).getClientCnx());
+            resumeStorage.complete(null);
+            pendingSend.get(15, TimeUnit.SECONDS);
+            forcedClose.get(15, TimeUnit.SECONDS);
+            boolean receivedPendingSend = false;
+            for (int i = 0; i < 4; i++) {
+                var resumed = affectedConsumer.receive(10, TimeUnit.SECONDS);
+                assertNotNull(resumed);
+                affectedConsumer.acknowledge(resumed);
+                if (resumed.getData()[0] == 77) {
+                    receivedPendingSend = true;
+                    break;
+                }
+                // Default grouped acknowledgments can still be buffered when the topic fences. Those
+                // earlier messages may be redelivered after reconnect, without losing the pending send.
+                assertEquals(resumed.getData().length, 1);
+                assertTrue(resumed.getData()[0] >= 0 && resumed.getData()[0] < 3);
+            }
+            assertTrue(receivedPendingSend, "The send held during storage closure must resume after handoff");
             shutdown.get(35, TimeUnit.SECONDS);
             // The close commands include the successor, so the existing client can relocate after drain.
             producer1.send(new byte[]{42});
@@ -237,6 +305,7 @@ public class BrokerTrafficDrainTest extends ExtensibleLoadManagerImplBaseTest {
             assertNotNull(relocated);
             consumer1.acknowledge(relocated);
         } finally {
+            resumeStorage.complete(null);
             resumeDrain.complete(null);
             if (shutdown != null) {
                 shutdown.get(35, TimeUnit.SECONDS);
