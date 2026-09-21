@@ -165,12 +165,14 @@ public class NonPersistentDispatcherMultipleConsumers extends AbstractDispatcher
         CompletableFuture<Void> completion;
         List<Consumer> consumersToDisconnect;
         synchronized (this) {
+            consumersToDisconnect = List.copyOf(consumerList);
+            // Never publish a pending empty generation that another caller could join before it is completed.
             // Share membership completion, but apply each caller's reset/redirect to current consumers.
             if (closeFuture == null || closeFuture.isDone()) {
-                closeFuture = new CompletableFuture<>();
+                closeFuture = consumersToDisconnect.isEmpty()
+                        ? CompletableFuture.completedFuture(null) : new CompletableFuture<>();
             }
             completion = closeFuture;
-            consumersToDisconnect = List.copyOf(consumerList);
             if (!consumersToDisconnect.isEmpty()) {
                 cancelPendingRead();
             }
@@ -178,9 +180,6 @@ public class NonPersistentDispatcherMultipleConsumers extends AbstractDispatcher
         // Consumer.close acquires the subscription monitor before removing itself from this dispatcher.
         // Calling it under our monitor inverts that order against a concurrent client-initiated close.
         consumersToDisconnect.forEach(consumer -> consumer.disconnect(isResetCursor, assignedBrokerLookupData));
-        if (consumersToDisconnect.isEmpty()) {
-            completion.complete(null);
-        }
         return completion;
     }
 
