@@ -21,7 +21,10 @@ package org.apache.pulsar.broker.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.broker.service.ShutdownCloseTimeEstimator.Estimate;
 import org.apache.pulsar.broker.service.ShutdownDrainPlanner.Active;
@@ -38,7 +41,7 @@ public class ShutdownDrainPlannerTest {
     }
 
     private static Estimate estimate(long seconds) {
-        return new Estimate(seconds(seconds), false, false, false, 32, 0);
+        return new Estimate(seconds(seconds), false, false, 32, 0);
     }
 
     private static Job job(String id, double impact, long topics) {
@@ -112,18 +115,42 @@ public class ShutdownDrainPlannerTest {
     public void testColdStartPacesAndExhaustionIsOneWay() {
         ShutdownDrainPlanner planner = new ShutdownDrainPlanner(seconds(100), 0, 8, 8, 0);
         List<Job> jobs = List.of(job("a", 8, 1), job("b", 1, 1));
-        Plan cold = planner.plan(0, jobs, List.of(), List.of(), new Estimate(seconds(1), true, false, false, 0, 0));
+        Plan cold = planner.plan(0, jobs, List.of(), List.of(), new Estimate(seconds(1), true, false, 0, 0));
         assertThat(cold.workConserving()).isFalse();
         assertThat(scheduled(cold, "b").dueNanos()).isPositive();
         Plan slow = planner.plan(seconds(2), jobs, List.of(), List.of(),
-                new Estimate(seconds(3), false, true, true, 28, 0));
+                new Estimate(seconds(200), true, true, 1, 0));
         assertThat(slow.workConserving()).isTrue();
         assertThat(slow.newExhaustion()).isTrue();
-        assertThat(slow.reasons()).contains(Reason.EXHAUSTED_ESTIMATE);
+        assertThat(slow.reasons()).contains(Reason.CAPACITY);
         assertThat(slow.jobs()).allSatisfy(entry -> assertThat(entry.dueNanos()).isLessThanOrEqualTo(seconds(2)));
         Plan recovered = planner.plan(seconds(3), jobs, List.of(), List.of(), estimate(1));
         assertThat(recovered.workConserving()).isTrue();
         assertThat(recovered.newExhaustion()).isFalse();
+    }
+
+    @Test
+    public void testFirstFastCompletionDoesNotEndPacingForSlowerSiblings() {
+        ShutdownCloseTimeEstimator estimator = new ShutdownCloseTimeEstimator(seconds(1));
+        ShutdownDrainPlanner planner = new ShutdownDrainPlanner(seconds(10), 0, 8, 8, 0);
+        Job first = job("first", 8, 8);
+        Job second = job("second", 1, 1);
+        Job third = job("third", 1, 1);
+        planner.plan(0, List.of(first, second, third), List.of(), List.of(), estimator.estimate(Map.of()));
+        planner.started(first, 0);
+        estimator.observe(0, TimeUnit.MILLISECONDS.toNanos(100), ShutdownCloseTimeEstimator.Outcome.SUCCESS);
+        Map<Long, Long> outstanding = new HashMap<>();
+        for (long id = 1; id < 8; id++) {
+            outstanding.put(id, TimeUnit.MILLISECONDS.toNanos(101));
+        }
+        Estimate observed = estimator.estimate(outstanding);
+        assertThat(observed.censored()).isTrue();
+        Plan plan = planner.plan(TimeUnit.MILLISECONDS.toNanos(101), List.of(second, third),
+                List.of(new Active("first", Collections.nCopies(7, 1L), 0, 0)), List.of(), observed);
+        assertThat(plan.workConserving()).isFalse();
+        assertThat(plan.reasons()).isEmpty();
+        assertThat(scheduled(plan, "second").dueNanos()).isEqualTo(seconds(8));
+        assertThat(scheduled(plan, "third").dueNanos()).isEqualTo(seconds(9));
     }
 
     @Test
@@ -224,7 +251,7 @@ public class ShutdownDrainPlannerTest {
         Job a = new Job("a", Double.MAX_VALUE, 3, Long.MAX_VALUE / 2, 0, false);
         Job b = new Job("b", Double.MAX_VALUE, 3, Long.MAX_VALUE / 2, 0, false);
         Plan plan = planner.plan(0, List.of(a, b), List.of(), List.of(),
-                new Estimate(Long.MAX_VALUE / 2, true, false, false, 0, 0));
+                new Estimate(Long.MAX_VALUE / 2, true, false, 0, 0));
         assertThat(plan.workConserving()).isTrue();
         assertThat(plan.shortfallLowerBoundNanos()).isPositive();
         assertThat(plan.jobs()).allSatisfy(entry -> assertThat(entry.notBeforeNanos()).isGreaterThanOrEqualTo(0));

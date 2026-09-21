@@ -32,7 +32,7 @@ final class ShutdownCloseTimeEstimator {
 
     record Observation(long nanos, Outcome outcome) { }
 
-    record Estimate(long nanos, boolean provisional, boolean censored, boolean exhausted,
+    record Estimate(long nanos, boolean provisional, boolean censored,
                     int successfulSamples, int failedSamples) { }
 
     private final long provisionalNanos;
@@ -73,19 +73,11 @@ final class ShutdownCloseTimeEstimator {
             }
         }
         exact.sort(Comparator.naturalOrder());
-        long expected = exact.isEmpty() ? provisionalNanos : exact.get(rank(exact.size()) - 1);
-        boolean exhausted = false;
-        for (var entry : window.entrySet()) {
-            if (entry.getValue().outcome() == Outcome.CENSORED && entry.getValue().nanos() > expected) {
-                exhausted = true;
-            }
-        }
         for (long elapsed : outstandingElapsedNanos.values()) {
             bounds.add(Math.max(0, elapsed));
-            exhausted |= elapsed > expected;
         }
         if (bounds.isEmpty()) {
-            return new Estimate(provisionalNanos, true, false, false, 0, failures);
+            return new Estimate(provisionalNanos, true, false, 0, failures);
         }
         bounds.sort(Comparator.naturalOrder());
         int rank = rank(bounds.size());
@@ -94,7 +86,7 @@ final class ShutdownCloseTimeEstimator {
         // Even short censored samples can leave p90 unknown; do not inspect only the selected sample.
         boolean censored = rank > exact.size() || exact.get(rank - 1) > lowerBound;
         return new Estimate(exact.isEmpty() ? Math.max(provisionalNanos, lowerBound) : lowerBound,
-                exact.size() < WINDOW_SIZE, censored, exhausted, exact.size(), failures);
+                exact.size() < WINDOW_SIZE, censored, exact.size(), failures);
     }
 
     private static int rank(int size) {

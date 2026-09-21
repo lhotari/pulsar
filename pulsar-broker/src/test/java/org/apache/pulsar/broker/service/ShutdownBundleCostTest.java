@@ -81,12 +81,11 @@ public class ShutdownBundleCostTest {
         Estimate estimate = estimator.estimate(Map.of());
         assertThat(estimate.nanos()).isEqualTo(TimeUnit.SECONDS.toNanos(60));
         assertThat(estimate.censored()).isTrue();
-        assertThat(estimate.exhausted()).isTrue();
         assertThat(estimate.successfulSamples()).isEqualTo(28);
     }
 
     @Test
-    public void testShortCensoringStillMakesQuantileUncertainAndLaterProgressExhaustsEstimate() {
+    public void testShortCensoringStillMakesQuantileUncertainAndLaterProgressRaisesBound() {
         ShutdownCloseTimeEstimator estimator = new ShutdownCloseTimeEstimator(100);
         for (int i = 0; i < 28; i++) {
             estimator.observe(i, 50, Outcome.SUCCESS);
@@ -97,9 +96,7 @@ public class ShutdownBundleCostTest {
         Estimate shortBounds = estimator.estimate(Map.of());
         assertThat(shortBounds.nanos()).isEqualTo(50);
         assertThat(shortBounds.censored()).isTrue();
-        assertThat(shortBounds.exhausted()).isFalse();
         Estimate overdue = estimator.estimate(Map.of(28L, 60L, 29L, 60L, 30L, 60L, 31L, 60L));
-        assertThat(overdue.exhausted()).isTrue();
         assertThat(overdue.nanos()).isEqualTo(60);
     }
 
@@ -107,9 +104,7 @@ public class ShutdownBundleCostTest {
     public void testPhysicalCompletionReplacesTimeoutAndFailuresAreNotFastSuccesses() {
         ShutdownCloseTimeEstimator estimator = new ShutdownCloseTimeEstimator(100);
         assertThat(estimator.estimate(Map.of()).provisional()).isTrue();
-        assertThat(estimator.estimate(Map.of()).exhausted()).isFalse();
         estimator.observe(1, 200, Outcome.CENSORED);
-        assertThat(estimator.estimate(Map.of()).exhausted()).isTrue();
         estimator.observe(1, 250, Outcome.SUCCESS);
         estimator.observe(2, 1, Outcome.FAILURE);
         Estimate complete = estimator.estimate(Map.of());
@@ -118,7 +113,6 @@ public class ShutdownBundleCostTest {
         assertThat(complete.provisional()).isTrue();
         assertThat(complete.failedSamples()).isEqualTo(1);
         assertThat(complete.censored()).isFalse();
-        assertThat(complete.exhausted()).isFalse();
         for (int i = 3; i < 35; i++) {
             estimator.observe(i, 50, Outcome.SUCCESS);
         }

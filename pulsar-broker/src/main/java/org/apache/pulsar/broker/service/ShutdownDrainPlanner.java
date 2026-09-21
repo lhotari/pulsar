@@ -55,7 +55,7 @@ final class ShutdownDrainPlanner {
         }
     }
 
-    enum Reason { CAPACITY, RATE_CAP, EXHAUSTED_ESTIMATE }
+    enum Reason { CAPACITY, RATE_CAP }
 
     record Scheduled(Job job, long nominalNanos, long latestNanos, long dueNanos, long notBeforeNanos) { }
 
@@ -120,9 +120,8 @@ final class ShutdownDrainPlanner {
         Map<String, Long> latest = new HashMap<>();
         long shortfall = 0;
         if (!unbounded) {
-            if (estimate.exhausted()) {
-                exhaustion.add(Reason.EXHAUSTED_ESTIMATE);
-            }
+            // A percentile overrun is duration evidence, not deadline exhaustion. Only the
+            // shared capacity forecast below decides whether pacing can still fit the budget.
             List<Long> occupied = new ArrayList<>(backgroundTopicRemainingNanos);
             active.forEach(job -> occupied.addAll(job.topicRemainingNanos()));
             CapacityTimeline capacity = new CapacityTimeline(now, workCutoff, topicCapacity, occupied);
