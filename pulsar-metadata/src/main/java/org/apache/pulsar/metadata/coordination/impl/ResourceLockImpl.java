@@ -354,6 +354,8 @@ public class ResourceLockImpl<T> implements ResourceLock<T> {
                             .thenCompose(ignored -> acquireWithNoRevalidation(newValue));
                 }).whenComplete((ignored, error) -> {
                     synchronized (this) {
+                        // Revalidation follows invalidation/session events. Even a failed read leaves ownership
+                        // unproven: a recreated ZooKeeper path can have the previous generation's version again.
                         ownershipFailure = error == null ? null : FutureUtil.unwrapCompletionException(error);
                     }
                 });
