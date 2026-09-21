@@ -296,8 +296,15 @@ final class ShutdownDrainController {
     private void completed(Entry entry, Throwable error) {
         long started = entry.work.handoffStartedNanos();
         if (entry.work.hasHandoff() && started != Long.MIN_VALUE) {
-            handoffEstimator.observe(entry.observationId, Math.max(0, clock.getAsLong() - started), error == null
-                    ? ShutdownCloseTimeEstimator.Outcome.SUCCESS : ShutdownCloseTimeEstimator.Outcome.FAILURE);
+            ShutdownCloseTimeEstimator.Outcome outcome;
+            if (error == null) {
+                outcome = ShutdownCloseTimeEstimator.Outcome.SUCCESS;
+            } else if (FutureUtil.unwrapCompletionException(error) instanceof TimeoutException) {
+                outcome = ShutdownCloseTimeEstimator.Outcome.CENSORED;
+            } else {
+                outcome = ShutdownCloseTimeEstimator.Outcome.FAILURE;
+            }
+            handoffEstimator.observe(entry.observationId, Math.max(0, clock.getAsLong() - started), outcome);
         }
         entry.work.cancelPreparation();
         entry.state = State.DONE;

@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -211,6 +212,35 @@ public class ShutdownDrainControllerTest {
             assertThat(third.starts).isEqualTo(1);
             third.closed.complete(null);
             harness.result.get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    public void testTimedOutHandoffRemainsALowerBoundAfterAFasterCompletion() throws Exception {
+        try (Harness harness = new Harness(11 * SECOND, 1, 0, 2 * SECOND)) {
+            Work first = harness.work("first", 8);
+            Work second = harness.work("second", 1);
+            Work third = harness.work("third", 1);
+            harness.work.forEach(work -> work.hasHandoff = true);
+            first.handoffStarted = 0;
+            harness.start();
+            harness.advance(2 * SECOND);
+            first.closed.completeExceptionally(new CompletionException(new TimeoutException("Handoff timed out")));
+            harness.flush();
+            harness.advance(6 * SECOND);
+            assertThat(second.starts).isEqualTo(1);
+            second.handoffStarted = 6 * SECOND;
+            harness.advance(6 * SECOND + SECOND / 10);
+            second.closed.complete(null);
+            harness.flush();
+            harness.advance(8 * SECOND - 1);
+            assertThat(third.starts).isZero();
+            harness.advance(8 * SECOND);
+            // A100ms success must not erase the previous handoff's observed2s lower bound.
+            assertThat(third.starts).isEqualTo(1);
+            third.closed.complete(null);
+            assertThatThrownBy(() -> harness.result.get(5, TimeUnit.SECONDS))
+                    .hasRootCauseInstanceOf(TimeoutException.class);
         }
     }
 
