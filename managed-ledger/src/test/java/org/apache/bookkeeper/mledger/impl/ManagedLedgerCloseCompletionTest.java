@@ -25,9 +25,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.RETURNS_SELF;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -576,6 +578,58 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
             createResult.complete(lateHandle);
             lateClose.complete(null);
             realLateHandle.closeAsync().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test(dataProvider = "closeFailures")
+    public void testFencedLedgerClosesCursorWithoutChangingItsRecoveryMetadata(boolean closeFailure) throws Exception {
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bkc) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                return new ManagedLedgerImpl(this, bk, spy(store), config, scheduledExecutor, name, ownershipChecker);
+            }
+        };
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) localFactory.open("fenced-cursor-close", defaultConfig());
+        ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("cursor");
+        cursor.markDelete(ledger.addEntry(new byte[] {1}));
+        LedgerHandle original = cursor.cursorLedger;
+        LedgerHandle handle = spy(original);
+        cursor.cursorLedger = handle;
+        CompletableFuture<Void> handleClosed = new CompletableFuture<>();
+        CompletableFuture<Void> handleCloseStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            handleCloseStarted.complete(null);
+            return handleClosed;
+        }).when(handle).closeAsync();
+        clearInvocations(ledger.store);
+        try {
+            ledger.setFenced();
+            PhysicalCloseFuture physical = new PhysicalCloseFuture();
+            CloseFuture legacy = new CloseFuture();
+            ledger.asyncClose(physical, null);
+            ledger.asyncClose(legacy, null);
+            handleCloseStarted.get(5, TimeUnit.SECONDS);
+            assertThat(physical).isNotDone();
+            assertThat(legacy).isNotDone();
+            verify(ledger.store, never()).asyncUpdateCursorInfo(any(), any(), any(), any(), any());
+            if (closeFailure) {
+                handleClosed.completeExceptionally(BKException.create(BKException.Code.WriteException));
+            } else {
+                handleClosed.complete(null);
+            }
+            assertResult(physical, closeFailure);
+            assertResult(legacy, true);
+            assertThat(bkc.getLedgers()).contains(original.getId());
+            verify(ledger.store, never()).asyncUpdateCursorInfo(any(), any(), any(), any(), any());
+            verify(handle, times(1)).closeAsync();
+            PhysicalCloseFuture repeated = new PhysicalCloseFuture();
+            ledger.asyncClose(repeated, null);
+            assertResult(repeated, closeFailure);
+        } finally {
+            handleClosed.complete(null);
+            original.closeAsync().get(5, TimeUnit.SECONDS);
         }
     }
 

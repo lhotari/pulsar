@@ -3296,25 +3296,32 @@ public class ManagedCursorImpl implements ManagedCursor {
     }
 
     private void persistFinalPosition(CompletableFuture<Void> closing) {
-        persistPositionWhenClosing(lastMarkDeleteEntry.newPosition, lastMarkDeleteEntry.properties,
-                new AsyncCallbacks.CloseCallback() {
-                    @Override
-                    public void closeComplete(Object ignored) {
-                        if (!STATE_UPDATER.compareAndSet(ManagedCursorImpl.this, State.Closing, State.Closed)) {
-                            log.warn().attr("state", state).log("State was modified from closing while closing");
-                            state = State.Closed;
-                        }
-                        closing.complete(null);
-                    }
+        AsyncCallbacks.CloseCallback callback = new AsyncCallbacks.CloseCallback() {
+            @Override
+            public void closeComplete(Object ignored) {
+                if (!STATE_UPDATER.compareAndSet(ManagedCursorImpl.this, State.Closing, State.Closed)) {
+                    log.warn().attr("state", state).log("State was modified from closing while closing");
+                    state = State.Closed;
+                }
+                closing.complete(null);
+            }
 
-                    @Override
-                    public void closeFailed(ManagedLedgerException exception, Object ignored) {
-                        log.warn("Persistent position failure when closing,"
-                                + " the state will remain in state-closing"
-                                + " and will no longer work");
-                        closing.completeExceptionally(exception);
-                    }
-                }, null);
+            @Override
+            public void closeFailed(ManagedLedgerException exception, Object ignored) {
+                log.warn("Persistent position failure when closing,"
+                        + " the state will remain in state-closing"
+                        + " and will no longer work");
+                closing.completeExceptionally(exception);
+            }
+        };
+        ManagedLedgerImpl.State ledgerState = ledger.getState();
+        if (ledgerState != null && ledgerState.isFenced()) {
+            // Another owner may already be recovering this cursor. Dispose our writer, but do not
+            // rewrite its metadata or delete the ledger referenced by the other owner's snapshot.
+            asyncCloseCursorLedger(callback, null);
+        } else {
+            persistPositionWhenClosing(lastMarkDeleteEntry.newPosition, lastMarkDeleteEntry.properties, callback, null);
+        }
     }
 
     protected void closeWaitingCursor() {
