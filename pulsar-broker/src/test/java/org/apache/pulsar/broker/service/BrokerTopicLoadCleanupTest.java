@@ -47,6 +47,8 @@ import org.apache.bookkeeper.mledger.AsyncCallbacks.OpenLedgerCallback;
 import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
+import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl;
+import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerWrapper;
 import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.broker.namespace.OwnedBundle;
 import org.apache.pulsar.broker.namespace.OwnershipCache;
@@ -572,6 +574,54 @@ public class BrokerTopicLoadCleanupTest {
                 broker.getTopics().remove(NAME.toString());
                 broker.getTopics().remove(secondName);
                 when(ownership.getOwnedBundles()).thenReturn(Map.of());
+            }
+        }
+    }
+
+    @Test
+    public void testLocalTeardownClosesInternalStorageLastWithoutEarlyClientNotifications() throws Exception {
+        try (PulsarTestContext context = context()) {
+            BrokerService broker = context.getBrokerService();
+            NamespaceService namespace = context.getPulsarService().getNamespaceService();
+            NamespaceBundleFactory factory = new NamespaceBundleFactory(context.getPulsarService(), Hashing.crc32());
+            doReturn(factory).when(namespace).getNamespaceBundleFactory();
+            var manager = context.getPulsarService().getLoadManager();
+            var originalManager = manager.get();
+            manager.set(mock(ExtensibleLoadManagerWrapper.class));
+            Topic user = mock(Topic.class);
+            Topic internal = mock(Topic.class);
+            CompletableFuture<Void> userClosed = new CompletableFuture<>();
+            CompletableFuture<Void> internalClosed = new CompletableFuture<>();
+            when(user.close(false, false)).thenReturn(userClosed);
+            when(internal.close(false, false)).thenReturn(internalClosed);
+            String internalName = ExtensibleLoadManagerImpl.BROKER_LOAD_DATA_STORE_TOPIC;
+            broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(user)));
+            broker.getTopics().put(internalName, CompletableFuture.completedFuture(Optional.of(internal)));
+            context.getPulsarService().getBrokerAdmission().close().forEach(Runnable::run);
+            try {
+                NamespaceBundle system = factory.getBundle(NamespaceName.SYSTEM_NAMESPACE,
+                        Range.closed(0L, 0xffffffffL));
+                broker.captureShutdownBundle(system).closeStorage().get(10, TimeUnit.SECONDS);
+                verify(internal, never()).close(false, false);
+                CompletableFuture<Void> result = broker.closeShutdownTopicsLocally(0);
+                verify(user, timeout(10000)).close(false, false);
+                assertPending(result);
+                verify(internal, never()).close(false, false);
+                userClosed.complete(null);
+                verify(internal, timeout(10000)).close(false, false);
+                assertPending(result);
+                internalClosed.complete(null);
+                result.get(10, TimeUnit.SECONDS);
+                for (Topic topic : List.of(user, internal)) {
+                    verify(topic, never()).close(true, false);
+                    verify(topic, never()).close(true);
+                }
+            } finally {
+                userClosed.complete(null);
+                internalClosed.complete(null);
+                broker.getTopics().remove(NAME.toString());
+                broker.getTopics().remove(internalName);
+                manager.set(originalManager);
             }
         }
     }

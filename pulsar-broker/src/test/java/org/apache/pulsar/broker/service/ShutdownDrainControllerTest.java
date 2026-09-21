@@ -126,6 +126,23 @@ public class ShutdownDrainControllerTest {
     }
 
     @Test
+    public void testDeadlineReleasesUnusedReservationWhileTargetSelectionIsPending() throws Exception {
+        try (Harness harness = new Harness(SECOND, 1, 0, SECOND)) {
+            Work work = harness.work("a", 0);
+            var reservation = harness.limiter.reserve().get(5, TimeUnit.SECONDS);
+            work.cancelReservation = reservation::close;
+            harness.start();
+            assertThat(work.starts).isEqualTo(1);
+            assertThat(harness.limiter.activeCount()).isEqualTo(1);
+            harness.advance(SECOND);
+            assertThatThrownBy(() -> harness.result.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(TimeoutException.class);
+            assertThat(harness.limiter.activeCount()).isZero();
+            assertThat(work.closed).isNotDone();
+        }
+    }
+
+    @Test
     public void testExplicitRateCapUsesActualStartAfterPreparation() throws Exception {
         try (Harness harness = new Harness(10 * SECOND, 3, 2, SECOND)) {
             Work first = harness.work("a", 0);
@@ -177,6 +194,7 @@ public class ShutdownDrainControllerTest {
         long budget;
         boolean canceled;
         boolean dependent;
+        Runnable cancelReservation = () -> { };
 
         Work(String id, long producers) {
             this.id = id;
@@ -218,6 +236,7 @@ public class ShutdownDrainControllerTest {
         @Override
         public void cancelPreparation() {
             canceled = true;
+            cancelReservation.run();
         }
     }
 

@@ -43,6 +43,9 @@ final class ShutdownDrainController {
         String id();
         ShutdownBundleCost.Load load();
         long remainingTopics();
+        default boolean unpaced() {
+            return false;
+        }
         default boolean dependent() {
             return false;
         }
@@ -168,7 +171,7 @@ final class ShutdownDrainController {
             for (Entry entry : entries.values()) {
                 if (entry.state == State.WAITING) {
                     entry.load = entry.work.load();
-                    if (!entry.work.dependent()) {
+                    if (!entry.work.dependent() && !entry.work.unpaced()) {
                         loads.add(entry.load);
                     }
                 }
@@ -205,7 +208,7 @@ final class ShutdownDrainController {
         for (Entry entry : entries.values()) {
             if (entry.state == State.WAITING) {
                 // Dependency work reserves storage capacity in the tail, without delaying user work by its impact.
-                boolean unpaced = entry.load.idle() || entry.work.dependent();
+                boolean unpaced = entry.load.idle() || entry.work.dependent() || entry.work.unpaced();
                 entry.job = new ShutdownDrainPlanner.Job(entry.work.id(), unpaced ? 0 : normalizer.impact(entry.load),
                         entry.work.remainingTopics(), estimate.nanos(), 0, unpaced);
                 pending.add(entry.job);
@@ -251,7 +254,7 @@ final class ShutdownDrainController {
                 } else {
                     // A queued reservation can outlive a load refresh. Freeze cost at actual admission.
                     entry.load = entry.work.load();
-                    boolean unpaced = entry.load.idle() || entry.work.dependent();
+                    boolean unpaced = entry.load.idle() || entry.work.dependent() || entry.work.unpaced();
                     entry.job = new ShutdownDrainPlanner.Job(entry.work.id(), unpaced ? 0
                             : normalizer.impact(entry.load), entry.work.remainingTopics(),
                             entry.job.longestTopicNanos(), entry.job.minimumDurationNanos(), unpaced);
@@ -284,9 +287,9 @@ final class ShutdownDrainController {
             wakeup.cancel(false);
         }
         for (Entry entry : entries.values()) {
-            if (entry.state == State.PREPARING) {
-                entry.work.cancelPreparation();
-            }
+            // A started bundle can still own an unused first slot while selecting/publishing its target.
+            // The handle releases only unused reservations, never a physical operation already in progress.
+            entry.work.cancelPreparation();
         }
         if (error == null) {
             result.complete(null);
