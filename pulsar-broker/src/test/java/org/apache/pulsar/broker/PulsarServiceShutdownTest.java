@@ -90,13 +90,16 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
     @DataProvider
     public Object[][] leadershipSuccessors() {
         return new Object[][]{
-                {true, false, false, true, true},
-                {true, true, false, true, true},
-                {true, true, true, true, true},
-                {true, true, false, false, true},
-                {true, true, false, true, false},
-                {true, true, false, true, null},
-                {false, false, false, true, true}
+                {true, false, false, true, true, 0},
+                {true, true, false, true, true, 0},
+                {true, true, true, true, true, 0},
+                {true, true, false, false, true, 0},
+                {true, true, false, true, false, 0},
+                {true, true, false, true, null, 0},
+                {false, false, false, true, true, 0},
+                {false, true, false, true, true, 1},
+                {false, true, false, true, true, 2},
+                {false, true, false, true, true, 3}
         };
     }
 
@@ -118,7 +121,8 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
     @Test(dataProvider = "leadershipSuccessors")
     public void handOffLeadershipBeforeDrainingOnlyWithAnotherBroker(boolean leader, boolean otherBroker,
                                                                     boolean differentElection, boolean ready,
-                                                                    Boolean eligible) throws Exception {
+                                                                    Boolean eligible, int disableOutcome)
+            throws Exception {
         LeaderElectionService election = mock(LeaderElectionService.class);
         when(election.isLeader()).thenReturn(leader);
         Brokers brokers = mock(Brokers.class);
@@ -138,7 +142,17 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         when(admin.brokers()).thenReturn(brokers);
         PulsarAdminBuilder adminBuilder = mock(PulsarAdminBuilder.class, RETURNS_SELF);
         when(adminBuilder.build()).thenReturn(admin);
-        when(election.setElectionEnabled(false)).thenReturn(CompletableFuture.completedFuture(null));
+        CompletableFuture<Void> disabled = new CompletableFuture<>();
+        if (disableOutcome == 3) {
+            when(election.setElectionEnabled(false)).thenThrow(new IllegalStateException("Disable rejected"));
+        } else {
+            when(election.setElectionEnabled(false)).thenReturn(disabled);
+            if (disableOutcome == 1) {
+                disabled.completeExceptionally(new IllegalStateException("Disable failed"));
+            } else if (disableOutcome != 2) {
+                disabled.complete(null);
+            }
+        }
         when(election.readCurrentLeader()).thenReturn(CompletableFuture.completedFuture(
                 Optional.of(new LeaderBroker("other-broker:8080", "http://other-broker:8080"))));
         ServiceConfiguration config = new ServiceConfiguration();
@@ -196,6 +210,10 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
         handoffChecked.get(5, TimeUnit.SECONDS);
         assertThat(service.getShutdownLookupServiceUrl().isPresent())
                 .isEqualTo(otherBroker && !differentElection && ready);
+        if (disableOutcome == 2) {
+            assertThat(disabled).isNotDone();
+            disabled.complete(null);
+        }
         awaitWorkerCleanup(service);
     }
 

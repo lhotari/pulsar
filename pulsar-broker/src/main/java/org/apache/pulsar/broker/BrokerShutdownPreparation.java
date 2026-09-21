@@ -77,10 +77,12 @@ final class BrokerShutdownPreparation {
         ExecutorService probes = Executors.newFixedThreadPool(4,
                 new DefaultThreadFactory("pulsar-shutdown-peer", true));
         try {
-            // A follower must not become leader while draining, even if no successor can be probed.
+            // Start disabling a follower immediately, but discover its outbound route independently.
+            // A stalled election operation must not consume the peer-probing budget before probing starts.
+            CompletableFuture<Void> followerDisabled = null;
             if (election != null && !election.isLeader()) {
-                await(election.setElectionEnabled(false));
-                handoff = "follower disabled";
+                followerDisabled = FutureUtil.supplySafely(() -> election.setElectionEnabled(false));
+                handoff = "follower disable requested";
             }
             CompletableFuture<BrokerLookupData> route = new CompletableFuture<>();
             CompletableFuture<Void> successor = new CompletableFuture<>();
@@ -103,6 +105,10 @@ final class BrokerShutdownPreparation {
             if (route.isDone()) {
                 pulsar.setShutdownLookupBroker(route.join());
                 routed = true;
+            }
+            if (followerDisabled != null) {
+                await(followerDisabled);
+                handoff = "follower disabled";
             }
             if (election != null && election.isLeader()) {
                 handoff = "leader retained";
