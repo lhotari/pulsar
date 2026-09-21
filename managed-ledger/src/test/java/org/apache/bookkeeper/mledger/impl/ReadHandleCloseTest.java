@@ -21,11 +21,13 @@ package org.apache.bookkeeper.mledger.impl;
 import static org.apache.bookkeeper.mledger.util.ManagedLedgerTestUtil.defaultConfig;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -43,6 +45,8 @@ import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.api.OpenBuilder;
 import org.apache.bookkeeper.client.api.ReadHandle;
+import org.apache.bookkeeper.common.util.OrderedExecutor;
+import org.apache.bookkeeper.common.util.ThreadBoundExecutor;
 import org.apache.bookkeeper.mledger.LedgerOffloader;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo;
@@ -181,12 +185,14 @@ public class ReadHandleCloseTest extends MockedBookKeeperTestCase {
 
     @Test
     public void testRejectedCallbackDispatchDisposesAcquiredReadHandle() throws Exception {
-        try (Fixture fixture = new Fixture()) {
+        try (Fixture fixture = new Fixture(true)) {
             HeldRead read = fixture.read(false);
             CompletableFuture<ReadHandle> opening = fixture.ledger.getLedgerHandle(read.handle().getId());
             read.started().get(5, TimeUnit.SECONDS);
-            fixture.ledger.getExecutor().shutdown();
-            assertThat(fixture.ledger.getExecutor().isShutdown()).isTrue();
+            // Reject managed-ledger publication without shutting down the BookKeeper worker that must
+            // still complete the unrelated current writer's physical close.
+            doThrow(new RejectedExecutionException("Reject read publication"))
+                    .when(fixture.ledger.getExecutor()).execute(any(Runnable.class));
             read.opened().complete(read.handle());
             assertThatThrownBy(() -> opening.get(5, TimeUnit.SECONDS))
                     .hasRootCauseInstanceOf(RejectedExecutionException.class);
@@ -216,11 +222,25 @@ public class ReadHandleCloseTest extends MockedBookKeeperTestCase {
 
     private final class Fixture implements AutoCloseable {
         private final BookKeeper bookKeeper = spy(bkc);
-        private final ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bookKeeper);
-        private final ManagedLedgerImpl ledger = (ManagedLedgerImpl) localFactory.open("read-close", defaultConfig());
+        private final ManagedLedgerFactoryImpl localFactory;
+        private final ManagedLedgerImpl ledger;
         private final List<HeldRead> reads = new ArrayList<>();
 
-        private Fixture() throws Exception { }
+        private Fixture() throws Exception {
+            this(false);
+        }
+
+        private Fixture(boolean rejectablePublication) throws Exception {
+            if (rejectablePublication) {
+                OrderedExecutor workers = mock(OrderedExecutor.class, delegatesTo(bkc.getMainWorkerPool()));
+                ThreadBoundExecutor callbackExecutor = mock(ThreadBoundExecutor.class,
+                        delegatesTo(bkc.getMainWorkerPool().chooseThread("read-close")));
+                doReturn(callbackExecutor).when(workers).chooseThread("read-close");
+                doReturn(workers).when(bookKeeper).getMainWorkerPool();
+            }
+            localFactory = new ManagedLedgerFactoryImpl(metadataStore, bookKeeper);
+            ledger = (ManagedLedgerImpl) localFactory.open("read-close", defaultConfig());
+        }
 
         private HeldRead read(boolean offloaded) throws Exception {
             LedgerHandle writer = bkc.createLedger(BookKeeper.DigestType.CRC32C, new byte[0]);
