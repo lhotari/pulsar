@@ -554,7 +554,6 @@ public class WebService implements AutoCloseable {
                 }
                 jettyStatisticsCollector = null;
             }
-            webServiceExecutor.join();
             // PIP-478: dispose the TLS factory subscription and close the factory, if the new path was used.
             if (this.reloadableServerTls != null) {
                 this.reloadableServerTls.subscription().dispose();
@@ -567,6 +566,9 @@ public class WebService implements AutoCloseable {
             webExecutorThreadPoolStats.close();
             this.executorStats.close();
         }
+        // A failed graceful stop has already attempted pool shutdown. Do not wait indefinitely for a handler
+        // that ignored interruption on that failure path; retain the original successful-stop join behavior.
+        webServiceExecutor.join();
         log.info("Web service closed");
     }
 

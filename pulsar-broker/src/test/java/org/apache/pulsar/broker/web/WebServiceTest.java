@@ -34,6 +34,7 @@ import com.google.common.collect.Multimap;
 import com.google.common.collect.Sets;
 import com.google.common.io.CharStreams;
 import com.google.common.io.Closeables;
+import com.google.common.util.concurrent.Uninterruptibles;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -54,6 +55,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.zip.GZIPInputStream;
@@ -208,6 +212,40 @@ public class WebServiceTest {
             pendingRequest.complete(null);
             server.removeBean(activeRequest);
             doReturn(Long.MAX_VALUE).when(pulsar).getRemainingShutdownDrainNanos();
+        }
+    }
+
+    @Test
+    public void testWebCloseTimeoutDoesNotJoinUnresponsiveHandler() throws Exception {
+        setupEnv(false, false, false, false, -1, false);
+        WebService webService = pulsar.getWebService();
+        var server = webService.getServer();
+        CountDownLatch handlerStarted = new CountDownLatch(1);
+        CountDownLatch releaseHandler = new CountDownLatch(1);
+        ExecutorService closer = Executors.newSingleThreadExecutor();
+        Graceful activeRequest = mock(Graceful.class);
+        CompletableFuture<Void> pendingRequest = new CompletableFuture<>();
+        doReturn(pendingRequest).when(activeRequest).shutdown();
+        server.addBean(activeRequest);
+        doReturn(TimeUnit.MILLISECONDS.toNanos(10)).when(pulsar).getRemainingShutdownDrainNanos();
+        try {
+            server.getThreadPool().execute(() -> {
+                handlerStarted.countDown();
+                Uninterruptibles.awaitUninterruptibly(releaseHandler);
+            });
+            assertTrue(handlerStarted.await(5, TimeUnit.SECONDS));
+            var closing = closer.submit(() -> Assert.expectThrows(PulsarServerException.class, webService::close));
+            PulsarServerException failure = closing.get(5, TimeUnit.SECONDS);
+            assertTrue(failure.getCause() instanceof TimeoutException);
+            assertFalse(pulsarTestContext.getOpenTelemetryMetricReader().collectAllMetrics().stream()
+                    .anyMatch(metric -> metric.getName().equals(WebExecutorThreadPoolStats.LIMIT_COUNTER)));
+        } finally {
+            releaseHandler.countDown();
+            pendingRequest.complete(null);
+            server.removeBean(activeRequest);
+            doReturn(Long.MAX_VALUE).when(pulsar).getRemainingShutdownDrainNanos();
+            closer.shutdownNow();
+            assertTrue(closer.awaitTermination(5, TimeUnit.SECONDS));
         }
     }
 
