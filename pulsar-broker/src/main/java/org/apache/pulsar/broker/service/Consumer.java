@@ -37,6 +37,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.concurrent.atomic.LongAdder;
@@ -91,6 +92,7 @@ public class Consumer {
     private final String topicName;
     private final int partitionIdx;
 
+    private final AtomicBoolean closed = new AtomicBoolean();
     private final long consumerId;
     private final int priorityLevel;
     private final boolean readCompacted;
@@ -509,8 +511,12 @@ public class Consumer {
     }
 
     public void close(boolean isResetCursor) throws BrokerServiceException {
-        subscription.removeConsumer(this, isResetCursor);
-        cnx.removedConsumer(this);
+        // Client close and broker disconnect can overlap. Only one caller may remove membership and debit usage.
+        // disconnect() still sends each caller's redirect before reaching this guard.
+        if (closed.compareAndSet(false, true)) {
+            subscription.removeConsumer(this, isResetCursor);
+            cnx.removedConsumer(this);
+        }
     }
 
     public void disconnect() {
