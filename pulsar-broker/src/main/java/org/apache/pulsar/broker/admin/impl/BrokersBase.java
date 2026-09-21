@@ -167,7 +167,7 @@ public class BrokersBase extends AdminResource {
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Whether the broker is eligible"),
             @ApiResponse(responseCode = "307", description = "Redirect to the named broker"),
-            @ApiResponse(responseCode = "403", description = "This operation requires super-user access"),
+            @ApiResponse(responseCode = "401", description = "This operation requires super-user access"),
             @ApiResponse(responseCode = "404", description = "Broker not found")})
     public void getLeaderBrokerEligible(@PathParam("brokerId") String brokerId,
                                         @Suspended final AsyncResponse response) {
@@ -188,7 +188,7 @@ public class BrokersBase extends AdminResource {
             @ApiResponse(responseCode = "204", description = "Leader-broker eligibility changed"),
             @ApiResponse(responseCode = "307", description = "Redirect to the named broker"),
             @ApiResponse(responseCode = "404", description = "Broker not found"),
-            @ApiResponse(responseCode = "403", description = "This operation requires super-user access"),
+            @ApiResponse(responseCode = "401", description = "This operation requires super-user access"),
             @ApiResponse(responseCode = "409", description = "Broker shutdown is already in progress")})
     public void setLeaderBrokerEligible(@PathParam("brokerId") String brokerId, boolean enabled,
                                         @Suspended final AsyncResponse response) {

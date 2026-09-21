@@ -19,8 +19,7 @@
 package org.apache.pulsar.broker;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockingDetails;
@@ -46,7 +45,7 @@ import java.util.function.BiConsumer;
 import lombok.Cleanup;
 import lombok.CustomLog;
 import org.apache.pulsar.broker.auth.MockedPulsarServiceBaseTest;
-import org.apache.pulsar.broker.namespace.NamespaceService;
+import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.client.admin.PulsarAdminException;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.PulsarClientException;
@@ -368,22 +367,28 @@ public class PulsarServiceTest extends MockedPulsarServiceBaseTest {
         @Cleanup
         Producer<byte[]> producer = pulsarClient.newProducer().topic(topic).create();
         producer.send(new byte[1]);
-        NamespaceService namespaces = mockingDetails(pulsar.getNamespaceService()).isMock()
-                ? pulsar.getNamespaceService() : spy(pulsar.getNamespaceService());
-        pulsar.setNsService(namespaces);
+        BrokerService broker = mockingDetails(pulsar.getBrokerService()).isMock()
+                ? pulsar.getBrokerService() : spy(pulsar.getBrokerService());
+        pulsar.setBrokerService(broker);
         CountDownLatch draining = new CountDownLatch(1);
         doAnswer(invocation -> {
             // Start real topic cleanup, but hold its acknowledgement forever.
             invocation.callRealMethod();
             draining.countDown();
             return new CompletableFuture<Void>();
-        }).when(namespaces).unloadNamespaceBundle(any(), anyLong(), any(), anyBoolean());
+        }).when(broker).drainShutdownBundles(any(), any(), anyInt());
         pulsar.getConfiguration().setBrokerShutdownTimeoutMs(60000);
         CompletableFuture<Void> request = admin.brokers().shutDownBrokerGracefully(1, true, 3000L);
         assertTrue(draining.await(5, TimeUnit.SECONDS));
         try {
             admin.brokers().shutDownBrokerGracefully(1, true, 60000L).get(5, TimeUnit.SECONDS);
             fail("A second shutdown request must be rejected");
+        } catch (ExecutionException e) {
+            assertTrue(e.getCause() instanceof PulsarAdminException.ConflictException);
+        }
+        try {
+            admin.brokers().setLeaderBrokerEligibleAsync(pulsar.getBrokerId(), true).get(5, TimeUnit.SECONDS);
+            fail("Leader-broker eligibility cannot change during shutdown");
         } catch (ExecutionException e) {
             assertTrue(e.getCause() instanceof PulsarAdminException.ConflictException);
         }
