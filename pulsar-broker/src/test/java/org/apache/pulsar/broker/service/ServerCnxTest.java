@@ -49,6 +49,8 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
 import io.netty.channel.DefaultChannelId;
 import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -2932,6 +2934,128 @@ public class ServerCnxTest {
 
         verify(ctx).writeAndFlush(any());
         verify(ctx).close();
+    }
+
+    @DataProvider
+    public Object[][] closeNotificationResults() {
+        return new Object[][] {{true, true}, {true, false}, {false, true}, {false, false}};
+    }
+
+    @Test(timeOut = 30000, dataProvider = "closeNotificationResults")
+    public void testAsyncCloseTracksNativeWrite(boolean producerClose, boolean succeed) throws Exception {
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        assertTrue(getResponse() instanceof CommandConnected);
+        serverCnx.cancelKeepAliveTask();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "closing-producer", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        channel.writeInbound(Commands.newProducer(successTopicName, 2, 2,
+                "untouched-producer", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 3,
+                CommandSubscribe.SubType.Shared, 0, "closing-consumer", 0));
+        assertTrue(getResponse() instanceof CommandSuccess);
+        Producer producer = serverCnx.getProducers().get(1).join();
+        Producer untouched = serverCnx.getProducers().get(2).join();
+        Consumer consumer = serverCnx.getConsumers().get(1).join();
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        List<ChannelPromise> writes = new ArrayList<>();
+        channel.pipeline().addFirst(new ChannelOutboundHandlerAdapter() {
+            @Override
+            public void write(ChannelHandlerContext ctx, Object message, ChannelPromise promise) {
+                ((ByteBuf) message).release();
+                writes.add(promise);
+            }
+        });
+
+        CompletableFuture<TransportCnx.CloseNotification> notification = producerClose
+                ? serverCnx.closeProducerAsync(producer, Optional.empty())
+                : serverCnx.closeConsumerAsync(consumer, Optional.empty());
+        assertThat(writes).isEmpty();
+        assertThat(notification).isNotDone();
+        channel.runPendingTasks();
+        assertThat(writes).hasSize(1);
+        assertThat(notification).as("dispatch and local map removal are not flush completion").isNotDone();
+        if (producerClose) {
+            assertFalse(serverCnx.getProducers().containsKey(1));
+            sendMessage();
+            assertTrue(channel.isActive());
+        } else {
+            assertFalse(serverCnx.getConsumers().containsKey(1));
+            channel.writeInbound(Commands.newAck(1, 0, 0, null, AckType.Individual,
+                    null, Collections.emptyMap(), 10));
+            channel.writeInbound(Commands.newFlow(1, 1));
+            channel.runPendingTasks();
+            assertTrue(channel.isActive());
+            assertThat(writes).as("late ACK/FLOW must not produce an acknowledgment receipt").hasSize(1);
+        }
+        assertSame(serverCnx.getProducers().get(2).join(), untouched);
+        // Topic membership is a separate operation from the transport write.
+        producer.closeNow(true);
+        consumer.close();
+        RuntimeException failure = new RuntimeException("held close write failed");
+        if (succeed) {
+            writes.get(0).setSuccess();
+            channel.runPendingTasks();
+            assertThat(notification.get(5, TimeUnit.SECONDS)).isEqualTo(TransportCnx.CloseNotification.FLUSHED);
+            assertTrue(channel.isActive());
+        } else {
+            writes.get(0).setFailure(failure);
+            channel.runPendingTasks();
+            assertThat(notification).isCompletedExceptionally();
+            assertThat(notification.handle((value, error) -> error).join()).hasRootCause(failure);
+            assertFalse(channel.isActive());
+        }
+        channel.finishAndReleaseAll();
+    }
+
+    @Test(timeOut = 30000, dataProvider = "legacyTransferCommands")
+    public void testDrainRetainsProducerTombstonePastKeepAlive(boolean drainBeforeClose) throws Exception {
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        assertTrue(getResponse() instanceof CommandConnected);
+        serverCnx.cancelKeepAliveTask();
+        for (int id = 1; id <= 2; id++) {
+            channel.writeInbound(Commands.newProducer(successTopicName, id, id,
+                    "producer-" + id, Collections.emptyMap(), false));
+            assertTrue(getResponse() instanceof CommandProducerSuccess);
+        }
+        Producer producer = serverCnx.getProducers().get(1).join();
+        Producer untouched = serverCnx.getProducers().get(2).join();
+        if (drainBeforeClose) {
+            pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        }
+        CompletableFuture<Void> closed = producer.disconnect();
+        channel.runPendingTasks();
+        closed.get(5, TimeUnit.SECONDS);
+        assertTrue(getResponse() instanceof CommandCloseProducer);
+        if (!drainBeforeClose) {
+            pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        }
+        channel.advanceTimeBy(brokerService.getKeepAliveIntervalSeconds() + 1L, TimeUnit.SECONDS);
+        channel.runScheduledPendingTasks();
+        channel.runPendingTasks();
+        assertFalse(serverCnx.getProducers().containsKey(1));
+        sendMessage();
+        assertTrue(channel.isActive());
+        assertSame(serverCnx.getProducers().get(2).join(), untouched);
+        assertTrue(channel.outboundMessages().isEmpty(), "Dropped sends must not receive a success receipt");
+        channel.finishAndReleaseAll();
+    }
+
+    @Test(timeOut = 30000, dataProvider = "legacyTransferCommands")
+    public void testAsyncCloseBeforeV5ReportsConnectionFallback(boolean producerClose) throws Exception {
+        resetChannel();
+        channel.writeInbound(newConnect(AuthMethod.AuthMethodNone, "", ProtocolVersion.v4.getValue()));
+        assertTrue(getResponse() instanceof CommandConnected);
+        CompletableFuture<TransportCnx.CloseNotification> notification = producerClose
+                ? serverCnx.closeProducerAsync(mock(Producer.class), Optional.empty())
+                : serverCnx.closeConsumerAsync(mock(Consumer.class), Optional.empty());
+        channel.runPendingTasks();
+        assertThat(notification.get(5, TimeUnit.SECONDS)).isEqualTo(TransportCnx.CloseNotification.UNTRACKED);
+        assertFalse(channel.isActive());
+        channel.finishAndReleaseAll();
     }
 
     @Test(timeOut = 30000)

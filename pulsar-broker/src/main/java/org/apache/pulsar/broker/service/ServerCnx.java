@@ -36,6 +36,8 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import io.github.merlimat.slog.Logger;
 import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOption;
@@ -4625,16 +4627,26 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
 
     @Override
     public void closeProducer(Producer producer) {
-        // removes producer-connection from map and send close command to producer
-        safelyRemoveProducer(producer);
-        closeProducer(producer.getProducerId(), producer.getEpoch(), Optional.empty());
+        closeProducer(producer, Optional.empty());
     }
 
     @Override
     public void closeProducer(Producer producer, Optional<BrokerLookupData> assignedBrokerLookupData) {
-        // removes producer-connection from map and send close command to producer
-        safelyRemoveProducer(producer);
-        closeProducer(producer.getProducerId(), producer.getEpoch(), assignedBrokerLookupData);
+        closeProducerAndTrack(producer, assignedBrokerLookupData);
+    }
+
+    @Override
+    public CompletableFuture<CloseNotification> closeProducerAsync(
+            Producer producer, Optional<BrokerLookupData> assignedBrokerLookupData) {
+        return FutureUtil.composeAsync(() -> closeProducerAndTrack(producer, assignedBrokerLookupData), this::execute);
+    }
+
+    private CompletableFuture<CloseNotification> closeProducerAndTrack(
+            Producer producer, Optional<BrokerLookupData> assignedBrokerLookupData) {
+        rememberClosedProducer(producer.getProducerId(), producer.getEpoch());
+        CompletableFuture<Void> removed = safelyRemoveProducer(producer);
+        return removed.thenCombine(writeCloseProducer(producer.getProducerId(), assignedBrokerLookupData),
+                (__, notification) -> notification);
     }
 
     private LookupData getLookupData(BrokerLookupData lookupData) {
@@ -4651,28 +4663,36 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
     }
 
     private void closeProducer(long producerId, long epoch, Optional<BrokerLookupData> assignedBrokerLookupData) {
-        if (getRemoteEndpointProtocolVersion() >= v5.getValue()) {
-            assignedBrokerLookupData.ifPresentOrElse(lookup -> {
-                        LookupData lookupData = getLookupData(lookup);
-                        writeAndFlush(Commands.newCloseProducer(producerId, -1L,
-                                lookupData.getBrokerUrl(),
-                                lookupData.getBrokerUrlTls()));
-                    },
-                    () -> writeAndFlush(Commands.newCloseProducer(producerId, -1L)));
+        rememberClosedProducer(producerId, epoch);
+        writeCloseProducer(producerId, assignedBrokerLookupData);
+    }
 
-            // The client does not necessarily know that the producer is closed, but the connection is still
-            // active, and there could be messages in flight already. We want to ignore these messages for a time
-            // because they are expected. Once the interval has passed, the client should have received the
-            // CloseProducer command and should not send any additional messages until it sends a create Producer
-            // command.
-            recentlyClosedProducers.put(producerId, epoch);
+    private void rememberClosedProducer(long producerId, long epoch) {
+        // Install before removing the producer or writing CLOSE: a late SEND must not close a shared connection.
+        recentlyClosedProducers.put(producerId, epoch);
+        if (!service.getPulsar().getBrokerAdmission().isClosed()) {
             ctx.executor().schedule(() -> {
-                recentlyClosedProducers.remove(producerId, epoch);
+                // A tombstone created just before shutdown also needs to survive the draining connection.
+                if (!service.getPulsar().getBrokerAdmission().isClosed()) {
+                    recentlyClosedProducers.remove(producerId, epoch);
+                }
             }, service.getKeepAliveIntervalSeconds(), TimeUnit.SECONDS);
-        } else {
-            close();
         }
+    }
 
+    private CompletableFuture<CloseNotification> writeCloseProducer(
+            long producerId, Optional<BrokerLookupData> assignedBrokerLookupData) {
+        if (getRemoteEndpointProtocolVersion() < v5.getValue()) {
+            return NettyFutureUtil.toCompletableFuture(ctx.close()).thenApply(__ -> CloseNotification.UNTRACKED);
+        }
+        ByteBuf command = assignedBrokerLookupData.map(lookup -> {
+            LookupData lookupData = getLookupData(lookup);
+            return Commands.newCloseProducer(producerId, -1L, lookupData.getBrokerUrl(), lookupData.getBrokerUrlTls());
+        }).orElseGet(() -> Commands.newCloseProducer(producerId, -1L));
+        // Previously the void promise propagated write failures through exceptionCaught, closing the connection.
+        ChannelFuture write = ctx.writeAndFlush(command).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+        return NettyFutureUtil.toCompletableFuture(write)
+                .thenApply(__ -> CloseNotification.FLUSHED);
     }
 
     @Override
@@ -4682,23 +4702,32 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         closeConsumer(consumer.consumerId(), assignedBrokerLookupData);
     }
 
-    private void closeConsumer(long consumerId, Optional<BrokerLookupData> assignedBrokerLookupData) {
-        if (getRemoteEndpointProtocolVersion() >= v5.getValue()) {
-            assignedBrokerLookupData.ifPresentOrElse(lookup -> {
-                        LookupData lookupData = getLookupData(lookup);
-                        writeCloseConsumerAndCloseConnectionOnFailure(Commands.newCloseConsumer(consumerId, -1L,
-                                lookupData.getBrokerUrl(),
-                                lookupData.getBrokerUrlTls()), consumerId);
-                    },
-                    () -> writeCloseConsumerAndCloseConnectionOnFailure(
-                            Commands.newCloseConsumer(consumerId, -1L, null, null), consumerId));
-        } else {
-            close();
-        }
+    @Override
+    public CompletableFuture<CloseNotification> closeConsumerAsync(
+            Consumer consumer, Optional<BrokerLookupData> assignedBrokerLookupData) {
+        return FutureUtil.composeAsync(() -> {
+            CompletableFuture<Void> removed = safelyRemoveConsumer(consumer);
+            return removed.thenCombine(closeConsumer(consumer.consumerId(), assignedBrokerLookupData),
+                    (__, notification) -> notification);
+        }, this::execute);
     }
 
-    private void writeCloseConsumerAndCloseConnectionOnFailure(ByteBuf cmd, long consumerId) {
-        ctx.writeAndFlush(cmd).addListener(future -> {
+    private CompletableFuture<CloseNotification> closeConsumer(
+            long consumerId, Optional<BrokerLookupData> assignedBrokerLookupData) {
+        if (getRemoteEndpointProtocolVersion() < v5.getValue()) {
+            return NettyFutureUtil.toCompletableFuture(ctx.close()).thenApply(__ -> CloseNotification.UNTRACKED);
+        }
+        ByteBuf command = assignedBrokerLookupData.map(lookup -> {
+            LookupData lookupData = getLookupData(lookup);
+            return Commands.newCloseConsumer(consumerId, -1L, lookupData.getBrokerUrl(), lookupData.getBrokerUrlTls());
+        }).orElseGet(() -> Commands.newCloseConsumer(consumerId, -1L, null, null));
+        return writeCloseConsumerAndCloseConnectionOnFailure(command, consumerId);
+    }
+
+    private CompletableFuture<CloseNotification> writeCloseConsumerAndCloseConnectionOnFailure(
+            ByteBuf cmd, long consumerId) {
+        ChannelFuture write = ctx.writeAndFlush(cmd);
+        write.addListener(future -> {
             if (!future.isSuccess()) {
                 log.warn()
                         .attr("consumerId", consumerId)
@@ -4707,6 +4736,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                 close();
             }
         });
+        return NettyFutureUtil.toCompletableFuture(write).thenApply(__ -> CloseNotification.FLUSHED);
     }
 
     /**
@@ -4734,7 +4764,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         safelyRemoveProducer(producer);
     }
 
-    private void safelyRemoveProducer(Producer producer) {
+    private CompletableFuture<Void> safelyRemoveProducer(Producer producer) {
         long producerId = producer.getProducerId();
         log.debug()
                 .attr("producerId", producerId)
@@ -4742,15 +4772,17 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                 .log("Removed producer");
         CompletableFuture<Producer> future = producers.get(producerId);
         if (future != null) {
-            future.whenCompleteAsync((producer2, exception) -> {
+            return future.handleAsync((producer2, exception) -> {
                     if (exception != null || producer2 == producer) {
                         producers.remove(producerId, future);
                     }
+                    return null;
                 }, ctx.executor());
         }
+        return CompletableFuture.completedFuture(null);
     }
 
-    private void safelyRemoveConsumer(Consumer consumer) {
+    private CompletableFuture<Void> safelyRemoveConsumer(Consumer consumer) {
         long consumerId = consumer.consumerId();
         log.debug()
                 .attr("consumerId", consumerId)
@@ -4758,12 +4790,14 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                 .log("Removed consumer");
         CompletableFuture<Consumer> future = consumers.get(consumerId);
         if (future != null) {
-            future.whenCompleteAsync((consumer2, exception) -> {
+            return future.handleAsync((consumer2, exception) -> {
                     if (exception != null || consumer2 == consumer) {
                         consumers.remove(consumerId, future);
                     }
+                    return null;
                 }, ctx.executor());
         }
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
