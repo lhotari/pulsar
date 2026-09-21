@@ -69,6 +69,9 @@ public class OwnedBundle {
     private volatile CompletableFuture<Void> shutdownOperation;
     @ToString.Exclude
     @EqualsAndHashCode.Exclude
+    private BrokerService.BundleUnload shutdownBundleUnload;
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
     private Runnable deferredUnloadEvent;
     @ToString.Exclude
     @EqualsAndHashCode.Exclude
@@ -246,39 +249,56 @@ public class OwnedBundle {
     }
 
     private CompletableFuture<Void> handleShutdownUnload(PulsarService pulsar, long timeout, TimeUnit unit) {
+        CompletableFuture<Void> existing = shutdownOperation;
+        return existing != null ? existing.copy() : FutureUtil.supplySafely(() -> handleShutdownUnload(
+                pulsar, timeout, unit, pulsar.getBrokerService().captureShutdownBundle(bundle)));
+    }
+
+    /** Use the controller's captured generation and first-topic reservation. */
+    public CompletableFuture<Void> handleShutdownUnload(PulsarService pulsar, long timeout, TimeUnit unit,
+                                                         BrokerService.BundleUnload unload) {
         long budget = Math.max(0, Math.min(unit.toNanos(timeout), pulsar.getRemainingShutdownDrainNanos()));
-        long deadline = System.nanoTime() + budget;
         CompletableFuture<Void> result;
+        boolean installed = false;
+        boolean unused = true;
         synchronized (this) {
             if (shutdownOperation != null) {
-                return shutdownOperation.copy();
-            }
-            if (budget <= 0) {
-                return CompletableFuture.failedFuture(new TimeoutException("Bundle shutdown admission timed out"));
-            }
-            if (!isActive()) {
-                return CompletableFuture.failedFuture(new IllegalStateException(
+                result = shutdownOperation;
+                unused = shutdownBundleUnload != unload;
+            } else if (budget <= 0) {
+                result = CompletableFuture.failedFuture(new TimeoutException("Bundle shutdown admission timed out"));
+            } else if (!isActive()) {
+                result = CompletableFuture.failedFuture(new IllegalStateException(
                         "Bundle already has an unload in progress: " + bundle));
+            } else {
+                result = new CompletableFuture<>();
+                shutdownBundleUnload = unload;
+                shutdownOperation = result;
+                installed = true;
             }
-            result = new CompletableFuture<>();
-            shutdownOperation = result;
+        }
+        if (!installed) {
+            if (unused) {
+                unload.cancelPreparation();
+            }
+            return result.copy();
         }
         FutureUtil.completeAfter(result, FutureUtil.supplySafely(() -> {
             OwnershipCache ownership = pulsar.getNamespaceService().getOwnershipCache();
             ownership.registerShutdownBundle(this);
-            BrokerService.BundleUnload unload = pulsar.getBrokerService().captureShutdownBundle(bundle);
             return unload.prepareStorage().thenCompose(prepared -> {
                 // Reserve the first topic slot before deactivating the bundle. The CAS still arbitrates
                 // with an ordinary administrative unload that started just before admission was sealed.
-                if (deadline - System.nanoTime() <= 0 || pulsar.getRemainingShutdownDrainNanos() <= 0) {
+                if (pulsar.getRemainingShutdownDrainNanos() <= 0) {
                     return CompletableFuture.failedFuture(new TimeoutException("Bundle shutdown admission timed out"));
                 }
                 if (!IS_ACTIVE_UPDATER.compareAndSet(this, TRUE, FALSE)) {
                     return CompletableFuture.failedFuture(new IllegalStateException(
                             "Bundle already has an unload in progress: " + bundle));
                 }
+                unload.startBudget(Math.min(unit.toNanos(timeout), pulsar.getRemainingShutdownDrainNanos()));
                 return unload.closeStorage().thenCompose(ignored -> ownership.removeOwnership(this,
-                                () -> deadline - System.nanoTime() > 0 && pulsar.getRemainingShutdownDrainNanos() > 0))
+                                () -> unload.remainingNanos() > 0))
                         .thenCompose(ignored -> unload.disconnectClients().whenCompleteAsync((closed, error) -> {
                             finishShutdownNotifications();
                             ownership.completeShutdownBundle(this);

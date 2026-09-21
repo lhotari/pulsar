@@ -73,6 +73,10 @@ final class BrokerShutdown {
                 : Math.max(0, remainingNanos() - cleanupReserveNanos);
     }
 
+    long startedNanos() {
+        return startedNanos;
+    }
+
     long deadlineNanos() {
         return startedNanos + timeoutNanos;
     }

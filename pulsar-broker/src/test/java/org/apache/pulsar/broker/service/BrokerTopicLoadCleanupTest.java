@@ -21,6 +21,8 @@ package org.apache.pulsar.broker.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -30,6 +32,10 @@ import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.google.common.collect.Range;
+import com.google.common.hash.Hashing;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -42,11 +48,15 @@ import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.pulsar.broker.namespace.NamespaceService;
+import org.apache.pulsar.broker.namespace.OwnedBundle;
+import org.apache.pulsar.broker.namespace.OwnershipCache;
 import org.apache.pulsar.broker.namespace.TopicExistsInfo;
 import org.apache.pulsar.broker.service.nonpersistent.NonPersistentReplicator;
 import org.apache.pulsar.broker.service.nonpersistent.NonPersistentTopic;
 import org.apache.pulsar.broker.testcontext.PulsarTestContext;
 import org.apache.pulsar.common.naming.NamespaceBundle;
+import org.apache.pulsar.common.naming.NamespaceBundleFactory;
+import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.policies.data.TopicPolicies;
 import org.testng.annotations.DataProvider;
@@ -465,6 +475,103 @@ public class BrokerTopicLoadCleanupTest {
                 secondPhysical.complete(null);
                 broker.getTopics().remove(NAME.toString());
                 broker.getTopics().remove(secondName);
+            }
+        }
+    }
+
+    @Test
+    public void testGroupedSnapshotRetainsCapturedTopicIdentity() throws Exception {
+        try (PulsarTestContext context = context()) {
+            BrokerService broker = context.getBrokerService();
+            var factory = new NamespaceBundleFactory(context.getPulsarService(), Hashing.crc32());
+            NamespaceService namespace = context.getPulsarService().getNamespaceService();
+            doReturn(factory).when(namespace).getNamespaceBundleFactory();
+            NamespaceBundle first = factory.getBundle(NAME.getNamespaceObject(), Range.closedOpen(0L, 0x80000000L));
+            NamespaceBundle second = factory.getBundle(NAME.getNamespaceObject(),
+                    Range.closed(0x80000000L, 0xffffffffL));
+            String otherName = "persistent://prop/other/topic";
+            NamespaceBundle other = factory.getBundle(NamespaceName.get("prop/other"), Range.closed(0L, 0xffffffffL));
+            Topic original = mock(Topic.class);
+            Topic otherTopic = mock(Topic.class);
+            Topic replacement = mock(Topic.class);
+            when(original.close(false, false)).thenReturn(CompletableFuture.completedFuture(null));
+            when(otherTopic.close(false, false)).thenReturn(CompletableFuture.completedFuture(null));
+            broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(original)));
+            broker.getTopics().put(otherName, CompletableFuture.completedFuture(Optional.of(otherTopic)));
+            context.getPulsarService().getBrokerAdmission().close().forEach(Runnable::run);
+            try {
+                var captured = broker.captureShutdownBundles(List.of(first, second, other));
+                broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(replacement)));
+                NamespaceBundle owner = first.includes(NAME) ? first : second;
+                NamespaceBundle empty = owner == first ? second : first;
+                captured.get(empty).closeStorage().get(10, TimeUnit.SECONDS);
+                verify(original, never()).close(false, false);
+                captured.get(owner).closeStorage().get(10, TimeUnit.SECONDS);
+                verify(original).close(false, false);
+                verify(otherTopic, never()).close(false, false);
+                captured.get(other).closeStorage().get(10, TimeUnit.SECONDS);
+                verify(otherTopic).close(false, false);
+                verify(replacement, never()).close(anyBoolean(), anyBoolean());
+                NamespaceBundle overlapping = factory.getBundle(NAME.getNamespaceObject(),
+                        Range.closed(0L, 0xffffffffL));
+                assertThatThrownBy(() -> broker.captureShutdownBundles(List.of(first, overlapping)))
+                        .isInstanceOf(IllegalStateException.class).hasMessageContaining("Overlapping");
+            } finally {
+                broker.getTopics().remove(NAME.toString());
+                broker.getTopics().remove(otherName);
+            }
+        }
+    }
+
+    @Test
+    public void testLegacyControllerUsesOneReservationAndWaitsForPhysicalStorage() throws Exception {
+        try (PulsarTestContext context = context()) {
+            BrokerService broker = context.getBrokerService();
+            NamespaceService namespace = context.getPulsarService().getNamespaceService();
+            NamespaceBundleFactory factory = new NamespaceBundleFactory(context.getPulsarService(), Hashing.crc32());
+            doReturn(factory).when(namespace).getNamespaceBundleFactory();
+            NamespaceBundle first = factory.getBundle(NAME.getNamespaceObject(), Range.closed(0L, 0xffffffffL));
+            NamespaceBundle second = factory.getBundle(NamespaceName.get("prop/zzz"), Range.closed(0L, 0xffffffffL));
+            OwnershipCache ownership = mock(OwnershipCache.class);
+            doReturn(ownership).when(namespace).getOwnershipCache();
+            OwnedBundle firstOwner = mock(OwnedBundle.class);
+            OwnedBundle secondOwner = mock(OwnedBundle.class);
+            when(ownership.getOwnedBundles()).thenReturn(Map.of(first, firstOwner, second, secondOwner));
+            for (OwnedBundle owner : List.of(firstOwner, secondOwner)) {
+                when(owner.handleShutdownUnload(any(), anyLong(), any(), any())).thenAnswer(invocation -> {
+                    BrokerService.BundleUnload captured = invocation.getArgument(3);
+                    captured.startBudget(invocation.getArgument(1));
+                    return captured.closeStorage();
+                });
+            }
+            Topic firstTopic = mock(Topic.class);
+            Topic secondTopic = mock(Topic.class);
+            CompletableFuture<Void> firstClosed = new CompletableFuture<>();
+            CompletableFuture<Void> secondClosed = new CompletableFuture<>();
+            when(firstTopic.close(false, false)).thenReturn(firstClosed);
+            when(secondTopic.close(false, false)).thenReturn(secondClosed);
+            String secondName = "persistent://prop/zzz/topic";
+            broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(firstTopic)));
+            broker.getTopics().put(secondName, CompletableFuture.completedFuture(Optional.of(secondTopic)));
+            context.getPulsarService().getBrokerAdmission().close().forEach(Runnable::run);
+            try {
+                CompletableFuture<Void> result = broker.drainLegacyBundles(0);
+                verify(firstTopic, timeout(10000)).close(false, false);
+                assertPending(result);
+                verify(secondTopic, never()).close(false, false);
+                firstClosed.complete(null);
+                verify(secondTopic, timeout(10000)).close(false, false);
+                assertPending(result);
+                secondClosed.complete(null);
+                result.get(10, TimeUnit.SECONDS);
+                verify(firstOwner).handleShutdownUnload(any(), anyLong(), any(), any());
+                verify(secondOwner).handleShutdownUnload(any(), anyLong(), any(), any());
+            } finally {
+                firstClosed.complete(null);
+                secondClosed.complete(null);
+                broker.getTopics().remove(NAME.toString());
+                broker.getTopics().remove(secondName);
+                when(ownership.getOwnedBundles()).thenReturn(Map.of());
             }
         }
     }

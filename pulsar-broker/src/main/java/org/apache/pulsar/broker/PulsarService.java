@@ -646,6 +646,12 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         return shutdownStarted;
     }
 
+    /** Monotonic acceptance anchor for drain planning; embedded drains without a shutdown start now. */
+    public long getShutdownStartNanos() {
+        BrokerShutdown current = shutdown;
+        return current == null ? System.nanoTime() : current.startedNanos();
+    }
+
     public long getRemainingShutdownDrainNanos() {
         BrokerShutdown current = shutdown;
         return current == null ? Long.MAX_VALUE : current.remainingDrainNanos();

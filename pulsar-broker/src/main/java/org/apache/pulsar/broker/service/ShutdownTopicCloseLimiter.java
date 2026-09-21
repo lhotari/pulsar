@@ -21,7 +21,9 @@ package org.apache.pulsar.broker.service;
 import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -39,6 +41,13 @@ final class ShutdownTopicCloseLimiter implements AutoCloseable {
     private final Executor executor;
     private final LongSupplier remainingNanos;
     private final Queue<CompletableFuture<Permit>> waiting = new ArrayDeque<>();
+    record Running(String bundle, long startedNanos) { }
+    record Completed(long nanos, boolean successful) { }
+    record Progress(Map<Long, Running> running, Map<Long, Completed> completed, int reserved) { }
+
+    private final Map<Long, Running> running = new LinkedHashMap<>();
+    private final Map<Long, Completed> completed = new LinkedHashMap<>();
+    private long sequence;
     private int active;
     private boolean dispatching;
     private volatile boolean closed;
@@ -60,10 +69,11 @@ final class ShutdownTopicCloseLimiter implements AutoCloseable {
             active++;
         }
         Permit permit = new Permit();
+        permit.track(null);
         try {
-            operation.whenComplete((ignored, error) -> permit.close());
+            operation.whenComplete((ignored, error) -> permit.finish(error));
         } catch (RuntimeException | Error error) {
-            permit.close();
+            permit.finish(error);
             throw error;
         }
     }
@@ -141,6 +151,10 @@ final class ShutdownTopicCloseLimiter implements AutoCloseable {
         rejected.forEach(request -> request.completeExceptionally(error));
     }
 
+    synchronized Progress progress() {
+        return new Progress(Map.copyOf(running), Map.copyOf(completed), active - running.size());
+    }
+
     @VisibleForTesting
     synchronized int activeCount() {
         return active;
@@ -149,17 +163,46 @@ final class ShutdownTopicCloseLimiter implements AutoCloseable {
     final class Permit implements AutoCloseable {
         private final AtomicBoolean released = new AtomicBoolean();
         private final AtomicBoolean started = new AtomicBoolean();
+        private long operationId;
+
+        private void track(String bundle) {
+            synchronized (ShutdownTopicCloseLimiter.this) {
+                operationId = ++sequence;
+                running.put(operationId, new Running(bundle, System.nanoTime()));
+            }
+        }
+
+        private void finish(Throwable error) {
+            synchronized (ShutdownTopicCloseLimiter.this) {
+                Running operation = running.remove(operationId);
+                if (operation != null) {
+                    completed.put(operationId, new Completed(System.nanoTime() - operation.startedNanos(),
+                            error == null));
+                    if (completed.size() > 32) {
+                        completed.remove(completed.keySet().iterator().next());
+                    }
+                }
+            }
+            close();
+        }
 
         CompletableFuture<Void> run(Supplier<CompletableFuture<Void>> operation) {
+            return run(null, remainingNanos, operation);
+        }
+
+        CompletableFuture<Void> run(String bundle, LongSupplier bundleRemainingNanos,
+                                    Supplier<CompletableFuture<Void>> operation) {
             if (!started.compareAndSet(false, true)) {
                 return CompletableFuture.failedFuture(new IllegalStateException("Topic close permit was already used"));
             }
             return FutureUtil.composeAsync(() -> {
-                if (closed || released.get() || remainingNanos.getAsLong() <= 0) {
+                if (closed || released.get() || remainingNanos.getAsLong() <= 0
+                        || bundleRemainingNanos.getAsLong() <= 0) {
                     return CompletableFuture.failedFuture(new TimeoutException("Topic close admission ended"));
                 }
+                track(bundle);
                 return FutureUtil.supplySafely(operation);
-            }, executor).whenComplete((ignored, error) -> close()).copy();
+            }, executor).whenComplete((ignored, error) -> finish(error)).copy();
         }
 
         @Override

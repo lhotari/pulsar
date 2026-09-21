@@ -187,6 +187,54 @@ public class ShutdownTopicCloseLimiterTest {
         }
     }
 
+    @Test
+    public void testProgressRetainsTimedOutPhysicalWorkAndFailureOutcome() throws Exception {
+        QueuedExecutor executor = new QueuedExecutor();
+        try (ShutdownTopicCloseLimiter limiter = new ShutdownTopicCloseLimiter(1, executor, () -> Long.MAX_VALUE)) {
+            CompletableFuture<ShutdownTopicCloseLimiter.Permit> reservation = limiter.reserve();
+            executor.runAll();
+            assertThat(limiter.progress().reserved()).isEqualTo(1);
+            assertThat(limiter.progress().running()).isEmpty();
+            CompletableFuture<Void> physical = new CompletableFuture<>();
+            CompletableFuture<Void> observer = reservation.get().run("bundle", () -> Long.MAX_VALUE, () -> physical);
+            executor.runAll();
+            long identity = limiter.progress().running().keySet().iterator().next();
+            assertThat(limiter.progress().running().get(identity).bundle()).isEqualTo("bundle");
+            assertThat(limiter.progress().reserved()).isZero();
+            assertThatThrownBy(() -> observer.orTimeout(1, TimeUnit.MILLISECONDS).get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(TimeoutException.class);
+            assertThat(limiter.progress().running()).containsKey(identity);
+            assertThat(limiter.progress().completed()).isEmpty();
+            physical.completeExceptionally(new IllegalStateException("storage failed"));
+            executor.runAll();
+            assertThat(limiter.progress().running()).isEmpty();
+            assertThat(limiter.progress().completed().get(identity).successful()).isFalse();
+            assertThat(limiter.progress().completed().get(identity).nanos()).isPositive();
+        }
+    }
+
+    @Test
+    public void testBundleDeadlineCheckedAtPhysicalDispatch() throws Exception {
+        QueuedExecutor executor = new QueuedExecutor();
+        try (ShutdownTopicCloseLimiter limiter = new ShutdownTopicCloseLimiter(1, executor, () -> Long.MAX_VALUE)) {
+            CompletableFuture<ShutdownTopicCloseLimiter.Permit> reservation = limiter.reserve();
+            executor.runAll();
+            AtomicLong bundleRemaining = new AtomicLong(1);
+            AtomicInteger started = new AtomicInteger();
+            CompletableFuture<Void> result = reservation.get().run("bundle", bundleRemaining::get, () -> {
+                started.incrementAndGet();
+                return CompletableFuture.completedFuture(null);
+            });
+            bundleRemaining.set(0);
+            executor.runAll();
+            assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS)).hasCauseInstanceOf(TimeoutException.class);
+            assertThat(started).hasValue(0);
+            assertThat(limiter.activeCount()).isZero();
+            assertThat(limiter.progress().running()).isEmpty();
+            assertThat(limiter.progress().completed()).isEmpty();
+        }
+    }
+
     private static final class QueuedExecutor implements Executor {
         private final Queue<Runnable> tasks = new ArrayDeque<>();
         private boolean reject;

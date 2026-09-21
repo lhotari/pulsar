@@ -29,6 +29,8 @@ import static org.apache.pulsar.common.naming.SystemTopicNames.isTransactionInte
 import static org.apache.pulsar.common.util.Runnables.catchingAndLoggingThrowables;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Queues;
+import com.google.common.collect.RangeMap;
+import com.google.common.collect.TreeRangeMap;
 import io.github.merlimat.slog.LoggerBuilder;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -54,6 +56,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -78,6 +81,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -122,6 +126,7 @@ import org.apache.pulsar.broker.intercept.ManagedLedgerInterceptorImpl;
 import org.apache.pulsar.broker.loadbalance.LoadManager;
 import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl;
 import org.apache.pulsar.broker.namespace.NamespaceService;
+import org.apache.pulsar.broker.namespace.OwnedBundle;
 import org.apache.pulsar.broker.namespace.TopicExistsInfo;
 import org.apache.pulsar.broker.resources.DynamicConfigurationResources;
 import org.apache.pulsar.broker.resources.LocalPoliciesResources;
@@ -1227,11 +1232,16 @@ public class BrokerService implements Closeable {
             Set<NamespaceBundle> serviceUnits =
                     pulsar.getNamespaceService() != null ? pulsar.getNamespaceService().getOwnedServiceUnits() : null;
             if (serviceUnits != null) {
-                GracefulBundleUnload.unload(pulsar.getNamespaceService(), serviceUnits,
-                        Math.max(1, pulsar.getConfiguration().getBrokerShutdownMaxConcurrentUnload()),
-                        maxConcurrentUnload, closeWithoutWaitingClientDisconnect,
-                        pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs(),
-                        pulsar::getRemainingShutdownDrainNanos);
+                if (pulsar.getBrokerAdmission().isClosed()) {
+                    drainLegacyBundles(maxConcurrentUnload).get(
+                            Math.max(0, pulsar.getRemainingShutdownDrainNanos()), TimeUnit.NANOSECONDS);
+                } else {
+                    GracefulBundleUnload.unload(pulsar.getNamespaceService(), serviceUnits,
+                            Math.max(1, pulsar.getConfiguration().getBrokerShutdownMaxConcurrentUnload()),
+                            maxConcurrentUnload, closeWithoutWaitingClientDisconnect,
+                            pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs(),
+                            pulsar::getRemainingShutdownDrainNanos);
+                }
                 double closeTopicsTimeSeconds =
                         TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - closeTopicsStartTime))
                                 / 1000.0;
@@ -1248,6 +1258,59 @@ public class BrokerService implements Closeable {
         } finally {
             unloaded = true;
         }
+    }
+
+    @VisibleForTesting
+    CompletableFuture<Void> drainLegacyBundles(int startsPerSecond) {
+        return FutureUtil.supplySafely(() -> {
+            Map<NamespaceBundle, OwnedBundle> generations = Map.copyOf(
+                    pulsar.getNamespaceService().getOwnershipCache().getOwnedBundles());
+            Map<NamespaceBundle, BundleUnload> captured = captureShutdownBundles(generations.keySet());
+            List<ShutdownDrainController.Work> work = new ArrayList<>();
+            captured.forEach((bundle, unload) -> work.add(new ShutdownDrainController.Work() {
+                @Override
+                public String id() {
+                    return bundle.toString();
+                }
+
+                @Override
+                public ShutdownBundleCost.Load load() {
+                    return unload.load();
+                }
+
+                @Override
+                public boolean dependent() {
+                    return bundle.getNamespaceObject().equals(NamespaceName.SYSTEM_NAMESPACE);
+                }
+
+                @Override
+                public long remainingTopics() {
+                    return unload.remainingTopics.get();
+                }
+
+                @Override
+                public CompletableFuture<Void> prepare() {
+                    return unload.prepareStorage();
+                }
+
+                @Override
+                public CompletableFuture<Void> start(long budgetNanos) {
+                    return generations.get(bundle).handleShutdownUnload(pulsar, budgetNanos,
+                            TimeUnit.NANOSECONDS, unload);
+                }
+
+                @Override
+                public void cancelPreparation() {
+                    unload.cancelPreparation();
+                }
+            }));
+            return new ShutdownDrainController(work, pulsar.getExecutor(), shutdownTopicCloseLimiter,
+                    pulsar.getShutdownStartNanos(), System::nanoTime, pulsar::getRemainingShutdownDrainNanos,
+                    pulsar.getConfiguration().getBrokerShutdownMaxConcurrentUnload(),
+                    pulsar.getConfiguration().getBrokerShutdownMaxConcurrentTopicClose(), startsPerSecond,
+                    TimeUnit.MILLISECONDS.toNanos(pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs()))
+                    .start();
+        });
     }
 
     private void closeTopicsLocally(boolean force, int startsPerSecond) throws Exception {
@@ -3142,12 +3205,56 @@ public class BrokerService implements Closeable {
         return new BundleUnload(bundle, Map.copyOf(getTopicFuturesInBundle(bundle)), loads);
     }
 
+    /** Group one sealed broker snapshot using the captured ranges, rather than a changing namespace layout. */
+    Map<NamespaceBundle, BundleUnload> captureShutdownBundles(Collection<NamespaceBundle> bundles) {
+        Map<NamespaceName, RangeMap<Long, NamespaceBundle>> ranges = new HashMap<>();
+        Map<NamespaceBundle, Map<String, CompletableFuture<Optional<Topic>>>> groupedTopics = new HashMap<>();
+        Map<NamespaceBundle, List<BrokerAdmission.TopicLoad>> groupedLoads = new HashMap<>();
+        for (NamespaceBundle bundle : bundles) {
+            RangeMap<Long, NamespaceBundle> namespace = ranges.computeIfAbsent(bundle.getNamespaceObject(),
+                    ignored -> TreeRangeMap.create());
+            if (!namespace.subRangeMap(bundle.getKeyRange()).asMapOfRanges().isEmpty()) {
+                // A split/administrative transition is already changing this generation. Never guess ownership.
+                throw new IllegalStateException("Overlapping shutdown ownership ranges: " + bundle);
+            }
+            namespace.put(bundle.getKeyRange(), bundle);
+            groupedTopics.put(bundle, new HashMap<>());
+            groupedLoads.put(bundle, new ArrayList<>());
+        }
+        Function<TopicName, NamespaceBundle> owner = name -> {
+            RangeMap<Long, NamespaceBundle> namespace = ranges.get(name.getNamespaceObject());
+            return namespace == null ? null : namespace.get(pulsar.getNamespaceService()
+                    .getNamespaceBundleFactory().getLongHashCode(name.toString()));
+        };
+        Map.copyOf(topics).forEach((name, future) -> {
+            NamespaceBundle bundle = owner.apply(TopicName.get(name));
+            if (bundle != null) {
+                groupedTopics.get(bundle).put(name, future);
+            }
+            // Unassigned topics stay in the broker cache for local/final cleanup; no ownership is released for them.
+        });
+        pulsar.getBrokerAdmission().getShutdownTopicLoads().forEach(load -> {
+            NamespaceBundle bundle = owner.apply(load.name());
+            if (bundle != null) {
+                groupedLoads.get(bundle).add(load);
+            }
+        });
+        Map<NamespaceBundle, BundleUnload> result = new HashMap<>();
+        groupedTopics.forEach((bundle, snapshot) -> result.put(bundle,
+                new BundleUnload(bundle, Map.copyOf(snapshot), List.copyOf(groupedLoads.get(bundle)))));
+        return Map.copyOf(result);
+    }
+
     /** Retained physical completion; request timeouts and cancellation must not mutate these barriers. */
     public final class BundleUnload {
         private final NamespaceBundle bundle;
         private final Map<String, CompletableFuture<Optional<Topic>>> topics;
         private final List<BrokerAdmission.TopicLoad> loads;
         private final Topic firstTopic;
+        private final List<CompletableFuture<Optional<Topic>>> materializations;
+        private final AtomicInteger remainingTopics;
+        private volatile long storageStartedNanos;
+        private volatile long storageBudgetNanos = Long.MAX_VALUE;
         private final AtomicBoolean firstPermitConsumed = new AtomicBoolean();
         private CompletableFuture<ShutdownTopicCloseLimiter.Permit> firstStoragePermit;
         private CompletableFuture<Void> storageClosed;
@@ -3158,23 +3265,88 @@ public class BrokerService implements Closeable {
             this.bundle = bundle;
             this.topics = topics;
             this.loads = loads;
+            Map<CompletableFuture<Optional<Topic>>, CompletableFuture<Optional<Topic>>> physical =
+                    new IdentityHashMap<>();
+            topics.values().forEach(future -> physical.put(future, future));
+            loads.forEach(load -> physical.put(load.request(), load.completion()));
+            this.materializations = List.copyOf(physical.values());
+            this.remainingTopics = new AtomicInteger(materializations.size());
+            materializations.forEach(future -> future.whenComplete((topic, error) -> {
+                if (error != null || topic.isEmpty()) {
+                    remainingTopics.decrementAndGet();
+                }
+            }));
             this.firstTopic = findReadyTopic();
         }
 
-        private Topic findReadyTopic() {
-            Map<CompletableFuture<Optional<Topic>>, CompletableFuture<Optional<Topic>>> tracked =
-                    new IdentityHashMap<>();
-            loads.forEach(load -> tracked.put(load.request(), load.completion()));
-            for (var entry : topics.entrySet()) {
-                if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
-                        && ExtensibleLoadManagerImpl.isInternalTopic(entry.getKey())) {
-                    continue;
+        /** Start the one bundle budget only after its first storage slot is ready. */
+        public void startBudget(long budgetNanos) {
+            storageStartedNanos = System.nanoTime();
+            storageBudgetNanos = Math.max(0, budgetNanos);
+        }
+
+        public long remainingNanos() {
+            long budget = storageBudgetNanos;
+            return Math.min(pulsar.getRemainingShutdownDrainNanos(), budget == Long.MAX_VALUE ? Long.MAX_VALUE
+                    : Math.max(0, budget - (System.nanoTime() - storageStartedNanos)));
+        }
+
+        private ShutdownBundleCost.Load load() {
+            long producers = 0;
+            long consumers = 0;
+            long replication = 0;
+            long unresolved = 0;
+            boolean persistence = false;
+            boolean transactions = false;
+            for (CompletableFuture<Optional<Topic>> future : materializations) {
+                if (!future.isDone()) {
+                    unresolved++;
+                } else if (!future.isCompletedExceptionally()) {
+                    Topic topic = future.getNow(Optional.empty()).orElse(null);
+                    if (topic != null) {
+                        producers += topic.getProducers().size();
+                        for (Subscription subscription : topic.getSubscriptions().values()) {
+                            consumers += subscription.getConsumers().size();
+                        }
+                        replication += topic.getReplicators().size() + topic.getShadowReplicators().size();
+                        if (topic instanceof PersistentTopic persistent) {
+                            persistence |= persistent.getPendingWriteOps().get() > 0
+                                    || persistent.getManagedLedger().getPendingAddEntriesCount() > 0;
+                            transactions |= persistent.getTransactionBuffer().getOngoingTxnCount() > 0;
+                        }
+                    }
                 }
-                CompletableFuture<Optional<Topic>> future = tracked.getOrDefault(entry.getValue(), entry.getValue());
+            }
+            if (pulsar.getConfiguration().isTransactionCoordinatorEnabled()
+                    && bundle.getNamespaceObject().equals(NamespaceName.SYSTEM_NAMESPACE)) {
+                transactions |= pulsar.getTransactionMetadataStoreService().getStores().values().stream()
+                        .anyMatch(store -> bundle.includes(SystemTopicNames.TRANSACTION_COORDINATOR_ASSIGN.getPartition(
+                                (int) store.getTransactionCoordinatorID().getId())));
+            }
+            double messages = 0;
+            double bytes = 0;
+            boolean fresh = false;
+            synchronized (pulsarStats) {
+                NamespaceBundleStats stats = pulsarStats.getBundleStats().get(bundle.toString());
+                long age = System.currentTimeMillis() - pulsarStats.getUpdatedAt();
+                if (stats != null && age >= 0 && age <= TimeUnit.SECONDS.toMillis(
+                        2L * pulsar.getConfiguration().getStatsUpdateFrequencyInSecs())) {
+                    fresh = true;
+                    messages = stats.msgRateIn + stats.msgRateOut;
+                    bytes = stats.msgThroughputIn + stats.msgThroughputOut;
+                }
+            }
+            return new ShutdownBundleCost.Load(producers, consumers, replication, unresolved,
+                    persistence, transactions, messages, bytes, fresh);
+        }
+
+        private Topic findReadyTopic() {
+            for (CompletableFuture<Optional<Topic>> future : materializations) {
                 if (future.isDone() && !future.isCompletedExceptionally()) {
-                    Optional<Topic> topic = future.getNow(Optional.empty());
-                    if (topic.isPresent()) {
-                        return topic.get();
+                    Topic topic = future.getNow(Optional.empty()).orElse(null);
+                    if (topic != null && (!ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
+                            || !ExtensibleLoadManagerImpl.isInternalTopic(topic.getName()))) {
+                        return topic;
                     }
                 }
             }
@@ -3213,9 +3385,13 @@ public class BrokerService implements Closeable {
 
         private CompletableFuture<Void> closeStorageTopic(Topic topic) {
             if (topic == firstTopic && firstPermitConsumed.compareAndSet(false, true)) {
-                return firstStoragePermit.thenCompose(permit -> permit.run(() -> topic.close(false, false)));
+                return firstStoragePermit.thenCompose(permit -> permit.run(bundle.toString(), this::remainingNanos,
+                        () -> topic.close(false, false)))
+                        .whenComplete((ignored, error) -> remainingTopics.decrementAndGet());
             }
-            return shutdownTopicCloseLimiter.run(() -> topic.close(false, false));
+            return shutdownTopicCloseLimiter.reserve().thenCompose(permit -> permit.run(bundle.toString(),
+                    this::remainingNanos, () -> topic.close(false, false)))
+                    .whenComplete((ignored, error) -> remainingTopics.decrementAndGet());
         }
 
         public CompletableFuture<Void> closeStorage() {
@@ -3246,8 +3422,9 @@ public class BrokerService implements Closeable {
                 result = new CompletableFuture<>();
                 clientsClosed = result;
             }
-            FutureUtil.completeAfter(result, closeStorage().thenComposeAsync(
-                    ignored -> unloadServiceUnit(bundle, true, false, topics, loads), pulsar.getExecutor())
+            FutureUtil.completeAfter(result, closeStorage().thenComposeAsync(ignored -> remainingNanos() <= 0
+                    ? CompletableFuture.failedFuture(new TimeoutException("Bundle notification deadline expired"))
+                    : unloadServiceUnit(bundle, true, false, topics, loads), pulsar.getExecutor())
                     .thenAcceptAsync(ignored -> cleanUnloadedTopicFromCache(bundle, topics), pulsar.getExecutor()));
             return result.copy();
         }

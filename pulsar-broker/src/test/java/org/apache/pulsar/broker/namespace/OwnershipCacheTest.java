@@ -1013,6 +1013,7 @@ public class OwnershipCacheTest {
         CompletableFuture<Void> notifications = new CompletableFuture<>();
         CompletableFuture<Void> prepared = new CompletableFuture<>();
         when(unload.prepareStorage()).thenReturn(prepared);
+        when(unload.remainingNanos()).thenReturn(TimeUnit.SECONDS.toNanos(30));
         when(unload.closeStorage()).thenReturn(storage);
         when(unload.disconnectClients()).thenReturn(notifications);
         when(pulsar.getRemainingShutdownDrainNanos()).thenReturn(TimeUnit.SECONDS.toNanos(30));
