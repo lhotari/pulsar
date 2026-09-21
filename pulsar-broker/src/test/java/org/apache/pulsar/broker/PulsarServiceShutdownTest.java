@@ -210,6 +210,47 @@ public class PulsarServiceShutdownTest extends BaseMetadataStoreTest {
     }
 
     @Test(dataProvider = "shutdownPaths")
+    public void finalCloseJoinsTransactionStoresEvenAfterBrokerFailure(boolean brokerFailure) throws Exception {
+        PulsarService service = newService(10000);
+        BrokerService broker = mock(BrokerService.class);
+        TransactionMetadataStoreService stores = mock(TransactionMetadataStoreService.class);
+        CompletableFuture<Void> brokerClosed = new CompletableFuture<>();
+        CompletableFuture<Void> storesClosed = new CompletableFuture<>();
+        CompletableFuture<Void> storesStarted = new CompletableFuture<>();
+        when(broker.closeAsync()).thenReturn(brokerClosed);
+        when(stores.closeAsync()).thenAnswer(invocation -> {
+            storesStarted.complete(null);
+            return storesClosed;
+        });
+        service.setBrokerService(broker);
+        service.setTransactionMetadataStoreService(stores);
+        CompletableFuture<Void> closed = service.closeAsync();
+        try {
+            Awaitility.await().untilAsserted(() -> verify(broker).closeAsync());
+            verify(stores, never()).closeAsync();
+            if (brokerFailure) {
+                brokerClosed.completeExceptionally(new IllegalStateException("broker close failed"));
+            } else {
+                brokerClosed.complete(null);
+            }
+            storesStarted.get(5, TimeUnit.SECONDS);
+            assertThat(closed).isNotDone();
+            storesClosed.complete(null);
+            if (brokerFailure) {
+                assertThatThrownBy(() -> closed.get(5, TimeUnit.SECONDS)).hasRootCauseMessage("broker close failed");
+            } else {
+                closed.get(5, TimeUnit.SECONDS);
+            }
+            verify(stores, times(1)).closeAsync();
+            verify(stores, never()).close();
+        } finally {
+            brokerClosed.complete(null);
+            storesClosed.complete(null);
+            awaitWorkerCleanup(service);
+        }
+    }
+
+    @Test(dataProvider = "shutdownPaths")
     public void blockedDrainAndConcurrentShutdown(boolean waitForWebService) throws Exception {
         PulsarService service = newService(500);
         MetadataStoreExtended local = mock(MetadataStoreExtended.class);

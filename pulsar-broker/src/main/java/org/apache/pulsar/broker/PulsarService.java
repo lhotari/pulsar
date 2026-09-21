@@ -750,19 +750,17 @@ public class PulsarService implements AutoCloseable, ShutdownService {
             executorServicesShutdown.shutdown(loadManagerExecutor);
 
             List<CompletableFuture<Void>> asyncCloseFutures = new ArrayList<>();
-            if (this.brokerService != null) {
-                CompletableFuture<Void> brokerCloseFuture = this.brokerService.closeAsync();
-                if (this.transactionMetadataStoreService != null) {
-                    asyncCloseFutures.add(brokerCloseFuture.whenComplete((__, ___) -> {
-                        // close transactionMetadataStoreService after the broker has been closed
-                        this.transactionMetadataStoreService.close();
-                        this.transactionMetadataStoreService = null;
-                    }));
-                } else {
-                    asyncCloseFutures.add(brokerCloseFuture);
-                }
-                this.brokerService = null;
+            CompletableFuture<Void> brokerCloseFuture = this.brokerService == null
+                    ? CompletableFuture.completedFuture(null) : this.brokerService.closeAsync();
+            asyncCloseFutures.add(brokerCloseFuture);
+            if (this.transactionMetadataStoreService != null) {
+                TransactionMetadataStoreService metadataStoreService = this.transactionMetadataStoreService;
+                // Even a failed broker close must start and join the remaining coordinator cleanup.
+                asyncCloseFutures.add(brokerCloseFuture.handle((__, error) -> null)
+                        .thenCompose(__ -> metadataStoreService.closeAsync())
+                        .whenComplete((__, error) -> this.transactionMetadataStoreService = null));
             }
+            this.brokerService = null;
 
             if (this.managedLedgerStorage != null) {
                 try {

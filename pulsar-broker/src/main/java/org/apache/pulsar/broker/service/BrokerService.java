@@ -223,7 +223,6 @@ import org.apache.pulsar.metadata.api.NotificationType;
 import org.apache.pulsar.opentelemetry.OpenTelemetryAttributes.ConnectionRateLimitOperationName;
 import org.apache.pulsar.opentelemetry.annotations.PulsarDeprecatedMetric;
 import org.apache.pulsar.policies.data.loadbalancer.NamespaceBundleStats;
-import org.apache.pulsar.transaction.coordinator.TransactionMetadataStore;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -3240,19 +3239,16 @@ public class BrokerService implements Closeable {
                     : CompletableFuture.completedFuture(null)));
         });
 
+        CompletableFuture<Integer> storesClosed = CompletableFuture.completedFuture(0);
         if (getPulsar().getConfig().isTransactionCoordinatorEnabled()
                 && serviceUnit.getNamespaceObject().equals(NamespaceName.SYSTEM_NAMESPACE)) {
             TransactionMetadataStoreService metadataStoreService =
                     this.getPulsar().getTransactionMetadataStoreService();
-            // if the store belongs to this bundle, remove and close the store
-            this.getPulsar().getTransactionMetadataStoreService().getStores().values().stream().filter(store ->
-                    serviceUnit.includes(SystemTopicNames.TRANSACTION_COORDINATOR_ASSIGN
-                            .getPartition((int) (store.getTransactionCoordinatorID().getId()))))
-                    .map(TransactionMetadataStore::getTransactionCoordinatorID)
-                    .forEach(tcId -> closeFutures.add(metadataStoreService.removeTransactionMetadataStore(tcId)));
+            storesClosed = metadataStoreService.closeStoresForBundle(serviceUnit);
         }
 
-        return FutureUtil.waitForAll(closeFutures).thenApply(v -> closeFutures.size());
+        return FutureUtil.waitForAll(closeFutures).thenCombine(storesClosed,
+                (__, storeCount) -> closeFutures.size() + storeCount);
     }
 
     private CompletableFuture<Void> closeTopicForUnload(Topic topic, boolean disconnectClients, boolean force) {
@@ -3404,9 +3400,7 @@ public class BrokerService implements Closeable {
             }
             if (pulsar.getConfiguration().isTransactionCoordinatorEnabled()
                     && bundle.getNamespaceObject().equals(NamespaceName.SYSTEM_NAMESPACE)) {
-                transactions |= pulsar.getTransactionMetadataStoreService().getStores().values().stream()
-                        .anyMatch(store -> bundle.includes(SystemTopicNames.TRANSACTION_COORDINATOR_ASSIGN.getPartition(
-                                (int) store.getTransactionCoordinatorID().getId())));
+                transactions |= pulsar.getTransactionMetadataStoreService().hasStoresInBundle(bundle);
             }
             double messages = 0;
             double bytes = 0;
