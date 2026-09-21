@@ -97,7 +97,9 @@ public interface AsyncCallbacks {
         /**
          * Reports a logical close failure together with the separate storage-cleanup outcome.
          * For example, an already fenced ledger can finish cleanup successfully. Cleanup failure
-         * must remain exceptional, including failures from resources owned by a subclass.
+         * must remain exceptional, including failures from resources owned by a subclass. Normal cleanup
+         * includes persisting final cursor positions: closing local handles alone does not prove a durable
+         * handoff. A ledger already known to be fenced closes local handles without changing recovery metadata.
          *
          * <p>The stage may be minimal and must not expose cancellation of the underlying cleanup.
          * Existing callbacks retain their original failure behavior through this default method.

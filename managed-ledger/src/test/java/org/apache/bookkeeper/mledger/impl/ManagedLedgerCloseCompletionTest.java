@@ -664,6 +664,66 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
         }
     }
 
+    @Test(dataProvider = "closeFailures")
+    public void testCursorPersistenceFailureRemainsUnsafeAfterHandleClose(boolean closeFailure) throws Exception {
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bkc) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                return new ManagedLedgerImpl(this, bk, spy(store), config, scheduledExecutor, name, ownershipChecker);
+            }
+        };
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) localFactory.open("cursor-persistence-close", defaultConfig());
+        ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("cursor");
+        cursor.markDelete(ledger.addEntry(new byte[] {1}));
+        LedgerHandle original = cursor.cursorLedger;
+        LedgerHandle handle = spy(original);
+        cursor.cursorLedger = handle;
+        CompletableFuture<Void> handleClosed = new CompletableFuture<>();
+        CompletableFuture<Void> handleCloseStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            handleCloseStarted.complete(null);
+            return handleClosed;
+        }).when(handle).closeAsync();
+        MetaStoreException persistenceFailure = new MetaStoreException(new IllegalStateException("cursor persistence"));
+        doAnswer(invocation -> {
+            MetaStoreCallback<Void> callback = invocation.getArgument(4);
+            callback.operationFailed(persistenceFailure);
+            return null;
+        }).when(ledger.store).asyncUpdateCursorInfo(any(), any(), any(), any(), any());
+        try {
+            PhysicalCloseFuture physical = new PhysicalCloseFuture();
+            CloseFuture legacy = new CloseFuture();
+            ledger.asyncClose(physical, null);
+            ledger.asyncClose(legacy, null);
+            handleCloseStarted.get(5, TimeUnit.SECONDS);
+            assertThat(physical).isNotDone();
+            assertThat(legacy).isNotDone();
+            BKException handleFailure = BKException.create(BKException.Code.WriteException);
+            if (closeFailure) {
+                handleClosed.completeExceptionally(handleFailure);
+            } else {
+                handleClosed.complete(null);
+            }
+            assertThatThrownBy(() -> physical.get(5, TimeUnit.SECONDS)).hasCause(persistenceFailure);
+            assertThatThrownBy(() -> legacy.get(5, TimeUnit.SECONDS)).hasCause(persistenceFailure);
+            if (closeFailure) {
+                assertThat(persistenceFailure.getSuppressed()).containsExactly(handleFailure);
+            } else {
+                assertThat(persistenceFailure.getSuppressed()).isEmpty();
+            }
+            assertThat(bkc.getLedgers()).contains(original.getId());
+            PhysicalCloseFuture repeated = new PhysicalCloseFuture();
+            ledger.asyncClose(repeated, null);
+            assertThatThrownBy(() -> repeated.get(5, TimeUnit.SECONDS)).hasCause(persistenceFailure);
+            verify(handle, times(1)).closeAsync();
+        } finally {
+            handleClosed.complete(null);
+            original.closeAsync().get(5, TimeUnit.SECONDS);
+        }
+    }
+
     @DataProvider
     public Object[][] cursorSwitches() {
         return new Object[][] {{false, false}, {false, true}, {true, false}, {true, true}};

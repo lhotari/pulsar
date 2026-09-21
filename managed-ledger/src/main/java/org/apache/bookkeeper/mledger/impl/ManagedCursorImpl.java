@@ -3087,6 +3087,10 @@ public class ManagedCursorImpl implements ManagedCursor {
                 asyncDeleteLedger(handle);
             }
             if (persistenceError != null) {
+                Throwable handleFailure = error == null ? null : FutureUtil.unwrapCompletionException(error);
+                if (handleFailure != null && handleFailure != persistenceError) {
+                    persistenceError.addSuppressed(handleFailure);
+                }
                 callback.closeFailed(persistenceError, ctx);
             } else if (error != null) {
                 callback.closeFailed(createManagedLedgerException(error), ctx);
