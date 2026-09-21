@@ -272,7 +272,7 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
                 return;
             }
             pendingInitializeLedgers.remove(name, pending);
-            Futures.CloseFuture closedLedger = new Futures.CloseFuture();
+            Futures.PhysicalCloseFuture closedLedger = new Futures.PhysicalCloseFuture();
             closedLedger.whenComplete((__, error) -> {
                 if (error == null) {
                     cleanup.complete(null);

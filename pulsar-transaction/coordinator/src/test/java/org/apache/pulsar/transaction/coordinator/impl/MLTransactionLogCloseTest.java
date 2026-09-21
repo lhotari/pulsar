@@ -158,6 +158,25 @@ public class MLTransactionLogCloseTest {
         verify(fixture.ledger, never()).asyncClose(any(), any());
     }
 
+    @Test(dataProvider = "cleanupFailures")
+    public void testFencedLedgerCloseUsesPhysicalOutcome(boolean failedCleanup) throws Exception {
+        Fixture fixture = new Fixture(false);
+        fixture.initialize();
+        CompletableFuture<Void> closing = fixture.log.closeAsync();
+        CompletableFuture<Void> physical = new CompletableFuture<>();
+        fixture.closed.get(5, TimeUnit.SECONDS).closeFailed(new ManagedLedgerException.ManagedLedgerFencedException(),
+                physical.minimalCompletionStage(), null);
+        assertThat(closing).isNotDone();
+        if (failedCleanup) {
+            physical.completeExceptionally(new ManagedLedgerException("physical close failed"));
+        } else {
+            physical.complete(null);
+        }
+        assertCloseResult(closing, failedCleanup);
+        assertCloseResult(fixture.log.closeAsync(), failedCleanup);
+        verify(fixture.ledger, times(1)).asyncClose(any(), any());
+    }
+
     @Test
     public void testRejectedWriterCleanupStillJoinsLedgerClose() throws Exception {
         Fixture fixture = new Fixture(true);

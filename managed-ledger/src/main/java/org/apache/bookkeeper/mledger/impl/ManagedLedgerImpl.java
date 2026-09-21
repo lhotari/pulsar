@@ -334,6 +334,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     // Guarded by this; logical Closed state precedes physical ledger/cursor completion.
     private CompletableFuture<Void> closeFuture;
+    private CompletableFuture<Void> physicalCloseFuture;
     private LedgerInitialization initialization;
 
     private final class LedgerInitialization implements ManagedLedgerInitializeLedgerCallback {
@@ -1996,6 +1997,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     @Override
     public void asyncClose(final CloseCallback callback, final Object ctx) {
         final CompletableFuture<Void> closing;
+        final CompletableFuture<Void> physicallyClosed;
         final boolean initiateClose;
         final boolean fenced;
         final LedgerHandle ledgerToClose;
@@ -2004,6 +2006,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             initiateClose = closeFuture == null;
             if (initiateClose) {
                 closeFuture = new CompletableFuture<>();
+                physicalCloseFuture = new CompletableFuture<>();
                 fenced = STATE_UPDATER.get(this).isFenced();
                 if (!fenced) {
                     STATE_UPDATER.set(this, State.Closed);
@@ -2030,62 +2033,86 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 creations = List.of();
             }
             closing = closeFuture;
+            physicallyClosed = physicalCloseFuture;
         }
         // Attach outside the lifecycle monitor: a completed close can invoke the callback inline.
         closing.whenComplete((__, error) -> {
             if (error == null) {
                 callback.closeComplete(ctx);
             } else {
-                callback.closeFailed(ManagedLedgerException.getManagedLedgerException(error), ctx);
+                callback.closeFailed(ManagedLedgerException.getManagedLedgerException(error),
+                        physicallyClosed.minimalCompletionStage(), ctx);
             }
         });
         if (!initiateClose) {
             return;
         }
 
+        physicallyClosed.whenComplete((__, error) -> {
+            if (error != null) {
+                closing.completeExceptionally(FutureUtil.unwrapCompletionException(error));
+            } else if (fenced) {
+                closing.completeExceptionally(new ManagedLedgerFencedException());
+            } else {
+                closing.complete(null);
+            }
+        });
+        Futures.CloseFuture ledgerClosed = new Futures.CloseFuture();
+        Futures.CloseFuture cursorsClosed = new Futures.CloseFuture();
+        CompletableFuture<Void> prepared = new CompletableFuture<>();
+        // Submission failure still starts cursor cleanup and joins every other admitted operation.
+        ledgerClosed.whenComplete((__, error) -> {
+            try {
+                closeAllCursors(cursorsClosed, null);
+            } catch (Throwable closeError) {
+                cursorsClosed.completeExceptionally(closeError);
+            }
+        });
+        List<CompletableFuture<Void>> storageOperations = new ArrayList<>(creations);
+        storageOperations.add(ledgerClosed);
+        storageOperations.add(cursorsClosed);
+        storageOperations.add(prepared);
+        // Creation callbacks can settle under the lifecycle monitor. Complete outside it without
+        // depending on the ledger executor surviving. A logical fenced status is not a storage failure.
+        FutureUtil.waitForAll(storageOperations).whenCompleteAsync((__, error) -> {
+            if (error == null) {
+                physicallyClosed.complete(null);
+            } else {
+                physicallyClosed.completeExceptionally(FutureUtil.unwrapCompletionException(error));
+            }
+        });
         try {
             factory.close(this);
             cancelScheduledTasks();
             log.info("Closing managed ledger");
             clearPendingAddEntries(new ManagedLedgerAlreadyClosedException("Managed ledger is closed"));
-            Futures.CloseFuture ledgerClosed = new Futures.CloseFuture();
-            Futures.CloseFuture cursorsClosed = new Futures.CloseFuture();
-            // Even a failed ledger close must join cursor cleanup before the physical operation settles.
-            ledgerClosed.whenComplete((__, error) -> closeAllCursors(cursorsClosed, null));
-            List<CompletableFuture<Void>> storageOperations = new ArrayList<>(creations);
-            storageOperations.add(ledgerClosed);
-            storageOperations.add(cursorsClosed);
-            if (fenced) {
-                storageOperations.add(CompletableFuture.failedFuture(new ManagedLedgerFencedException()));
-            }
-            // Creation callbacks can settle under the lifecycle monitor. Dispatch final completion so
-            // client close callbacks never run inline under that monitor (or depend on its executor surviving).
-            FutureUtil.waitForAll(storageOperations).whenCompleteAsync((__, error) -> {
-                if (error == null) {
-                    closing.complete(null);
-                } else {
-                    closing.completeExceptionally(FutureUtil.unwrapCompletionException(error));
-                }
-            });
-            if (ledgerToClose == null) {
-                ledgerClosed.complete(null);
-                return;
-            }
-
+            prepared.complete(null);
+        } catch (Throwable error) {
+            prepared.completeExceptionally(error);
+        }
+        if (ledgerToClose == null) {
+            ledgerClosed.complete(null);
+            return;
+        }
+        try {
             log.debug().attr("ledgerId", ledgerToClose.getId()).log("Closing current writing ledger");
             mbean.startDataLedgerCloseOp();
             ledgerToClose.asyncClose((rc, closedLedger, ignored) -> {
-                log.debug().attr("ledgerId", ledgerToClose.getId()).attr("rc", rc).log("Close complete for ledger");
-                mbean.endDataLedgerCloseOp();
-                ledgerCache.forEach((ledgerId, readHandle) -> invalidateReadHandle(ledgerId));
-                if (rc == BKException.Code.OK) {
-                    ledgerClosed.complete(null);
-                } else {
-                    ledgerClosed.completeExceptionally(createManagedLedgerException(rc));
+                try {
+                    log.debug().attr("ledgerId", ledgerToClose.getId()).attr("rc", rc).log("Close complete for ledger");
+                    mbean.endDataLedgerCloseOp();
+                    ledgerCache.forEach((ledgerId, readHandle) -> invalidateReadHandle(ledgerId));
+                    if (rc == BKException.Code.OK) {
+                        ledgerClosed.complete(null);
+                    } else {
+                        ledgerClosed.completeExceptionally(createManagedLedgerException(rc));
+                    }
+                } catch (Throwable error) {
+                    ledgerClosed.completeExceptionally(error);
                 }
             }, null);
         } catch (Throwable error) {
-            closing.completeExceptionally(error);
+            ledgerClosed.completeExceptionally(error);
         }
     }
 

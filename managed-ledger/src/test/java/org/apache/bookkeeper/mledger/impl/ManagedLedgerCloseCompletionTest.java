@@ -35,10 +35,12 @@ import static org.mockito.Mockito.when;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import lombok.Cleanup;
 import org.apache.bookkeeper.client.AsyncCallback;
@@ -61,6 +63,7 @@ import org.apache.bookkeeper.mledger.impl.MetaStore.MetaStoreCallback;
 import org.apache.bookkeeper.mledger.proto.ManagedCursorInfo;
 import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo;
 import org.apache.bookkeeper.mledger.util.Futures.CloseFuture;
+import org.apache.bookkeeper.mledger.util.Futures.PhysicalCloseFuture;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
 import org.apache.pulsar.metadata.api.Stat;
 import org.awaitility.Awaitility;
@@ -78,7 +81,12 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
         return new Object[][] {{false, false}, {true, false}, {false, true}};
     }
 
-    @Test(dataProvider = "ledgerCloseFailures")
+    @DataProvider
+    public Object[][] fencedLedgerCloseFailures() {
+        return new Object[][] {{false, false}, {true, false}, {false, true}, {true, true}};
+    }
+
+    @Test(dataProvider = "fencedLedgerCloseFailures")
     public void testRepeatedLedgerCloseSharesPhysicalResult(boolean fail, boolean fenced) throws Exception {
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("ledger-close", defaultConfig());
         LedgerHandle handle = spy(ledger.currentLedger);
@@ -91,22 +99,47 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
         if (fenced) {
             ledger.setFenced();
         }
-        CloseFuture first = new CloseFuture();
+        AtomicInteger notifications = new AtomicInteger();
+        CloseFuture first = new CloseFuture() {
+            @Override
+            public void closeComplete(Object ctx) {
+                notifications.incrementAndGet();
+                super.closeComplete(ctx);
+            }
+
+            @Override
+            public void closeFailed(ManagedLedgerException error, Object ctx) {
+                notifications.incrementAndGet();
+                super.closeFailed(error, ctx);
+            }
+        };
         CloseFuture second = new CloseFuture();
+        PhysicalCloseFuture physical = new PhysicalCloseFuture();
+        PhysicalCloseFuture canceled = new PhysicalCloseFuture();
         boolean released = false;
         try {
             ledger.asyncClose(first, "first");
             AsyncCallback.CloseCallback callback = physicalClose.get(5, TimeUnit.SECONDS);
             ledger.asyncClose(second, "second");
+            ledger.asyncClose(canceled, null);
+            assertThat(canceled.cancel(false)).isTrue();
+            ledger.asyncClose(physical, null);
+            assertThat(physical).isNotDone();
             assertThat(first).isNotDone();
             assertThat(second).as("a logical Closed state is not physical completion").isNotDone();
             released = true;
             callback.closeComplete(fail ? BKException.Code.WriteException : BKException.Code.OK, handle, null);
             assertResult(first, fail || fenced);
             assertResult(second, fail || fenced);
+            assertResult(physical, fail);
+            assertThat(canceled).isCancelled();
+            PhysicalCloseFuture repeatedPhysical = new PhysicalCloseFuture();
+            ledger.asyncClose(repeatedPhysical, null);
+            assertResult(repeatedPhysical, fail);
             CloseFuture third = new CloseFuture();
             ledger.asyncClose(third, "third");
             assertResult(third, fail || fenced);
+            assertThat(notifications).hasValue(1);
             verify(handle, times(1)).asyncClose(any(), any());
         } finally {
             if (!released && physicalClose.isDone()) {
@@ -148,6 +181,86 @@ public class ManagedLedgerCloseCompletionTest extends MockedBookKeeperTestCase {
         } finally {
             if (!released && physicalClose.isDone()) {
                 physicalClose.getNow(null).closeComplete(null);
+            }
+        }
+    }
+
+    @Test
+    public void testFailedOpenOfFencedCandidateReportsSuccessfulCleanup() throws Exception {
+        CompletableFuture<ManagedLedgerImpl> created = new CompletableFuture<>();
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl localFactory = new ManagedLedgerFactoryImpl(metadataStore, bkc) {
+            @Override
+            protected ManagedLedgerImpl createManagedLedger(BookKeeper bk, MetaStore store, String name,
+                    ManagedLedgerConfig config, Supplier<CompletableFuture<Boolean>> ownershipChecker) {
+                ManagedLedgerImpl ledger = super.createManagedLedger(bk, store, name, config, ownershipChecker);
+                ledger.setFenced();
+                created.complete(ledger);
+                return ledger;
+            }
+        };
+        CompletableFuture<ManagedLedger> opening = new CompletableFuture<>();
+        CompletableFuture<Void> cleanup = new CompletableFuture<>();
+        localFactory.asyncOpen("fenced-candidate", defaultConfig(), new AsyncCallbacks.OpenLedgerCallback() {
+            @Override
+            public void openLedgerComplete(ManagedLedger ledger, Object ctx) {
+                opening.complete(ledger);
+            }
+
+            @Override
+            public void openLedgerFailed(ManagedLedgerException error, Object ctx) {
+                opening.completeExceptionally(error);
+                cleanup.completeExceptionally(new AssertionError("Physical cleanup outcome was not provided"));
+            }
+
+            @Override
+            public void openLedgerFailed(ManagedLedgerException error, CompletionStage<Void> physical, Object ctx) {
+                opening.completeExceptionally(error);
+                physical.whenComplete((__, failure) -> {
+                    if (failure == null) {
+                        cleanup.complete(null);
+                    } else {
+                        cleanup.completeExceptionally(failure);
+                    }
+                });
+            }
+        }, null, null);
+        assertThatThrownBy(() -> opening.get(5, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(ManagedLedgerException.ManagedLedgerAlreadyClosedException.class);
+        cleanup.get(5, TimeUnit.SECONDS);
+        CloseFuture legacy = new CloseFuture();
+        created.get(5, TimeUnit.SECONDS).asyncClose(legacy, null);
+        assertThatThrownBy(() -> legacy.get(5, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(ManagedLedgerException.ManagedLedgerFencedException.class);
+    }
+
+    @Test
+    public void testLedgerCloseSubmissionFailureStillJoinsCursorCleanup() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("close-submission", defaultConfig());
+        LedgerHandle handle = spy(ledger.currentLedger);
+        ledger.currentLedger = handle;
+        doAnswer(invocation -> {
+            throw new IllegalStateException("ledger close submission failed");
+        }).when(handle).asyncClose(any(), any());
+        CompletableFuture<AsyncCallbacks.CloseCallback> cursorClose = new CompletableFuture<>();
+        addHeldCursor(ledger, "held", cursorClose);
+        PhysicalCloseFuture physical = new PhysicalCloseFuture();
+        CloseFuture legacy = new CloseFuture();
+        try {
+            ledger.asyncClose(physical, null);
+            ledger.asyncClose(legacy, null);
+            AsyncCallbacks.CloseCallback callback = cursorClose.get(5, TimeUnit.SECONDS);
+            assertPending(physical);
+            assertPending(legacy);
+            callback.closeComplete(null);
+            assertThatThrownBy(() -> physical.get(5, TimeUnit.SECONDS))
+                    .hasRootCauseMessage("ledger close submission failed");
+            assertThatThrownBy(() -> legacy.get(5, TimeUnit.SECONDS))
+                    .hasRootCauseMessage("ledger close submission failed");
+            verify(handle, times(1)).asyncClose(any(), any());
+        } finally {
+            if (cursorClose.isDone()) {
+                cursorClose.getNow(null).closeComplete(null);
             }
         }
     }

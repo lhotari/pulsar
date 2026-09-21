@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -47,6 +48,7 @@ import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo;
 import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo;
 import org.apache.bookkeeper.mledger.proto.NestedPositionInfo;
 import org.apache.bookkeeper.mledger.util.Futures.CloseFuture;
+import org.apache.bookkeeper.mledger.util.Futures.PhysicalCloseFuture;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.metadata.api.Stat;
 
@@ -60,6 +62,7 @@ public class ShadowManagedLedgerImpl extends ManagedLedgerImpl {
     // Guarded by this; unwatch does not cancel already-issued source ledger opens.
     private final Set<CompletableFuture<Void>> pendingSourceOpens = new HashSet<>();
     private CompletableFuture<Void> shadowCloseFuture;
+    private CompletableFuture<Void> shadowPhysicalCloseFuture;
     private Throwable sourceCleanupFailure;
     private boolean initializingSource = true;
     private SourceInfo deferredSourceInfo;
@@ -480,14 +483,17 @@ public class ShadowManagedLedgerImpl extends ManagedLedgerImpl {
     @Override
     public void asyncClose(AsyncCallbacks.CloseCallback callback, Object ctx) {
         final CompletableFuture<Void> closing;
+        final CompletableFuture<Void> physicallyClosed;
         final List<CompletableFuture<Void>> pending;
         final boolean initiate;
         synchronized (this) {
             initiate = shadowCloseFuture == null;
             if (initiate) {
                 shadowCloseFuture = new CompletableFuture<>();
+                shadowPhysicalCloseFuture = new CompletableFuture<>();
             }
             closing = shadowCloseFuture;
+            physicallyClosed = shadowPhysicalCloseFuture;
             pending = new ArrayList<>(pendingSourceOpens);
             if (sourceCleanupFailure != null) {
                 pending.add(CompletableFuture.failedFuture(sourceCleanupFailure));
@@ -498,31 +504,51 @@ public class ShadowManagedLedgerImpl extends ManagedLedgerImpl {
             if (error == null) {
                 callback.closeComplete(ctx);
             } else {
-                callback.closeFailed(createManagedLedgerException(error), ctx);
+                callback.closeFailed(createManagedLedgerException(error),
+                        physicallyClosed.minimalCompletionStage(), ctx);
             }
         });
         if (!initiate) {
             return;
         }
         CloseFuture baseClosed = new CloseFuture();
-        pending.add(baseClosed);
+        PhysicalCloseFuture basePhysicallyClosed = new PhysicalCloseFuture();
         try {
             store.unwatchManagedLedgerInfo(sourceMLName);
         } catch (Throwable error) {
             pending.add(CompletableFuture.failedFuture(error));
         }
         try {
-            super.asyncClose(baseClosed, null);
+            super.asyncClose(new AsyncCallbacks.CloseCallback() {
+                @Override
+                public void closeComplete(Object ignored) {
+                    basePhysicallyClosed.complete(null);
+                    baseClosed.complete(null);
+                }
+
+                @Override
+                public void closeFailed(ManagedLedgerException error, Object ignored) {
+                    basePhysicallyClosed.completeExceptionally(error);
+                    baseClosed.completeExceptionally(error);
+                }
+
+                @Override
+                public void closeFailed(ManagedLedgerException error, CompletionStage<Void> physicalCompletion,
+                                        Object ignored) {
+                    basePhysicallyClosed.closeFailed(error, physicalCompletion, null);
+                    baseClosed.completeExceptionally(error);
+                }
+            }, null);
         } catch (Throwable error) {
+            basePhysicallyClosed.completeExceptionally(error);
             baseClosed.completeExceptionally(error);
         }
-        FutureUtil.waitForAll(pending).whenComplete((__, error) -> {
-            if (error == null) {
-                closing.complete(null);
-            } else {
-                closing.completeExceptionally(error);
-            }
-        });
+        List<CompletableFuture<Void>> physicalOperations = new ArrayList<>(pending);
+        physicalOperations.add(basePhysicallyClosed);
+        FutureUtil.completeAfter(physicallyClosed, FutureUtil.waitForAll(physicalOperations));
+        pending.add(baseClosed);
+        pending.add(physicallyClosed);
+        FutureUtil.completeAfter(closing, FutureUtil.waitForAll(pending));
     }
 
     @Override

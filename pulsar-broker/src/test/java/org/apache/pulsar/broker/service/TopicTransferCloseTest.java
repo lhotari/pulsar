@@ -60,7 +60,8 @@ public class TopicTransferCloseTest extends SharedPulsarBaseTest {
                 {true, 0, false}, {true, 1, false}, {true, 2, false}, {true, 3, false},
                 {false, 0, false}, {false, 2, false}, {false, 3, false},
                 {true, 0, true}, {true, 1, true}, {true, 2, true}, {true, 3, true},
-                {false, 0, true}, {false, 2, true}, {false, 3, true}
+                {false, 0, true}, {false, 2, true}, {false, 3, true},
+                {true, 4, false}, {true, 5, false}, {true, 4, true}, {true, 5, true}
         };
     }
 
@@ -83,6 +84,11 @@ public class TopicTransferCloseTest extends SharedPulsarBaseTest {
             CloseCallback callback = invocation.getArgument(0);
             Object context = invocation.getArgument(1);
             ledgerCloseStarted.complete(callback);
+            if (failure >= 4) {
+                callback.closeFailed(new ManagedLedgerException.ManagedLedgerFencedException(),
+                        ledgerClosed.minimalCompletionStage(), context);
+                return null;
+            }
             ledgerClosed.whenComplete((ignored, error) -> {
                 if (error == null) {
                     callback.closeComplete(context);
@@ -160,13 +166,13 @@ public class TopicTransferCloseTest extends SharedPulsarBaseTest {
                 ledgerCloseStarted.get(10, TimeUnit.SECONDS);
                 assertPending(storage);
                 assertPending(disconnect);
-                if (failure == 1) {
+                if (failure == 1 || failure == 5) {
                     ledgerClosed.completeExceptionally(expected);
                 } else {
                     ledgerClosed.complete(null);
                 }
             }
-            if (failure != 0) {
+            if (failure != 0 && failure != 4) {
                 assertFailed(storage);
                 assertFailed(repeatedStorage);
                 assertFailed(disconnect);

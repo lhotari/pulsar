@@ -42,6 +42,7 @@ import org.apache.bookkeeper.mledger.ManagedLedgerFactory;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
+import org.apache.bookkeeper.mledger.util.Futures.PhysicalCloseFuture;
 import org.apache.pulsar.common.allocator.PulsarByteBufAllocator;
 import org.apache.pulsar.common.api.proto.CommandSubscribe;
 import org.apache.pulsar.common.naming.NamespaceName;
@@ -253,19 +254,9 @@ public class MLTransactionLogImpl implements TransactionLog {
             if (managedLedger == null) {
                 return CompletableFuture.completedFuture(null);
             }
-            CompletableFuture<Void> closed = new CompletableFuture<>();
+            PhysicalCloseFuture closed = new PhysicalCloseFuture();
             try {
-                managedLedger.asyncClose(new AsyncCallbacks.CloseCallback() {
-                    @Override
-                    public void closeComplete(Object ctx) {
-                        closed.complete(null);
-                    }
-
-                    @Override
-                    public void closeFailed(ManagedLedgerException error, Object ctx) {
-                        closed.completeExceptionally(error);
-                    }
-                }, null);
+                managedLedger.asyncClose(closed, null);
             } catch (Throwable error) {
                 closed.completeExceptionally(error);
             }

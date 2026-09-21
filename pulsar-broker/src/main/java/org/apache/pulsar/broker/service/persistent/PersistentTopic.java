@@ -45,6 +45,7 @@ import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -2003,6 +2004,22 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                     } else {
                         closeFuture.completeExceptionally(exception);
                     }
+                }
+
+                @Override
+                public void closeFailed(ManagedLedgerException exception, CompletionStage<Void> physicalCompletion,
+                                        Object ctx) {
+                    if (closeType != CloseTypes.transferring) {
+                        closeFailed(exception, ctx);
+                        return;
+                    }
+                    physicalCompletion.whenComplete((__, error) -> {
+                        if (error == null) {
+                            closeFuture.complete(null);
+                        } else {
+                            closeFuture.completeExceptionally(FutureUtil.unwrapCompletionException(error));
+                        }
+                    });
                 }
             }, null);
         };

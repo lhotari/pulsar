@@ -52,6 +52,7 @@ import org.apache.bookkeeper.mledger.impl.MetaStore.MetaStoreCallback;
 import org.apache.bookkeeper.mledger.impl.MetaStore.UpdateCallback;
 import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo;
 import org.apache.bookkeeper.mledger.util.Futures.CloseFuture;
+import org.apache.bookkeeper.mledger.util.Futures.PhysicalCloseFuture;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
 import org.apache.pulsar.metadata.api.Stat;
 import org.awaitility.Awaitility;
@@ -62,6 +63,13 @@ public class ShadowLedgerCloseTest extends MockedBookKeeperTestCase {
     @DataProvider
     public Object[][] failures() {
         return new Object[][] {{false}, {true}};
+    }
+
+    @DataProvider
+    public Object[][] fencedFailures() {
+        return new Object[][] {{false, false, false}, {true, false, false},
+                {false, true, false}, {true, true, false}, {false, false, true}, {true, false, true},
+                {false, true, true}, {true, true, true}};
     }
 
     private static ManagedLedgerConfig shadowConfig() {
@@ -178,8 +186,9 @@ public class ShadowLedgerCloseTest extends MockedBookKeeperTestCase {
         }
     }
 
-    @Test(dataProvider = "failures")
-    public void testSourceWatchOpenIsJoinedAcrossClose(boolean fail) throws Exception {
+    @Test(dataProvider = "fencedFailures")
+    public void testSourceWatchOpenIsJoinedAcrossClose(boolean fail, boolean fenced, boolean baseFailure)
+            throws Exception {
         ManagedLedger source = factory.open("source", defaultConfig());
         source.addEntry(new byte[] {1});
         BookKeeper bookKeeper = spy(bkc);
@@ -188,11 +197,26 @@ public class ShadowLedgerCloseTest extends MockedBookKeeperTestCase {
         ManagedLedgerFactoryImpl localFactory = watchedFactory(bookKeeper, watcher);
         ShadowManagedLedgerImpl shadow = (ShadowManagedLedgerImpl) localFactory.open("shadow", shadowConfig());
         LedgerHandle prior = shadow.currentLedger;
+        if (baseFailure) {
+            prior = spy(prior);
+            shadow.currentLedger = prior;
+            doAnswer(invocation -> {
+                AsyncCallback.CloseCallback callback = invocation.getArgument(0);
+                callback.closeComplete(BKException.Code.WriteException,
+                        (LedgerHandle) invocation.getMock(), invocation.getArgument(1));
+                return null;
+            }).when(prior).asyncClose(any(), any());
+        }
         HeldRead read = heldRead(bkc.createLedger(BookKeeper.DigestType.CRC32C, new byte[0]).getId());
         doReturn(read.builder()).when(bookKeeper).newOpenLedgerOp();
         watcher.get(5, TimeUnit.SECONDS).onUpdate(info(read.handle().getId()), stat(100));
         read.started().get(5, TimeUnit.SECONDS);
+        if (fenced) {
+            shadow.setFenced();
+        }
         try {
+            PhysicalCloseFuture physical = new PhysicalCloseFuture();
+            shadow.asyncClose(physical, null);
             CloseFuture first = new CloseFuture();
             CloseFuture second = new CloseFuture();
             shadow.asyncClose(first, null);
@@ -201,11 +225,17 @@ public class ShadowLedgerCloseTest extends MockedBookKeeperTestCase {
             read.opened().complete(read.handle());
             read.closeStarted().get(5, TimeUnit.SECONDS);
             assertPending(second);
+            assertPending(physical);
             release(read, fail);
-            assertClosed(first, fail);
-            assertClosed(second, fail);
+            assertClosed(first, fail || fenced || baseFailure);
+            assertClosed(second, fail || fenced || baseFailure);
+            assertClosed(physical, fail || baseFailure);
+            PhysicalCloseFuture repeated = new PhysicalCloseFuture();
+            shadow.asyncClose(repeated, null);
+            assertClosed(repeated, fail || baseFailure);
             assertThat(shadow.currentLedger).isSameAs(prior);
-            assertThat(shadow.getState()).isEqualTo(ManagedLedgerImpl.State.Closed);
+            assertThat(shadow.getState()).isEqualTo(fenced
+                    ? ManagedLedgerImpl.State.Fenced : ManagedLedgerImpl.State.Closed);
             watcher.getNow(null).onUpdate(info(read.handle().getId() + 1), stat(101));
             drainExecutor(shadow);
             verify(read.builder(), times(1)).execute();

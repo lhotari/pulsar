@@ -93,6 +93,19 @@ public interface AsyncCallbacks {
         void closeComplete(Object ctx);
 
         void closeFailed(ManagedLedgerException exception, Object ctx);
+
+        /**
+         * Reports a logical close failure together with the separate storage-cleanup outcome.
+         * For example, an already fenced ledger can finish cleanup successfully. Cleanup failure
+         * must remain exceptional, including failures from resources owned by a subclass.
+         *
+         * <p>The stage may be minimal and must not expose cancellation of the underlying cleanup.
+         * Existing callbacks retain their original failure behavior through this default method.
+         */
+        default void closeFailed(ManagedLedgerException exception, CompletionStage<Void> physicalCompletion,
+                                 Object ctx) {
+            closeFailed(exception, ctx);
+        }
     }
 
     /**
