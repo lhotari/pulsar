@@ -45,6 +45,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.Cleanup;
 import lombok.CustomLog;
+import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerEntry;
 import org.apache.bookkeeper.client.LedgerHandle;
@@ -734,8 +735,20 @@ public class ManagedLedgerBkTest extends BookKeeperClusterTestCase {
 
     private static Thread readCallbackThread(LedgerHandle lh, long entryId) throws Exception {
         CompletableFuture<Thread> callbackThread = new CompletableFuture<>();
-        lh.asyncReadEntries(entryId, entryId,
-                (rc, handle, seq, ctx) -> callbackThread.complete(Thread.currentThread()), null);
+        lh.asyncReadEntries(entryId, entryId, (rc, handle, seq, ctx) -> {
+            if (rc != BKException.Code.OK) {
+                callbackThread.completeExceptionally(BKException.create(rc));
+                return;
+            }
+            try {
+                while (seq.hasMoreElements()) {
+                    seq.nextElement().getEntryBuffer().release();
+                }
+                callbackThread.complete(Thread.currentThread());
+            } catch (Throwable error) {
+                callbackThread.completeExceptionally(error);
+            }
+        }, null);
         return callbackThread.get(10, TimeUnit.SECONDS);
     }
 
@@ -904,9 +917,13 @@ public class ManagedLedgerBkTest extends BookKeeperClusterTestCase {
         assertEquals(c1.getNumberOfEntriesInBacklog(false), 4);
 
         List<Entry> entries = c1.readEntries(4);
-        assertEquals(entries.size(), 4);
-        for (int i = 0; i < 4; i++) {
-            assertEquals(new String(entries.get(i).getData()), "entry-" + i);
+        try {
+            assertEquals(entries.size(), 4);
+            for (int i = 0; i < 4; i++) {
+                assertEquals(new String(entries.get(i).getData()), "entry-" + i);
+            }
+        } finally {
+            entries.forEach(Entry::release);
         }
     }
 

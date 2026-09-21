@@ -3774,13 +3774,27 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         ManagedLedgerFactoryImpl factory = new ManagedLedgerFactoryImpl(metadataStore, bkc, config);
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("my_test_ledger", defaultConfig());
 
+        List<CompletableFuture<Void>> completions = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
+            CompletableFuture<Void> completion = new CompletableFuture<>();
+            completions.add(completion);
             OpAddEntry op = OpAddEntry.createNoRetainBuffer(ledger,
-                    ByteBufAllocator.DEFAULT.buffer(128), null, null, new AtomicBoolean());
+                    ByteBufAllocator.DEFAULT.buffer(128), new AddEntryCallback() {
+                        @Override
+                        public void addComplete(Position position, ByteBuf data, Object ctx) {
+                            completion.complete(null);
+                        }
+
+                        @Override
+                        public void addFailed(ManagedLedgerException exception, Object ctx) {
+                            completion.completeExceptionally(exception);
+                        }
+                    }, null, new AtomicBoolean());
             ledger.internalAsyncAddEntry(op);
             long addOpCount = ManagedLedgerImpl.ADD_OP_COUNT_UPDATER.get(ledger);
             Assert.assertEquals(i + 1, addOpCount);
         }
+        CompletableFuture.allOf(completions.toArray(CompletableFuture[]::new)).get(5, TimeUnit.SECONDS);
     }
 
 
