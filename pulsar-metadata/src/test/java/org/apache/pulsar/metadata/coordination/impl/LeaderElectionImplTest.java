@@ -18,19 +18,30 @@
  */
 package org.apache.pulsar.metadata.coordination.impl;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import java.util.EnumSet;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 import lombok.Cleanup;
 import org.apache.pulsar.metadata.BaseMetadataStoreTest;
 import org.apache.pulsar.metadata.api.MetadataStoreConfig;
+import org.apache.pulsar.metadata.api.Stat;
 import org.apache.pulsar.metadata.api.coordination.CoordinationService;
+import org.apache.pulsar.metadata.api.coordination.LeaderElectionState;
+import org.apache.pulsar.metadata.api.extended.CreateOption;
 import org.apache.pulsar.metadata.api.extended.MetadataStoreExtended;
 import org.testng.annotations.Test;
 
@@ -68,6 +79,36 @@ public class LeaderElectionImplTest extends BaseMetadataStoreTest {
             }
         });
         blockFuture.join();
+    }
+
+    @Test(timeOut = 20000)
+    public void disablingWaitsForInFlightAcquisitionToBeReleased() throws Exception {
+        MetadataStoreExtended store = mock(MetadataStoreExtended.class);
+        String path = "/disable-during-acquisition";
+        when(store.get(path)).thenReturn(CompletableFuture.completedFuture(Optional.empty()));
+        CompletableFuture<Stat> acquiring = new CompletableFuture<>();
+        when(store.put(eq(path), any(), any(), eq(EnumSet.of(CreateOption.Ephemeral)))).thenReturn(acquiring);
+        CompletableFuture<Void> releasing = new CompletableFuture<>();
+        when(store.delete(eq(path), any())).thenReturn(releasing);
+        @Cleanup("shutdownNow")
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        LeaderElectionImpl<String> election = new LeaderElectionImpl<>(store, String.class, path, __ -> { }, executor);
+        CompletableFuture<LeaderElectionState> original = election.elect("broker");
+        CompletableFuture<Void> disable = election.setElectionEnabled(false);
+        assertThat(disable.isDone()).isFalse();
+        acquiring.complete(new Stat(path, 7, 0, 0, true, true));
+        verify(store).delete(path, Optional.of(7L));
+        assertThat(disable.isDone()).isFalse();
+        releasing.complete(null);
+        disable.get(5, TimeUnit.SECONDS);
+        assertThat(original.isCompletedExceptionally()).isTrue();
+        assertThat(election.isElectionEnabled()).isFalse();
+        assertThat(election.getState()).isEqualTo(LeaderElectionState.Following);
+        assertThat(election.getLeaderValue().get(5, TimeUnit.SECONDS)).isEmpty();
+        election.setElectionEnabled(true).get(5, TimeUnit.SECONDS);
+        verify(store, times(2)).put(eq(path), any(), any(), eq(EnumSet.of(CreateOption.Ephemeral)));
+        assertThat(election.getState()).isEqualTo(LeaderElectionState.Leading);
+        election.close();
     }
 
     @Test(timeOut = 20000)

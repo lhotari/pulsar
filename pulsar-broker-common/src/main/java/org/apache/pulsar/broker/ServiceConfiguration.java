@@ -609,9 +609,28 @@ public class ServiceConfiguration implements PulsarConfiguration {
     @FieldContext(
         category = CATEGORY_SERVER,
         dynamic = true,
-        doc = "Time to wait for broker graceful shutdown. After this time elapses, the process will be killed"
+        doc = "Overall broker shutdown budget in milliseconds, including bundle draining and service cleanup. "
+                + "The smaller of 5 seconds or 20% is reserved for closing metadata-store sessions. "
+                + "Non-positive values disable the overall deadline (embedded/test use). "
+                + "The broker entry point terminates the process if shutdown exceeds the budget."
     )
     private long brokerShutdownTimeoutMs = 60000;
+
+    @FieldContext(
+        category = CATEGORY_SERVER,
+        minValue = 1,
+        doc = "Maximum namespace bundles unloaded concurrently during graceful broker shutdown. "
+                + "The shutdown API can separately limit the number of unload starts per second."
+    )
+    private int brokerShutdownMaxConcurrentUnload = 32;
+
+    @FieldContext(
+        category = CATEGORY_SERVER,
+        minValue = 1,
+        doc = "Maximum concurrent topic storage closes initiated by broker shutdown or rejected topic-load cleanup. "
+                + "A request timeout does not release a slot while its physical close remains pending."
+    )
+    private int brokerShutdownMaxConcurrentTopicClose = 32;
 
     @FieldContext(
         category = CATEGORY_SERVER,

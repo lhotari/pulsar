@@ -42,12 +42,15 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
 import io.netty.channel.DefaultChannelId;
 import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -75,6 +78,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -113,6 +117,7 @@ import org.apache.pulsar.broker.authentication.AuthenticationService;
 import org.apache.pulsar.broker.authentication.AuthenticationState;
 import org.apache.pulsar.broker.authorization.AuthorizationService;
 import org.apache.pulsar.broker.authorization.PulsarAuthorizationProvider;
+import org.apache.pulsar.broker.loadbalance.impl.ModularLoadManagerWrapper;
 import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.broker.namespace.TopicExistsInfo;
 import org.apache.pulsar.broker.service.BrokerServiceException.ServiceUnitNotReadyException;
@@ -294,6 +299,170 @@ public class ServerCnxTest {
 
         assertEquals(serverCnx.getState(), State.Connected);
         assertTrue(getResponse() instanceof CommandConnected);
+        channel.finish();
+    }
+
+    @Test
+    public void testConnectRejectedDuringDrainBeforeMetadataFence() throws Exception {
+        doReturn(false).when(pulsar).isRunning();
+        doReturn(PulsarService.State.Closing).when(pulsar).getState();
+        doReturn(false).when(pulsar).isMetadataSessionsClosing();
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        assertFalse(channel.isActive());
+        channel.finish();
+    }
+
+    @Test(timeOut = 30000)
+    public void testDrainRejectsEntitiesWithoutClosingEstablishedConnection() throws Exception {
+        resetChannel();
+        setChannelConnected();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "established", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        Producer established = serverCnx.getProducers().get(1).join();
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 2,
+                CommandSubscribe.SubType.Shared, 0, "established-consumer", 0));
+        assertTrue(getResponse() instanceof CommandSuccess);
+        Consumer consumer = serverCnx.getConsumers().get(1).join();
+
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        for (int entityId : new int[]{1, 2}) {
+            channel.writeInbound(Commands.newProducer(successTopicName, entityId, 3,
+                    "new-producer", Collections.emptyMap(), false));
+            assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+            channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, entityId, 4,
+                    CommandSubscribe.SubType.Shared, 0, "new-consumer", 0));
+            assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        }
+        assertTrue(channel.isActive());
+        assertEquals(serverCnx.getProducers().size(), 1);
+        assertEquals(serverCnx.getConsumers().size(), 1);
+        assertSame(serverCnx.getProducers().get(1).join(), established);
+        assertSame(serverCnx.getConsumers().get(1).join(), consumer);
+        channel.finish();
+    }
+
+    @Test(timeOut = 30000)
+    public void testDrainDequeuesExclusiveProducer() throws Exception {
+        resetChannel();
+        setChannelConnected();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "established", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        AbstractTopic topic = (AbstractTopic) brokerService.getTopicReference(successTopicName).orElseThrow();
+        channel.writeInbound(Commands.newProducer(successTopicName, 2, 2, "waiting", false,
+                Collections.emptyMap(), null, 0, true, ProducerAccessMode.WaitForExclusive,
+                Optional.empty(), false));
+        CommandProducerSuccess queued = (CommandProducerSuccess) getResponse();
+        assertFalse(queued.isProducerReady());
+        assertEquals(topic.getWaitingExclusiveProducerCount(), 1);
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        channel.runPendingTasks();
+        assertEquals(topic.getWaitingExclusiveProducerCount(), 0);
+        serverCnx.getProducers().get(1).join().closeNow(true);
+        channel.runPendingTasks();
+        assertTrue(topic.getProducers().isEmpty());
+        assertTrue(serverCnx.getProducers().isEmpty());
+        assertTrue(channel.isActive());
+        channel.finish();
+    }
+
+    @Test(timeOut = 30000)
+    public void testDrainRejectsConnectWaitingForAuthentication() throws Exception {
+        AuthenticationService authenticationService = mock(AuthenticationService.class);
+        AuthenticationProvider provider = mock(AuthenticationProvider.class);
+        AuthenticationState authentication = mock(AuthenticationState.class);
+        CompletableFuture<AuthData> authenticated = new CompletableFuture<>();
+        when(brokerService.getAuthenticationService()).thenReturn(authenticationService);
+        when(authenticationService.getAuthenticationProvider("delayed")).thenReturn(provider);
+        when(provider.newAuthState(any(), any(), any())).thenReturn(authentication);
+        when(authentication.authenticateAsync(any())).thenReturn(authenticated);
+        when(authentication.getAuthRole()).thenReturn("delayed-client");
+        svcConfig.setAuthenticationEnabled(true);
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("delayed", "credentials", null));
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        authenticated.complete(null);
+        channel.runPendingTasks();
+        assertEquals(serverCnx.getState(), State.Failed);
+        assertFalse(channel.isActive());
+        channel.finish();
+    }
+
+    @Test(timeOut = 30000)
+    public void testDrainClosesLateConsumerWithoutDeletingSubscription() throws Exception {
+        resetChannel();
+        setChannelConnected();
+        Topic loaded = brokerService.getOrCreateTopic(successTopicName).get(5, TimeUnit.SECONDS);
+        Topic topic = Mockito.mockingDetails(loaded).isMock() ? loaded : Mockito.spy(loaded);
+        doReturn(CompletableFuture.completedFuture(Optional.of(topic)))
+                .when(brokerService).getTopic(eq(successTopicName), anyBoolean());
+        CompletableFuture<Consumer> created = new CompletableFuture<>();
+        CompletableFuture<Consumer> delivered = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            CompletableFuture<Consumer> realSubscribe = (CompletableFuture<Consumer>) invocation.callRealMethod();
+            realSubscribe.whenComplete((consumer, error) -> {
+                if (error == null) {
+                    created.complete(consumer);
+                } else {
+                    created.completeExceptionally(error);
+                }
+            });
+            return delivered;
+        }).when(topic).subscribe(any());
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 1,
+                CommandSubscribe.SubType.Shared, 0, "pending-consumer", 0));
+        Awaitility.await().until(() -> {
+            channel.runPendingTasks();
+            return created.isDone();
+        });
+        Consumer consumer = created.get(5, TimeUnit.SECONDS);
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        delivered.complete(consumer);
+        Awaitility.await().untilAsserted(() -> {
+            channel.runPendingTasks();
+            assertTrue(serverCnx.getConsumers().isEmpty());
+            assertTrue(topic.getSubscription(successSubName).getConsumers().isEmpty());
+        });
+        assertTrue(topic.getSubscriptions().containsKey(successSubName));
+        assertTrue(channel.isActive());
+        channel.finish();
+    }
+
+    @Test(timeOut = 30000)
+    public void testDrainCancelsProducerWaitingForTopic() throws Exception {
+        resetChannel();
+        setChannelConnected();
+        Topic topic = brokerService.getOrCreateTopic(successTopicName).get(5, TimeUnit.SECONDS);
+        CompletableFuture<Topic> topicLoad = new CompletableFuture<>();
+        doReturn(topicLoad).when(brokerService).getOrCreateTopic(successTopicName);
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "pending", Collections.emptyMap(), false));
+        channel.runPendingTasks();
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        assertEquals(((CommandError) getResponse()).getError(), ServerError.ServiceNotReady);
+        topicLoad.complete(topic);
+        channel.runPendingTasks();
+        assertTrue(serverCnx.getProducers().isEmpty());
+        assertTrue(topic.getProducers().isEmpty());
+        assertTrue(channel.isActive());
+        channel.finish();
+    }
+
+    @Test
+    public void testConnectRejectedAfterMetadataFence() throws Exception {
+        doReturn(false).when(pulsar).isRunning();
+        doReturn(PulsarService.State.Closing).when(pulsar).getState();
+        doReturn(true).when(pulsar).isMetadataSessionsClosing();
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        CommandError error = (CommandError) getResponse();
+        assertEquals(error.getError(), ServerError.ServiceNotReady);
         channel.finish();
     }
 
@@ -2011,6 +2180,46 @@ public class ServerCnxTest {
         channel.finish();
     }
 
+    @DataProvider
+    public Object[][] legacyTransferCommands() {
+        return new Object[][] {{true}, {false}};
+    }
+
+    @Test(timeOut = 30000, dataProvider = "legacyTransferCommands")
+    public void testLegacyTransferKeepsConnectionAndDoesNotAcknowledgeDroppedWork(boolean send) throws Exception {
+        pulsar.getLoadManager().set(mock(ModularLoadManagerWrapper.class));
+        resetChannel();
+        setChannelConnected();
+        serverCnx.cancelKeepAliveTask();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "prod-name", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 2,
+                SubType.Exclusive, 0, "consumer", 0));
+        assertTrue(getResponse() instanceof CommandSuccess);
+        doAnswer(invocation -> {
+            CloseCallback callback = invocation.getArgument(0);
+            callback.closeComplete(invocation.getArgument(1));
+            return null;
+        }).when(ledgerMock).asyncClose(any(), any());
+        Topic topic = brokerService.getTopicReference(successTopicName).orElseThrow();
+        topic.close(false, false).get(10, TimeUnit.SECONDS);
+        assertTrue(topic.isTransferring());
+        assertTrue(serverCnx.getProducers().containsKey(1));
+        assertTrue(serverCnx.getConsumers().containsKey(1));
+        if (send) {
+            sendMessage();
+        } else {
+            // A request ID asks for an ACK receipt. Dropping this ACK must not issue a successful one.
+            channel.writeInbound(Commands.newAck(1, 0, 0, null, AckType.Individual,
+                    null, Collections.emptyMap(), 10));
+        }
+        channel.runPendingTasks();
+        assertTrue(channel.isActive());
+        assertTrue(channel.outboundMessages().isEmpty());
+        channel.finish();
+    }
+
     @Test(timeOut = 30000)
     public void testSendCommandBeforeCreatingProducer() throws Exception {
         resetChannel();
@@ -2726,6 +2935,244 @@ public class ServerCnxTest {
 
         verify(ctx).writeAndFlush(any());
         verify(ctx).close();
+    }
+
+    @DataProvider
+    public Object[][] closeNotificationResults() {
+        return new Object[][] {{true, true}, {true, false}, {false, true}, {false, false}};
+    }
+
+    @Test(timeOut = 30000)
+    public void testBundleNotificationWaitsForNativeWritesBeforeDisposingTopic() throws Exception {
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        assertTrue(getResponse() instanceof CommandConnected);
+        serverCnx.cancelKeepAliveTask();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "draining-producer", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 2,
+                CommandSubscribe.SubType.Shared, 0, "draining-consumer", 0));
+        assertTrue(getResponse() instanceof CommandSuccess);
+        Topic topic = brokerService.getTopicReference(successTopicName).orElseThrow();
+        CompletableFuture<Void> storageGate = new CompletableFuture<>();
+        CompletableFuture<Void> storageStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            CloseCallback callback = invocation.getArgument(0);
+            Object context = invocation.getArgument(1);
+            storageStarted.complete(null);
+            storageGate.thenRun(() -> callback.closeComplete(context));
+            return null;
+        }).when(ledgerMock).asyncClose(any(), any());
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        NamespaceBundle bundle = mock(NamespaceBundle.class);
+        when(bundle.includes(any(TopicName.class))).thenReturn(true);
+        BrokerService.BundleUnload unload = brokerService.captureShutdownBundle(bundle);
+        List<ChannelPromise> writes = new ArrayList<>();
+        channel.pipeline().addFirst(new ChannelOutboundHandlerAdapter() {
+            @Override
+            public void write(ChannelHandlerContext ctx, Object message, ChannelPromise promise) {
+                ((ByteBuf) message).release();
+                writes.add(promise);
+            }
+        });
+        CompletableFuture<Void> storage = unload.closeStorage();
+        storageStarted.get(5, TimeUnit.SECONDS);
+        channel.runPendingTasks();
+        assertThat(writes).isEmpty();
+        assertThat(topic.getProducers()).hasSize(1);
+        assertThat(topic.getSubscription(successSubName).getConsumers()).hasSize(1);
+        storageGate.complete(null);
+        storage.get(5, TimeUnit.SECONDS);
+        // The owner invokes Phase B only after its separate metadata ownership boundary has completed.
+        CompletableFuture<Void> notification = unload.disconnectClients();
+        Awaitility.await().untilAsserted(() -> {
+            channel.runPendingTasks();
+            assertThat(writes).hasSize(2);
+            assertThat(topic.getProducers()).isEmpty();
+            assertThat(topic.getSubscription(successSubName).getConsumers()).isEmpty();
+        });
+        assertThat(notification).isNotDone();
+        assertThat(brokerService.getTopicReference(successTopicName)).containsSame(topic);
+        sendMessage();
+        channel.writeInbound(Commands.newAck(1, 0, 0, null, AckType.Individual,
+                null, Collections.emptyMap(), 10));
+        channel.writeInbound(Commands.newFlow(1, 1));
+        channel.runPendingTasks();
+        assertTrue(channel.isActive());
+        assertThat(writes).hasSize(2);
+        writes.get(0).setSuccess();
+        channel.runPendingTasks();
+        assertThat(notification).isNotDone();
+        assertThat(brokerService.getTopicReference(successTopicName)).containsSame(topic);
+        writes.get(1).setSuccess();
+        Awaitility.await().until(() -> {
+            channel.runPendingTasks();
+            return notification.isDone();
+        });
+        notification.get(5, TimeUnit.SECONDS);
+        assertThat(brokerService.getTopicReference(successTopicName)).isEmpty();
+        assertThat(topic.getSubscriptions()).containsKey(successSubName);
+        verify(ledgerMock, times(1)).asyncClose(any(), any());
+        verify(ledgerMock, never()).asyncDeleteCursor(eq(successSubName), any(), any());
+        channel.finishAndReleaseAll();
+    }
+
+    @Test(timeOut = 30000, dataProvider = "legacyTransferCommands")
+    public void testNativeNotificationRechecksDeadlineBeforeQueuedWrite(boolean producerClose) throws Exception {
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        assertTrue(getResponse() instanceof CommandConnected);
+        serverCnx.cancelKeepAliveTask();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "producer", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 2,
+                CommandSubscribe.SubType.Shared, 0, "consumer", 0));
+        assertTrue(getResponse() instanceof CommandSuccess);
+        Producer producer = serverCnx.getProducers().get(1).join();
+        Consumer consumer = serverCnx.getConsumers().get(1).join();
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        AtomicLong remaining = new AtomicLong(100);
+        CompletableFuture<TransportCnx.CloseNotification> notification = producerClose
+                ? serverCnx.closeProducerAsync(producer, Optional.empty(), remaining::get)
+                : serverCnx.closeConsumerAsync(consumer, Optional.empty(), remaining::get);
+        remaining.set(0);
+        channel.runPendingTasks();
+        assertThat(notification).isCompletedExceptionally();
+        assertTrue(channel.outboundMessages().isEmpty());
+        if (producerClose) {
+            assertFalse(serverCnx.getProducers().containsKey(1));
+            assertSame(serverCnx.getConsumers().get(1).join(), consumer);
+            sendMessage();
+        } else {
+            assertFalse(serverCnx.getConsumers().containsKey(1));
+            assertSame(serverCnx.getProducers().get(1).join(), producer);
+            channel.writeInbound(Commands.newAck(1, 0, 0, null, AckType.Individual,
+                    null, Collections.emptyMap(), 10));
+        }
+        assertTrue(channel.isActive());
+        assertTrue(channel.outboundMessages().isEmpty());
+        producer.closeNow(true);
+        consumer.close();
+        channel.finishAndReleaseAll();
+    }
+
+    @Test(timeOut = 30000, dataProvider = "closeNotificationResults")
+    public void testAsyncCloseTracksNativeWrite(boolean producerClose, boolean succeed) throws Exception {
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        assertTrue(getResponse() instanceof CommandConnected);
+        serverCnx.cancelKeepAliveTask();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "closing-producer", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        channel.writeInbound(Commands.newProducer(successTopicName, 2, 2,
+                "untouched-producer", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 3,
+                CommandSubscribe.SubType.Shared, 0, "closing-consumer", 0));
+        assertTrue(getResponse() instanceof CommandSuccess);
+        Producer producer = serverCnx.getProducers().get(1).join();
+        Producer untouched = serverCnx.getProducers().get(2).join();
+        Consumer consumer = serverCnx.getConsumers().get(1).join();
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        List<ChannelPromise> writes = new ArrayList<>();
+        channel.pipeline().addFirst(new ChannelOutboundHandlerAdapter() {
+            @Override
+            public void write(ChannelHandlerContext ctx, Object message, ChannelPromise promise) {
+                ((ByteBuf) message).release();
+                writes.add(promise);
+            }
+        });
+
+        CompletableFuture<TransportCnx.CloseNotification> notification = producerClose
+                ? serverCnx.closeProducerAsync(producer, Optional.empty())
+                : serverCnx.closeConsumerAsync(consumer, Optional.empty());
+        assertThat(writes).isEmpty();
+        assertThat(notification).isNotDone();
+        channel.runPendingTasks();
+        assertThat(writes).hasSize(1);
+        assertThat(notification).as("dispatch and local map removal are not flush completion").isNotDone();
+        if (producerClose) {
+            assertFalse(serverCnx.getProducers().containsKey(1));
+            sendMessage();
+            assertTrue(channel.isActive());
+        } else {
+            assertFalse(serverCnx.getConsumers().containsKey(1));
+            channel.writeInbound(Commands.newAck(1, 0, 0, null, AckType.Individual,
+                    null, Collections.emptyMap(), 10));
+            channel.writeInbound(Commands.newFlow(1, 1));
+            channel.runPendingTasks();
+            assertTrue(channel.isActive());
+            assertThat(writes).as("late ACK/FLOW must not produce an acknowledgment receipt").hasSize(1);
+        }
+        assertSame(serverCnx.getProducers().get(2).join(), untouched);
+        // Topic membership is a separate operation from the transport write.
+        producer.closeNow(true);
+        consumer.close();
+        RuntimeException failure = new RuntimeException("held close write failed");
+        if (succeed) {
+            writes.get(0).setSuccess();
+            channel.runPendingTasks();
+            assertThat(notification.get(5, TimeUnit.SECONDS)).isEqualTo(TransportCnx.CloseNotification.FLUSHED);
+            assertTrue(channel.isActive());
+        } else {
+            writes.get(0).setFailure(failure);
+            channel.runPendingTasks();
+            assertThat(notification).isCompletedExceptionally();
+            assertThat(notification.handle((value, error) -> error).join()).hasRootCause(failure);
+            assertFalse(channel.isActive());
+        }
+        channel.finishAndReleaseAll();
+    }
+
+    @Test(timeOut = 30000, dataProvider = "legacyTransferCommands")
+    public void testDrainRetainsProducerTombstonePastKeepAlive(boolean drainBeforeClose) throws Exception {
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        assertTrue(getResponse() instanceof CommandConnected);
+        serverCnx.cancelKeepAliveTask();
+        for (int id = 1; id <= 2; id++) {
+            channel.writeInbound(Commands.newProducer(successTopicName, id, id,
+                    "producer-" + id, Collections.emptyMap(), false));
+            assertTrue(getResponse() instanceof CommandProducerSuccess);
+        }
+        Producer producer = serverCnx.getProducers().get(1).join();
+        Producer untouched = serverCnx.getProducers().get(2).join();
+        if (drainBeforeClose) {
+            pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        }
+        CompletableFuture<Void> closed = producer.disconnect();
+        channel.runPendingTasks();
+        closed.get(5, TimeUnit.SECONDS);
+        assertTrue(getResponse() instanceof CommandCloseProducer);
+        if (!drainBeforeClose) {
+            pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        }
+        channel.advanceTimeBy(brokerService.getKeepAliveIntervalSeconds() + 1L, TimeUnit.SECONDS);
+        channel.runScheduledPendingTasks();
+        channel.runPendingTasks();
+        assertFalse(serverCnx.getProducers().containsKey(1));
+        sendMessage();
+        assertTrue(channel.isActive());
+        assertSame(serverCnx.getProducers().get(2).join(), untouched);
+        assertTrue(channel.outboundMessages().isEmpty(), "Dropped sends must not receive a success receipt");
+        channel.finishAndReleaseAll();
+    }
+
+    @Test(timeOut = 30000, dataProvider = "legacyTransferCommands")
+    public void testAsyncCloseBeforeV5ReportsConnectionFallback(boolean producerClose) throws Exception {
+        resetChannel();
+        channel.writeInbound(newConnect(AuthMethod.AuthMethodNone, "", ProtocolVersion.v4.getValue()));
+        assertTrue(getResponse() instanceof CommandConnected);
+        CompletableFuture<TransportCnx.CloseNotification> notification = producerClose
+                ? serverCnx.closeProducerAsync(mock(Producer.class), Optional.empty())
+                : serverCnx.closeConsumerAsync(mock(Consumer.class), Optional.empty());
+        channel.runPendingTasks();
+        assertThat(notification.get(5, TimeUnit.SECONDS)).isEqualTo(TransportCnx.CloseNotification.UNTRACKED);
+        assertFalse(channel.isActive());
+        channel.finishAndReleaseAll();
     }
 
     @Test(timeOut = 30000)
@@ -3962,7 +4409,7 @@ public class ServerCnxTest {
         ByteBuf clientCommand = Commands.newConnect("none", "", null);
         channel.writeInbound(clientCommand);
 
-        assertEquals(serverCnx.getState(), State.Start);
+        assertEquals(serverCnx.getState(), State.Failed);
         Object response = getResponse();
         assertTrue(response instanceof CommandError);
         CommandError error = (CommandError) response;

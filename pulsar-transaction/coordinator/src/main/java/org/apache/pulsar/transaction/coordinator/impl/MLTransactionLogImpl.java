@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.CustomLog;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
@@ -41,11 +42,13 @@ import org.apache.bookkeeper.mledger.ManagedLedgerFactory;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
+import org.apache.bookkeeper.mledger.util.Futures.PhysicalCloseFuture;
 import org.apache.pulsar.common.allocator.PulsarByteBufAllocator;
 import org.apache.pulsar.common.api.proto.CommandSubscribe;
 import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.TopicDomain;
 import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.collections.BitSetRecyclable;
 import org.apache.pulsar.transaction.coordinator.TransactionCoordinatorID;
 import org.apache.pulsar.transaction.coordinator.TransactionLog;
@@ -60,6 +63,12 @@ public class MLTransactionLogImpl implements TransactionLog {
     private final ManagedLedgerFactory managedLedgerFactory;
     private final ManagedLedgerConfig managedLedgerConfig;
     private ManagedLedger managedLedger;
+    // Lifecycle reservation only; no ledger calls or observer completions run under this monitor.
+    private CompletableFuture<Void> opening;
+    private CompletableFuture<Void> initialized;
+    private CompletableFuture<Void> closing;
+    private Throwable failedOpenCleanup;
+
 
     public static final String TRANSACTION_LOG_PREFIX = "__transaction_log_";
 
@@ -110,43 +119,100 @@ public class MLTransactionLogImpl implements TransactionLog {
 
     @Override
     public CompletableFuture<Void> initialize() {
-        CompletableFuture<Void> future = new CompletableFuture<>();
+        CompletableFuture<Void> physicalOpen;
+        CompletableFuture<Void> result;
+        synchronized (this) {
+            if (closing != null) {
+                return CompletableFuture.failedFuture(
+                        new ManagedLedgerAlreadyClosedException("Transaction log closed"));
+            }
+            if (initialized != null) {
+                return initialized.copy();
+            }
+            physicalOpen = new CompletableFuture<>();
+            opening = physicalOpen;
+            result = new CompletableFuture<>();
+            initialized = result;
+        }
+        physicalOpen.whenComplete((__, error) -> {
+            if (error != null) {
+                // Failure can follow acquisition of a ledger/cursor. Join cleanup before reporting initialization.
+                closeAsync().whenComplete((ignored, closeError) -> {
+                    Throwable cause = FutureUtil.unwrapCompletionException(error);
+                    if (closeError != null && FutureUtil.unwrapCompletionException(closeError) != cause) {
+                        cause.addSuppressed(FutureUtil.unwrapCompletionException(closeError));
+                    }
+                    result.completeExceptionally(cause);
+                });
+            } else {
+                boolean closed;
+                synchronized (MLTransactionLogImpl.this) {
+                    closed = closing != null;
+                }
+                if (closed) {
+                    result.completeExceptionally(new ManagedLedgerAlreadyClosedException("Transaction log closed"));
+                } else {
+                    result.complete(null);
+                }
+            }
+        });
+        try {
+            openLedger(physicalOpen);
+        } catch (Throwable error) {
+            physicalOpen.completeExceptionally(error);
+        }
+        return result.copy();
+    }
+
+    private void openLedger(CompletableFuture<Void> future) {
         managedLedgerFactory.asyncOpen(topicName.getPersistenceNamingEncoding(),
-                managedLedgerConfig,
-                new AsyncCallbacks.OpenLedgerCallback() {
+                managedLedgerConfig, new AsyncCallbacks.OpenLedgerCallback() {
                     @Override
                     public void openLedgerComplete(ManagedLedger ledger, Object ctx) {
-                        MLTransactionLogImpl.this.managedLedger = ledger;
-                        MLTransactionLogImpl.this.bufferedWriter = new TxnLogBufferedWriter<>(
-                                managedLedger, ((ManagedLedgerImpl) managedLedger).getExecutor(),
-                                timer, TransactionLogDataSerializer.INSTANCE,
-                                txnLogBufferedWriterConfig.getBatchedWriteMaxRecords(),
-                                txnLogBufferedWriterConfig.getBatchedWriteMaxSize(),
-                                txnLogBufferedWriterConfig.getBatchedWriteMaxDelayInMillis(),
-                                txnLogBufferedWriterConfig.isBatchEnabled(),
-                                bufferedWriterMetrics);
+                        managedLedger = ledger;
+                        try {
+                            bufferedWriter = new TxnLogBufferedWriter<>(ledger,
+                                    ((ManagedLedgerImpl) ledger).getExecutor(), timer,
+                                    TransactionLogDataSerializer.INSTANCE,
+                                    txnLogBufferedWriterConfig.getBatchedWriteMaxRecords(),
+                                    txnLogBufferedWriterConfig.getBatchedWriteMaxSize(),
+                                    txnLogBufferedWriterConfig.getBatchedWriteMaxDelayInMillis(),
+                                    txnLogBufferedWriterConfig.isBatchEnabled(), bufferedWriterMetrics);
+                            ledger.asyncOpenCursor(TRANSACTION_SUBSCRIPTION_NAME,
+                                    CommandSubscribe.InitialPosition.Earliest, new AsyncCallbacks.OpenCursorCallback() {
+                                        @Override
+                                        public void openCursorComplete(ManagedCursor openedCursor, Object ctx) {
+                                            cursor = openedCursor;
+                                            future.complete(null);
+                                        }
 
-                        managedLedger.asyncOpenCursor(TRANSACTION_SUBSCRIPTION_NAME,
-                                CommandSubscribe.InitialPosition.Earliest, new AsyncCallbacks.OpenCursorCallback() {
-                                    @Override
-                                    public void openCursorComplete(ManagedCursor cursor, Object ctx) {
-                                        MLTransactionLogImpl.this.cursor = cursor;
-                                        future.complete(null);
-                                    }
-
-                                    @Override
-                                    public void openCursorFailed(ManagedLedgerException exception, Object ctx) {
-                                        future.completeExceptionally(exception);
-                                    }
-                                }, null);
+                                        @Override
+                                        public void openCursorFailed(ManagedLedgerException error, Object ctx) {
+                                            future.completeExceptionally(error);
+                                        }
+                                    }, null);
+                        } catch (Throwable error) {
+                            future.completeExceptionally(error);
+                        }
                     }
 
                     @Override
-                    public void openLedgerFailed(ManagedLedgerException exception, Object ctx) {
-                        future.completeExceptionally(exception);
+                    public void openLedgerFailed(ManagedLedgerException error, Object ctx) {
+                        // An older factory supplies no physical-cleanup proof. Keep close conservative.
+                        openLedgerFailed(error, CompletableFuture.failedFuture(error), ctx);
+                    }
+
+                    @Override
+                    public void openLedgerFailed(ManagedLedgerException error, CompletionStage<Void> cleanup,
+                                                 Object ctx) {
+                        cleanup.whenComplete((__, cleanupError) -> {
+                            synchronized (MLTransactionLogImpl.this) {
+                                failedOpenCleanup = cleanupError;
+                            }
+                            future.completeExceptionally(error);
+                        });
                     }
                 }, null, null);
-        return future;
     }
 
     @Override
@@ -161,25 +227,47 @@ public class MLTransactionLogImpl implements TransactionLog {
 
     @Override
     public CompletableFuture<Void> closeAsync() {
-        CompletableFuture<Void> completableFuture = new CompletableFuture<>();
-
-        managedLedger.asyncClose(new AsyncCallbacks.CloseCallback() {
-            @Override
-            public void closeComplete(Object ctx) {
-                log.info().attr("value", tcId).log("Transaction log with tcId :close managedLedger successful!");
-                completableFuture.complete(null);
-                bufferedWriter.close();
+        CompletableFuture<Void> result;
+        CompletableFuture<Void> pendingOpen;
+        synchronized (this) {
+            if (closing != null) {
+                return closing.copy();
             }
-
-            @Override
-            public void closeFailed(ManagedLedgerException exception, Object ctx) {
-                // If close managed ledger failure, should not close buffered writer.
-                log.error().attr("value", tcId).log("Transaction log with tcId :close managedLedger fail!");
-                completableFuture.completeExceptionally(exception);
+            result = new CompletableFuture<>();
+            closing = result;
+            pendingOpen = opening == null ? CompletableFuture.completedFuture(null) : opening;
+        }
+        pendingOpen.handle((__, error) -> null).thenCompose(__ -> closeResources()).whenComplete((__, error) -> {
+            if (error == null) {
+                result.complete(null);
+            } else {
+                result.completeExceptionally(FutureUtil.unwrapCompletionException(error));
             }
-        }, null);
+        });
+        return result.copy();
+    }
 
-        return completableFuture;
+    private CompletableFuture<Void> closeResources() {
+        CompletableFuture<Void> writerClosed = bufferedWriter == null ? CompletableFuture.completedFuture(null)
+                : FutureUtil.supplySafely(bufferedWriter::close);
+        CompletableFuture<Void> ledgerClosed = writerClosed.handle((__, error) -> null).thenCompose(__ -> {
+            if (managedLedger == null) {
+                return CompletableFuture.completedFuture(null);
+            }
+            PhysicalCloseFuture closed = new PhysicalCloseFuture();
+            try {
+                managedLedger.asyncClose(closed, null);
+            } catch (Throwable error) {
+                closed.completeExceptionally(error);
+            }
+            return closed;
+        });
+        Throwable cleanupError;
+        synchronized (this) {
+            cleanupError = failedOpenCleanup;
+        }
+        return FutureUtil.waitForAll(List.of(writerClosed, ledgerClosed, cleanupError == null
+                ? CompletableFuture.completedFuture(null) : CompletableFuture.failedFuture(cleanupError)));
     }
 
     @Override

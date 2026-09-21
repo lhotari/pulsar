@@ -210,10 +210,43 @@ public class BrokersImpl extends BaseResource implements Brokers {
     @Override
     public CompletableFuture<Void> shutDownBrokerGracefully(int maxConcurrentUnloadPerSec,
                                                             boolean forcedTerminateTopic) {
+        return shutDownBrokerGracefully(maxConcurrentUnloadPerSec, forcedTerminateTopic, null);
+    }
+
+    @Override
+    public CompletableFuture<Void> shutDownBrokerGracefully(int maxConcurrentUnloadPerSec,
+                                                            boolean forcedTerminateTopic, Long timeoutMs) {
         WebTarget path = adminBrokers.path("shutdown")
                 .queryParam("maxConcurrentUnloadPerSec", maxConcurrentUnloadPerSec)
                 .queryParam("forcedTerminateTopic", forcedTerminateTopic);
+        if (timeoutMs != null) {
+            path = path.queryParam("timeoutMs", timeoutMs);
+        }
         return asyncPostRequest(path, Entity.entity("", MediaType.APPLICATION_JSON));
+    }
+
+    @Override
+    public CompletableFuture<Boolean> isLeaderBrokerEligibleAsync(String brokerId) {
+        if (brokerId == null || brokerId.isBlank()) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Broker ID is required"));
+        }
+        return asyncGetRequest(adminBrokers.path(brokerId).path("leaderBrokerEligible"),
+                new FutureCallback<Boolean>() { });
+    }
+
+    @Override
+    public CompletableFuture<Void> checkReadyAsync() {
+        return asyncGetRequest(adminBrokers.path("ready"), new FutureCallback<String>() { })
+                .thenApply(__ -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> setLeaderBrokerEligibleAsync(String brokerId, boolean enabled) {
+        if (brokerId == null || brokerId.isBlank()) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Broker ID is required"));
+        }
+        return asyncPostRequest(adminBrokers.path(brokerId).path("leaderBrokerEligible"),
+                Entity.entity(enabled, MediaType.APPLICATION_JSON));
     }
 
     @Override

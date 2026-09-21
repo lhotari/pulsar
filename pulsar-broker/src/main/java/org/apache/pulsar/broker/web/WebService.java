@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.web;
 
+import com.google.common.annotations.VisibleForTesting;
 import io.prometheus.client.CollectorRegistry;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.Filter;
@@ -37,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import lombok.CustomLog;
 import lombok.Getter;
 import org.apache.commons.lang3.StringUtils;
@@ -504,11 +506,11 @@ public class WebService implements AutoCloseable {
     public void close(boolean waitUtilServerStopped) throws PulsarServerException {
         try {
             if (waitUtilServerStopped) {
-                doClose();
+                doClose(true);
             } else {
                 Thread webServiceTerminator = new Thread(() -> {
                     try {
-                        doClose();
+                        doClose(false);
                     } catch (Exception e) {
                         log.error().exception(e).log("Error while closing web service");
                     }
@@ -521,32 +523,52 @@ public class WebService implements AutoCloseable {
         }
     }
 
-    private void doClose() throws Exception {
-        server.stop();
-        // unregister statistics from Prometheus client's default CollectorRegistry singleton
-        // to prevent memory leaks in tests
-        if (jettyStatisticsCollector != null) {
-            try {
-                CollectorRegistry.defaultRegistry.unregister(jettyStatisticsCollector);
-            } catch (Exception e) {
-                // ignore any exception happening in unregister
-                // exception will be thrown for 2. instance of WebService in tests since
-                // the register supports a single JettyStatisticsCollector
+    @VisibleForTesting
+    Server getServer() {
+        return server;
+    }
+
+    private void doClose(boolean synchronous) throws Exception {
+        // The detached terminator must allow the admin response to finish after metadata cleanup.
+        // A synchronous close instead spends service-cleanup time and must preserve that reserve.
+        long remainingNanos = synchronous ? pulsar.getRemainingShutdownDrainNanos()
+                : pulsar.getRemainingShutdownNanos();
+        if (remainingNanos != Long.MAX_VALUE) {
+            // Jetty skips graceful shutdown notifications for zero, so retain a positive floor even after expiry.
+            long remainingMs = Math.max(1, TimeUnit.NANOSECONDS.toMillis(remainingNanos));
+            server.setStopTimeout(remainingMs);
+        }
+        try {
+            server.stop();
+        } finally {
+            // Jetty can stop its components and then throw a graceful-stop timeout. Always release our resources.
+            // unregister statistics from Prometheus client's default CollectorRegistry singleton
+            // to prevent memory leaks in tests
+            if (jettyStatisticsCollector != null) {
+                try {
+                    CollectorRegistry.defaultRegistry.unregister(jettyStatisticsCollector);
+                } catch (Exception e) {
+                    // ignore any exception happening in unregister
+                    // exception will be thrown for 2. instance of WebService in tests since
+                    // the register supports a single JettyStatisticsCollector
+                }
+                jettyStatisticsCollector = null;
             }
-            jettyStatisticsCollector = null;
+            // PIP-478: dispose the TLS factory subscription and close the factory, if the new path was used.
+            if (this.reloadableServerTls != null) {
+                this.reloadableServerTls.subscription().dispose();
+                this.reloadableServerTls = null;
+            }
+            if (this.tlsFactory != null) {
+                this.tlsFactory.close();
+                this.tlsFactory = null;
+            }
+            webExecutorThreadPoolStats.close();
+            this.executorStats.close();
         }
+        // A failed graceful stop has already attempted pool shutdown. Do not wait indefinitely for a handler
+        // that ignored interruption on that failure path; retain the original successful-stop join behavior.
         webServiceExecutor.join();
-        // PIP-478: dispose the TLS factory subscription and close the factory, if the new path was used.
-        if (this.reloadableServerTls != null) {
-            this.reloadableServerTls.subscription().dispose();
-            this.reloadableServerTls = null;
-        }
-        if (this.tlsFactory != null) {
-            this.tlsFactory.close();
-            this.tlsFactory = null;
-        }
-        webExecutorThreadPoolStats.close();
-        this.executorStats.close();
         log.info("Web service closed");
     }
 

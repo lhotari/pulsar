@@ -36,7 +36,7 @@ import org.testng.annotations.Test;
 public class PulsarClientBasedHandlerTest {
 
     private static final String clusterName = "cluster";
-    private static final int shutdownTimeoutMs = 100;
+    private static final int shutdownTimeoutMs = 10000;
     private final LocalBookkeeperEnsemble bk = new LocalBookkeeperEnsemble(2, 0);
     private File tempDirectory;
     private PulsarService pulsar;
@@ -72,8 +72,8 @@ public class PulsarClientBasedHandlerTest {
         log.info().attr("elapsedMs", elapsedMs)
                 .attr("handlerCloseTimeMs", handler.closeTimeMs)
                 .log("Broker stop timing");
-        Assert.assertTrue(elapsedMs
-               < +handler.closeTimeMs + shutdownTimeoutMs + 1000); // tolerate 1 more second for other processes
+        // The budget now includes protocol-handler close, bundle draining and final metadata cleanup.
+        Assert.assertTrue(elapsedMs < shutdownTimeoutMs + 1000);
     }
 
     @AfterClass(alwaysRun = true)

@@ -329,12 +329,59 @@ public interface Brokers {
     /**
      * Trigger the current broker to graceful-shutdown asynchronously.
      *
-     * @param maxConcurrentUnloadPerSec the maximum number of topics to unload per second.
+     * @param maxConcurrentUnloadPerSec the maximum number of bundle unloads to start per second (zero is unlimited).
      *                                  This helps control the speed of the unload operation during shutdown.
      * @param forcedTerminateTopic if true, topics will be forcefully terminated during the shutdown process.
      */
     CompletableFuture<Void> shutDownBrokerGracefully(int maxConcurrentUnloadPerSec,
                                                      boolean forcedTerminateTopic);
+
+    /**
+     * Shut down this broker within a duration measured from acceptance of the request.
+     * Only one shutdown request is accepted; subsequent requests fail with a conflict.
+     *
+     * @param maxConcurrentUnloadPerSec maximum bundle unload starts per second; zero means unlimited
+     * @param forcedTerminateTopic whether to close topics without waiting for client disconnection
+     * @param timeoutMs positive shutdown timeout in milliseconds, or null to use brokerShutdownTimeoutMs
+     */
+    default CompletableFuture<Void> shutDownBrokerGracefully(int maxConcurrentUnloadPerSec,
+                                                              boolean forcedTerminateTopic, Long timeoutMs) {
+        if (timeoutMs == null) {
+            return shutDownBrokerGracefully(maxConcurrentUnloadPerSec, forcedTerminateTopic);
+        }
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Shutdown timeout is not supported"));
+    }
+
+    /**
+     * Check the target broker's uncached readiness endpoint. Completes exceptionally when it is not ready.
+     * Unlike a health check, this does not create messaging entities.
+     */
+    default CompletableFuture<Void> checkReadyAsync() {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("Readiness check is not supported"));
+    }
+
+    /**
+     * Get whether the named broker may become the leader broker returned by {@link #getLeaderBroker()}.
+     * Requests sent to another broker are redirected to the named broker. Requires super-user access.
+     * @param brokerId broker ID returned by {@link #getActiveBrokers()}
+     */
+    default CompletableFuture<Boolean> isLeaderBrokerEligibleAsync(String brokerId) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Leader-broker eligibility control is not supported"));
+    }
+
+    /**
+     * Enable or disable the named broker's eligibility for the leader-broker role until it restarts.
+     * Disabling releases this role if held, even if no other broker is available. The broker still serves its topics.
+     * Requests sent to another broker are redirected to the named broker. Other coordination roles are unaffected.
+     * This requires super-user access and is rejected once shutdown has started.
+     * @param brokerId broker ID returned by {@link #getActiveBrokers()}
+     * @param enabled whether the broker may hold the leader-broker role
+     */
+    default CompletableFuture<Void> setLeaderBrokerEligibleAsync(String brokerId, boolean enabled) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Leader-broker eligibility control is not supported"));
+    }
 
     /**
      * Get version of broker.

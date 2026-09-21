@@ -20,6 +20,7 @@ package org.apache.bookkeeper.mledger.util;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.CloseCallback;
@@ -46,6 +47,25 @@ public class Futures {
         @Override
         public void closeFailed(ManagedLedgerException exception, Object ctx) {
             completeExceptionally(exception);
+        }
+    }
+
+    /**
+     * Observes storage cleanup independently of a preexisting logical close failure. An old-style
+     * failure callback has no separate cleanup proof and remains a failure.
+     */
+    public static class PhysicalCloseFuture extends CloseFuture {
+        @Override
+        public void closeFailed(ManagedLedgerException exception, CompletionStage<Void> physicalCompletion,
+                                Object ctx) {
+            physicalCompletion.whenComplete((__, error) -> {
+                if (error == null) {
+                    complete(null);
+                } else {
+                    completeExceptionally(ManagedLedgerException.getManagedLedgerException(
+                            FutureUtil.unwrapCompletionException(error)));
+                }
+            });
         }
     }
 

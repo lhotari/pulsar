@@ -43,6 +43,7 @@ import org.apache.bookkeeper.client.BKException.BKNoSuchLedgerExistsException;
 import org.apache.bookkeeper.client.api.LedgerEntries;
 import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.client.api.ReadHandle;
+import org.apache.bookkeeper.client.impl.LedgerEntriesImpl;
 import org.apache.bookkeeper.client.impl.LedgerEntryImpl;
 import org.apache.bookkeeper.common.util.ThreadBoundExecutor;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
@@ -82,13 +83,16 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
 
         byte[] data = new byte[10];
         for (int i = 0; i < 10; i++) {
-            entryCache.insert(EntryImpl.create(0, i, data));
+            insertEntry(entryCache, i, data);
         }
 
         when(ml.getLastConfirmedEntry()).thenReturn(PositionFactory.create(0, 9));
         final var entries = readEntry(entryCache, lh, 0, 9, () -> 0, null);
-        assertEquals(entries.size(), 10);
-        entries.forEach(Entry::release);
+        try {
+            assertEquals(entries.size(), 10);
+        } finally {
+            entries.forEach(Entry::release);
+        }
 
         // Verify no entries were read from bookkeeper
         verify(lh, never()).readUnconfirmedAsync(anyLong(), anyLong());
@@ -106,12 +110,16 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
 
         byte[] data = new byte[10];
         for (int i = 3; i < 10; i++) {
-            entryCache.insert(EntryImpl.create(0, i, data));
+            insertEntry(entryCache, i, data);
         }
 
         when(ml.getLastConfirmedEntry()).thenReturn(PositionFactory.create(0, 9));
         final var entries = readEntry(entryCache, lh, 0, 9, () -> 0, null);
-        assertEquals(entries.size(), 10);
+        try {
+            assertEquals(entries.size(), 10);
+        } finally {
+            entries.forEach(Entry::release);
+        }
     }
 
     @Test(timeOut = 5000)
@@ -125,12 +133,16 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
 
         byte[] data = new byte[10];
         for (int i = 0; i < 8; i++) {
-            entryCache.insert(EntryImpl.create(0, i, data));
+            insertEntry(entryCache, i, data);
         }
 
         when(ml.getLastConfirmedEntry()).thenReturn(PositionFactory.create(0, 9));
         final var entries = readEntry(entryCache, lh, 0, 9, () -> 0, null);
-        assertEquals(entries.size(), 10);
+        try {
+            assertEquals(entries.size(), 10);
+        } finally {
+            entries.forEach(Entry::release);
+        }
     }
 
     @Test(timeOut = 5000)
@@ -143,14 +155,18 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
         EntryCache entryCache = cacheManager.getEntryCache(ml);
 
         byte[] data = new byte[10];
-        entryCache.insert(EntryImpl.create(0, 0, data));
-        entryCache.insert(EntryImpl.create(0, 1, data));
-        entryCache.insert(EntryImpl.create(0, 8, data));
-        entryCache.insert(EntryImpl.create(0, 9, data));
+        insertEntry(entryCache, 0, data);
+        insertEntry(entryCache, 1, data);
+        insertEntry(entryCache, 8, data);
+        insertEntry(entryCache, 9, data);
 
         when(ml.getLastConfirmedEntry()).thenReturn(PositionFactory.create(0, 9));
         final var entries = readEntry(entryCache, lh, 0, 9, () -> 0, null);
-        assertEquals(entries.size(), 10);
+        try {
+            assertEquals(entries.size(), 10);
+        } finally {
+            entries.forEach(Entry::release);
+        }
     }
 
     @Test(timeOut = 5000)
@@ -163,14 +179,18 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
         EntryCache entryCache = cacheManager.getEntryCache(ml);
 
         byte[] data = new byte[10];
-        entryCache.insert(EntryImpl.create(0, 0, data));
-        entryCache.insert(EntryImpl.create(0, 2, data));
-        entryCache.insert(EntryImpl.create(0, 5, data));
-        entryCache.insert(EntryImpl.create(0, 8, data));
+        insertEntry(entryCache, 0, data);
+        insertEntry(entryCache, 2, data);
+        insertEntry(entryCache, 5, data);
+        insertEntry(entryCache, 8, data);
 
         when(ml.getLastConfirmedEntry()).thenReturn(PositionFactory.create(0, 9));
         final var entries = readEntry(entryCache, lh, 0, 9, () -> 0, null);
-        assertEquals(entries.size(), 10);
+        try {
+            assertEquals(entries.size(), 10);
+        } finally {
+            entries.forEach(Entry::release);
+        }
     }
 
     @Test
@@ -201,17 +221,23 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
 
         when(ml.getLastConfirmedEntry()).thenReturn(PositionFactory.create(0, 1));
         List<Entry> cacheMissEntries = readEntry(entryCache, lh, 0, 1, () -> 1, null);
-        // Ensure first entry is 0 and
-        assertEquals(cacheMissEntries.size(), 2);
-        assertEquals(cacheMissEntries.get(0).getEntryId(), 0);
-        assertEquals(cacheMissEntries.get(0).getDataBuffer().readerIndex(), 0);
+        try {
+            assertEquals(cacheMissEntries.size(), 2);
+            assertEquals(cacheMissEntries.get(0).getEntryId(), 0);
+            assertEquals(cacheMissEntries.get(0).getDataBuffer().readerIndex(), 0);
 
-        // Move the reader index to simulate consumption
-        cacheMissEntries.get(0).getDataBuffer().readerIndex(10);
-
-        List<Entry> cacheHitEntries = readEntry(entryCache, lh, 0, 1, () -> 1, null);
-        assertEquals(cacheHitEntries.get(0).getEntryId(), 0);
-        assertEquals(cacheHitEntries.get(0).getDataBuffer().readerIndex(), 0);
+            // Move the reader index to simulate consumption.
+            cacheMissEntries.get(0).getDataBuffer().readerIndex(10);
+            List<Entry> cacheHitEntries = readEntry(entryCache, lh, 0, 1, () -> 1, null);
+            try {
+                assertEquals(cacheHitEntries.get(0).getEntryId(), 0);
+                assertEquals(cacheHitEntries.get(0).getDataBuffer().readerIndex(), 0);
+            } finally {
+                cacheHitEntries.forEach(Entry::release);
+            }
+        } finally {
+            cacheMissEntries.forEach(Entry::release);
+        }
     }
 
     @Test(timeOut = 5000)
@@ -230,11 +256,20 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
         EntryCache entryCache = cacheManager.getEntryCache(ml);
 
         byte[] data = new byte[10];
-        entryCache.insert(EntryImpl.create(0, 2, data));
+        insertEntry(entryCache, 2, data);
 
         when(ml.getLastConfirmedEntry()).thenReturn(PositionFactory.create(0, 9));
         readEntry(entryCache, lh, 0, 9, () -> 0, e ->
                 assertTrue(e instanceof ManagedLedgerException.LedgerNotExistException));
+    }
+
+    private static void insertEntry(EntryCache cache, long entryId, byte[] data) {
+        Entry entry = EntryImpl.create(0, entryId, data);
+        try {
+            cache.insert(entry);
+        } finally {
+            entry.release();
+        }
     }
 
     static ReadHandle getLedgerHandle() {
@@ -248,9 +283,7 @@ public class EntryCacheTest extends MockedBookKeeperTestCase {
                 for (int i = 0; i <= (lastEntry - firstEntry); i++) {
                     entries.add(LedgerEntryImpl.create(0, i, 10, Unpooled.wrappedBuffer(new byte[10])));
                 }
-                LedgerEntries ledgerEntries = mock(LedgerEntries.class);
-                doAnswer((invocation2) -> entries.iterator()).when(ledgerEntries).iterator();
-                return CompletableFuture.completedFuture(ledgerEntries);
+                return CompletableFuture.completedFuture(LedgerEntriesImpl.create(entries));
             }).when(lh).readUnconfirmedAsync(anyLong(), anyLong());
         // Batch reads use the ReadHandle default, which delegates to the stubbed readUnconfirmedAsync
         when(lh.batchReadUnconfirmedAsync(anyLong(), anyInt(), anyLong())).thenCallRealMethod();

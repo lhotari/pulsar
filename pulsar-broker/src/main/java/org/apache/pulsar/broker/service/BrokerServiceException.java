@@ -61,6 +61,13 @@ public class BrokerServiceException extends Exception {
         }
     }
 
+    /** Distinguishes shutdown admission from ordinary ownership failures at the lookup response boundary. */
+    public static class BrokerDrainingException extends ServiceUnitNotReadyException {
+        public BrokerDrainingException() {
+            super("Broker is draining");
+        }
+    }
+
     public static class ServiceUnitNotReadyException extends BrokerServiceException {
         public ServiceUnitNotReadyException(String msg) {
             super(msg);

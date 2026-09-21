@@ -22,6 +22,7 @@ import io.netty.buffer.ByteBuf;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletionStage;
 import org.apache.bookkeeper.common.annotation.InterfaceAudience;
 import org.apache.bookkeeper.common.annotation.InterfaceStability;
 import org.apache.bookkeeper.mledger.util.ManagedLedgerUtils;
@@ -39,6 +40,17 @@ public interface AsyncCallbacks {
         void openLedgerComplete(ManagedLedger ledger, Object ctx);
 
         void openLedgerFailed(ManagedLedgerException exception, Object ctx);
+
+        /**
+         * Reports a logical open failure independently from cleanup of any unpublished ledger.
+         * The cleanup stage settles only after all resources acquired by this open attempt have
+         * finished closing; exceptional completion means safe cleanup could not be established.
+         * A caller timeout or cancellation must not be used as evidence of physical cleanup.
+         * Implementations that do not override this method retain the ordinary failure callback.
+         */
+        default void openLedgerFailed(ManagedLedgerException exception, CompletionStage<Void> cleanup, Object ctx) {
+            openLedgerFailed(exception, ctx);
+        }
     }
 
     interface OpenReadOnlyCursorCallback {
@@ -81,6 +93,21 @@ public interface AsyncCallbacks {
         void closeComplete(Object ctx);
 
         void closeFailed(ManagedLedgerException exception, Object ctx);
+
+        /**
+         * Reports a logical close failure together with the separate storage-cleanup outcome.
+         * For example, an already fenced ledger can finish cleanup successfully. Cleanup failure
+         * must remain exceptional, including failures from resources owned by a subclass. Normal cleanup
+         * includes persisting final cursor positions: closing local handles alone does not prove a durable
+         * handoff. A ledger already known to be fenced closes local handles without changing recovery metadata.
+         *
+         * <p>The stage may be minimal and must not expose cancellation of the underlying cleanup.
+         * Existing callbacks retain their original failure behavior through this default method.
+         */
+        default void closeFailed(ManagedLedgerException exception, CompletionStage<Void> physicalCompletion,
+                                 Object ctx) {
+            closeFailed(exception, ctx);
+        }
     }
 
     /**

@@ -58,6 +58,7 @@ public class TopicLoadingContext extends LatencyTracer {
     private final boolean createIfMissing;
     @Getter
     private final CompletableFuture<Optional<Topic>> topicFuture;
+    private final BrokerAdmission.TopicLoad topicLoad;
     @Getter
     @Setter
     @Nullable private Map<String, String> properties;
@@ -66,11 +67,21 @@ public class TopicLoadingContext extends LatencyTracer {
 
     public TopicLoadingContext(TopicName topicName, boolean createIfMissing,
                                CompletableFuture<Optional<Topic>> topicFuture) {
+        this(topicName, createIfMissing, topicFuture, null);
+    }
+
+    TopicLoadingContext(TopicName topicName, boolean createIfMissing, CompletableFuture<Optional<Topic>> topicFuture,
+                        BrokerAdmission.TopicLoad topicLoad) {
         // The topic loading could be ended asynchronously by a timeout event, so we need a thread safe queue here
         super(new ConcurrentLinkedQueue<>(), System::nanoTime);
         this.topicName = topicName;
         this.createIfMissing = createIfMissing;
         this.topicFuture = topicFuture;
+        this.topicLoad = topicLoad;
+    }
+
+    BrokerAdmission.TopicLoad topicLoad() {
+        return topicLoad;
     }
 
     public <T> CompletableFuture<T> trace(TopicLoadingStage stage, CompletableFuture<T> future) {

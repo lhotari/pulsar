@@ -64,8 +64,8 @@ import java.util.function.IntFunction;
 import java.util.function.Predicate;
 import java.util.stream.LongStream;
 import lombok.Getter;
-import org.apache.bookkeeper.client.AsyncCallback.CloseCallback;
 import org.apache.bookkeeper.client.AsyncCallback.OpenCallback;
+import org.apache.bookkeeper.client.AsyncCallback.ReadCallback;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerEntry;
@@ -350,6 +350,13 @@ public class ManagedCursorImpl implements ManagedCursor {
         AtomicReferenceFieldUpdater.newUpdater(ManagedCursorImpl.class, State.class, "state");
     protected volatile State state = State.Uninitialized;
 
+    // Guarded by pendingMarkDeleteOps, together with submission and the close boundary.
+    private CompletableFuture<Void> closeFuture;
+    private CompletableFuture<Void> submittedMarkDeletesDrained;
+    private final Set<CompletableFuture<Void>> pendingPersistenceOperations = new HashSet<>();
+    private Throwable ledgerCreationCleanupFailure;
+    private CompletableFuture<Void> discardedRecoveryHandleClose = CompletableFuture.completedFuture(null);
+
     protected final ManagedCursorMXBean mbean;
 
     private volatile ManagedCursorAttributes managedCursorAttributes;
@@ -425,41 +432,61 @@ public class ManagedCursorImpl implements ManagedCursor {
     private CompletableFuture<Void> computeCursorProperties(
             final Function<Map<String, String>, Map<String, String>> updateFunction) {
         CompletableFuture<Void> updateCursorPropertiesResult = new CompletableFuture<>();
-
-        final Stat lastCursorLedgerStat = ManagedCursorImpl.this.cursorLedgerStat;
-
-        Map<String, String> newProperties = updateFunction.apply(ManagedCursorImpl.this.cursorProperties);
-        if (!isDurable()) {
-            this.cursorProperties = Collections.unmodifiableMap(newProperties);
-            updateCursorPropertiesResult.complete(null);
-            return updateCursorPropertiesResult;
+        // Keep physical completion private: cancellation/timeout of the caller's result must not
+        // retire a metadata write that has already been admitted.
+        CompletableFuture<Void> metadataWriteComplete = new CompletableFuture<>();
+        synchronized (pendingMarkDeleteOps) {
+            if (state.isClosed()) {
+                return CompletableFuture.failedFuture(new CursorAlreadyClosedException("Cursor is closing"));
+            }
+            pendingPersistenceOperations.add(metadataWriteComplete);
         }
+        metadataWriteComplete.whenComplete((__, error) -> {
+            synchronized (pendingMarkDeleteOps) {
+                pendingPersistenceOperations.remove(metadataWriteComplete);
+            }
+        });
+        try {
+            final Stat lastCursorLedgerStat = ManagedCursorImpl.this.cursorLedgerStat;
+            Map<String, String> newProperties = updateFunction.apply(ManagedCursorImpl.this.cursorProperties);
+            if (!isDurable()) {
+                this.cursorProperties = Collections.unmodifiableMap(newProperties);
+                metadataWriteComplete.complete(null);
+                updateCursorPropertiesResult.complete(null);
+                return updateCursorPropertiesResult;
+            }
 
-        ManagedCursorInfo copy = new ManagedCursorInfo();
-        copy.copyFrom(ManagedCursorImpl.this.managedCursorInfo);
-        copy.clearCursorProperties();
-        copy.addAllCursorProperties(buildStringPropertiesMap(newProperties));
+            ManagedCursorInfo copy = new ManagedCursorInfo();
+            copy.copyFrom(ManagedCursorImpl.this.managedCursorInfo);
+            copy.clearCursorProperties();
+            copy.addAllCursorProperties(buildStringPropertiesMap(newProperties));
 
-        ledger.getStore().asyncUpdateCursorInfo(ledger.getName(),
-                name, copy, lastCursorLedgerStat, new MetaStoreCallback<>() {
-                    @Override
-                    public void operationComplete(Void result, Stat stat) {
-                        log.info("Updated ledger cursor");
-                        ManagedCursorImpl.this.cursorProperties = Collections.unmodifiableMap(newProperties);
-                        updateCursorLedgerStat(copy, stat);
-                        updateCursorPropertiesResult.complete(result);
-                    }
+            ledger.getStore().asyncUpdateCursorInfo(ledger.getName(),
+                    name, copy, lastCursorLedgerStat, new MetaStoreCallback<>() {
+                        @Override
+                        public void operationComplete(Void result, Stat stat) {
+                            log.info("Updated ledger cursor");
+                            ManagedCursorImpl.this.cursorProperties = Collections.unmodifiableMap(newProperties);
+                            updateCursorLedgerStat(copy, stat);
+                            metadataWriteComplete.complete(null);
+                            updateCursorPropertiesResult.complete(result);
+                        }
 
-                    @Override
-                    public void operationFailed(MetaStoreException e) {
-                        log.error()
-                                .attr("properties", newProperties)
-                                .exception(e)
-                                .log("Error while updating ledger cursor properties");
-                        updateCursorPropertiesResult.completeExceptionally(e);
-                    }
-                });
-
+                        @Override
+                        public void operationFailed(MetaStoreException e) {
+                            log.error()
+                                    .attr("properties", newProperties)
+                                    .exception(e)
+                                    .log("Error while updating ledger cursor properties");
+                            // Final close persistence can proceed after a failed conditional property write.
+                            metadataWriteComplete.complete(null);
+                            updateCursorPropertiesResult.completeExceptionally(e);
+                        }
+                    });
+        } catch (Throwable error) {
+            metadataWriteComplete.complete(null);
+            updateCursorPropertiesResult.completeExceptionally(error);
+        }
         return updateCursorPropertiesResult;
     }
 
@@ -641,11 +668,13 @@ public class ManagedCursorImpl implements ManagedCursor {
             if (lastEntryInLedger < 0) {
                 log.warn().attr("ledgerId", ledgerId).log("Error reading from metadata ledger: no entries in ledger");
                 // Rewind to last cursor snapshot available
-                initialize(getRollbackPosition(info), rollbackProperties, cursorProperties, callback);
+                discardRecoveryHandle(lh,
+                        () -> initialize(getRollbackPosition(info), rollbackProperties, cursorProperties, callback),
+                        callback, null);
                 return;
             }
 
-            lh.asyncReadEntries(lastEntryInLedger, lastEntryInLedger, (rc1, lh1, seq, ctx1) -> {
+            ReadCallback readCallback = (rc1, lh1, seq, ctx1) -> {
                 log.debug().attr("rc", rc1).attr("entryId", lh1.getLastAddConfirmed()).log("readComplete");
                 if (isBkErrorNotRecoverable(rc1) || (rc1 != BKException.Code.OK && ledgerForceRecovery)) {
                     log.error()
@@ -653,7 +682,9 @@ public class ManagedCursorImpl implements ManagedCursor {
                             .attr("errorMessage", BKException.getMessage(rc1))
                             .log("Error reading from metadata ledger");
                     // Rewind to the oldest entry available
-                    initialize(getRollbackPosition(info), rollbackProperties, cursorProperties, callback);
+                    discardRecoveryHandle(lh,
+                            () -> initialize(getRollbackPosition(info), rollbackProperties, cursorProperties, callback),
+                            callback, createManagedLedgerException(rc1));
                     return;
                 } else if (rc1 != BKException.Code.OK) {
                     log.warn()
@@ -661,17 +692,21 @@ public class ManagedCursorImpl implements ManagedCursor {
                             .attr("errorMessage", BKException.getMessage(rc1))
                             .log("Error reading from metadata ledger");
 
-                    callback.operationFailed(createManagedLedgerException(rc1));
+                    ManagedLedgerException recoveryFailure = createManagedLedgerException(rc1);
+                    discardRecoveryHandle(lh, () -> callback.operationFailed(recoveryFailure),
+                            callback, recoveryFailure);
                     return;
                 }
 
-                LedgerEntry entry = seq.nextElement();
-                mbean.addReadCursorLedgerSize(entry.getLength());
                 PositionInfo positionInfo = new PositionInfo();
                 try {
+                    LedgerEntry entry = seq.nextElement();
+                    mbean.addReadCursorLedgerSize(entry.getLength());
                     positionInfo.parseFrom(entry.getEntry());
                 } catch (Exception e) {
-                    callback.operationFailed(new ManagedLedgerException(e));
+                    ManagedLedgerException recoveryFailure = new ManagedLedgerException(e);
+                    discardRecoveryHandle(lh, () -> callback.operationFailed(recoveryFailure),
+                            callback, recoveryFailure);
                     return;
                 }
 
@@ -687,7 +722,14 @@ public class ManagedCursorImpl implements ManagedCursor {
                 }
                 recoveredCursor(position, recoveredProperties, cursorProperties, lh);
                 callback.operationComplete();
-            }, null);
+            };
+            try {
+                lh.asyncReadEntries(lastEntryInLedger, lastEntryInLedger, readCallback, null);
+            } catch (Exception error) {
+                ManagedLedgerException recoveryFailure = new ManagedLedgerException(error);
+                discardRecoveryHandle(lh, () -> callback.operationFailed(recoveryFailure),
+                            callback, recoveryFailure);
+            }
         };
         try {
             bookkeeper.newOpenLedgerOp()
@@ -705,6 +747,28 @@ public class ManagedCursorImpl implements ManagedCursor {
             log.error().attr("ledgerId", ledgerId).exception(t).log("Encountered error on opening cursor ledger");
             openCallback.openComplete(BKException.Code.UnexpectedConditionException, null, null);
         }
+    }
+
+    private void discardRecoveryHandle(LedgerHandle handle, Runnable afterClose, VoidCallback callback,
+                                       Throwable recoveryFailure) {
+        CompletableFuture<Void> closed = new CompletableFuture<>();
+        synchronized (pendingMarkDeleteOps) {
+            // Recovery has not published this cursor yet. Retain failed cleanup for initialization's close barrier.
+            discardedRecoveryHandleClose = closed;
+        }
+        closeLedgerHandle(handle).whenComplete((__, error) -> {
+            if (error != null) {
+                closed.completeExceptionally(error);
+                ManagedLedgerException failure = createManagedLedgerException(error);
+                if (recoveryFailure != null && recoveryFailure != failure) {
+                    failure.addSuppressed(recoveryFailure);
+                }
+                callback.operationFailed(failure);
+            } else {
+                closed.complete(null);
+                afterClose.run();
+            }
+        });
     }
 
     public void recoverIndividualDeletedMessages(PositionInfo positionInfo) {
@@ -2993,7 +3057,7 @@ public class ManagedCursorImpl implements ManagedCursor {
                                     .attr("ledgerId", cursorLedger.getId())
                                     .attr("errorMessage", e.getMessage())
                                     .log("Failed to persist mark-delete position into cursor-ledger");
-                            callback.closeFailed(e, ctx);
+                            closeCursorLedgerAfterPersistence(callback, ctx, e, false);
                         }
                     }, true);
         } else {
@@ -3001,18 +3065,39 @@ public class ManagedCursorImpl implements ManagedCursor {
                 @Override
                 public void operationComplete(Void result, Stat stat) {
                     log.info().attr("markDeletePosition", markDeletePosition).log("Closed cursor");
-                    // At this point the position had already been safely stored in the cursor z-node
-                    callback.closeComplete(ctx);
-                    asyncDeleteLedger(cursorLedger);
+                    // Metadata no longer references the writer; join handle close before reporting completion.
+                    closeCursorLedgerAfterPersistence(callback, ctx, null, true);
                 }
 
                 @Override
                 public void operationFailed(MetaStoreException e) {
                     log.warn().attr("errorMessage", e.getMessage()).log("Failed to update cursor info when closing");
-                    callback.closeFailed(e, ctx);
+                    closeCursorLedgerAfterPersistence(callback, ctx, e, false);
                 }
             }, true);
         }
+    }
+
+    private void closeCursorLedgerAfterPersistence(AsyncCallbacks.CloseCallback callback, Object ctx,
+                                                    ManagedLedgerException persistenceError, boolean delete) {
+        LedgerHandle handle = cursorLedger;
+        CompletableFuture<Void> closed = closeLedgerHandle(handle);
+        closed.whenComplete((__, error) -> {
+            if (delete) {
+                asyncDeleteLedger(handle);
+            }
+            if (persistenceError != null) {
+                Throwable handleFailure = error == null ? null : FutureUtil.unwrapCompletionException(error);
+                if (handleFailure != null && handleFailure != persistenceError) {
+                    persistenceError.addSuppressed(handleFailure);
+                }
+                callback.closeFailed(persistenceError, ctx);
+            } else if (error != null) {
+                callback.closeFailed(createManagedLedgerException(error), ctx);
+            } else {
+                callback.closeComplete(ctx);
+            }
+        });
     }
 
     private boolean shouldPersistUnackRangesToLedger() {
@@ -3111,34 +3196,136 @@ public class ManagedCursorImpl implements ManagedCursor {
 
     @Override
     public void asyncClose(final AsyncCallbacks.CloseCallback callback, final Object ctx) {
-        boolean alreadyClosing = !trySetStateToClosing();
-        if (alreadyClosing) {
-            log.info("State is already closed");
-            callback.closeComplete(ctx);
+        asyncClose(callback, ctx, false);
+    }
+
+    void asyncCloseForDeletion(AsyncCallbacks.CloseCallback callback, Object ctx) {
+        asyncClose(callback, ctx, true);
+    }
+
+    private void asyncClose(AsyncCallbacks.CloseCallback callback, Object ctx, boolean deleting) {
+        final CompletableFuture<Void> closing;
+        final CompletableFuture<Void> prerequisites;
+        final List<MarkDeleteEntry> queued;
+        final boolean initiateClose;
+        final boolean alreadyClosed;
+        synchronized (pendingMarkDeleteOps) {
+            initiateClose = closeFuture == null;
+            if (initiateClose) {
+                closeFuture = new CompletableFuture<>();
+                if (deleting) {
+                    alreadyClosed = changeStateToDeletingIfNotDeleted().isClosed();
+                } else {
+                    alreadyClosed = !trySetStateToClosing();
+                }
+                submittedMarkDeletesDrained = new CompletableFuture<>();
+                if (PENDING_MARK_DELETED_SUBMITTED_COUNT_UPDATER.get(this) == 0) {
+                    submittedMarkDeletesDrained.complete(null);
+                }
+                queued = new ArrayList<>(pendingMarkDeleteOps);
+                pendingMarkDeleteOps.clear();
+            } else {
+                alreadyClosed = false;
+                queued = List.of();
+            }
+            closing = closeFuture;
+            List<CompletableFuture<Void>> pending = new ArrayList<>(pendingPersistenceOperations);
+            pending.add(submittedMarkDeletesDrained);
+            pending.add(discardedRecoveryHandleClose);
+            if (ledgerCreationCleanupFailure != null) {
+                pending.add(CompletableFuture.failedFuture(ledgerCreationCleanupFailure));
+            }
+            prerequisites = FutureUtil.waitForAll(pending);
+        }
+        // A repeat caller observes the same physical outcome, not merely State.Closing/Closed.
+        closing.whenComplete((__, error) -> {
+            if (error == null) {
+                callback.closeComplete(ctx);
+            } else {
+                callback.closeFailed(ManagedLedgerException.getManagedLedgerException(error), ctx);
+            }
+        });
+        if (!initiateClose) {
             return;
         }
-        closeWaitingCursor();
-        setInactive();
-        persistPositionWhenClosing(lastMarkDeleteEntry.newPosition, lastMarkDeleteEntry.properties,
-                new AsyncCallbacks.CloseCallback(){
-
-                    @Override
-                    public void closeComplete(Object ctx) {
-                        if (!STATE_UPDATER.compareAndSet(ManagedCursorImpl.this, State.Closing, State.Closed)) {
-                            log.warn().attr("state", state).log("State was modified from closing while closing");
-                            state = State.Closed;
+        try {
+            if (!alreadyClosed) {
+                closeWaitingCursor();
+                setInactive();
+            }
+            CompletableFuture<Void> finalPersistence = new CompletableFuture<>();
+            FutureUtil.waitForAll(List.of(prerequisites, finalPersistence)).whenComplete((__, error) -> {
+                if (error == null) {
+                    closing.complete(null);
+                } else {
+                    closing.completeExceptionally(FutureUtil.unwrapCompletionException(error));
+                }
+            });
+            // Join all started writes/switches before final persistence, including failed cleanup. A
+            // published switch may have installed the handle that final persistence must close.
+            prerequisites.handleAsync((__, error) -> {
+                if (deleting) {
+                    // Metadata removal follows this barrier. Do not write a final position that is
+                    // about to be deleted, but do join every writer before the name can be reused.
+                    closeLedgerHandle(cursorLedger).whenComplete((ignored, closeError) -> {
+                        if (closeError == null) {
+                            finalPersistence.complete(null);
+                        } else {
+                            finalPersistence.completeExceptionally(closeError);
                         }
-                        callback.closeComplete(ctx);
-                    }
+                    });
+                } else if (alreadyClosed) {
+                    // Deleting/Deleted/DeletingFailed must not issue another cursor metadata write.
+                    finalPersistence.complete(null);
+                } else {
+                    persistFinalPosition(finalPersistence);
+                }
+                return null;
+            }).exceptionally(error -> {
+                finalPersistence.completeExceptionally(error);
+                return null;
+            });
+        } catch (Throwable error) {
+            closing.completeExceptionally(error);
+        }
+        // Start cleanup before invoking request callbacks: a callback may re-enter close.
+        CursorAlreadyClosedException closed = new CursorAlreadyClosedException("Cursor is closing");
+        for (MarkDeleteEntry entry : queued) {
+            try {
+                entry.triggerFailed(closed);
+            } catch (Throwable error) {
+                log.debug().exception(error).log("Queued mark-delete callback failed during cursor close");
+            }
+        }
+    }
 
-                    @Override
-                    public void closeFailed(ManagedLedgerException exception, Object ctx) {
-                        log.warn("Persistent position failure when closing,"
-                                + " the state will remain in state-closing"
-                                + " and will no longer work");
-                        callback.closeFailed(exception, ctx);
-                    }
-                }, ctx);
+    private void persistFinalPosition(CompletableFuture<Void> closing) {
+        AsyncCallbacks.CloseCallback callback = new AsyncCallbacks.CloseCallback() {
+            @Override
+            public void closeComplete(Object ignored) {
+                if (!STATE_UPDATER.compareAndSet(ManagedCursorImpl.this, State.Closing, State.Closed)) {
+                    log.warn().attr("state", state).log("State was modified from closing while closing");
+                    state = State.Closed;
+                }
+                closing.complete(null);
+            }
+
+            @Override
+            public void closeFailed(ManagedLedgerException exception, Object ignored) {
+                log.warn("Persistent position failure when closing,"
+                        + " the state will remain in state-closing"
+                        + " and will no longer work");
+                closing.completeExceptionally(exception);
+            }
+        };
+        ManagedLedgerImpl.State ledgerState = ledger.getState();
+        if (ledgerState != null && ledgerState.isFenced()) {
+            // Another owner may already be recovering this cursor. Dispose our writer, but do not
+            // rewrite its metadata or delete the ledger referenced by the other owner's snapshot.
+            asyncCloseCursorLedger(callback, null);
+        } else {
+            persistPositionWhenClosing(lastMarkDeleteEntry.newPosition, lastMarkDeleteEntry.properties, callback, null);
+        }
     }
 
     protected void closeWaitingCursor() {
@@ -3275,7 +3462,11 @@ public class ManagedCursorImpl implements ManagedCursor {
 
             @Override
             public void operationFailed(ManagedLedgerException exception) {
-                log.error().attr("error", exception).log("Metadata ledger creation failed");
+                if (exception instanceof CursorAlreadyClosedException) {
+                    log.debug().log("Cursor closed while creating a metadata ledger");
+                } else {
+                    log.error().attr("error", exception).log("Metadata ledger creation failed");
+                }
                 synchronized (pendingMarkDeleteOps) {
                     // At this point we don't have a ledger ready
                     changeStateIfNotClosed(State.NoLedger);
@@ -3307,7 +3498,7 @@ public class ManagedCursorImpl implements ManagedCursor {
     }
 
     private void flushPendingMarkDeletes() {
-        if (!pendingMarkDeleteOps.isEmpty()) {
+        if (!state.isClosed() && !pendingMarkDeleteOps.isEmpty()) {
             internalFlushPendingMarkDeletes();
         }
     }
@@ -3321,59 +3512,118 @@ public class ManagedCursorImpl implements ManagedCursor {
     }
 
     void createNewMetadataLedger(final VoidCallback callback) {
-        ledger.mbean.startCursorLedgerCreateOp();
-        doCreateNewMetadataLedger().thenAccept(newLedgerHandle -> {
-            if (newLedgerHandle == null) {
-                return;
+        CompletableFuture<Void> physicalCreate = new CompletableFuture<>();
+        CompletableFuture<Void> lifecycle = new CompletableFuture<>();
+        CompletableFuture<Void> creation = FutureUtil.waitForAll(List.of(physicalCreate, lifecycle));
+        boolean rejected;
+        synchronized (pendingMarkDeleteOps) {
+            rejected = state.isClosed();
+            if (!rejected) {
+                pendingPersistenceOperations.add(creation);
             }
-            MarkDeleteEntry mdEntry = lastMarkDeleteEntry;
-            // Created the ledger, now write the last position content
-            persistPositionToLedger(newLedgerHandle, mdEntry, new VoidCallback() {
-                @Override
-                public void operationComplete() {
-                    log.debug().attr("position", mdEntry.newPosition).log("Persisted position");
-                    switchToNewLedger(newLedgerHandle, callback);
+        }
+        if (rejected) {
+            callback.operationFailed(new CursorAlreadyClosedException("Cursor is closing"));
+            return;
+        }
+        creation.whenComplete((__, error) -> {
+            synchronized (pendingMarkDeleteOps) {
+                if (error != null && ledgerCreationCleanupFailure == null) {
+                    ledgerCreationCleanupFailure = FutureUtil.unwrapCompletionException(error);
                 }
+                pendingPersistenceOperations.remove(creation);
+            }
+        });
+        ledger.mbean.startCursorLedgerCreateOp();
+        doCreateNewMetadataLedger(physicalCreate, lifecycle).whenComplete((newLedgerHandle, error) -> {
+            if (error != null) {
+                finishLedgerCreation(callback, lifecycle, createManagedLedgerException(error), null);
+            } else if (state.isClosed()) {
+                discardCreatedLedger(newLedgerHandle, callback, lifecycle,
+                        new CursorAlreadyClosedException("Cursor closed during ledger creation"));
+            } else {
+                MarkDeleteEntry mdEntry = lastMarkDeleteEntry;
+                // Keep the operation registered through this write AND the subsequent metadata switch.
+                persistPositionToLedger(newLedgerHandle, mdEntry, new VoidCallback() {
+                    @Override
+                    public void operationComplete() {
+                        switchToNewLedger(newLedgerHandle, callback, lifecycle);
+                    }
 
-                @Override
-                public void operationFailed(ManagedLedgerException exception) {
-                    log.warn().attr("position", mdEntry.newPosition).log("Failed to persist position");
-
-                    deleteLedgerAsync(newLedgerHandle);
-                    callback.operationFailed(exception);
-                }
-            }, false);
-        }).whenComplete((result, e) -> {
-            ledger.mbean.endCursorLedgerCreateOp();
-            if (e != null) {
-                callback.operationFailed(createManagedLedgerException(e));
+                    @Override
+                    public void operationFailed(ManagedLedgerException exception) {
+                        discardCreatedLedger(newLedgerHandle, callback, lifecycle, exception);
+                    }
+                }, false);
             }
         });
     }
 
-    private CompletableFuture<LedgerHandle> doCreateNewMetadataLedger() {
+    private CompletableFuture<LedgerHandle> doCreateNewMetadataLedger(CompletableFuture<Void> physicalCreate,
+                                                                     CompletableFuture<Void> lifecycle) {
         CompletableFuture<LedgerHandle> future = new CompletableFuture<>();
-        ledger.asyncCreateLedger(bookkeeper, getConfig(), digestType, (rc, lh, ctx) -> {
-
-            if (ledger.checkAndCompleteLedgerOpTask(rc, lh, ctx)) {
-                future.complete(null);
-                return;
-            }
-
-            ledger.getExecutor().execute(() -> {
-                ledger.mbean.endCursorLedgerCreateOp();
-                if (rc != BKException.Code.OK) {
-                    log.warn().attr("errorMessage", BKException.getMessage(rc)).log("Error creating cursor ledger");
-                    future.completeExceptionally(new ManagedLedgerException(BKException.getMessage(rc)));
+        try {
+            ledger.asyncCreateLedger(bookkeeper, getConfig(), digestType, (rc, lh, ctx) -> {
+                ManagedLedgerImpl.getLedgerCreationCompletion(ctx).whenComplete((__, error) -> {
+                    if (error == null) {
+                        physicalCreate.complete(null);
+                    } else {
+                        physicalCreate.completeExceptionally(error);
+                    }
+                });
+                if (ledger.checkAndCompleteLedgerOpTask(rc, lh, ctx)) {
                     return;
                 }
-
-                log.debug().attr("ledgerId", lh.getId()).log("Created cursor ledger");
-                future.complete(lh);
-            });
-        }, LedgerMetadataUtils.buildAdditionalMetadataForCursor(name), log);
-
+                // The callback may report a timeout before a late physical create completes. The
+                // physical future above still owns that eventual handle's cleanup.
+                if (rc != BKException.Code.OK) {
+                    future.completeExceptionally(createManagedLedgerException(rc));
+                } else {
+                    try {
+                        ledger.getExecutor().execute(() -> future.complete(lh));
+                    } catch (Throwable error) {
+                        closeLedgerHandle(lh).whenComplete((__, closeError) -> {
+                            if (closeError != null) {
+                                lifecycle.completeExceptionally(closeError);
+                            }
+                            future.completeExceptionally(error);
+                        });
+                    }
+                }
+            }, LedgerMetadataUtils.buildAdditionalMetadataForCursor(name), log);
+        } catch (Throwable error) {
+            physicalCreate.completeExceptionally(error);
+            future.completeExceptionally(error);
+        }
         return future;
+    }
+
+    private void finishLedgerCreation(VoidCallback callback, CompletableFuture<Void> lifecycle,
+                                      ManagedLedgerException error, Throwable cleanupError) {
+        completeLedgerCreationLifecycle(lifecycle, cleanupError);
+        if (error == null) {
+            callback.operationComplete();
+        } else {
+            callback.operationFailed(error);
+        }
+    }
+
+    private void completeLedgerCreationLifecycle(CompletableFuture<Void> lifecycle, Throwable cleanupError) {
+        ledger.mbean.endCursorLedgerCreateOp();
+        if (cleanupError == null) {
+            lifecycle.complete(null);
+        } else {
+            lifecycle.completeExceptionally(cleanupError);
+        }
+    }
+
+    private void discardCreatedLedger(LedgerHandle handle, VoidCallback callback,
+                                      CompletableFuture<Void> lifecycle, ManagedLedgerException error) {
+        closeLedgerHandle(handle).whenComplete((__, closeError) -> {
+            // The handle must close before the operation retires; deletion is unreferenced-ledger GC.
+            deleteLedgerAsync(handle);
+            finishLedgerCreation(callback, lifecycle, error, closeError);
+        });
     }
 
     private CompletableFuture<Void> deleteLedgerAsync(LedgerHandle ledgerHandle) {
@@ -3659,35 +3909,52 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
     }
 
-    void switchToNewLedger(final LedgerHandle lh, final VoidCallback callback) {
+    private void switchToNewLedger(LedgerHandle lh, VoidCallback callback, CompletableFuture<Void> lifecycle) {
+        if (state.isClosed()) {
+            discardCreatedLedger(lh, callback, lifecycle,
+                    new CursorAlreadyClosedException("Cursor closed before metadata switch"));
+            return;
+        }
         log.debug().attr("ledgerId", lh.getId()).log("Switching to new metadata ledger");
         persistPositionMetaStore(lh.getId(), lastMarkDeleteEntry.newPosition, lastMarkDeleteEntry.properties,
                 new MetaStoreCallback<Void>() {
-            @Override
-            public void operationComplete(Void result, Stat stat) {
-                log.info()
-                        .attr("ledgerId", lh.getId())
-                        .attr("markDeletePosition", markDeletePosition)
-                        .attr("readPosition", readPosition)
-                        .log("Updated cursor with new ledger");
-                final LedgerHandle oldLedger = cursorLedger;
-                cursorLedger = lh;
-                isCursorLedgerReadOnly = false;
+                    @Override
+                    public void operationComplete(Void result, Stat stat) {
+                        final LedgerHandle oldLedger;
+                        final boolean deleted;
+                        synchronized (pendingMarkDeleteOps) {
+                            oldLedger = cursorLedger;
+                            deleted = state.isClosed() && state != State.Closing;
+                            // A pre-issued switch can finish during Closing. Retain the published handle
+                            // for final persistence, without reopening admission or flushing queued writes.
+                            if (!deleted) {
+                                cursorLedger = lh;
+                                isCursorLedgerReadOnly = false;
+                            }
+                        }
+                        if (deleted) {
+                            // A deletion may have raced with this already-published switch. Close the
+                            // handle, but do not delete a ledger that the metadata may still reference.
+                            closeLedgerHandle(lh).whenComplete((__, closeError) -> finishLedgerCreation(
+                                    callback, lifecycle, new CursorAlreadyClosedException("Cursor was deleted"),
+                                    closeError));
+                            return;
+                        }
+                        CompletableFuture<Void> oldClosed = closeLedgerHandle(oldLedger);
+                        oldClosed.whenComplete((__, closeError) -> {
+                            asyncDeleteLedger(oldLedger);
+                            completeLedgerCreationLifecycle(lifecycle, closeError);
+                        });
+                        // The new writer is usable now. Ordinary acknowledgments need not wait for
+                        // old-handle cleanup; a concurrent close still joins that cleanup via lifecycle.
+                        callback.operationComplete();
+                    }
 
-                // At this point the position had already been safely markdeleted
-                callback.operationComplete();
-
-                asyncDeleteLedger(oldLedger);
-            }
-
-            @Override
-            public void operationFailed(MetaStoreException e) {
-                log.warn().exception(e).log("Failed to update cursor metadata");
-                // it means it failed to switch the newly created ledger so, it should be
-                // deleted to prevent leak
-                deleteLedgerAsync(lh).thenRun(() -> callback.operationFailed(e));
-            }
-        }, false);
+                    @Override
+                    public void operationFailed(MetaStoreException error) {
+                        discardCreatedLedger(lh, callback, lifecycle, error);
+                    }
+                }, false);
     }
 
     /**
@@ -3738,35 +4005,42 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
     }
 
-    void asyncCloseCursorLedger(final AsyncCallbacks.CloseCallback callback, final Object ctx) {
-        LedgerHandle lh = cursorLedger;
+    private CompletableFuture<Void> closeLedgerHandle(LedgerHandle handle) {
+        if (handle == null) {
+            return CompletableFuture.completedFuture(null);
+        }
         ledger.mbean.startCursorLedgerCloseOp();
-        log.info().attr("ledgerId", lh.getId()).log("Closing metadata ledger");
-        lh.asyncClose(new CloseCallback() {
-            @Override
-            public void closeComplete(int rc, LedgerHandle lh, Object ctx) {
-                ledger.mbean.endCursorLedgerCloseOp();
-                if (rc == BKException.Code.OK) {
-                    log.info().attr("ledgerId", cursorLedger.getId()).log("Closed cursor-ledger");
-                    callback.closeComplete(ctx);
-                } else {
-                    log.warn()
-                            .attr("ledgerId", cursorLedger.getId())
-                            .attr("errorMessage", BKException.getMessage(rc))
-                            .log("Failed to close cursor-ledger");
-                    callback.closeFailed(createManagedLedgerException(rc), ctx);
-                }
+        return FutureUtil.supplySafely(handle::closeAsync).whenComplete((__, error) -> {
+            ledger.mbean.endCursorLedgerCloseOp();
+            if (error != null) {
+                log.debug().attr("ledgerId", handle.getId()).exception(error).log("Cursor ledger close failed");
             }
-        }, ctx);
+        });
+    }
+
+    void asyncCloseCursorLedger(final AsyncCallbacks.CloseCallback callback, final Object ctx) {
+        closeLedgerHandle(cursorLedger).whenComplete((__, error) -> {
+            if (error == null) {
+                callback.closeComplete(ctx);
+            } else {
+                callback.closeFailed(createManagedLedgerException(error), ctx);
+            }
+        });
     }
 
     void decrementPendingMarkDeleteCount() {
-        if (PENDING_MARK_DELETED_SUBMITTED_COUNT_UPDATER.decrementAndGet(this) == 0) {
-            if (state == State.SwitchingLedger) {
-                // A metadata ledger switch was pending and now we can do it since we don't have any more
-                // outstanding mark-delete requests
-                createNewMetadataLedger();
+        CompletableFuture<Void> drained = null;
+        synchronized (pendingMarkDeleteOps) {
+            if (PENDING_MARK_DELETED_SUBMITTED_COUNT_UPDATER.decrementAndGet(this) == 0) {
+                drained = submittedMarkDeletesDrained;
+                if (state == State.SwitchingLedger) {
+                    // A metadata ledger switch was pending until all submitted writes completed.
+                    createNewMetadataLedger();
+                }
             }
+        }
+        if (drained != null) {
+            drained.complete(null);
         }
     }
 

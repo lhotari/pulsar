@@ -20,7 +20,9 @@
 package org.apache.pulsar.broker.loadbalance.extensions.channel;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static org.apache.pulsar.common.naming.NamespaceName.SYSTEM_NAMESPACE;
+import com.google.common.annotations.VisibleForTesting;
 import java.io.IOException;
 import java.util.Map;
 import java.util.Set;
@@ -38,6 +40,7 @@ import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.TableView;
 import org.apache.pulsar.common.naming.TopicDomain;
 import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.util.FutureUtil;
 
 @CustomLog
 public class ServiceUnitStateTableViewImpl extends ServiceUnitStateTableViewBase {
@@ -50,6 +53,14 @@ public class ServiceUnitStateTableViewImpl extends ServiceUnitStateTableViewBase
     public static final CompressionType MSG_COMPRESSION_TYPE = CompressionType.ZSTD;
     private volatile Producer<ServiceUnitStateData> producer;
     private volatile TableView<ServiceUnitStateData> tableview;
+
+    public ServiceUnitStateTableViewImpl() { }
+
+    @VisibleForTesting
+    ServiceUnitStateTableViewImpl(Producer<ServiceUnitStateData> producer, TableView<ServiceUnitStateData> tableview) {
+        this.producer = producer;
+        this.tableview = tableview;
+    }
 
     @Override
     @SuppressWarnings("deprecation")
@@ -170,14 +181,28 @@ public class ServiceUnitStateTableViewImpl extends ServiceUnitStateTableViewBase
         if (!isValidState()) {
             throw new IllegalStateException(INVALID_STATE_ERROR_MSG);
         }
-        final var deadline = System.currentTimeMillis() + waitDurationInMillis;
-        var waitTimeMs = waitDurationInMillis;
-        producer.flushAsync().get(waitTimeMs, MILLISECONDS);
-        waitTimeMs = deadline - System.currentTimeMillis();
-        if (waitTimeMs < 0) {
-            waitTimeMs = 0;
+        final long started = System.nanoTime();
+        final long budget = MILLISECONDS.toNanos(waitDurationInMillis);
+        producer.flushAsync().get(Math.max(0, budget), NANOSECONDS);
+        while (true) {
+            long remaining = Math.max(0, budget - (System.nanoTime() - started));
+            try {
+                tableview.refreshAsync().get(remaining, NANOSECONDS);
+                return;
+            } catch (ExecutionException error) {
+                if (!(FutureUtil.unwrapCompletionException(error.getCause())
+                        instanceof PulsarClientException.BrokerMetadataException)) {
+                    throw error;
+                }
+                // Leadership handoff disconnects the control-topic reader. A concurrent last-message-id
+                // request can report "Consumer not found" before the reader reconnects to the successor.
+                remaining = Math.max(0, budget - (System.nanoTime() - started));
+                if (remaining == 0) {
+                    throw error;
+                }
+                NANOSECONDS.sleep(Math.min(remaining, MILLISECONDS.toNanos(50)));
+            }
         }
-        tableview.refreshAsync().get(waitTimeMs, MILLISECONDS);
     }
 
     @Override

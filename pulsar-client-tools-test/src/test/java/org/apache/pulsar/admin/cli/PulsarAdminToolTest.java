@@ -174,9 +174,21 @@ public class PulsarAdminToolTest {
         verify(mockBrokers).getVersion();
 
         doReturn(CompletableFuture.completedFuture(null)).when(mockBrokers)
-                .shutDownBrokerGracefully(anyInt(), anyBoolean());
+                .shutDownBrokerGracefully(anyInt(), anyBoolean(), any());
         brokers.run(split("shutdown -m 10 -f"));
-        verify(mockBrokers).shutDownBrokerGracefully(10, true);
+        verify(mockBrokers).shutDownBrokerGracefully(10, true, null);
+        brokers.run(split("shutdown --timeout-ms 30000"));
+        verify(mockBrokers).shutDownBrokerGracefully(0, false, 30000L);
+
+        doReturn(CompletableFuture.completedFuture(true)).when(mockBrokers).isLeaderBrokerEligibleAsync("broker:8080");
+        brokers.run(split("get-leader-broker-eligible broker:8080"));
+        verify(mockBrokers).isLeaderBrokerEligibleAsync("broker:8080");
+        doReturn(CompletableFuture.completedFuture(null)).when(mockBrokers)
+                .setLeaderBrokerEligibleAsync(anyString(), anyBoolean());
+        brokers.run(split("set-leader-broker-eligible broker:8080 --enabled false"));
+        verify(mockBrokers).setLeaderBrokerEligibleAsync("broker:8080", false);
+        brokers.run(split("set-leader-broker-eligible broker:8080 --enabled true"));
+        verify(mockBrokers).setLeaderBrokerEligibleAsync("broker:8080", true);
     }
 
     @Test

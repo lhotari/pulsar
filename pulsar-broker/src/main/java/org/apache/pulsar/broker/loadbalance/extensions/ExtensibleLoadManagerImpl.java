@@ -90,6 +90,7 @@ import org.apache.pulsar.broker.loadbalance.impl.SimpleResourceAllocationPolicie
 import org.apache.pulsar.broker.namespace.LookupOptions;
 import org.apache.pulsar.broker.namespace.NamespaceEphemeralData;
 import org.apache.pulsar.broker.namespace.NamespaceService;
+import org.apache.pulsar.broker.service.BrokerServiceException.BrokerDrainingException;
 import org.apache.pulsar.client.admin.PulsarAdminException;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.NamespaceBundleSplitAlgorithm;
@@ -333,9 +334,13 @@ public class ExtensibleLoadManagerImpl implements ExtensibleLoadManager, BrokerS
      */
     public static CompletableFuture<Optional<BrokerLookupData>> getAssignedBrokerLookupData(PulsarService pulsar,
                                                                           String topic) {
+        if (pulsar.isLocalOnlyShutdown()) {
+            // The state table may already be closed. Local teardown cannot wait for a destination or reconnect it.
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
         var config = pulsar.getConfig();
         if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
-                && config.isLoadBalancerMultiPhaseBundleUnload()) {
+                && (config.isLoadBalancerMultiPhaseBundleUnload() || pulsar.getBrokerAdmission().isClosed())) {
             var topicName = TopicName.get(topic);
             try {
                 return pulsar.getNamespaceService().getBundleAsync(topicName)
@@ -344,6 +349,10 @@ public class ExtensibleLoadManagerImpl implements ExtensibleLoadManager, BrokerS
                                     var assigned = loadManager.getServiceUnitStateChannel()
                                             .getAssigned(bundle.toString());
                                     if (assigned.isPresent()) {
+                                        if (pulsar.getBrokerAdmission().isClosed()
+                                                && assigned.get().equals(pulsar.getBrokerId())) {
+                                            return CompletableFuture.completedFuture(Optional.empty());
+                                        }
                                         return loadManager.getBrokerRegistry().lookupAsync(assigned.get());
                                     } else {
                                         return CompletableFuture.completedFuture(Optional.empty());
@@ -501,7 +510,9 @@ public class ExtensibleLoadManagerImpl implements ExtensibleLoadManager, BrokerS
     public CompletableFuture<Optional<BrokerLookupData>> assign(Optional<ServiceUnitId> topic,
                                                                 ServiceUnitId serviceUnit,
                                                                 LookupOptions options) {
-
+        if (pulsar.isMetadataSessionsClosing()) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Broker is shutting down"));
+        }
         final String bundle = serviceUnit.toString();
 
         return dedupeLookupRequest(bundle, k -> {
@@ -532,6 +543,9 @@ public class ExtensibleLoadManagerImpl implements ExtensibleLoadManager, BrokerS
         return serviceUnitStateChannel.getOwnerAsync(bundle).thenCompose(broker -> {
             // If the bundle not assign yet, select and publish assign event to channel.
             if (broker.isEmpty()) {
+                if (pulsar.getBrokerAdmission().isClosed()) {
+                    return FutureUtil.failedFuture(new BrokerDrainingException());
+                }
                 return this.selectAsync(serviceUnit, Collections.emptySet(), options).thenCompose(brokerOpt -> {
                     if (brokerOpt.isPresent()) {
                         assignCounter.incrementSuccess();
@@ -864,6 +878,9 @@ public class ExtensibleLoadManagerImpl implements ExtensibleLoadManager, BrokerS
     private boolean handleNoChannelOwnerError(Throwable e) {
         if (FutureUtil.unwrapCompletionException(e).getMessage().contains("no channel owner now")) {
             var leaderElectionService = getLeaderElectionService();
+            if (!leaderElectionService.isElectionEnabled()) {
+                return false;
+            }
             log.warn("No channel owner is found. Trying to start LeaderElectionService again.");
             leaderElectionService.start();
             var channelOwner = serviceUnitStateChannel.getChannelOwnerAsync().join();
@@ -1144,13 +1161,22 @@ public class ExtensibleLoadManagerImpl implements ExtensibleLoadManager, BrokerS
             failForUnexpectedState("disableBroker");
         }
         stopLoadDataReportTasks();
+        if (pulsar.isLocalOnlyShutdown()) {
+            // Keep remaining ownership records for a successor to recover. In particular, do not attempt
+            // override publication or flushing through producers whose local broker no longer admits them.
+            serviceUnitStateChannel.close();
+            return;
+        }
         serviceUnitStateChannel.cleanOwnerships();
         brokerRegistry.unregister();
-        leaderElectionService.close();
         final var availableBrokers = brokerRegistry.getAvailableBrokersAsync()
-                .get(conf.getMetadataStoreOperationTimeoutSeconds(), TimeUnit.SECONDS);
+                .get(Math.min(pulsar.getRemainingShutdownDrainNanos(),
+                        TimeUnit.SECONDS.toNanos(conf.getMetadataStoreOperationTimeoutSeconds())),
+                        TimeUnit.NANOSECONDS);
         if (availableBrokers.isEmpty()) {
             close();
+        } else {
+            leaderElectionService.close();
         }
         // Close the internal topics (if owned any) after giving up the possible leader role,
         // so that the subsequent lookups could hit the next leader.
@@ -1170,7 +1196,8 @@ public class ExtensibleLoadManagerImpl implements ExtensibleLoadManager, BrokerS
         }
         try {
             FutureUtil.waitForAll(futures)
-                    .get(pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs(), TimeUnit.MILLISECONDS);
+                    .get(Math.min(pulsar.getRemainingShutdownDrainNanos(), TimeUnit.MILLISECONDS.toNanos(
+                            pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs())), TimeUnit.NANOSECONDS);
         } catch (Throwable e) {
             log.warn().exception(e).log("Failed to wait for closing internal topics");
         }

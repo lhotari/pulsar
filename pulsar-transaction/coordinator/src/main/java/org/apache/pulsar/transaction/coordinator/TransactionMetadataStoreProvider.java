@@ -65,7 +65,8 @@ public interface TransactionMetadataStoreProvider {
      * @param recoverTracker {@link TransactionRecoverTracker} the recoverTracker to handle transaction recover.
      * @return a future represents the result of the operation.
      *         an instance of {@link TransactionMetadataStore} is returned
-     *         if the operation succeeds.
+     *         if the operation succeeds. Providers may return {@link TransactionMetadataStoreOpening} to
+     *         report physical cleanup separately when initialization fails, preserving the original failure.
      */
     CompletableFuture<TransactionMetadataStore> openStore(
             TransactionCoordinatorID transactionCoordinatorId, ManagedLedgerFactory managedLedgerFactory,

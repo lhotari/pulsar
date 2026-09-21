@@ -198,6 +198,10 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
 
     @Override
     public void publishMessage(ByteBuf data, PublishContext callback) {
+        if (brokerService.pulsar().isMetadataSessionsClosing()) {
+            callback.completed(new TopicFencedException("Broker is shutting down"), -1, -1);
+            return;
+        }
         if (isExceedMaximumMessageSize(data.readableBytes(), callback)) {
             callback.completed(new NotAllowedException("Exceed maximum message size")
                     , -1, -1);
@@ -526,6 +530,16 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
 
 
     @Override
+    public CompletableFuture<Void> closeUnpublished() {
+        return close(false, false).thenCompose(ignored -> brokerService.removeTopicFromCache(this))
+                .thenRun(this::unregisterTopicPolicyListener);
+    }
+
+    // Guarded by the topic write lock. A transfer never loses its physical close result.
+    private CompletableFuture<Void> transferCloseFuture;
+    private CompletableFuture<Void> transferDisconnectFuture;
+
+    @Override
     public CompletableFuture<Void> close(boolean closeWithoutWaitingClientDisconnect) {
         return close(true, closeWithoutWaitingClientDisconnect);
     }
@@ -540,47 +554,100 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
     @Override
     public CompletableFuture<Void> close(
             boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect) {
-        CompletableFuture<Void> closeFuture = new CompletableFuture<>();
+        return close(disconnectClients, closeWithoutWaitingClientDisconnect, false);
+    }
 
+    @Override
+    public CompletableFuture<Void> disposeAfterTransfer() {
+        if (!producers.isEmpty()
+                || subscriptions.values().stream().anyMatch(sub -> !sub.getConsumers().isEmpty())) {
+            return completeShutdownTransferDisposal(CompletableFuture.failedFuture(
+                    new IllegalStateException("Transfer clients remain registered")));
+        }
+        return completeShutdownTransferDisposal(close(true, false, true));
+    }
+
+    private CompletableFuture<Void> close(boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect,
+                                          boolean clientsRemoved) {
+        CompletableFuture<Void> disposalToJoin = null;
+        CompletableFuture<Void> closeFuture = new CompletableFuture<>();
+        CompletableFuture<Void> storageClosed;
         lock.writeLock().lock();
         try {
-            if (!disconnectClients) {
-                transferring = true;
+            if (clientsRemoved && !transferring) {
+                return CompletableFuture.failedFuture(new IllegalStateException(
+                        "Transfer disposal requires fenced storage and removed clients"));
             }
-            if (!isFenced || closeWithoutWaitingClientDisconnect) {
-                isFenced = true;
+            if (disconnectClients && !clientsRemoved && shutdownTransferDisposed != null) {
+                // Observe the shutdown owner without installing transferDisconnectFuture.
+                disposalToJoin = shutdownTransferDisposed;
+                storageClosed = transferCloseFuture;
+            } else if (transferCloseFuture != null) {
+                if (!disconnectClients) {
+                    return transferCloseFuture.copy();
+                }
+                if (transferDisconnectFuture != null) {
+                    return clientsRemoved ? transferDisconnectFuture : transferDisconnectFuture.copy();
+                }
+                transferDisconnectFuture = closeFuture;
+                storageClosed = transferCloseFuture;
             } else {
-                log.warn("Topic is already being closed or deleted");
-                closeFuture.completeExceptionally(new TopicFencedException("Topic is already fenced"));
-                return closeFuture;
+                if (isFenced && !closeWithoutWaitingClientDisconnect) {
+                    return CompletableFuture.failedFuture(new TopicFencedException("Topic is already fenced"));
+                }
+                isFenced = true;
+                if (!disconnectClients) {
+                    transferring = true;
+                    if (shutdownTransferRequested) {
+                        shutdownTransferDisposed = new CompletableFuture<>();
+                    }
+                    transferCloseFuture = closeFuture;
+                }
+                storageClosed = CompletableFuture.completedFuture(null);
             }
         } finally {
             lock.writeLock().unlock();
         }
+        if (disposalToJoin != null) {
+            return observeShutdownTransfer(storageClosed, disposalToJoin);
+        }
+        FutureUtil.completeAfter(closeFuture, storageClosed.thenCompose(ignored -> FutureUtil.supplySafely(
+                () -> closeResources(disconnectClients, closeWithoutWaitingClientDisconnect, clientsRemoved))));
+        return transferring && !clientsRemoved ? closeFuture.copy() : closeFuture;
+    }
 
+    private CompletableFuture<Void> closeResources(
+            boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect, boolean clientsRemoved) {
+        CompletableFuture<Void> closeFuture = new CompletableFuture<>();
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
-        replicators.forEach((cluster, replicator) -> futures.add(replicator.terminate()));
-        if (disconnectClients) {
+        boolean storageAlreadyClosed = transferring && disconnectClients;
+        if (!storageAlreadyClosed) {
+            replicators.forEach((cluster, replicator) -> futures.add(FutureUtil.supplySafely(replicator::terminate)));
+        }
+        if (disconnectClients && !clientsRemoved) {
             futures.add(ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(
-                brokerService.getPulsar(), topic).thenAccept(lookupData -> {
-                    producers.values().forEach(producer -> futures.add(producer.disconnect(lookupData)));
+                brokerService.getPulsar(), topic).thenCompose(lookupData -> {
+                    List<CompletableFuture<Void>> disconnects = new ArrayList<>();
+                    producers.values().forEach(producer -> disconnects.add(producer.disconnect(lookupData)));
                     // Topics unloaded due to the ExtensibleLoadManager undergo closing twice: first with
                     // disconnectClients = false, second with disconnectClients = true. The check below identifies the
                     // cases when Topic.close is called outside the scope of the ExtensibleLoadManager. In these
                     // situations, we must pursue the regular Subscription.close, as Topic.close is invoked just once.
                     if (isTransferring()) {
-                        subscriptions.forEach((s, sub) -> futures.add(sub.disconnect(lookupData)));
+                        subscriptions.forEach((s, sub) -> disconnects.add(sub.disconnect(lookupData)));
                     } else {
-                        subscriptions.forEach((s, sub) -> futures.add(sub.close(true, lookupData)));
+                        subscriptions.forEach((s, sub) -> disconnects.add(sub.close(true, lookupData)));
                     }
+                    return FutureUtil.waitForAll(disconnects);
                 }
             ));
-        } else {
-            subscriptions.forEach((s, sub) -> futures.add(sub.close(false, Optional.empty())));
+        } else if (!disconnectClients) {
+            subscriptions.forEach((s, sub) -> futures.add(
+                    FutureUtil.supplySafely(() -> sub.close(false, Optional.empty()))));
         }
 
-        if (entryFilters != null) {
+        if (!storageAlreadyClosed && entryFilters != null) {
             entryFilters.getRight().forEach(filter -> {
                 try {
                     filter.close();
@@ -591,28 +658,22 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
         }
 
         CompletableFuture<Void> clientCloseFuture =
-                closeWithoutWaitingClientDisconnect ? CompletableFuture.completedFuture(null)
+                disconnectClients && closeWithoutWaitingClientDisconnect ? CompletableFuture.completedFuture(null)
                         : FutureUtil.waitForAll(futures);
 
-        clientCloseFuture.thenRun(() -> {
-            log.info("Topic closed");
-            // unload topic iterates over topics map and removing from the map with the same thread creates deadlock.
-            // so, execute it in different thread
-            brokerService.executor().execute(() -> {
-
-                if (disconnectClients) {
-                    brokerService.removeTopicFromCache(NonPersistentTopic.this);
-                    unregisterTopicPolicyListener();
-                }
-                closeFuture.complete(null);
-
-            });
-        }).exceptionally(exception -> {
-            log.error().exception(exception).log("Error closing topic");
-            isFenced = false;
-            closeFuture.completeExceptionally(exception);
-            return null;
-        });
+        FutureUtil.completeAfter(closeFuture, clientCloseFuture.thenComposeAsync(ignored -> disconnectClients
+                ? brokerService.removeTopicFromCache(this).thenRun(this::unregisterTopicPolicyListener)
+                : CompletableFuture.completedFuture(null), brokerService.executor())
+                .whenComplete((ignored, exception) -> {
+                    if (exception == null) {
+                        log.info("Topic closed");
+                        return;
+                    }
+                    log.error().exception(exception).log("Error closing topic");
+                    if (!transferring) {
+                        isFenced = false;
+                    }
+                }));
 
         return closeFuture;
     }
@@ -1091,6 +1152,10 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
 
     @Override
     public void checkGC() {
+        if (isTransferring()) {
+            // The transfer owns storage, ownership release and client notification ordering.
+            return;
+        }
         // Close-on-inactive is a broker-level switch and takes precedence over any namespace- or topic-level
         // `deleteWhileInactive` policy, so enabling it can never fall through to the delete path.
         // No delete-mode guard is needed here: isActive() only reports inactivity when there is neither a

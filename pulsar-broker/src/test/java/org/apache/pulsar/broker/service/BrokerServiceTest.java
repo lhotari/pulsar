@@ -1290,6 +1290,8 @@ public class BrokerServiceTest extends BrokerTestBase {
     @Test
     public void testConcurrentLoadTopicExceedLimitShouldNotBeAutoCreated() throws Exception {
         boolean needDeleteTopic = false;
+        boolean previousAutoCreation = conf.isAllowAutoTopicCreation();
+        int previousLoadLimit = conf.getMaxConcurrentTopicLoadRequest();
         final String namespace = "prop/concurrentLoad";
         try {
             // set up broker disable auto create and set concurrent load to 1 qps.
@@ -1339,12 +1341,19 @@ public class BrokerServiceTest extends BrokerTestBase {
                 }
             }
         } finally {
-            if (needDeleteTopic) {
-                String topicName = "persistent://" + namespace + "/my-topic";
+            // This class shares its broker. Do not leave auto-creation disabled for the later retry tests.
+            conf.setAllowAutoTopicCreation(previousAutoCreation);
+            conf.setMaxConcurrentTopicLoadRequest(previousLoadLimit);
+            try {
+                if (needDeleteTopic) {
+                    String topicName = "persistent://" + namespace + "/my-topic";
 
-                for (int i = 0; i < 3; i++) {
-                    admin.topics().delete(topicName + "_" + i);
+                    for (int i = 0; i < 3; i++) {
+                        admin.topics().delete(topicName + "_" + i);
+                    }
                 }
+            } finally {
+                resetState();
             }
         }
     }

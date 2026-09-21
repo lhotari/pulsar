@@ -36,6 +36,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import lombok.CustomLog;
 import org.apache.bookkeeper.common.component.ComponentStarter;
 import org.apache.bookkeeper.common.component.LifecycleComponent;
@@ -128,6 +130,7 @@ public class PulsarBrokerStarter {
     }
 
     protected static class BrokerStarter implements Callable<Integer> {
+        private boolean enforceProcessExit;
         private ServiceConfiguration brokerConfig;
         private PulsarService pulsarService;
         private LifecycleComponent bookieServer;
@@ -214,6 +217,10 @@ public class PulsarBrokerStarter {
                                                   ShutdownUtil.triggerImmediateForcefulShutdown(exitCode);
                                               });
 
+            if (enforceProcessExit) {
+                enforceShutdownDeadline(pulsarService);
+            }
+
             // if no argument to run bookie in cmd line, read from pulsar config
             if (!starterArguments.runBookie) {
                 starterArguments.runBookie = brokerConfig.isEnableRunBookieTogether();
@@ -298,6 +305,10 @@ public class PulsarBrokerStarter {
         }
 
         public void shutdown() throws Exception {
+            // Start the broker deadline before another component's stop can block the shutdown hook.
+            if (pulsarService != null) {
+                pulsarService.closeAsync();
+            }
             if (null != functionsWorkerService) {
                 functionsWorkerService.stop();
                 log.info("Shut down functions worker service successfully.");
@@ -328,6 +339,30 @@ public class PulsarBrokerStarter {
         }
     }
 
+    @VisibleForTesting
+    static void enforceShutdownDeadline(PulsarService pulsarService) {
+        pulsarService.getShutdownStartedFuture().thenAccept(deadlineNanos -> {
+            if (deadlineNanos != 0) {
+                // Remains armed even if PulsarService closes successfully: a function worker, bookie, or
+                // another JVM shutdown hook can still block process exit. Embedded services have no such timer.
+                var watchdog = Executors.newSingleThreadScheduledExecutor(runnable -> {
+                    Thread thread = new Thread(runnable, "pulsar-process-shutdown-watchdog");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+                // At the hard deadline even logging shutdown may block, so halt directly.
+                watchdog.schedule(() -> Runtime.getRuntime().halt(1),
+                        Math.max(0, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
+            }
+        });
+        pulsarService.getShutdownFuture().whenComplete((__, error) -> {
+            if (error != null) {
+                log.error().exception(error).log("Broker shutdown failed; halting process after session cleanup");
+                ShutdownUtil.triggerImmediateForcefulShutdown(1);
+            }
+        });
+    }
+
     @SuppressWarnings("deprecation")
     public static void main(String[] args) throws Exception {
         DateFormat dateFormat = new SimpleDateFormat(
@@ -340,6 +375,7 @@ public class PulsarBrokerStarter {
         });
 
         BrokerStarter starter = new BrokerStarter();
+        starter.enforceProcessExit = true;
         Runtime.getRuntime().addShutdownHook(
             new Thread(() -> {
                 try {

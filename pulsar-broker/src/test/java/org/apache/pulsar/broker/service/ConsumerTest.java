@@ -26,17 +26,30 @@ import static org.apache.pulsar.common.api.proto.KeySharedMode.AUTO_SPLIT;
 import static org.apache.pulsar.common.protocol.Commands.DEFAULT_CONSUMER_EPOCH;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import io.netty.util.concurrent.DefaultPromise;
+import io.netty.util.concurrent.ImmediateEventExecutor;
 import java.net.SocketAddress;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
 import org.apache.pulsar.common.api.proto.CommandAck;
 import org.apache.pulsar.common.api.proto.KeySharedMeta;
 import org.apache.pulsar.common.policies.data.HierarchyTopicPolicies;
@@ -75,6 +88,54 @@ public class ConsumerTest {
         consumer =
                 new Consumer(subscription, Exclusive, "topic", 1, 0, "Cons1", true, cnx, "myrole-1", emptyMap(), false,
                         new KeySharedMeta().setKeySharedMode(AUTO_SPLIT), latest, DEFAULT_CONSUMER_EPOCH);
+    }
+
+    @Test
+    public void testOverlappingDisconnectRemovesConsumerOnlyOnce() throws Exception {
+        CountDownLatch removing = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger removals = new AtomicInteger();
+        ExecutorService closer = Executors.newSingleThreadExecutor();
+        doAnswer(invocation -> {
+            if (removals.incrementAndGet() == 1) {
+                removing.countDown();
+                assertThat(release.await(5, TimeUnit.SECONDS)).isTrue();
+            }
+            return null;
+        }).when(subscription).removeConsumer(eq(consumer), anyBoolean());
+        try {
+            var first = closer.submit(() -> consumer.disconnect(true, Optional.empty()));
+            assertThat(removing.await(5, TimeUnit.SECONDS)).isTrue();
+            BrokerLookupData target = mock(BrokerLookupData.class);
+            consumer.disconnect(false, Optional.of(target));
+            verify(cnx).closeConsumer(consumer, Optional.empty());
+            verify(cnx).closeConsumer(consumer, Optional.of(target));
+            verify(subscription, never()).removeConsumer(consumer, false);
+            release.countDown();
+            first.get(5, TimeUnit.SECONDS);
+            consumer.close();
+            assertThat(removals.get()).isEqualTo(1);
+            verify(cnx).removedConsumer(consumer);
+        } finally {
+            release.countDown();
+            closer.shutdownNow();
+            assertThat(closer.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
+    public void testSessionCleanupFencesDispatchAndReleasesEntries() {
+        when(subscription.getTopic().getBrokerService().getPulsar().isMetadataSessionsClosing()).thenReturn(true);
+        when(cnx.newPromise()).thenReturn(new DefaultPromise<>(ImmediateEventExecutor.INSTANCE));
+        Entry entry = mock(Entry.class);
+        EntryBatchSizes sizes = mock(EntryBatchSizes.class);
+        EntryBatchIndexesAcks acks = mock(EntryBatchIndexesAcks.class);
+        var result = consumer.sendMessages(List.of(entry), null, sizes, acks, 1, 1, 0, null, 0);
+        assertThat(result.isDone()).isTrue();
+        assertThat(result.cause()).isInstanceOf(BrokerServiceException.ServiceUnitNotReadyException.class);
+        verify(entry).release();
+        verify(sizes).recyle();
+        verify(acks).recycle();
     }
 
     @Test

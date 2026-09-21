@@ -36,6 +36,7 @@ import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
 import org.apache.pulsar.broker.namespace.LookupOptions;
+import org.apache.pulsar.broker.service.BrokerServiceException.BrokerDrainingException;
 import org.apache.pulsar.broker.web.PulsarWebResource;
 import org.apache.pulsar.broker.web.RestException;
 import org.apache.pulsar.common.api.proto.CommandLookupTopicResponse.LookupType;
@@ -275,7 +276,7 @@ public class TopicLookupBase extends PulsarWebResource {
                                     .attr("result", optLookupResult)
                                     .log("Lookup result");
                             if (!optLookupResult.isPresent()) {
-                                lookupfuture.complete(newLookupErrorResponse(ServerError.ServiceNotReady,
+                                lookupfuture.complete(newLookupErrorResponse(unavailableLookupError(pulsarService),
                                         "No broker was available to own " + topicName, requestId));
                                 return;
                             }
@@ -295,12 +296,13 @@ public class TopicLookupBase extends PulsarWebResource {
                                         requestId, shouldRedirectThroughServiceUrl(conf, lookupData)));
                             }
                         }).exceptionally(ex -> {
-                            handleLookupError(lookupfuture, topicName.toString(), clientAppId, requestId, ex);
+                            handleLookupError(pulsarService, lookupfuture, topicName.toString(),
+                                    clientAppId, requestId, ex);
                             return null;
                         });
             }
         }).exceptionally(ex -> {
-            handleLookupError(lookupfuture, topicName.toString(), clientAppId, requestId, ex);
+            handleLookupError(pulsarService, lookupfuture, topicName.toString(), clientAppId, requestId, ex);
             return null;
         });
 
@@ -335,14 +337,18 @@ public class TopicLookupBase extends PulsarWebResource {
         }
     }
 
-    private static void handleLookupError(CompletableFuture<ByteBuf> lookupFuture, String topicName, String clientAppId,
-                                   long requestId, Throwable ex){
+    private static void handleLookupError(PulsarService pulsarService, CompletableFuture<ByteBuf> lookupFuture,
+                                          String topicName, String clientAppId, long requestId, Throwable ex) {
         Throwable unwrapEx = FutureUtil.unwrapCompletionException(ex);
         final String errorMsg = unwrapEx.getMessage();
         if (unwrapEx instanceof PulsarServerException) {
             unwrapEx = FutureUtil.unwrapCompletionException(unwrapEx.getCause());
         }
-        if (unwrapEx instanceof IllegalStateException) {
+        if (unwrapEx instanceof BrokerDrainingException) {
+            // ServiceNotReady closes Java clients' entire pooled connection on lookup. This shutdown-only
+            // failure is retriable without interrupting established entities multiplexed on that channel.
+            lookupFuture.complete(newLookupErrorResponse(ServerError.MetadataError, errorMsg, requestId));
+        } else if (unwrapEx instanceof IllegalStateException) {
             // Current broker still hold the bundle's lock, but the bundle is being unloading.
             LOG.info()
                     .attr("topic", topicName)
@@ -362,8 +368,14 @@ public class TopicLookupBase extends PulsarWebResource {
                     .attr("topic", topicName)
                     .attr("errorMessage", errorMsg)
                     .log("Failed to lookup topic");
-            lookupFuture.complete(newLookupErrorResponse(ServerError.ServiceNotReady, errorMsg, requestId));
+            lookupFuture.complete(newLookupErrorResponse(unavailableLookupError(pulsarService), errorMsg, requestId));
         }
+    }
+
+    /** Lookup failures during draining must not close a shared client connection. */
+    public static ServerError unavailableLookupError(PulsarService pulsar) {
+        return pulsar.getState() == PulsarService.State.Closing
+                ? ServerError.MetadataError : ServerError.ServiceNotReady;
     }
 
     protected TopicName getTopicName(String topicDomain, String tenant, String namespace,

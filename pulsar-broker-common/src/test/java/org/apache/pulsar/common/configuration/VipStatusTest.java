@@ -19,6 +19,7 @@
 package org.apache.pulsar.common.configuration;
 
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.expectThrows;
 import jakarta.servlet.ServletContext;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
@@ -82,6 +83,15 @@ public class VipStatusTest {
     @Test
     public void testVipStatusCheckStatusWithoutDeadlock() {
         assertEquals(vipStatus.checkStatus(), "OK");
+    }
+
+    @Test
+    public void readinessOverridesCachedSuccess() {
+        assertEquals(vipStatus.checkStatus(), "OK");
+        Mockito.when(mockServletContext.getAttribute(ATTRIBUTE_IS_READY_PROBE))
+                .thenReturn((Supplier<Boolean>) () -> false);
+        WebApplicationException error = expectThrows(WebApplicationException.class, vipStatus::checkStatus);
+        assertEquals(error.getResponse().getStatus(), Response.Status.SERVICE_UNAVAILABLE.getStatusCode());
     }
 
     @Test

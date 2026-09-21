@@ -646,19 +646,27 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     }
 
     @Override
-    public synchronized CompletableFuture<Void> disconnectAllConsumers(
+    public CompletableFuture<Void> disconnectAllConsumers(
             boolean isResetCursor, Optional<BrokerLookupData> assignedBrokerLookupData) {
-        closeFuture = new CompletableFuture<>();
-        if (consumerList.isEmpty()) {
-            closeFuture.complete(null);
-        } else {
-            // Iterator of CopyOnWriteArrayList uses the internal array to do the for-each, and CopyOnWriteArrayList
-            // will create a new internal array when adding/removing a new item. So remove items in the for-each
-            // block is safety when the for-each and add/remove are using a same lock.
-            consumerList.forEach(consumer -> consumer.disconnect(isResetCursor, assignedBrokerLookupData));
-            cancelPendingRead();
+        CompletableFuture<Void> completion;
+        List<Consumer> consumersToDisconnect;
+        synchronized (this) {
+            consumersToDisconnect = List.copyOf(consumerList);
+            // Never publish a pending empty generation that another caller could join before it is completed.
+            // Share membership completion, but apply each caller's reset/redirect to current consumers.
+            if (closeFuture == null || closeFuture.isDone()) {
+                closeFuture = consumersToDisconnect.isEmpty()
+                        ? CompletableFuture.completedFuture(null) : new CompletableFuture<>();
+            }
+            completion = closeFuture;
+            if (!consumersToDisconnect.isEmpty()) {
+                cancelPendingRead();
+            }
         }
-        return closeFuture;
+        // Consumer.close acquires the subscription monitor before removing itself from this dispatcher.
+        // Calling it under our monitor inverts that order against a concurrent client-initiated close.
+        consumersToDisconnect.forEach(consumer -> consumer.disconnect(isResetCursor, assignedBrokerLookupData));
+        return completion;
     }
 
     @Override
@@ -675,7 +683,20 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     public synchronized void resetCloseFuture() {
-        closeFuture = null;
+        // Cursor reset can finish while another consumer disconnect is still in progress.
+        // Preserve its membership completion until the remaining consumers have actually left.
+        if (closeFuture == null || closeFuture.isDone()) {
+            closeFuture = null;
+        } else {
+            CompletableFuture<Void> pending = closeFuture;
+            pending.whenComplete((ignored, error) -> {
+                synchronized (this) {
+                    if (closeFuture == pending) {
+                        closeFuture = null;
+                    }
+                }
+            });
+        }
     }
 
     @Override

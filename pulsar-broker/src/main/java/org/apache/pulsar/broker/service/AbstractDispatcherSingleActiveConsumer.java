@@ -308,8 +308,8 @@ public abstract class AbstractDispatcherSingleActiveConsumer extends AbstractBas
     }
 
     /**
-     * Disconnect all consumers on this dispatcher (server side close). This triggers channelInactive on the inbound
-     * handler which calls dispatcher.removeConsumer(), where the closeFuture is completed.
+     * Disconnect all consumers on this dispatcher (server side close). Each consumer is removed from its subscription,
+     * which calls dispatcher.removeConsumer(), where the closeFuture is completed when no consumers remain.
      *
      * @param isResetCursor
      *              Specifies if the cursor has been reset.
@@ -320,32 +320,61 @@ public abstract class AbstractDispatcherSingleActiveConsumer extends AbstractBas
      * @return CompletableFuture indicating the completion of the operation.
      */
     @Override
-    public synchronized CompletableFuture<Void> disconnectAllConsumers(
+    public CompletableFuture<Void> disconnectAllConsumers(
             boolean isResetCursor, Optional<BrokerLookupData> assignedBrokerLookupData) {
-        closeFuture = new CompletableFuture<>();
-
-        if (!consumers.isEmpty()) {
-            consumers.forEach(consumer -> consumer.disconnect(isResetCursor, assignedBrokerLookupData));
-            cancelPendingRead();
-        } else {
-            // no consumer connected, complete disconnect immediately
-            closeFuture.complete(null);
+        CompletableFuture<Void> completion;
+        List<Consumer> consumersToDisconnect;
+        synchronized (this) {
+            consumersToDisconnect = List.copyOf(consumers);
+            // Never publish a pending empty generation that another caller could join before it is completed.
+            // Share membership completion, but apply each caller's reset/redirect to current consumers.
+            if (closeFuture == null || closeFuture.isDone()) {
+                closeFuture = consumersToDisconnect.isEmpty()
+                        ? CompletableFuture.completedFuture(null) : new CompletableFuture<>();
+            }
+            completion = closeFuture;
+            if (!consumersToDisconnect.isEmpty()) {
+                cancelPendingRead();
+            }
         }
-        return closeFuture;
+        // Consumer.close acquires the subscription monitor before removing itself from this dispatcher.
+        // Calling it under our monitor inverts that order against a concurrent client-initiated close.
+        consumersToDisconnect.forEach(consumer -> consumer.disconnect(isResetCursor, assignedBrokerLookupData));
+        return completion;
     }
 
-    public synchronized CompletableFuture<Void> disconnectActiveConsumers(boolean isResetCursor) {
-        closeFuture = new CompletableFuture<>();
-        if (activeConsumer != null) {
-            activeConsumer.disconnect(isResetCursor);
+    public CompletableFuture<Void> disconnectActiveConsumers(boolean isResetCursor) {
+        Consumer consumerToDisconnect;
+        synchronized (this) {
+            // Suppress selecting a replacement active consumer, without replacing an in-progress
+            // all-consumer disconnect or completing it while standby consumers are still present.
+            if (closeFuture == null) {
+                closeFuture = CompletableFuture.completedFuture(null);
+            }
+            consumerToDisconnect = activeConsumer;
         }
-        closeFuture.complete(null);
-        return closeFuture;
+        if (consumerToDisconnect != null) {
+            consumerToDisconnect.disconnect(isResetCursor);
+        }
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
     public synchronized void resetCloseFuture() {
-        closeFuture = null;
+        // An active-consumer cursor reset can finish while an all-consumer disconnect is still in progress.
+        // Preserve its membership completion until the remaining consumers have actually left.
+        if (closeFuture == null || closeFuture.isDone()) {
+            closeFuture = null;
+        } else {
+            CompletableFuture<Void> pending = closeFuture;
+            pending.whenComplete((ignored, error) -> {
+                synchronized (this) {
+                    if (closeFuture == pending) {
+                        closeFuture = null;
+                    }
+                }
+            });
+        }
     }
 
     public void reset() {

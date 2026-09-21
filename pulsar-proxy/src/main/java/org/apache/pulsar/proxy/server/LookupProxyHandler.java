@@ -55,6 +55,7 @@ import org.apache.pulsar.common.protocol.schema.BytesSchemaVersion;
 import org.apache.pulsar.common.protocol.schema.SchemaVersion;
 import org.apache.pulsar.common.semaphore.AsyncDualMemoryLimiter;
 import org.apache.pulsar.common.semaphore.AsyncDualMemoryLimiterImpl;
+import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.common.util.netty.NettyChannelUtil;
 import org.apache.pulsar.policies.data.loadbalancer.ServiceLookupData;
 
@@ -278,8 +279,8 @@ public class LookupProxyHandler {
                             .attr("topic", topicName)
                             .exception(t)
                             .log("failed to get Partitioned");
-                    PulsarClientException pce = PulsarClientException.unwrap(t);
-                    writeAndFlush(Commands.newLookupErrorResponse(ClientCnx.revertClientExToErrorCode(pce),
+                    PulsarClientException pce = PulsarClientException.unwrap(FutureUtil.unwrapCompletionException(t));
+                    writeAndFlush(Commands.newPartitionMetadataResponse(ClientCnx.revertClientExToErrorCode(pce),
                             t.getMessage(), clientRequestId));
                 } else {
                     writeAndFlush(
@@ -557,11 +558,14 @@ public class LookupProxyHandler {
     }
 
     private ServerError getServerError(Throwable error) {
+        error = FutureUtil.unwrapCompletionException(error);
         ServerError responseError;
         if (error instanceof PulsarClientException.AuthorizationException) {
             responseError = ServerError.AuthorizationError;
         } else if (error instanceof PulsarClientException.AuthenticationException) {
             responseError = ServerError.AuthenticationError;
+        } else if (error instanceof PulsarClientException.BrokerMetadataException) {
+            responseError = ServerError.MetadataError;
         } else {
             responseError = ServerError.ServiceNotReady;
         }

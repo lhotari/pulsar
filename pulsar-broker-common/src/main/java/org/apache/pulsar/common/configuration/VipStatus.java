@@ -83,6 +83,11 @@ public class VipStatus {
 
     @GET
     public String checkStatus() {
+        @SuppressWarnings("unchecked")
+        Supplier<Boolean> isReadyProbe = (Supplier<Boolean>) servletContext.getAttribute(ATTRIBUTE_IS_READY_PROBE);
+        if (isReadyProbe != null && !isReadyProbe.get()) {
+            throw new WebApplicationException(Status.SERVICE_UNAVAILABLE);
+        }
         // Locking classes to avoid deadlock detection in multi-thread concurrent requests.
         synchronized (VipStatus.class) {
             if (clock.millis() - lastCheckStatusTimestamp < CHECK_STATUS_INTERVAL) {
@@ -95,13 +100,9 @@ public class VipStatus {
             lastCheckStatusTimestamp = clock.millis();
 
             String statusFilePath = (String) servletContext.getAttribute(ATTRIBUTE_STATUS_FILE_PATH);
-            @SuppressWarnings("unchecked")
-            Supplier<Boolean> isReadyProbe = (Supplier<Boolean>) servletContext.getAttribute(ATTRIBUTE_IS_READY_PROBE);
-            boolean isReady = isReadyProbe != null ? isReadyProbe.get() : true;
-
             if (statusFilePath != null) {
                 File statusFile = new File(statusFilePath);
-                if (isReady && statusFile.exists() && statusFile.isFile()) {
+                if (statusFile.exists() && statusFile.isFile()) {
                     // check deadlock
                     ThreadMXBean threadBean = ManagementFactory.getThreadMXBean();
                     long[] threadIds = threadBean.findDeadlockedThreads();
@@ -133,7 +134,6 @@ public class VipStatus {
             lastCheckStatusResult = false;
             log.warn()
                     .attr("file", statusFilePath)
-                    .attr("value", isReady)
                     .log("Status file doesn't exist or ready probe value isn't true. The service is not ready");
             throw new WebApplicationException(Status.NOT_FOUND);
         }

@@ -18,15 +18,59 @@
  */
 package org.apache.bookkeeper.mledger.util;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertEquals;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 public class FuturesTest {
+
+    @DataProvider
+    public Object[][] cleanupFailures() {
+        return new Object[][] {{false}, {true}};
+    }
+
+    @Test(dataProvider = "cleanupFailures")
+    public void testPhysicalCloseAdapterPreservesSeparateResult(boolean failed) throws Exception {
+        ManagedLedgerException logical = new ManagedLedgerException.ManagedLedgerFencedException();
+        ManagedLedgerException failure = new ManagedLedgerException("physical cleanup failed");
+        CompletableFuture<Void> cleanup = new CompletableFuture<>();
+        Futures.CloseFuture legacy = new Futures.CloseFuture();
+        Futures.PhysicalCloseFuture physical = new Futures.PhysicalCloseFuture();
+        Futures.PhysicalCloseFuture canceled = new Futures.PhysicalCloseFuture();
+        legacy.closeFailed(logical, cleanup.minimalCompletionStage(), null);
+        physical.closeFailed(logical, cleanup.minimalCompletionStage(), null);
+        canceled.closeFailed(logical, cleanup.minimalCompletionStage(), null);
+        assertThat(canceled.cancel(false)).isTrue();
+        assertThatThrownBy(() -> legacy.get(5, TimeUnit.SECONDS)).hasCause(logical);
+        assertThat(physical).isNotDone();
+        assertThat(cleanup).isNotDone();
+        if (failed) {
+            cleanup.completeExceptionally(failure);
+            assertThatThrownBy(() -> physical.get(5, TimeUnit.SECONDS)).hasCause(failure);
+        } else {
+            cleanup.complete(null);
+            physical.get(5, TimeUnit.SECONDS);
+        }
+        assertThat(canceled).isCancelled();
+    }
+
+    @Test
+    public void testPhysicalCloseAdapterKeepsUntrackedFailure() throws Exception {
+        ManagedLedgerException failure = new ManagedLedgerException.ManagedLedgerFencedException();
+        Futures.PhysicalCloseFuture oldCallback = new Futures.PhysicalCloseFuture();
+        oldCallback.closeFailed(failure, null);
+        assertThatThrownBy(() -> oldCallback.get(5, TimeUnit.SECONDS)).hasCause(failure);
+        Futures.PhysicalCloseFuture direct = new Futures.PhysicalCloseFuture();
+        direct.completeExceptionally(failure);
+        assertThatThrownBy(() -> direct.get(5, TimeUnit.SECONDS)).hasCause(failure);
+    }
 
     @Test
     public void testExecuteWithRetryHandlesSynchronousFailure() throws Exception {

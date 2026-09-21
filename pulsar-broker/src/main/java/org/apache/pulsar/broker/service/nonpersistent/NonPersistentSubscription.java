@@ -323,39 +323,48 @@ public class NonPersistentSubscription extends AbstractSubscription {
     }
 
 
+    // Guarded by this; retain the result of a storage-only close even if the dispatcher fails.
+    private CompletableFuture<Void> transferCloseFuture;
+
     /**
      * Fence this subscription and optionally disconnect all consumers.
      *
      * @return CompletableFuture indicating the completion of the operation.
      */
     @Override
-    public synchronized CompletableFuture<Void> close(boolean disconnectConsumers,
-                                                      Optional<BrokerLookupData> assignedBrokerLookupData) {
+    public CompletableFuture<Void> close(boolean disconnectConsumers,
+                                         Optional<BrokerLookupData> assignedBrokerLookupData) {
         CompletableFuture<Void> closeFuture = new CompletableFuture<>();
-
-        // block any further consumers on this subscription
-        IS_FENCED_UPDATER.set(this, TRUE);
-
-        (dispatcher != null
-                ? dispatcher.close(disconnectConsumers, assignedBrokerLookupData)
-                : CompletableFuture.completedFuture(null))
-                .thenRun(() -> {
-                    log.info()
-                            .log("Successfully closed subscription");
-                    closeFuture.complete(null);
-                }).exceptionally(exception -> {
+        Dispatcher dispatcherToClose;
+        synchronized (this) {
+            if (!disconnectConsumers) {
+                if (transferCloseFuture != null) {
+                    return transferCloseFuture.copy();
+                }
+                transferCloseFuture = closeFuture;
+            }
+            IS_FENCED_UPDATER.set(this, TRUE);
+            dispatcherToClose = dispatcher;
+        }
+        CompletableFuture<Void> dispatcherClosed = dispatcherToClose != null
+                ? FutureUtil.supplySafely(() -> dispatcherToClose.close(disconnectConsumers, assignedBrokerLookupData))
+                : CompletableFuture.completedFuture(null);
+        dispatcherClosed.whenComplete((ignored, error) -> {
+            if (error == null) {
+                log.info().log("Successfully closed subscription");
+                closeFuture.complete(null);
+            } else {
+                if (disconnectConsumers) {
                     IS_FENCED_UPDATER.set(this, FALSE);
-                    if (dispatcher != null) {
-                        dispatcher.reset();
+                    if (dispatcherToClose != null) {
+                        dispatcherToClose.reset();
                     }
-                    log.error()
-                            .exception(exception)
-                            .log("Error closing subscription");
-                    closeFuture.completeExceptionally(exception);
-                    return null;
-                });
-
-        return closeFuture;
+                }
+                log.error().exception(error).log("Error closing subscription");
+                closeFuture.completeExceptionally(error);
+            }
+        });
+        return disconnectConsumers ? closeFuture : closeFuture.copy();
     }
 
     /**

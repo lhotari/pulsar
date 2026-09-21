@@ -23,9 +23,12 @@ import io.netty.util.concurrent.Promise;
 import java.net.SocketAddress;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
+import java.util.function.LongSupplier;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
 import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
 import org.apache.pulsar.common.api.proto.FeatureFlags;
+import org.apache.pulsar.common.util.FutureUtil;
 
 public interface TransportCnx {
 
@@ -67,6 +70,50 @@ public interface TransportCnx {
     void removedConsumer(Consumer consumer);
 
     void closeConsumer(Consumer consumer, Optional<BrokerLookupData> assignedBrokerLookupData);
+
+    /** Whether an entity-close command has completed its transport write, not whether the client received it. */
+    enum CloseNotification {
+        FLUSHED,
+        /** The transport cannot track the entity-close write (including the pre-v5 connection-close fallback). */
+        UNTRACKED
+    }
+
+    /**
+     * Close a producer and track the notification when supported by the transport. Implementations predating this
+     * method retain their void close operation and explicitly report that its write completion is untracked.
+     */
+    default CompletableFuture<CloseNotification> closeProducerAsync(
+            Producer producer, Optional<BrokerLookupData> assignedBrokerLookupData) {
+        return FutureUtil.supplySafely(() -> {
+            closeProducer(producer, assignedBrokerLookupData);
+            return CompletableFuture.completedFuture(CloseNotification.UNTRACKED);
+        });
+    }
+
+    /** See {@link #closeProducerAsync(Producer, Optional)}. */
+    default CompletableFuture<CloseNotification> closeConsumerAsync(
+            Consumer consumer, Optional<BrokerLookupData> assignedBrokerLookupData) {
+        return FutureUtil.supplySafely(() -> {
+            closeConsumer(consumer, assignedBrokerLookupData);
+            return CompletableFuture.completedFuture(CloseNotification.UNTRACKED);
+        });
+    }
+
+    /** Native transports also check the same remaining budget when the queued write is about to start. */
+    default CompletableFuture<CloseNotification> closeProducerAsync(
+            Producer producer, Optional<BrokerLookupData> assignedBrokerLookupData, LongSupplier remainingNanos) {
+        return FutureUtil.supplySafely(() -> remainingNanos.getAsLong() > 0
+                ? closeProducerAsync(producer, assignedBrokerLookupData)
+                : CompletableFuture.failedFuture(new TimeoutException("Producer notification deadline expired")));
+    }
+
+    /** See {@link #closeProducerAsync(Producer, Optional, LongSupplier)}. */
+    default CompletableFuture<CloseNotification> closeConsumerAsync(
+            Consumer consumer, Optional<BrokerLookupData> assignedBrokerLookupData, LongSupplier remainingNanos) {
+        return FutureUtil.supplySafely(() -> remainingNanos.getAsLong() > 0
+                ? closeConsumerAsync(consumer, assignedBrokerLookupData)
+                : CompletableFuture.failedFuture(new TimeoutException("Consumer notification deadline expired")));
+    }
 
     boolean isPreciseDispatcherFlowControl();
 

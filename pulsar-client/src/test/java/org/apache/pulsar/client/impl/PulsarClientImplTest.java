@@ -52,7 +52,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import lombok.Cleanup;
 import org.apache.pulsar.client.api.PulsarClient;
@@ -69,6 +72,7 @@ import org.apache.pulsar.common.naming.NamespaceName;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.partition.PartitionedTopicMetadata;
 import org.apache.pulsar.common.util.netty.EventLoopUtil;
+import org.awaitility.Awaitility;
 import org.mockito.Mockito;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.Test;
@@ -101,6 +105,90 @@ public class PulsarClientImplTest {
         assertFalse(client.isClosed());
         client.close();
         assertTrue(client.isClosed());
+    }
+
+    @Test
+    public void testInternalLookupRoutePreservesConnectionsAndSurvivesReload() throws Exception {
+        ClientConfigurationData conf = new ClientConfigurationData();
+        conf.setServiceUrl("pulsar://localhost:6650");
+        initializeEventLoopGroup(conf);
+        ConnectionPool pool = mock(ConnectionPool.class);
+        try (PulsarClientImpl client = new PulsarClientImpl(conf, eventLoopGroup, pool)) {
+            client.updateLookupServiceUrl("pulsar://localhost:6651");
+            assertEquals(client.getConfiguration().getServiceUrl(), "pulsar://localhost:6651");
+            assertEquals(client.getLookup().getServiceUrl(), "pulsar://localhost:6651");
+            client.reloadLookUp();
+            assertEquals(client.getLookup().getServiceUrl(), "pulsar://localhost:6651");
+            verify(pool, Mockito.never()).closeAllConnections();
+        }
+    }
+
+    @Test
+    public void testInternalLookupRouteRejectsProtocolChangeWithoutMutation() throws Exception {
+        ClientConfigurationData conf = new ClientConfigurationData();
+        conf.setServiceUrl("pulsar://localhost:6650");
+        initializeEventLoopGroup(conf);
+        try (PulsarClientImpl client = new PulsarClientImpl(conf, eventLoopGroup)) {
+            for (String invalid : List.of("pulsar+ssl://localhost:6651", "http://localhost:8080", "not a url")) {
+                assertThrows(PulsarClientException.InvalidServiceURL.class,
+                        () -> client.updateLookupServiceUrl(invalid));
+                assertEquals(client.getConfiguration().getServiceUrl(), "pulsar://localhost:6650");
+                assertEquals(client.getLookup().getServiceUrl(), "pulsar://localhost:6650");
+            }
+            client.reloadLookUp();
+            assertEquals(client.getLookup().getServiceUrl(), "pulsar://localhost:6650");
+        }
+    }
+
+    @Test(timeOut = 10000)
+    public void testLookupReloadCannotReinstallOldShutdownRoute() throws Exception {
+        ClientConfigurationData conf = new ClientConfigurationData();
+        conf.setServiceUrl("pulsar://localhost:6650");
+        initializeEventLoopGroup(conf);
+        try (PulsarClientImpl client = Mockito.spy(new PulsarClientImpl(conf, eventLoopGroup))) {
+            CountDownLatch reloading = new CountDownLatch(1);
+            CountDownLatch finishReload = new CountDownLatch(1);
+            Mockito.doAnswer(invocation -> {
+                reloading.countDown();
+                assertTrue(finishReload.await(5, TimeUnit.SECONDS));
+                return invocation.callRealMethod();
+            }).when(client).createLookup("pulsar://localhost:6650");
+            CompletableFuture<Void> reload = CompletableFuture.runAsync(() -> {
+                try {
+                    client.reloadLookUp();
+                } catch (PulsarClientException e) {
+                    throw new AssertionError(e);
+                }
+            });
+            CompletableFuture<Void> update = null;
+            try {
+                assertTrue(reloading.await(5, TimeUnit.SECONDS));
+                CountDownLatch updating = new CountDownLatch(1);
+                AtomicReference<Thread> updateThread = new AtomicReference<>();
+                update = CompletableFuture.runAsync(() -> {
+                    updateThread.set(Thread.currentThread());
+                    updating.countDown();
+                    try {
+                        client.updateLookupServiceUrl("pulsar://localhost:6651");
+                    } catch (PulsarClientException e) {
+                        throw new AssertionError(e);
+                    }
+                });
+                assertTrue(updating.await(5, TimeUnit.SECONDS));
+                CompletableFuture<Void> pendingUpdate = update;
+                Awaitility.await().until(() -> updateThread.get().getState() == Thread.State.BLOCKED
+                        || pendingUpdate.isDone());
+                assertFalse(update.isDone(), "Route update must wait for the lookup reload's monitor");
+            } finally {
+                finishReload.countDown();
+                reload.get(5, TimeUnit.SECONDS);
+                if (update != null) {
+                    update.get(5, TimeUnit.SECONDS);
+                }
+            }
+            assertEquals(client.getConfiguration().getServiceUrl(), "pulsar://localhost:6651");
+            assertEquals(client.getLookup().getServiceUrl(), "pulsar://localhost:6651");
+        }
     }
 
     @Test

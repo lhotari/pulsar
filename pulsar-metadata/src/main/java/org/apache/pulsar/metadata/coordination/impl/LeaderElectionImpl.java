@@ -54,7 +54,11 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
 
     private LeaderElectionState leaderElectionState;
     private Optional<Long> version = Optional.empty();
-    private Optional<T> proposedValue;
+    private Optional<T> proposedValue = Optional.empty();
+    private boolean electionEnabled = true;
+    private CompletableFuture<LeaderElectionState> electionFuture = CompletableFuture.completedFuture(
+            LeaderElectionState.NoLeader);
+    private final FutureUtil.Sequencer<Void> eligibilityChanges = FutureUtil.Sequencer.create();
 
     // The leader value as known by the election cycle (the leader can only change through an
     // election cycle). Pending while no leader is known — election in progress or the leader node
@@ -122,24 +126,31 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
 
     @Override
     public synchronized CompletableFuture<LeaderElectionState> elect(T proposedValue) {
+        this.proposedValue = Optional.of(proposedValue);
         if (internalState == InternalState.Closed) {
             // Reopened after close() (e.g. the broker's LeaderElectionService is close()d and then
             // start()ed again): reset so a fresh election cycle runs and readers wait for it.
             leaderElectionState = LeaderElectionState.NoLeader;
             currentLeaderFuture = new CompletableFuture<>();
+            internalState = InternalState.Init;
         }
         if (leaderElectionState != LeaderElectionState.NoLeader) {
             return CompletableFuture.completedFuture(leaderElectionState);
         }
 
-        this.proposedValue = Optional.of(proposedValue);
         return elect();
     }
 
     private synchronized CompletableFuture<LeaderElectionState> elect() {
+        if (internalState == InternalState.Closed) {
+            return FutureUtil.failedFuture(new AlreadyClosedException("Leader election is closed"));
+        }
+        if (!electionEnabled) {
+            return observeLeader();
+        }
         // First check if there's already a leader elected
         internalState = InternalState.ElectionInProgress;
-        return store.get(path).thenCompose(optLock -> {
+        return electionFuture = store.get(path).thenCompose(optLock -> {
             if (optLock.isPresent()) {
                 return handleExistingLeaderValue(optLock.get());
             } else {
@@ -149,6 +160,12 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
     }
 
     private synchronized CompletableFuture<LeaderElectionState> handleExistingLeaderValue(GetResult res) {
+        if (internalState == InternalState.Closed) {
+            return FutureUtil.failedFuture(new AlreadyClosedException("Leader election is closed"));
+        }
+        if (!electionEnabled) {
+            return observeLeader();
+        }
         T existingValue;
         try {
             existingValue = serde.deserialize(path, res.getValue(), res.getStat());
@@ -164,6 +181,7 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
                 log.info().attr("value", existingValue).attr("path", path).attr("stat", res.getStat())
                         .log("Keeping the existing value as it's from the same session");
                 // The value is still valid because it was created in the same session
+                version = Optional.of(res.getStat().getVersion());
                 leaderKnown(Optional.of(existingValue));
                 changeState(LeaderElectionState.Leading);
                 return CompletableFuture.completedFuture(LeaderElectionState.Leading);
@@ -206,6 +224,12 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
     }
 
     private synchronized CompletableFuture<LeaderElectionState> tryToBecomeLeader() {
+        if (internalState == InternalState.Closed) {
+            return FutureUtil.failedFuture(new AlreadyClosedException("Leader election is closed"));
+        }
+        if (!electionEnabled) {
+            return observeLeader();
+        }
         T value = proposedValue.get();
         byte[] payload;
         try {
@@ -218,10 +242,11 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
         store.put(path, payload, Optional.of(-1L), EnumSet.of(CreateOption.Ephemeral))
                 .thenAccept(stat -> {
                     synchronized (LeaderElectionImpl.this) {
-                        if (internalState == InternalState.ElectionInProgress) {
+                        if (electionEnabled && internalState == InternalState.ElectionInProgress) {
                             log.info().attr("path", path).attr("value", value)
                                     .log("Acquired leadership");
                             internalState = InternalState.LeaderIsPresent;
+                            version = Optional.of(stat.getVersion());
                             leaderKnown(Optional.of(value));
                             if (leaderElectionState != LeaderElectionState.Leading) {
                                 leaderElectionState = LeaderElectionState.Leading;
@@ -269,6 +294,54 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
     }
 
     @Override
+    public synchronized boolean isElectionEnabled() {
+        return electionEnabled;
+    }
+
+    @Override
+    public CompletableFuture<Void> setElectionEnabled(boolean enabled) {
+        return eligibilityChanges.sequential(() -> {
+            synchronized (this) {
+                if (internalState == InternalState.Closed) {
+                    return FutureUtil.failedFuture(new AlreadyClosedException("Leader election is closed"));
+                }
+                if (electionEnabled && enabled) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                electionEnabled = enabled;
+                if (enabled) {
+                    leaderElectionState = LeaderElectionState.NoLeader;
+                    if (proposedValue.isEmpty()) {
+                        internalState = InternalState.Init;
+                        return CompletableFuture.completedFuture(null);
+                    }
+                    return elect().thenAccept(__ -> { });
+                }
+                // Fence election callbacks first, then wait for any in-flight acquisition to release its node.
+                return electionFuture.handle((__, error) -> null)
+                        .thenCompose(__ -> store.get(path))
+                        .thenCompose(value -> value.isPresent() && value.get().getStat().isCreatedBySelf()
+                                ? store.delete(path, Optional.of(value.get().getStat().getVersion()))
+                                : CompletableFuture.completedFuture(null))
+                        .thenCompose(__ -> observeLeader())
+                        .thenAccept(__ -> { });
+            }
+        });
+    }
+
+    private synchronized CompletableFuture<LeaderElectionState> observeLeader() {
+        return readLeaderValueFromStore().thenApply(value -> {
+            synchronized (this) {
+                if (internalState != InternalState.Closed && !electionEnabled) {
+                    leaderKnown(value);
+                    changeState(LeaderElectionState.Following);
+                }
+                return leaderElectionState;
+            }
+        });
+    }
+
+    @Override
     public void close() throws Exception {
         try {
             asyncClose().join();
@@ -309,18 +382,16 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
 
     @Override
     public synchronized LeaderElectionState getState() {
-        return leaderElectionState;
+        return electionEnabled ? leaderElectionState : LeaderElectionState.Following;
     }
 
     @Override
     public CompletableFuture<Optional<T>> getLeaderValue() {
         CompletableFuture<Optional<T>> future;
         synchronized (this) {
-            if (internalState == InternalState.Init) {
-                // This instance never participated in the election (a pure observer, e.g.
-                // BookKeeper's MetadataDrivers helpers querying the current auditor): there is no
-                // local election cycle to wait for, so the store content is the authoritative
-                // answer.
+            if (internalState == InternalState.Init || (!electionEnabled && internalState != InternalState.Closed)) {
+                // Pure observers and disabled participants have no local election cycle to wait for.
+                // Read the store directly; a disabled participant must still discover the current leader.
                 return readLeaderValueFromStore();
             }
             future = currentLeaderFuture;
@@ -394,6 +465,13 @@ class LeaderElectionImpl<T> implements LeaderElection<T> {
         }
 
         synchronized (this) {
+            if (!electionEnabled && internalState != InternalState.Closed) {
+                observeLeader().exceptionally(error -> {
+                    log.warn().attr("path", path).exceptionMessage(error).log("Failed to observe leader");
+                    return null;
+                });
+                return;
+            }
             if (internalState != InternalState.LeaderIsPresent) {
                 // Ignoring notification since we're not trying to become leader
                 return;

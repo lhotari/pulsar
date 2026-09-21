@@ -29,7 +29,9 @@ import static org.apache.pulsar.common.naming.SystemTopicNames.isTransactionInte
 import static org.apache.pulsar.common.util.Runnables.catchingAndLoggingThrowables;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Queues;
-import com.google.common.util.concurrent.RateLimiter;
+import com.google.common.collect.Range;
+import com.google.common.collect.RangeMap;
+import com.google.common.collect.TreeRangeMap;
 import io.github.merlimat.slog.LoggerBuilder;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -55,9 +57,11 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -66,8 +70,10 @@ import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -76,17 +82,22 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import lombok.AccessLevel;
 import lombok.CustomLog;
 import lombok.Getter;
 import lombok.Setter;
 import org.apache.bookkeeper.common.util.OrderedExecutor;
+import org.apache.bookkeeper.mledger.AsyncCallbacks.CloseCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.DeleteLedgerCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.OpenLedgerCallback;
 import org.apache.bookkeeper.mledger.LedgerOffloader;
@@ -99,7 +110,6 @@ import org.apache.bookkeeper.mledger.impl.NonAppendableLedgerOffloader;
 import org.apache.bookkeeper.mledger.util.Futures;
 import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.mutable.MutableBoolean;
 import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.bookie.rackawareness.IsolatedBookieEnsemblePlacementPolicy;
@@ -117,13 +127,16 @@ import org.apache.pulsar.broker.intercept.BrokerInterceptor;
 import org.apache.pulsar.broker.intercept.ManagedLedgerInterceptorImpl;
 import org.apache.pulsar.broker.loadbalance.LoadManager;
 import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl;
+import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
 import org.apache.pulsar.broker.namespace.NamespaceService;
+import org.apache.pulsar.broker.namespace.OwnedBundle;
 import org.apache.pulsar.broker.namespace.TopicExistsInfo;
 import org.apache.pulsar.broker.resources.DynamicConfigurationResources;
 import org.apache.pulsar.broker.resources.LocalPoliciesResources;
 import org.apache.pulsar.broker.resources.NamespaceResources;
 import org.apache.pulsar.broker.resources.NamespaceResources.PartitionedTopicResources;
 import org.apache.pulsar.broker.resources.ScalableTopicResources;
+import org.apache.pulsar.broker.service.BrokerServiceException.BrokerDrainingException;
 import org.apache.pulsar.broker.service.BrokerServiceException.NamingException;
 import org.apache.pulsar.broker.service.BrokerServiceException.NotAllowedException;
 import org.apache.pulsar.broker.service.BrokerServiceException.PersistenceException;
@@ -210,7 +223,6 @@ import org.apache.pulsar.metadata.api.NotificationType;
 import org.apache.pulsar.opentelemetry.OpenTelemetryAttributes.ConnectionRateLimitOperationName;
 import org.apache.pulsar.opentelemetry.annotations.PulsarDeprecatedMetric;
 import org.apache.pulsar.policies.data.loadbalancer.NamespaceBundleStats;
-import org.apache.pulsar.transaction.coordinator.TransactionMetadataStore;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -347,7 +359,7 @@ public class BrokerService implements Closeable {
 
     private PulsarChannelInitializer.Factory pulsarChannelInitFactory = PulsarChannelInitializer.DEFAULT_FACTORY;
 
-    private final List<Channel> listenChannels = new ArrayList<>(2);
+    private final List<Channel> listenChannels = new CopyOnWriteArrayList<>();
     // PIP-478: the channel initializers that own a PulsarTlsFactory (new-SPI TLS path); closed on shutdown.
     private final List<PulsarChannelInitializer> pulsarChannelInitializers = new ArrayList<>(2);
     private Channel listenChannel;
@@ -362,6 +374,7 @@ public class BrokerService implements Closeable {
 
     private final TopicEventsDispatcher topicEventsDispatcher = new TopicEventsDispatcher();
     private volatile boolean unloaded = false;
+    private final ShutdownTopicCloseLimiter shutdownTopicCloseLimiter;
 
     // semaphore for limiting the concurrency of ledger deletion at broker level,
     // thus all managed ledgers sharing the same semaphore
@@ -371,6 +384,9 @@ public class BrokerService implements Closeable {
 
     public BrokerService(PulsarService pulsar, EventLoopGroup eventLoopGroup) throws Exception {
         this.pulsar = pulsar;
+        this.shutdownTopicCloseLimiter = new ShutdownTopicCloseLimiter(
+                pulsar.getConfiguration().getBrokerShutdownMaxConcurrentTopicClose(),
+                pulsar.getExecutor(), pulsar::getRemainingShutdownDrainNanos);
         this.clock = pulsar.getClock();
         this.dynamicConfigurationMap = prepareDynamicConfigurationMap();
         this.brokerPublishRateLimiter = new PublishRateLimiterImpl(pulsar.getMonotonicClock(), producer -> {
@@ -676,6 +692,9 @@ public class BrokerService implements Closeable {
             try {
                 Channel ch = b.bind(addr).sync().channel();
                 listenChannels.add(ch);
+                if (pulsar.getBrokerAdmission().isClosed()) {
+                    ch.close();
+                }
 
                 // identify the primary channel. Note that the legacy bindings appear first and have no listener.
                 if (StringUtils.isBlank(a.getListenerName())
@@ -968,6 +987,11 @@ public class BrokerService implements Closeable {
         });
     }
 
+    /** Stop accepting new TCP connections without stopping established channels or their event loops. */
+    public void closeListenChannels() {
+        listenChannels.forEach(Channel::close);
+    }
+
     public CompletableFuture<Void> closeAsync() {
         try {
             log.info("Shutting down Pulsar Broker service");
@@ -983,7 +1007,11 @@ public class BrokerService implements Closeable {
             pendingLookupRequests.unregister();
 
             // unloads all namespaces gracefully without disrupting mutually
-            unloadNamespaceBundlesGracefully();
+            try {
+                unloadNamespaceBundlesGracefully();
+            } finally {
+                shutdownTopicCloseLimiter.close();
+            }
 
             // close replication clients
             replicationClients.forEach((cluster, client) -> {
@@ -1067,10 +1095,10 @@ public class BrokerService implements Closeable {
                                 asyncCloseFutures.add(GracefulExecutorServicesShutdown
                                         .initiate()
                                         .timeout(
-                                                Duration.ofMillis(
-                                                        (long) (GRACEFUL_SHUTDOWN_TIMEOUT_RATIO_OF_TOTAL_TIMEOUT
-                                                                * pulsar.getConfiguration()
-                                                                .getBrokerShutdownTimeoutMs())))
+                                                Duration.ofNanos(
+                                                        pulsar.getRemainingShutdownDrainNanos() == Long.MAX_VALUE
+                                                        ? 0 : (long) (GRACEFUL_SHUTDOWN_TIMEOUT_RATIO_OF_TOTAL_TIMEOUT
+                                                                * pulsar.getRemainingShutdownDrainNanos())))
                                         .shutdown(
                                                 statsUpdater,
                                                 inactivityMonitor,
@@ -1119,7 +1147,9 @@ public class BrokerService implements Closeable {
     }
 
     CompletableFuture<Void> shutdownEventLoopGracefully(String name, EventLoopGroup eventLoopGroup) {
-        long brokerShutdownTimeoutMs = pulsar.getConfiguration().getBrokerShutdownTimeoutMs();
+        long brokerShutdownTimeoutMs = pulsar.getRemainingShutdownDrainNanos() == Long.MAX_VALUE
+                ? Math.max(0, pulsar.getConfiguration().getBrokerShutdownTimeoutMs())
+                : TimeUnit.NANOSECONDS.toMillis(pulsar.getRemainingShutdownDrainNanos());
         long timeout = (long) (GRACEFUL_SHUTDOWN_TIMEOUT_RATIO_OF_TOTAL_TIMEOUT * brokerShutdownTimeoutMs);
         long periodMs = (timeout > 0) ? 1 : 0;
         long startNs = System.nanoTime();
@@ -1156,7 +1186,7 @@ public class BrokerService implements Closeable {
      * <ul>
      * <li>First it makes current broker unavailable and isolates from the clusters so, it will not serve any new
      * requests.</li>
-     * <li>Second it starts unloading namespace bundle one by one without closing the connection in order to avoid
+     * <li>Second it unloads namespace bundles concurrently without closing the connection in order to avoid
      * disruption for other namespacebundles which are sharing the same connection from the same client.</li>
      * </ul>
      */
@@ -1165,7 +1195,7 @@ public class BrokerService implements Closeable {
     }
 
     public void unloadNamespaceBundlesGracefully(int maxConcurrentUnload, boolean closeWithoutWaitingClientDisconnect) {
-        if (unloaded) {
+        if (unloaded || pulsar.getRemainingShutdownDrainNanos() == 0) {
             return;
         }
         try {
@@ -1178,6 +1208,13 @@ public class BrokerService implements Closeable {
                 } catch (PulsarServerException.NotFoundException ne) {
                     log.warn("Broker load-manager znode doesn't exist");
                     // still continue and release bundle ownership as broker's registration node doesn't exist.
+                } catch (Exception e) {
+                    if (!pulsar.getBrokerAdmission().isClosed()) {
+                        throw e;
+                    }
+                    log.warn().exception(e).log("Load manager drain failed; closing remaining topics locally");
+                    closeTopicsLocally(closeWithoutWaitingClientDisconnect, maxConcurrentUnload);
+                    return;
                 }
             }
             double disableBrokerTimeSeconds =
@@ -1187,34 +1224,26 @@ public class BrokerService implements Closeable {
                     .attr("disableBrokerTimeSeconds", disableBrokerTimeSeconds)
                     .log("Disable broker in load manager completed in seconds");
 
+            if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)) {
+                closeTopicsLocally(closeWithoutWaitingClientDisconnect, maxConcurrentUnload);
+                return;
+            }
+
             // unload all namespace-bundles gracefully
             long closeTopicsStartTime = System.nanoTime();
             Set<NamespaceBundle> serviceUnits =
                     pulsar.getNamespaceService() != null ? pulsar.getNamespaceService().getOwnedServiceUnits() : null;
             if (serviceUnits != null) {
-                RateLimiter rateLimiter = maxConcurrentUnload > 0 ? RateLimiter.create(maxConcurrentUnload) : null;
-                serviceUnits.forEach(su -> {
-                    if (su != null) {
-                        try {
-                            if (rateLimiter != null) {
-                                rateLimiter.acquire(1);
-                            }
-                            long timeout = pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs();
-                            pulsar.getNamespaceService().unloadNamespaceBundle(su, timeout, MILLISECONDS,
-                                    closeWithoutWaitingClientDisconnect).get(timeout, MILLISECONDS);
-                        } catch (Exception e) {
-                            if (e instanceof ExecutionException
-                                    && e.getCause() instanceof ServiceUnitNotReadyException) {
-                                log.warn()
-                                        .attr("su", su)
-                                        .exceptionMessage(e)
-                                        .log("Failed to unload namespace bundle");
-                            } else {
-                                log.warn().attr("su", su).exception(e).log("Failed to unload namespace bundle");
-                            }
-                        }
-                    }
-                });
+                if (pulsar.getBrokerAdmission().isClosed()) {
+                    drainLegacyBundles(maxConcurrentUnload).get(
+                            Math.max(0, pulsar.getRemainingShutdownDrainNanos()), TimeUnit.NANOSECONDS);
+                } else {
+                    GracefulBundleUnload.unload(pulsar.getNamespaceService(), serviceUnits,
+                            Math.max(1, pulsar.getConfiguration().getBrokerShutdownMaxConcurrentUnload()),
+                            maxConcurrentUnload, closeWithoutWaitingClientDisconnect,
+                            pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs(),
+                            pulsar::getRemainingShutdownDrainNanos);
+                }
                 double closeTopicsTimeSeconds =
                         TimeUnit.NANOSECONDS.toMillis((System.nanoTime() - closeTopicsStartTime))
                                 / 1000.0;
@@ -1231,6 +1260,149 @@ public class BrokerService implements Closeable {
         } finally {
             unloaded = true;
         }
+    }
+
+    @VisibleForTesting
+    CompletableFuture<Void> drainLegacyBundles(int startsPerSecond) {
+        return FutureUtil.supplySafely(() -> {
+            Map<NamespaceBundle, OwnedBundle> generations = Map.copyOf(
+                    pulsar.getNamespaceService().getOwnershipCache().getOwnedBundles());
+            Map<NamespaceBundle, BundleUnload> captured = captureShutdownBundles(generations.keySet());
+            return drainShutdownBundles(captured, (bundle, budget) -> generations.get(bundle)
+                    .handleShutdownUnload(pulsar, budget, TimeUnit.NANOSECONDS, captured.get(bundle)), startsPerSecond);
+        });
+    }
+
+    /** Manager-specific ownership transitions share the same physical admission and planning controller. */
+    public CompletableFuture<Void> drainShutdownBundles(Map<NamespaceBundle, BundleUnload> captured,
+            BiFunction<NamespaceBundle, Long, CompletableFuture<Void>> transition, int startsPerSecond) {
+        return drainShutdownBundles(captured, transition, startsPerSecond, false);
+    }
+
+    private CompletableFuture<Void> drainShutdownBundles(Map<NamespaceBundle, BundleUnload> captured,
+            BiFunction<NamespaceBundle, Long, CompletableFuture<Void>> transition, int startsPerSecond,
+            boolean unpaced) {
+        return FutureUtil.supplySafely(() -> {
+            List<ShutdownDrainController.Work> work = new ArrayList<>();
+            captured.forEach((bundle, unload) -> work.add(new ShutdownDrainController.Work() {
+                @Override
+                public String id() {
+                    return bundle.toString();
+                }
+
+                @Override
+                public ShutdownBundleCost.Load load() {
+                    return unload.load();
+                }
+
+                @Override
+                public boolean unpaced() {
+                    return unpaced;
+                }
+
+                @Override
+                public boolean dependent() {
+                    return bundle.getNamespaceObject().equals(NamespaceName.SYSTEM_NAMESPACE);
+                }
+
+                @Override
+                public long remainingTopics() {
+                    return unload.remainingTopics.get();
+                }
+
+                @Override
+                public boolean hasHandoff() {
+                    return !unpaced;
+                }
+
+                @Override
+                public long handoffStartedNanos() {
+                    return unload.storageClosedNanos;
+                }
+
+                @Override
+                public CompletableFuture<Void> prepare() {
+                    return unload.prepareStorage();
+                }
+
+                @Override
+                public CompletableFuture<Void> start(long budgetNanos) {
+                    return transition.apply(bundle, budgetNanos);
+                }
+
+                @Override
+                public void cancelPreparation() {
+                    unload.cancelPreparation();
+                }
+            }));
+            return new ShutdownDrainController(work, pulsar.getExecutor(), shutdownTopicCloseLimiter,
+                    pulsar.getShutdownStartNanos(), System::nanoTime, pulsar::getRemainingShutdownDrainNanos,
+                    pulsar.getConfiguration().getBrokerShutdownMaxConcurrentUnload(),
+                    pulsar.getConfiguration().getBrokerShutdownMaxConcurrentTopicClose(), startsPerSecond,
+                    TimeUnit.MILLISECONDS.toNanos(pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs()))
+                    .start();
+        });
+    }
+
+    private void closeTopicsLocally(boolean force, int startsPerSecond) throws Exception {
+        if (pulsar.getBrokerAdmission().isClosed()) {
+            closeShutdownTopicsLocally(startsPerSecond).get(pulsar.getRemainingShutdownDrainNanos(),
+                    TimeUnit.NANOSECONDS);
+            return;
+        }
+        Map<NamespaceBundle, List<CompletableFuture<Optional<Topic>>>> bundles = new HashMap<>();
+        // Include topics still loading. The normal topic future's final ownership fence prevents late serving.
+        for (var entry : Map.copyOf(topics).entrySet()) {
+            NamespaceBundle bundle = pulsar.getNamespaceService().getBundle(TopicName.get(entry.getKey()));
+            bundles.computeIfAbsent(bundle, __ -> new ArrayList<>()).add(entry.getValue());
+        }
+        for (boolean system : new boolean[]{false, true}) {
+            var phase = bundles.entrySet().stream()
+                    .filter(entry -> entry.getKey().getNamespaceObject()
+                            .equals(NamespaceName.SYSTEM_NAMESPACE) == system)
+                    .toList();
+            GracefulBundleUnload.drain(phase, (entry, timeout) -> {
+                List<CompletableFuture<Void>> closes = new ArrayList<>();
+                for (var topicFuture : entry.getValue()) {
+                    closes.add(topicFuture.thenCompose(topic -> topic.isPresent()
+                            ? topic.get().close(force) : CompletableFuture.completedFuture(null)));
+                }
+                return FutureUtil.waitForAll(closes);
+            }, Math.max(1, pulsar.getConfiguration().getBrokerShutdownMaxConcurrentUnload()), startsPerSecond,
+                    pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs(),
+                    pulsar::getRemainingShutdownDrainNanos);
+        }
+    }
+
+    @VisibleForTesting
+    CompletableFuture<Void> closeShutdownTopicsLocally(int startsPerSecond) {
+        return FutureUtil.supplySafely(() -> {
+            Map<NamespaceName, Map<String, CompletableFuture<Optional<Topic>>>> grouped = new HashMap<>();
+            Map<NamespaceName, List<BrokerAdmission.TopicLoad>> loads = new HashMap<>();
+            Map.copyOf(topics).forEach((name, future) -> grouped.computeIfAbsent(
+                    TopicName.get(name).getNamespaceObject(), ignored -> new HashMap<>()).put(name, future));
+            pulsar.getBrokerAdmission().getShutdownTopicLoads().forEach(load -> {
+                NamespaceName namespace = load.name().getNamespaceObject();
+                grouped.computeIfAbsent(namespace, ignored -> new HashMap<>());
+                loads.computeIfAbsent(namespace, ignored -> new ArrayList<>()).add(load);
+            });
+            Map<NamespaceBundle, BundleUnload> captured = new HashMap<>();
+            grouped.forEach((namespace, snapshot) -> {
+                // No ownership change is attempted in local teardown. A full namespace group avoids metadata
+                // lookups and covers orphaned/internal topics as well as sealed, not-yet-cached materialization.
+                NamespaceBundle group = new NamespaceBundle(namespace, Range.closed(0L, 0xffffffffL),
+                        pulsar.getNamespaceService().getNamespaceBundleFactory());
+                captured.put(group, new BundleUnload(group, Map.copyOf(snapshot),
+                        List.copyOf(loads.getOrDefault(namespace, List.of())), true));
+            });
+            return drainShutdownBundles(captured, (bundle, budget) -> {
+                BundleUnload unload = captured.get(bundle);
+                unload.startBudget(budget);
+                // Established connections end at final transport teardown. No early CLOSE is sent while this
+                // broker still holds ownership, and a failed storage close cannot be bypassed by the force flag.
+                return unload.closeStorage();
+            }, startsPerSecond, true);
+        });
     }
 
     public CompletableFuture<Optional<Topic>> getTopicIfExists(final String topic) {
@@ -1323,7 +1495,7 @@ public class BrokerService implements Closeable {
      * 2. If the topic metadata exists, the topic is created regardless of {@code createIfMissing}.
      * 3. If the topic metadata not exists, and {@code createIfMissing} is false,
      *    returns an empty Optional in a CompletableFuture. And this empty future not be added to the map.
-     * 4. Otherwise, use computeIfAbsent. It returns the existing topic or creates and adds a new topicFuture.
+     * 4. Otherwise, publish a candidate with putIfAbsent before starting materialization outside the map lock.
      *    Any exceptions will remove the topicFuture from the map.
      *
      * @param topicName The name of the topic, potentially including partition information.
@@ -1333,11 +1505,17 @@ public class BrokerService implements Closeable {
      */
     public CompletableFuture<Optional<Topic>> getTopic(final TopicName topicName, boolean createIfMissing,
                                                        @Nullable Map<String, String> properties) {
+        if (pulsar.isMetadataSessionsClosing()) {
+            return CompletableFuture.failedFuture(new ServiceUnitNotReadyException("Broker is shutting down"));
+        }
         try {
             // If topic future exists in the cache returned directly regardless of whether it fails or timeout.
             CompletableFuture<Optional<Topic>> tp = topics.get(topicName.toString());
             if (tp != null) {
                 return tp;
+            }
+            if (pulsar.getBrokerAdmission().isClosed()) {
+                return FutureUtil.failedFuture(new BrokerDrainingException());
             }
             final boolean isPersistentTopic = topicName.isPersistent();
             if (isPersistentTopic) {
@@ -1350,7 +1528,12 @@ public class BrokerService implements Closeable {
                 final CompletableFuture<Optional<Topic>> topicFuture = FutureUtil.createFutureWithTimeout(
                         Duration.ofSeconds(timeoutSeconds), executor(),
                         () -> FAILED_TO_LOAD_TOPIC_TIMEOUT_EXCEPTION);
-                final var context = new TopicLoadingContext(topicName, createIfMissing, topicFuture);
+                final var topicLoad = pulsar.getBrokerAdmission().registerTopicLoad(topicName, topicFuture);
+                if (topicLoad == null) {
+                    topicFuture.completeExceptionally(new BrokerDrainingException());
+                    return topicFuture;
+                }
+                final var context = new TopicLoadingContext(topicName, createIfMissing, topicFuture, topicLoad);
                 if (properties != null) {
                     context.setProperties(properties);
                 }
@@ -1374,6 +1557,7 @@ public class BrokerService implements Closeable {
                 });
                 context.trace("topic exists", checkNonPartitionedTopicExists(topicName)).thenAccept(exists -> {
                     if (!exists && !createIfMissing) {
+                        topicLoad.finishWithoutMaterialization();
                         topicFuture.complete(Optional.empty());
                         return;
                     }
@@ -1382,12 +1566,16 @@ public class BrokerService implements Closeable {
                     final var systemTopicLoadFuture = context.trace(TopicLoadingStage.TOPIC_POLICIES,
                             getTopicPoliciesBypassSystemTopic(topicName, TopicPoliciesService.GetType.LOCAL_ONLY));
                     systemTopicLoadFuture.thenRun(() -> {
-                        final var inserted = new MutableBoolean(false);
-                        final var cachedFuture = topics.computeIfAbsent(topicName.toString(), ___ -> {
-                            inserted.setTrue();
-                            return loadOrCreatePersistentTopic(context);
-                        });
-                        if (inserted.isFalse()) {
+                        if (topicFuture.isDone() || pulsar.getBrokerAdmission().isClosed()) {
+                            failTopicFuture(topicName.toString(), topicFuture, new BrokerDrainingException());
+                            return;
+                        }
+                        final var cachedFuture = topics.putIfAbsent(topicName.toString(), topicFuture);
+                        if (cachedFuture == null) {
+                            // Publish the candidate before dispatching I/O, outside a topic-map compute callback.
+                            loadOrCreatePersistentTopic(context);
+                        } else {
+                            topicLoad.finishWithoutMaterialization();
                             // This case should happen rarely when the same topic is loaded concurrently because we
                             // checked if the `topics` cache includes this topic before, so the latency is not the
                             // actual loading latency that should not be recorded in metrics.
@@ -1426,18 +1614,22 @@ public class BrokerService implements Closeable {
                     topicEventsDispatcher.notify(topicName.toString(), TopicEvent.LOAD, EventStage.BEFORE);
                 }
                 if (topicName.isPartitioned() || createIfMissing) {
-                    return topics.computeIfAbsent(topicName.toString(), (name) -> {
-                        topicEventsDispatcher
-                                .notify(topicName.toString(), TopicEvent.CREATE, EventStage.BEFORE);
-
-                        CompletableFuture<Optional<Topic>> res = createNonPersistentTopic(name);
-
-                        CompletableFuture<Optional<Topic>> eventFuture = topicEventsDispatcher
-                                .notifyOnCompletion(res, topicName.toString(), TopicEvent.CREATE);
-                        topicEventsDispatcher
-                                .notifyOnCompletion(eventFuture, topicName.toString(), TopicEvent.LOAD);
-                        return res;
-                    });
+                    CompletableFuture<Optional<Topic>> result = new CompletableFuture<>();
+                    var topicLoad = pulsar.getBrokerAdmission().registerTopicLoad(topicName, result);
+                    if (topicLoad == null) {
+                        return CompletableFuture.failedFuture(new BrokerDrainingException());
+                    }
+                    CompletableFuture<Optional<Topic>> existing = topics.putIfAbsent(topicName.toString(), result);
+                    if (existing != null) {
+                        topicLoad.finishWithoutMaterialization();
+                        return existing;
+                    }
+                    topicEventsDispatcher.notify(topicName.toString(), TopicEvent.CREATE, EventStage.BEFORE);
+                    CompletableFuture<Optional<Topic>> eventFuture = topicEventsDispatcher
+                            .notifyOnCompletion(result, topicName.toString(), TopicEvent.CREATE);
+                    topicEventsDispatcher.notifyOnCompletion(eventFuture, topicName.toString(), TopicEvent.LOAD);
+                    createNonPersistentTopic(topicName.toString(), result, topicLoad);
+                    return result;
                 }
                 CompletableFuture<Optional<Topic>> topicFuture = topics.get(topicName.toString());
                 if (topicFuture == null) {
@@ -1662,54 +1854,83 @@ public class BrokerService implements Closeable {
                     });
     }
 
-    private CompletableFuture<Optional<Topic>> createNonPersistentTopic(String topic) {
-        CompletableFuture<Optional<Topic>> topicFuture = new CompletableFuture<>();
+    private void createNonPersistentTopic(String topic, CompletableFuture<Optional<Topic>> topicFuture,
+                                          BrokerAdmission.TopicLoad topicLoad) {
         topicFuture.exceptionally(t -> {
             pulsarStats.recordTopicLoadFailed(TopicLoadFailureReason.OTHERS);
             pulsar.getExecutor().execute(() -> topics.remove(topic, topicFuture));
             return null;
         });
+        if (!topicLoad.beginMaterialization()) {
+            topicLoad.finishWithoutMaterialization();
+            failTopicFuture(topic, topicFuture, new BrokerDrainingException());
+            return;
+        }
         final long topicCreateTimeMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime());
         NonPersistentTopic nonPersistentTopic;
         try {
-            if (isSystemTopic(topic)) {
-                nonPersistentTopic = new NonPersistentSystemTopic(topic, this);
-            } else {
-                nonPersistentTopic = newTopic(topic, null, this, NonPersistentTopic.class);
-            }
+            nonPersistentTopic = isSystemTopic(topic) ? new NonPersistentSystemTopic(topic, this)
+                    : newTopic(topic, null, this, NonPersistentTopic.class);
             nonPersistentTopic.setCreateFuture(topicFuture);
-        } catch (Throwable e) {
-            log.warn().attr("topic", topic).exception(e).log("Failed to create topic");
-            topicFuture.completeExceptionally(e);
-            return topicFuture;
+        } catch (Throwable error) {
+            topicLoad.cleanupUntracked(error);
+            failTopicFuture(topic, topicFuture, error);
+            return;
         }
-        checkTopicNsOwnership(topic)
-                .thenCompose((__) -> validateTopicConsistency(TopicName.get(topic)))
-                .thenRun(() -> {
-            nonPersistentTopic.initialize()
-                    .thenCompose(__ -> nonPersistentTopic.checkReplication())
-                    .thenRun(() -> {
-                        log.info().attr("nonPersistentTopic", nonPersistentTopic).log("Created topic");
-                        long topicLoadLatencyMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime()) - topicCreateTimeMs;
-                        pulsarStats.recordTopicLoadTimeValue(topic, topicLoadLatencyMs);
-                        addTopicToStatsMaps(TopicName.get(topic), nonPersistentTopic);
-                        topicFuture.complete(Optional.of(nonPersistentTopic));
-                    }).exceptionally(ex -> {
-                log.warn()
-                        .attr("topic", topic)
-                        .exceptionMessage(ex.getCause())
-                        .log("Replication check failed. Removing topic from topics list");
-                nonPersistentTopic.stopReplProducers().whenComplete((v, exception) -> {
-                    topicFuture.completeExceptionally(ex);
+        FutureUtil.supplySafely(() -> checkTopicNsOwnership(topic))
+                .thenCompose(ignored -> validateTopicConsistency(TopicName.get(topic)))
+                .thenCompose(ignored -> nonPersistentTopic.initialize())
+                .thenCompose(ignored -> nonPersistentTopic.checkReplication())
+                .whenComplete((ignored, error) -> {
+                    if (error == null && topicLoad.canPublish()
+                            && topicFuture.complete(Optional.of(nonPersistentTopic))) {
+                        try {
+                            addTopicToStatsMaps(TopicName.get(topic), nonPersistentTopic);
+                            pulsarStats.recordTopicLoadTimeValue(topic,
+                                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime()) - topicCreateTimeMs);
+                        } finally {
+                            topicLoad.published(nonPersistentTopic);
+                        }
+                    } else {
+                        closeRejectedTopic(nonPersistentTopic, topicLoad).whenComplete((closed, closeError) -> {
+                            topics.remove(topic, topicFuture);
+                            topicFuture.completeExceptionally(error != null ? error
+                                    : closeError != null ? closeError : new BrokerDrainingException());
+                        });
+                    }
                 });
-                return null;
-            });
-        }).exceptionally(e -> {
-            topicFuture.completeExceptionally(FutureUtil.unwrapCompletionException(e));
-            return null;
-        });
+    }
 
-        return topicFuture;
+    private CompletableFuture<Void> closeRejectedTopic(Topic topic, BrokerAdmission.TopicLoad load) {
+        return closeRejectedLoad(topic::closeUnpublished, load);
+    }
+
+    private CompletableFuture<Void> closeRejectedLedger(ManagedLedger ledger, BrokerAdmission.TopicLoad load) {
+        return closeRejectedLoad(() -> {
+            CompletableFuture<Void> closed = new CompletableFuture<>();
+            ledger.asyncClose(new CloseCallback() {
+                @Override
+                public void closeComplete(Object context) {
+                    closed.complete(null);
+                }
+
+                @Override
+                public void closeFailed(ManagedLedgerException error, Object context) {
+                    closed.completeExceptionally(error);
+                }
+            }, null);
+            return closed;
+        }, load);
+    }
+
+    private CompletableFuture<Void> closeRejectedLoad(Supplier<CompletableFuture<Void>> close,
+                                                      BrokerAdmission.TopicLoad load) {
+        // Closure can take lifecycle locks; do not run it on a metadata callback thread.
+        CompletableFuture<Void> cleanup = shutdownTopicCloseLimiter.run(close);
+        if (load != null) {
+            load.cleaned(cleanup);
+        }
+        return cleanup;
     }
 
     public PulsarClient getReplicationClient(String cluster, Optional<ClusterData> clusterDataOp) {
@@ -2270,94 +2491,98 @@ public class BrokerService implements Closeable {
                 loggerContextBuilder.attr("topic", topicName.toString());
             }
             managedLedgerConfig.setLoggerContext(loggerContextBuilder.build());
+            BrokerAdmission.TopicLoad topicLoad = context.topicLoad();
+            if (topicLoad != null ? !topicLoad.beginMaterialization()
+                    : pulsar.getBrokerAdmission().isClosed() || topicFuture.isDone()) {
+                if (topicLoad != null) {
+                    topicLoad.finishWithoutMaterialization();
+                }
+                failTopicFuture(topic, topicFuture, new BrokerDrainingException());
+                return null;
+            }
             context.start(TopicLoadingStage.OPEN_ML);
-            managedLedgerFactory.asyncOpen(topicName.getPersistenceNamingEncoding(), managedLedgerConfig,
+            try {
+                managedLedgerFactory.asyncOpen(topicName.getPersistenceNamingEncoding(), managedLedgerConfig,
                     new OpenLedgerCallback() {
                         @Override
                         public void openLedgerComplete(ManagedLedger ledger, Object ctx) {
+                            context.finish(TopicLoadingStage.OPEN_ML);
+                            if (topicFuture.isDone() || pulsar.getBrokerAdmission().isClosed()) {
+                                closeRejectedLedger(ledger, topicLoad).whenComplete((ignored, error) ->
+                                        failTopicFuture(topic, topicFuture,
+                                                error != null ? error : new BrokerDrainingException()));
+                                return;
+                            }
+                            PersistentTopic persistentTopic;
                             try {
-                                context.finish(TopicLoadingStage.OPEN_ML);
-                                PersistentTopic persistentTopic = isSystemTopic(topic)
+                                persistentTopic = isSystemTopic(topic)
                                         ? new SystemTopic(topic, ledger, BrokerService.this)
                                         : newTopic(topic, ledger, BrokerService.this, PersistentTopic.class);
                                 persistentTopic.setCreateFuture(topicFuture);
-                                context.trace(TopicLoadingStage.INITIALIZE, persistentTopic.initialize(context))
-                                        .thenCompose(__ -> context.trace(TopicLoadingStage.PRE_CREATE_COMPACTED_SUB,
-                                                persistentTopic.preCreateSubscriptionForCompactionIfNeeded()))
-                                        .thenCompose(__ -> context.trace(TopicLoadingStage.REPLICATION,
-                                                persistentTopic.initializeCheckReplication()))
-                                        .thenCompose(v -> context.trace(TopicLoadingStage.DEDUPLICATION,
-                                                persistentTopic.checkDeduplicationStatus()))
-                                        .thenRun(() -> {
-                                            final var latency = context.traceAndGetLatency("done");
-                                            log.info()
-                                                    .attr("topic", topic)
-                                                    .attr("dedupEnabled", persistentTopic.isDeduplicationEnabled())
-                                                    .attr("latency", latency.description())
-                                                    .log("Loaded topic");
-                                            pulsarStats.recordTopicLoadTimeValue(topic, latency.elapsedInMillis());
-                                            if (!topicFuture.complete(Optional.of(persistentTopic))) {
-                                                // Check create persistent topic timeout.
-                                                if (topicFuture.isCompletedExceptionally()) {
-                                                    log.warn()
-                                                            .attr("topic", topic)
-                                                            .attr("error",
-                                                                    FutureUtil.getException(topicFuture).orElse(null))
-                                                            .log("The future is already completed with failure, "
-                                                                    + "closing the topic");
-                                                } else {
-                                                    // It should not happen.
-                                                    log.error()
-                                                            .attr("topic", topic)
-                                                            .log("future is already completed by another thread, "
-                                                                    + "which is not expected. Closing the current one");
-                                                }
-                                                executor().submit(() -> {
-                                                    persistentTopic.close().whenComplete((ignore, ex) -> {
-                                                        topics.remove(topic, topicFuture);
-                                                        if (ex != null) {
-                                                            log.warn()
-                                                                    .attr("topic", topic)
-                                                                    .exception(ex)
-                                                                    .log("Get an error when closing topic.");
-                                                        }
-                                                    });
-                                                });
-                                            } else {
-                                                addTopicToStatsMaps(topicName, persistentTopic);
-                                            }
-                                        })
-                                        .exceptionally((ex) -> {
-                                            log.warn()
-                                                    .attr("topic", topic)
-                                                    .exceptionMessage(ex)
-                                                    .log("Replication or dedup check failed."
-                                                            + "Removing topic from topics list");
-                                            executor().submit(() -> {
-                                                persistentTopic.close().whenComplete((ignore, closeEx) -> {
-                                                    topics.remove(topic, topicFuture);
-                                                    if (closeEx != null) {
-                                                        log.warn()
-                                                                .attr("topic", topic)
-                                                                .log("Get an error when closing topic.");
-                                                    }
-                                                    context.setTopicLoadFailureReason(
-                                                            TopicLoadFailureReason.FAILED_INIT);
-                                                    topicFuture.completeExceptionally(ex);
-                                                });
-                                            });
-                                            return null;
-                                        });
-                            } catch (Exception e) {
-                                failTopicFuture(topic, topicFuture, e);
+                            } catch (Throwable error) {
+                                closeRejectedLedger(ledger, topicLoad).whenComplete((ignored, closeError) ->
+                                        failTopicFuture(topic, topicFuture, error));
+                                return;
                             }
+                            FutureUtil.supplySafely(() -> context.trace(TopicLoadingStage.INITIALIZE,
+                                            persistentTopic.initialize(context)))
+                                    .thenCompose(__ -> context.trace(TopicLoadingStage.PRE_CREATE_COMPACTED_SUB,
+                                            persistentTopic.preCreateSubscriptionForCompactionIfNeeded()))
+                                    .thenCompose(__ -> context.trace(TopicLoadingStage.REPLICATION,
+                                            persistentTopic.initializeCheckReplication()))
+                                    .thenCompose(__ -> context.trace(TopicLoadingStage.DEDUPLICATION,
+                                            persistentTopic.checkDeduplicationStatus()))
+                                    .whenComplete((ignored, error) -> {
+                                        boolean admitted = topicLoad != null ? topicLoad.canPublish()
+                                                : !pulsar.getBrokerAdmission().isClosed();
+                                        if (error == null && admitted
+                                                && topicFuture.complete(Optional.of(persistentTopic))) {
+                                            try {
+                                                addTopicToStatsMaps(topicName, persistentTopic);
+                                                final var latency = context.traceAndGetLatency("done");
+                                                pulsarStats.recordTopicLoadTimeValue(topic, latency.elapsedInMillis());
+                                                log.info().attr("topic", topic)
+                                                        .attr("dedupEnabled", persistentTopic.isDeduplicationEnabled())
+                                                        .attr("latency", latency.description()).log("Loaded topic");
+                                            } finally {
+                                                if (topicLoad != null) {
+                                                    topicLoad.published(persistentTopic);
+                                                }
+                                            }
+                                        } else {
+                                            if (error != null) {
+                                                context.setTopicLoadFailureReason(TopicLoadFailureReason.FAILED_INIT);
+                                            }
+                                            closeRejectedTopic(persistentTopic, topicLoad)
+                                                    .whenComplete((closed, closeError) -> failTopicFuture(topic,
+                                                            topicFuture, error != null ? error : closeError != null
+                                                                    ? closeError : new BrokerDrainingException()));
+                                        }
+                                    });
                         }
 
                         @Override
                         public void openLedgerFailed(ManagedLedgerException exception, Object ctx) {
+                            if (topicLoad != null) {
+                                topicLoad.cleanupUntracked(new IllegalStateException(
+                                        "Managed ledger factory did not report failed-open cleanup", exception));
+                            }
+                            failOpen(exception);
+                        }
+
+                        @Override
+                        public void openLedgerFailed(ManagedLedgerException exception, CompletionStage<Void> cleanup,
+                                                     Object ctx) {
+                            shutdownTopicCloseLimiter.observeExisting(cleanup);
+                            if (topicLoad != null) {
+                                topicLoad.cleaned(cleanup);
+                            }
+                            failOpen(exception);
+                        }
+
+                        private void failOpen(ManagedLedgerException exception) {
                             context.finish(TopicLoadingStage.OPEN_ML);
                             if (!createIfMissing && exception instanceof ManagedLedgerNotFoundException) {
-                                // We were just trying to load a topic and the topic doesn't exist
                                 pulsar.getExecutor().execute(() -> topics.remove(topic, topicFuture));
                                 loadFuture.completeExceptionally(exception);
                                 topicFuture.complete(Optional.empty());
@@ -2367,6 +2592,12 @@ public class BrokerService implements Closeable {
                             }
                         }
                     }, () -> isTopicNsOwnedByBrokerAsync(topicName), null);
+            } catch (Throwable error) {
+                if (topicLoad != null) {
+                    topicLoad.cleanupUntracked(error);
+                }
+                failTopicFuture(topic, topicFuture, error);
+            }
             return null;
         }).exceptionally((exception) -> {
             boolean migrationFailure = exception.getCause() instanceof TopicMigratedException;
@@ -2906,8 +3137,12 @@ public class BrokerService implements Closeable {
         ScheduledFuture<?> taskTimeout = executor().schedule(() -> {
             if (!future.isDone()) {
                 log.warn().attr("serviceUnit", serviceUnit).log("Unloading of has timed out");
-                // Complete the future with no error
-                future.complete(0);
+                if (pulsar.getBrokerAdmission().isClosed()) {
+                    future.completeExceptionally(new TimeoutException("Shutdown bundle unload timed out"));
+                } else {
+                    // Preserve the ordinary administrative unload completion contract.
+                    future.complete(0);
+                }
             }
         }, timeout, unit);
 
@@ -2929,10 +3164,38 @@ public class BrokerService implements Closeable {
                                                          boolean closeWithoutWaitingClientDisconnect,
                                                          Map<String, CompletableFuture<Optional<Topic>>>
                                                                  topicFutures) {
+        List<BrokerAdmission.TopicLoad> loads = pulsar.getBrokerAdmission().isClosed()
+                ? pulsar.getBrokerAdmission().getShutdownTopicLoads() : List.of();
+        return unloadServiceUnit(serviceUnit, disconnectClients, closeWithoutWaitingClientDisconnect,
+                topicFutures, loads);
+    }
+
+    private CompletableFuture<Integer> unloadServiceUnit(NamespaceBundle serviceUnit, boolean disconnectClients,
+            boolean closeWithoutWaitingClientDisconnect, Map<String, CompletableFuture<Optional<Topic>>> topicFutures,
+            List<BrokerAdmission.TopicLoad> loads) {
+        return unloadServiceUnit(serviceUnit, topicFutures, loads,
+                topic -> closeTopicForUnload(topic, disconnectClients, closeWithoutWaitingClientDisconnect));
+    }
+
+    private CompletableFuture<Integer> unloadServiceUnit(NamespaceBundle serviceUnit,
+            Map<String, CompletableFuture<Optional<Topic>>> topicFutures, List<BrokerAdmission.TopicLoad> loads,
+            Function<Topic, CompletableFuture<Void>> topicClose) {
+        return unloadServiceUnit(serviceUnit, topicFutures, loads, topicClose, false);
+    }
+
+    private CompletableFuture<Integer> unloadServiceUnit(NamespaceBundle serviceUnit,
+            Map<String, CompletableFuture<Optional<Topic>>> topicFutures, List<BrokerAdmission.TopicLoad> loads,
+            Function<Topic, CompletableFuture<Void>> topicClose, boolean includeInternalTopics) {
         List<CompletableFuture<Void>> closeFutures = new ArrayList<>();
+        Map<CompletableFuture<Optional<Topic>>, BrokerAdmission.TopicLoad> pendingLoads = new IdentityHashMap<>();
+        loads.forEach(load -> {
+            if (serviceUnit.includes(load.name())) {
+                pendingLoads.put(load.request(), load);
+            }
+        });
         topicFutures.forEach((name, topicFuture) -> {
             TopicName topicName = TopicName.get(name);
-            if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
+            if (!includeInternalTopics && ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
                     && ExtensibleLoadManagerImpl.isInternalTopic(topicName.toString())) {
                 if (ExtensibleLoadManagerImpl.debug(pulsar.getConfiguration(), log)) {
                     log.info()
@@ -2943,12 +3206,15 @@ public class BrokerService implements Closeable {
                 return;
             }
 
+            BrokerAdmission.TopicLoad trackedLoad = pendingLoads.remove(topicFuture);
+            CompletableFuture<Optional<Topic>> physicalTopic = trackedLoad != null
+                    ? trackedLoad.completion() : topicFuture;
             // Topic needs to be unloaded
             log.info().attr("topic", topicName).log("Unloading topic");
-            if (topicFuture.isCompletedExceptionally()) {
+            if (trackedLoad == null && topicFuture.isCompletedExceptionally()) {
                 try {
                     topicFuture.get();
-                } catch (InterruptedException | ExecutionException ex) {
+                } catch (InterruptedException | ExecutionException | CancellationException ex) {
                     if (ex.getCause() instanceof ServiceUnitNotReadyException) {
                         // Topic was already unloaded
                         log.debug().attr("topic", topicName).log("Topic was already unloaded");
@@ -2958,12 +3224,12 @@ public class BrokerService implements Closeable {
                     }
                 }
             }
-            closeFutures.add(topicFuture
-                    .thenCompose(t -> t.isPresent() ? t.get().close(
-                            disconnectClients, closeWithoutWaitingClientDisconnect)
+            closeFutures.add(physicalTopic
+                    .thenCompose(t -> t.isPresent() ? topicClose.apply(t.get())
                             : CompletableFuture.completedFuture(null))
                     .exceptionally(e -> {
-                        if (e.getCause() instanceof BrokerServiceException.ServiceUnitNotReadyException
+                        if (trackedLoad == null
+                                && e.getCause() instanceof BrokerServiceException.ServiceUnitNotReadyException
                                 && e.getMessage().contains("Please redo the lookup")) {
                             log.warn().attr("topic", topicName).log("Topic ownership check failed. Skipping it");
                             return null;
@@ -2972,19 +3238,309 @@ public class BrokerService implements Closeable {
                     }));
         });
 
+        // Pre-insertion loads and failed requests removed from the cache still own their cleanup obligation.
+        pendingLoads.values().forEach(load -> {
+            if (!includeInternalTopics && ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
+                    && ExtensibleLoadManagerImpl.isInternalTopic(load.name().toString())) {
+                return;
+            }
+            closeFutures.add(load.completion().thenCompose(topic -> topic.isPresent()
+                    ? topicClose.apply(topic.get())
+                    : CompletableFuture.completedFuture(null)));
+        });
+
+        CompletableFuture<Integer> storesClosed = CompletableFuture.completedFuture(0);
         if (getPulsar().getConfig().isTransactionCoordinatorEnabled()
                 && serviceUnit.getNamespaceObject().equals(NamespaceName.SYSTEM_NAMESPACE)) {
             TransactionMetadataStoreService metadataStoreService =
                     this.getPulsar().getTransactionMetadataStoreService();
-            // if the store belongs to this bundle, remove and close the store
-            this.getPulsar().getTransactionMetadataStoreService().getStores().values().stream().filter(store ->
-                    serviceUnit.includes(SystemTopicNames.TRANSACTION_COORDINATOR_ASSIGN
-                            .getPartition((int) (store.getTransactionCoordinatorID().getId()))))
-                    .map(TransactionMetadataStore::getTransactionCoordinatorID)
-                    .forEach(tcId -> closeFutures.add(metadataStoreService.removeTransactionMetadataStore(tcId)));
+            storesClosed = metadataStoreService.closeStoresForBundle(serviceUnit);
         }
 
-        return FutureUtil.waitForAll(closeFutures).thenApply(v -> closeFutures.size());
+        return FutureUtil.waitForAll(closeFutures).thenCombine(storesClosed,
+                (__, storeCount) -> closeFutures.size() + storeCount);
+    }
+
+    private CompletableFuture<Void> closeTopicForUnload(Topic topic, boolean disconnectClients, boolean force) {
+        if (pulsar.getBrokerAdmission().isClosed() && !disconnectClients) {
+            return shutdownTopicCloseLimiter.run(() -> topic.close(false, false));
+        }
+        return FutureUtil.supplySafely(() -> topic.close(disconnectClients, force));
+    }
+
+    /** Capture the same cache and materialization identities for both shutdown close phases. */
+    public BundleUnload captureShutdownBundle(NamespaceBundle bundle) {
+        List<BrokerAdmission.TopicLoad> loads = pulsar.getBrokerAdmission().getShutdownTopicLoads().stream()
+                .filter(load -> bundle.includes(load.name())).toList();
+        return new BundleUnload(bundle, Map.copyOf(getTopicFuturesInBundle(bundle)), loads);
+    }
+
+    /** Group one sealed broker snapshot using the captured ranges, rather than a changing namespace layout. */
+    public Map<NamespaceBundle, BundleUnload> captureShutdownBundles(Collection<NamespaceBundle> bundles) {
+        Map<NamespaceName, RangeMap<Long, NamespaceBundle>> ranges = new HashMap<>();
+        Map<NamespaceBundle, Map<String, CompletableFuture<Optional<Topic>>>> groupedTopics = new HashMap<>();
+        Map<NamespaceBundle, List<BrokerAdmission.TopicLoad>> groupedLoads = new HashMap<>();
+        for (NamespaceBundle bundle : bundles) {
+            RangeMap<Long, NamespaceBundle> namespace = ranges.computeIfAbsent(bundle.getNamespaceObject(),
+                    ignored -> TreeRangeMap.create());
+            if (!namespace.subRangeMap(bundle.getKeyRange()).asMapOfRanges().isEmpty()) {
+                // A split/administrative transition is already changing this generation. Never guess ownership.
+                throw new IllegalStateException("Overlapping shutdown ownership ranges: " + bundle);
+            }
+            namespace.put(bundle.getKeyRange(), bundle);
+            groupedTopics.put(bundle, new HashMap<>());
+            groupedLoads.put(bundle, new ArrayList<>());
+        }
+        Function<TopicName, NamespaceBundle> owner = name -> {
+            RangeMap<Long, NamespaceBundle> namespace = ranges.get(name.getNamespaceObject());
+            return namespace == null ? null : namespace.get(pulsar.getNamespaceService()
+                    .getNamespaceBundleFactory().getLongHashCode(name.toString()));
+        };
+        Map.copyOf(topics).forEach((name, future) -> {
+            NamespaceBundle bundle = owner.apply(TopicName.get(name));
+            if (bundle != null) {
+                groupedTopics.get(bundle).put(name, future);
+            }
+            // Unassigned topics stay in the broker cache for local/final cleanup; no ownership is released for them.
+        });
+        pulsar.getBrokerAdmission().getShutdownTopicLoads().forEach(load -> {
+            NamespaceBundle bundle = owner.apply(load.name());
+            if (bundle != null) {
+                groupedLoads.get(bundle).add(load);
+            }
+        });
+        Map<NamespaceBundle, BundleUnload> result = new HashMap<>();
+        groupedTopics.forEach((bundle, snapshot) -> result.put(bundle,
+                new BundleUnload(bundle, Map.copyOf(snapshot), List.copyOf(groupedLoads.get(bundle)))));
+        return Map.copyOf(result);
+    }
+
+    /** Retained physical completion; request timeouts and cancellation must not mutate these barriers. */
+    public final class BundleUnload {
+        private final NamespaceBundle bundle;
+        private final Map<String, CompletableFuture<Optional<Topic>>> topics;
+        private final List<BrokerAdmission.TopicLoad> loads;
+        private final Topic firstTopic;
+        private final boolean includeInternalTopics;
+        private final List<CompletableFuture<Optional<Topic>>> materializations;
+        private final AtomicInteger remainingTopics;
+        private volatile long storageStartedNanos;
+        private volatile long storageClosedNanos = Long.MIN_VALUE;
+        private boolean budgetStarted;
+        private volatile long storageBudgetNanos = Long.MAX_VALUE;
+        private final AtomicBoolean firstPermitConsumed = new AtomicBoolean();
+        private CompletableFuture<ShutdownTopicCloseLimiter.Permit> firstStoragePermit;
+        private CompletableFuture<Void> storageClosed;
+        private CompletableFuture<Void> clientsClosed;
+
+        private BundleUnload(NamespaceBundle bundle, Map<String, CompletableFuture<Optional<Topic>>> topics,
+                             List<BrokerAdmission.TopicLoad> loads) {
+            this(bundle, topics, loads, false);
+        }
+
+        private BundleUnload(NamespaceBundle bundle, Map<String, CompletableFuture<Optional<Topic>>> topics,
+                             List<BrokerAdmission.TopicLoad> loads, boolean includeInternalTopics) {
+            this.bundle = bundle;
+            this.includeInternalTopics = includeInternalTopics;
+            if (!includeInternalTopics && ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)) {
+                // Internal topics belong to the leader-broker role, independently of this bundle's ownership.
+                Map<String, CompletableFuture<Optional<Topic>>> userTopics = new HashMap<>(topics);
+                userTopics.keySet().removeIf(ExtensibleLoadManagerImpl::isInternalTopic);
+                this.topics = Map.copyOf(userTopics);
+                this.loads = loads.stream().filter(load ->
+                        !ExtensibleLoadManagerImpl.isInternalTopic(load.name().toString())).toList();
+            } else {
+                this.topics = topics;
+                this.loads = loads;
+            }
+            Map<CompletableFuture<Optional<Topic>>, CompletableFuture<Optional<Topic>>> physical =
+                    new IdentityHashMap<>();
+            this.topics.values().forEach(future -> physical.put(future, future));
+            this.loads.forEach(load -> physical.put(load.request(), load.completion()));
+            this.materializations = List.copyOf(physical.values());
+            this.remainingTopics = new AtomicInteger(materializations.size());
+            materializations.forEach(future -> future.whenComplete((topic, error) -> {
+                if (error != null || topic.isEmpty()) {
+                    remainingTopics.decrementAndGet();
+                }
+            }));
+            this.firstTopic = findReadyTopic();
+        }
+
+        /** Start the one bundle budget only after its first storage slot is ready. */
+        public synchronized void startBudget(long budgetNanos) {
+            if (budgetStarted) {
+                return;
+            }
+            budgetStarted = true;
+            storageStartedNanos = System.nanoTime();
+            storageBudgetNanos = Math.max(0, budgetNanos);
+        }
+
+        public long remainingNanos() {
+            long budget = storageBudgetNanos;
+            return Math.min(pulsar.getRemainingShutdownDrainNanos(), budget == Long.MAX_VALUE ? Long.MAX_VALUE
+                    : Math.max(0, budget - (System.nanoTime() - storageStartedNanos)));
+        }
+
+        private ShutdownBundleCost.Load load() {
+            long producers = 0;
+            long consumers = 0;
+            long replication = 0;
+            long unresolved = 0;
+            boolean persistence = false;
+            boolean transactions = false;
+            for (CompletableFuture<Optional<Topic>> future : materializations) {
+                if (!future.isDone()) {
+                    unresolved++;
+                } else if (!future.isCompletedExceptionally()) {
+                    Topic topic = future.getNow(Optional.empty()).orElse(null);
+                    if (topic != null) {
+                        producers += topic.getProducers().size();
+                        for (Subscription subscription : topic.getSubscriptions().values()) {
+                            consumers += subscription.getConsumers().size();
+                        }
+                        replication += topic.getReplicators().size() + topic.getShadowReplicators().size();
+                        if (topic instanceof PersistentTopic persistent) {
+                            persistence |= persistent.getPendingWriteOps().get() > 0
+                                    || persistent.getManagedLedger().getPendingAddEntriesCount() > 0;
+                            transactions |= persistent.getTransactionBuffer().getOngoingTxnCount() > 0;
+                        }
+                    }
+                }
+            }
+            if (pulsar.getConfiguration().isTransactionCoordinatorEnabled()
+                    && bundle.getNamespaceObject().equals(NamespaceName.SYSTEM_NAMESPACE)) {
+                transactions |= pulsar.getTransactionMetadataStoreService().hasStoresInBundle(bundle);
+            }
+            double messages = 0;
+            double bytes = 0;
+            boolean fresh = false;
+            synchronized (pulsarStats) {
+                NamespaceBundleStats stats = pulsarStats.getBundleStats().get(bundle.toString());
+                long age = System.currentTimeMillis() - pulsarStats.getUpdatedAt();
+                if (stats != null && age >= 0 && age <= TimeUnit.SECONDS.toMillis(
+                        2L * pulsar.getConfiguration().getStatsUpdateFrequencyInSecs())) {
+                    fresh = true;
+                    messages = stats.msgRateIn + stats.msgRateOut;
+                    bytes = stats.msgThroughputIn + stats.msgThroughputOut;
+                }
+            }
+            return new ShutdownBundleCost.Load(producers, consumers, replication, unresolved,
+                    persistence, transactions, messages, bytes, fresh);
+        }
+
+        private Topic findReadyTopic() {
+            for (CompletableFuture<Optional<Topic>> future : materializations) {
+                if (future.isDone() && !future.isCompletedExceptionally()) {
+                    Topic topic = future.getNow(Optional.empty()).orElse(null);
+                    if (topic != null) {
+                        return topic;
+                    }
+                }
+            }
+            // Pending materializations clean themselves up through the same limiter. Reserving a slot while
+            // waiting for their cleanup would deadlock at capacity one; they are joined without another slot.
+            return null;
+        }
+
+        public CompletableFuture<Void> prepareStorage() {
+            CompletableFuture<ShutdownTopicCloseLimiter.Permit> result;
+            synchronized (this) {
+                if (firstStoragePermit != null) {
+                    return firstStoragePermit.thenAccept(ignored -> { });
+                }
+                result = new CompletableFuture<>();
+                firstStoragePermit = result;
+            }
+            FutureUtil.completeAfter(result, firstTopic == null
+                    ? CompletableFuture.completedFuture(null) : shutdownTopicCloseLimiter.reserve());
+            return result.thenAccept(ignored -> { });
+        }
+
+        public void cancelPreparation() {
+            CompletableFuture<ShutdownTopicCloseLimiter.Permit> reservation;
+            synchronized (this) {
+                reservation = firstStoragePermit;
+            }
+            if (reservation != null && firstPermitConsumed.compareAndSet(false, true)) {
+                reservation.thenAccept(permit -> {
+                    if (permit != null) {
+                        permit.close();
+                    }
+                });
+            }
+        }
+
+        private CompletableFuture<Void> closeStorageTopic(Topic topic) {
+            if (topic == firstTopic && firstPermitConsumed.compareAndSet(false, true)) {
+                return firstStoragePermit.thenCompose(permit -> permit.run(bundle.toString(), this::remainingNanos,
+                        topic::closeForShutdownTransfer))
+                        .whenComplete((ignored, error) -> remainingTopics.decrementAndGet());
+            }
+            return shutdownTopicCloseLimiter.reserve().thenCompose(permit -> permit.run(bundle.toString(),
+                    this::remainingNanos, topic::closeForShutdownTransfer))
+                    .whenComplete((ignored, error) -> remainingTopics.decrementAndGet());
+        }
+
+        public CompletableFuture<Void> closeStorage() {
+            CompletableFuture<Void> result;
+            synchronized (this) {
+                if (storageClosed != null) {
+                    return storageClosed.copy();
+                }
+                result = new CompletableFuture<>();
+                storageClosed = result;
+            }
+            FutureUtil.completeAfter(result, prepareStorage().thenComposeAsync(
+                    ignored -> unloadServiceUnit(bundle, topics, loads, this::closeStorageTopic, includeInternalTopics),
+                    pulsar.getExecutor())
+                    .thenAccept(ignored -> storageClosedNanos = System.nanoTime()).whenComplete((ignored, error) -> {
+                        if (error != null) {
+                            cancelPreparation();
+                        }
+                    }));
+            return result.copy();
+        }
+
+        public CompletableFuture<Void> disconnectClients() {
+            CompletableFuture<Void> result;
+            synchronized (this) {
+                if (clientsClosed != null) {
+                    return clientsClosed.copy();
+                }
+                result = new CompletableFuture<>();
+                clientsClosed = result;
+            }
+            FutureUtil.completeAfter(result, closeStorage().thenComposeAsync(ignored -> {
+                if (remainingNanos() <= 0) {
+                    return CompletableFuture.failedFuture(new TimeoutException("Bundle notification deadline expired"));
+                }
+                Set<Topic> captured = Collections.newSetFromMap(new IdentityHashMap<>());
+                for (CompletableFuture<Optional<Topic>> materialization : materializations) {
+                    if (!materialization.isDone()) {
+                        return CompletableFuture.failedFuture(new IllegalStateException(
+                                "Topic materialization is still pending after the storage barrier"));
+                    }
+                    if (!materialization.isCompletedExceptionally()) {
+                        materialization.getNow(Optional.empty()).ifPresent(captured::add);
+                    }
+                }
+                CompletableFuture<Optional<BrokerLookupData>> destination = captured.isEmpty()
+                        ? CompletableFuture.completedFuture(Optional.empty())
+                        : FutureUtil.supplySafely(() -> ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(
+                                pulsar, captured.iterator().next().getName()));
+                ShutdownClientNotifications notifications = new ShutdownClientNotifications(
+                        captured, pulsar.getExecutor(), this::remainingNanos, destination);
+                return notifications.start().whenComplete((__, error) -> log.debug()
+                        .attr("bundle", bundle)
+                        .attr("notifications", notifications.snapshot())
+                        .exception(error)
+                        .log("Finished shutdown client notification attempt"));
+            }, pulsar.getExecutor()).thenRunAsync(
+                    () -> cleanUnloadedTopicFromCache(bundle, topics), pulsar.getExecutor()));
+            return result.copy();
+        }
     }
 
     /**

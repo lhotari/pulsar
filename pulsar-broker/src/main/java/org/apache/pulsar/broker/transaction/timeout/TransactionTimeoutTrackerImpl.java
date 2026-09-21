@@ -40,6 +40,8 @@ public class TransactionTimeoutTrackerImpl implements TransactionTimeoutTracker,
     private final long tickTimeMillis;
     private final Clock clock;
     private Timeout currentTimeout;
+    // Guarded by this, together with the queue and timeout registration.
+    private boolean closed;
     private static final long INITIAL_TIMEOUT = 1L;
 
     private volatile long nowTaskTimeoutTime = INITIAL_TIMEOUT;
@@ -58,10 +60,19 @@ public class TransactionTimeoutTrackerImpl implements TransactionTimeoutTracker,
     @Override
     public void addTransaction(long sequenceId, long timeout) {
         if (timeout < tickTimeMillis) {
+            synchronized (this) {
+                if (closed) {
+                    return;
+                }
+            }
+            // This notification was admitted before closure; do not invoke the service under our monitor.
             this.transactionMetadataStoreService.endTransactionForTimeout(new TxnID(tcId, sequenceId));
             return;
         }
-        synchronized (this){
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
             long nowTime = clock.millis();
             long transactionTimeoutTime = nowTime + timeout;
             priorityQueue.add(transactionTimeoutTime, tcId, sequenceId);
@@ -81,14 +92,16 @@ public class TransactionTimeoutTrackerImpl implements TransactionTimeoutTracker,
     }
 
     @Override
-    public void replayAddTransaction(long sequenceId, long timeout) {
-        priorityQueue.add(timeout, tcId, sequenceId);
+    public synchronized void replayAddTransaction(long sequenceId, long timeout) {
+        if (!closed) {
+            priorityQueue.add(timeout, tcId, sequenceId);
+        }
     }
 
     @Override
     public void start() {
         synchronized (this) {
-            if (currentTimeout == null && !priorityQueue.isEmpty()) {
+            if (!closed && currentTimeout == null && !priorityQueue.isEmpty()) {
                 this.currentTimeout = this.timer.newTimeout(this,
                         priorityQueue.peekN1() - this.clock.millis(), TimeUnit.MILLISECONDS);
                 this.nowTaskTimeoutTime = priorityQueue.peekN1();
@@ -98,29 +111,41 @@ public class TransactionTimeoutTrackerImpl implements TransactionTimeoutTracker,
 
     @Override
     public void close() {
-        priorityQueue.close();
-        if (this.currentTimeout != null) {
-            this.currentTimeout.cancel();
+        Timeout timeout;
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            priorityQueue.close();
+            timeout = currentTimeout;
+            currentTimeout = null;
+        }
+        if (timeout != null) {
+            timeout.cancel();
         }
     }
 
     @Override
     public void run(Timeout timeout) {
-        synchronized (this){
-            while (!priorityQueue.isEmpty()){
+        while (true) {
+            TxnID expiredTransaction;
+            synchronized (this) {
+                if (closed || priorityQueue.isEmpty()) {
+                    return;
+                }
                 long timeoutTime = priorityQueue.peekN1();
                 long nowTime = clock.millis();
-                if (timeoutTime < nowTime){
-                    transactionMetadataStoreService.endTransactionForTimeout(new TxnID(priorityQueue.peekN2(),
-                            priorityQueue.peekN3()));
-                    priorityQueue.pop();
-                } else {
-                    currentTimeout = timer
-                            .newTimeout(this, timeoutTime - clock.millis(), TimeUnit.MILLISECONDS);
+                if (timeoutTime >= nowTime) {
+                    currentTimeout = timer.newTimeout(this, timeoutTime - nowTime, TimeUnit.MILLISECONDS);
                     nowTaskTimeoutTime = timeoutTime;
-                    break;
+                    return;
                 }
+                expiredTransaction = new TxnID(priorityQueue.peekN2(), priorityQueue.peekN3());
+                priorityQueue.pop();
             }
+            // An admitted expiry can finish during close. The service must not run under the queue monitor.
+            transactionMetadataStoreService.endTransactionForTimeout(expiredTransaction);
         }
     }
 }
