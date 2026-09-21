@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 import static org.testng.Assert.assertFalse;
@@ -37,6 +38,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.pulsar.broker.ServiceConfiguration;
+import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
 import org.mockito.stubbing.Answer;
 import org.testng.annotations.DataProvider;
@@ -44,6 +46,36 @@ import org.testng.annotations.Test;
 
 @Test(groups = "broker")
 public class SingleActiveDispatcherCloseTest {
+    @Test
+    public void testOverlappingDisconnectRetainsNewArgumentsAndConsumers() throws Exception {
+        AbstractDispatcherSingleActiveConsumer dispatcher = newDispatcher();
+        Consumer first = addConsumer(dispatcher, "first");
+        Consumer second = null;
+        try {
+            CompletableFuture<Void> original = dispatcher.disconnectAllConsumers(true, Optional.empty());
+            second = addConsumer(dispatcher, "second");
+            BrokerLookupData target = mock(BrokerLookupData.class);
+            CompletableFuture<Void> overlapping = dispatcher.disconnectAllConsumers(false, Optional.of(target));
+
+            verify(first).disconnect(true, Optional.empty());
+            verify(first).disconnect(false, Optional.of(target));
+            verify(second).disconnect(false, Optional.of(target));
+            dispatcher.removeConsumer(first);
+            assertFalse(original.isDone());
+            assertFalse(overlapping.isDone());
+            dispatcher.removeConsumer(second);
+            original.get(5, TimeUnit.SECONDS);
+            overlapping.get(5, TimeUnit.SECONDS);
+        } finally {
+            if (dispatcher.getConsumers().contains(first)) {
+                dispatcher.removeConsumer(first);
+            }
+            if (second != null && dispatcher.getConsumers().contains(second)) {
+                dispatcher.removeConsumer(second);
+            }
+        }
+    }
+
     @Test
     public void testOverlappingAllConsumerDisconnectsBothComplete() throws Exception {
         AbstractDispatcherSingleActiveConsumer dispatcher = newDispatcher();

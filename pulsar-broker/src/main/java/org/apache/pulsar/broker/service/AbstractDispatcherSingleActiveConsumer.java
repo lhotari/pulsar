@@ -322,13 +322,14 @@ public abstract class AbstractDispatcherSingleActiveConsumer extends AbstractBas
     @Override
     public CompletableFuture<Void> disconnectAllConsumers(
             boolean isResetCursor, Optional<BrokerLookupData> assignedBrokerLookupData) {
-        CompletableFuture<Void> completion = new CompletableFuture<>();
+        CompletableFuture<Void> completion;
         List<Consumer> consumersToDisconnect;
         synchronized (this) {
-            if (closeFuture != null && !closeFuture.isDone()) {
-                return closeFuture;
+            // Share membership completion, but apply each caller's reset/redirect to current consumers.
+            if (closeFuture == null || closeFuture.isDone()) {
+                closeFuture = new CompletableFuture<>();
             }
-            closeFuture = completion;
+            completion = closeFuture;
             consumersToDisconnect = List.copyOf(consumers);
             if (!consumersToDisconnect.isEmpty()) {
                 cancelPendingRead();
