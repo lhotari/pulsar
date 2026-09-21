@@ -207,6 +207,14 @@ public interface Topic {
     CompletableFuture<Void> close(
             boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect);
 
+    /**
+     * Finish a successful storage transfer after its captured clients have been removed. Native topics reuse the
+     * retained storage barrier and only dispose local state; other implementations retain their close operation.
+     */
+    default CompletableFuture<Void> disposeAfterTransfer() {
+        return FutureUtil.supplySafely(() -> close(true, false));
+    }
+
     void checkGC();
 
     CompletableFuture<Void> checkClusterMigration();

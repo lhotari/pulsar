@@ -127,6 +127,7 @@ import org.apache.pulsar.broker.intercept.BrokerInterceptor;
 import org.apache.pulsar.broker.intercept.ManagedLedgerInterceptorImpl;
 import org.apache.pulsar.broker.loadbalance.LoadManager;
 import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl;
+import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
 import org.apache.pulsar.broker.namespace.NamespaceService;
 import org.apache.pulsar.broker.namespace.OwnedBundle;
 import org.apache.pulsar.broker.namespace.TopicExistsInfo;
@@ -3506,10 +3507,33 @@ public class BrokerService implements Closeable {
                 result = new CompletableFuture<>();
                 clientsClosed = result;
             }
-            FutureUtil.completeAfter(result, closeStorage().thenComposeAsync(ignored -> remainingNanos() <= 0
-                    ? CompletableFuture.failedFuture(new TimeoutException("Bundle notification deadline expired"))
-                    : unloadServiceUnit(bundle, true, false, topics, loads), pulsar.getExecutor())
-                    .thenAcceptAsync(ignored -> cleanUnloadedTopicFromCache(bundle, topics), pulsar.getExecutor()));
+            FutureUtil.completeAfter(result, closeStorage().thenComposeAsync(ignored -> {
+                if (remainingNanos() <= 0) {
+                    return CompletableFuture.failedFuture(new TimeoutException("Bundle notification deadline expired"));
+                }
+                Set<Topic> captured = Collections.newSetFromMap(new IdentityHashMap<>());
+                for (CompletableFuture<Optional<Topic>> materialization : materializations) {
+                    if (!materialization.isDone()) {
+                        return CompletableFuture.failedFuture(new IllegalStateException(
+                                "Topic materialization is still pending after the storage barrier"));
+                    }
+                    if (!materialization.isCompletedExceptionally()) {
+                        materialization.getNow(Optional.empty()).ifPresent(captured::add);
+                    }
+                }
+                CompletableFuture<Optional<BrokerLookupData>> destination = captured.isEmpty()
+                        ? CompletableFuture.completedFuture(Optional.empty())
+                        : FutureUtil.supplySafely(() -> ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(
+                                pulsar, captured.iterator().next().getName()));
+                ShutdownClientNotifications notifications = new ShutdownClientNotifications(
+                        captured, pulsar.getExecutor(), this::remainingNanos, destination);
+                return notifications.start().whenComplete((__, error) -> log.debug()
+                        .attr("bundle", bundle)
+                        .attr("notifications", notifications.snapshot())
+                        .exception(error)
+                        .log("Finished shutdown client notification attempt"));
+            }, pulsar.getExecutor()).thenRunAsync(
+                    () -> cleanUnloadedTopicFromCache(bundle, topics), pulsar.getExecutor()));
             return result.copy();
         }
     }

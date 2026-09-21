@@ -307,7 +307,7 @@ public class BrokerTopicLoadCleanupTest {
             CompletableFuture<Void> storage = new CompletableFuture<>();
             CompletableFuture<Void> notifications = new CompletableFuture<>();
             when(original.close(false, false)).thenReturn(storage);
-            when(original.close(true, false)).thenReturn(notifications);
+            when(original.disposeAfterTransfer()).thenReturn(notifications);
             broker.getTopics().put(NAME.toString(), CompletableFuture.completedFuture(Optional.of(original)));
             context.getPulsarService().getBrokerAdmission().close().forEach(Runnable::run);
             NamespaceBundle bundle = mock(NamespaceBundle.class);
@@ -325,7 +325,7 @@ public class BrokerTopicLoadCleanupTest {
                 verify(original, timeout(10000)).close(false, false);
                 assertPending(first);
                 assertPending(second);
-                verify(original, never()).close(true, false);
+                verify(original, never()).disposeAfterTransfer();
                 if (failStorage) {
                     storage.completeExceptionally(new IllegalStateException("storage close failed"));
                     assertThatThrownBy(() -> first.get(10, TimeUnit.SECONDS))
@@ -333,18 +333,18 @@ public class BrokerTopicLoadCleanupTest {
                     CompletableFuture<Void> failedDisconnect = second;
                     assertThatThrownBy(() -> failedDisconnect.get(10, TimeUnit.SECONDS))
                             .hasRootCauseMessage("storage close failed");
-                    verify(original, never()).close(true, false);
+                    verify(original, never()).disposeAfterTransfer();
                 } else {
                     storage.complete(null);
                     first.get(10, TimeUnit.SECONDS);
-                    verify(original, timeout(10000)).close(true, false);
+                    verify(original, timeout(10000)).disposeAfterTransfer();
                     assertPending(second);
                     notifications.complete(null);
                     second.get(10, TimeUnit.SECONDS);
                 }
                 verify(original).close(false, false);
                 verify(replacement, never()).close(false, false);
-                verify(replacement, never()).close(true, false);
+                verify(replacement, never()).disposeAfterTransfer();
                 assertThat(broker.getTopics().get(NAME.toString())).isSameAs(replacementFuture);
             } finally {
                 broker.getTopics().remove(NAME.toString(), replacementFuture);

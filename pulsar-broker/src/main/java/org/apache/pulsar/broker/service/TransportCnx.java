@@ -23,6 +23,8 @@ import io.netty.util.concurrent.Promise;
 import java.net.SocketAddress;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
+import java.util.function.LongSupplier;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
 import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
 import org.apache.pulsar.common.api.proto.FeatureFlags;
@@ -95,6 +97,22 @@ public interface TransportCnx {
             closeConsumer(consumer, assignedBrokerLookupData);
             return CompletableFuture.completedFuture(CloseNotification.UNTRACKED);
         });
+    }
+
+    /** Native transports also check the same remaining budget when the queued write is about to start. */
+    default CompletableFuture<CloseNotification> closeProducerAsync(
+            Producer producer, Optional<BrokerLookupData> assignedBrokerLookupData, LongSupplier remainingNanos) {
+        return FutureUtil.supplySafely(() -> remainingNanos.getAsLong() > 0
+                ? closeProducerAsync(producer, assignedBrokerLookupData)
+                : CompletableFuture.failedFuture(new TimeoutException("Producer notification deadline expired")));
+    }
+
+    /** See {@link #closeProducerAsync(Producer, Optional, LongSupplier)}. */
+    default CompletableFuture<CloseNotification> closeConsumerAsync(
+            Consumer consumer, Optional<BrokerLookupData> assignedBrokerLookupData, LongSupplier remainingNanos) {
+        return FutureUtil.supplySafely(() -> remainingNanos.getAsLong() > 0
+                ? closeConsumerAsync(consumer, assignedBrokerLookupData)
+                : CompletableFuture.failedFuture(new TimeoutException("Consumer notification deadline expired")));
     }
 
     boolean isPreciseDispatcherFlowControl();

@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -44,6 +45,8 @@ import org.apache.pulsar.broker.service.nonpersistent.NonPersistentSubscription;
 import org.apache.pulsar.broker.service.nonpersistent.NonPersistentTopic;
 import org.apache.pulsar.broker.service.persistent.PersistentSubscription;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
+import org.apache.pulsar.common.policies.data.InactiveTopicDeleteMode;
+import org.apache.pulsar.common.policies.data.InactiveTopicPolicies;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.testng.annotations.DataProvider;
@@ -184,6 +187,10 @@ public class TopicTransferCloseTest extends SharedPulsarBaseTest {
                 disconnect.get(10, TimeUnit.SECONDS);
                 repeatedDisconnect.get(10, TimeUnit.SECONDS);
             }
+            verify(replicator, times(1)).terminate();
+            if (persistent) {
+                verify(ledger, times(1)).asyncClose(any(), any());
+            }
         } finally {
             subscriptionClosed.complete(null);
             ledgerClosed.complete(null);
@@ -218,6 +225,61 @@ public class TopicTransferCloseTest extends SharedPulsarBaseTest {
     @DataProvider
     public Object[][] dispatcherFailures() {
         return new Object[][] {{false}, {true}};
+    }
+
+    @Test(dataProvider = "dispatcherFailures")
+    public void testDisposeAfterTransferWaitsForStorageWithoutRepeatingIt(boolean persistent) throws Exception {
+        ManagedLedger ledger = mock(ManagedLedger.class);
+        when(ledger.getConfig()).thenReturn(new ManagedLedgerConfig());
+        when(ledger.getProperties()).thenReturn(Map.of());
+        when(ledger.getLastConfirmedEntry()).thenReturn(PositionFactory.EARLIEST);
+        doAnswer(invocation -> {
+            CloseCallback callback = invocation.getArgument(0);
+            callback.closeComplete(invocation.getArgument(1));
+            return null;
+        }).when(ledger).asyncClose(any(), any());
+        String name = newTopicName();
+        AbstractTopic topic = persistent
+                ? new PersistentTopic(name, ledger, getPulsar().getBrokerService())
+                : new NonPersistentTopic(name.replace("persistent://", "non-persistent://"),
+                        getPulsar().getBrokerService());
+        topic = Mockito.spy(topic);
+        doReturn(true).when(topic).isCloseWhileInactive();
+        topic.getHierarchyTopicPolicies().getInactiveTopicPolicies().updateTopicValue(new InactiveTopicPolicies(
+                InactiveTopicDeleteMode.delete_when_no_subscriptions, 0, false));
+        assertThat(topic.disposeAfterTransfer()).isCompletedExceptionally();
+        CompletableFuture<Void> replicationClosed = new CompletableFuture<>();
+        Replicator replicator;
+        if (persistent) {
+            replicator = mock(Replicator.class);
+            ((PersistentTopic) topic).getReplicators().put("remote", replicator);
+        } else {
+            NonPersistentReplicator nonPersistentReplicator = mock(NonPersistentReplicator.class);
+            ((NonPersistentTopic) topic).getReplicators().put("remote", nonPersistentReplicator);
+            replicator = nonPersistentReplicator;
+        }
+        when(replicator.terminate()).thenReturn(replicationClosed);
+        try {
+            CompletableFuture<Void> storage = topic.close(false, false);
+            topic.checkGC();
+            verify(topic, never()).close(true, false);
+            verify(replicator, times(1)).terminate();
+            CompletableFuture<Void> canceled = topic.disposeAfterTransfer();
+            assertThat(canceled.cancel(false)).isTrue();
+            CompletableFuture<Void> disposed = topic.disposeAfterTransfer();
+            assertPending(disposed);
+            replicationClosed.complete(null);
+            storage.get(10, TimeUnit.SECONDS);
+            disposed.get(10, TimeUnit.SECONDS);
+            topic.close(true, false).get(10, TimeUnit.SECONDS);
+            verify(replicator, times(1)).terminate();
+            if (persistent) {
+                verify(ledger, times(1)).asyncClose(any(), any());
+            }
+        } finally {
+            replicationClosed.complete(null);
+            topic.getReplicators().clear();
+        }
     }
 
     @Test(dataProvider = "dispatcherFailures")

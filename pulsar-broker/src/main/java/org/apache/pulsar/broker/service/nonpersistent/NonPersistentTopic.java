@@ -554,10 +554,28 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
     @Override
     public CompletableFuture<Void> close(
             boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect) {
+        return close(disconnectClients, closeWithoutWaitingClientDisconnect, false);
+    }
+
+    @Override
+    public CompletableFuture<Void> disposeAfterTransfer() {
+        if (!producers.isEmpty()
+                || subscriptions.values().stream().anyMatch(sub -> !sub.getConsumers().isEmpty())) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Transfer clients remain registered"));
+        }
+        return close(true, false, true);
+    }
+
+    private CompletableFuture<Void> close(boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect,
+                                          boolean clientsRemoved) {
         CompletableFuture<Void> closeFuture = new CompletableFuture<>();
         CompletableFuture<Void> storageClosed;
         lock.writeLock().lock();
         try {
+            if (clientsRemoved && !transferring) {
+                return CompletableFuture.failedFuture(new IllegalStateException(
+                        "Transfer disposal requires fenced storage and removed clients"));
+            }
             if (transferCloseFuture != null) {
                 if (!disconnectClients) {
                     return transferCloseFuture.copy();
@@ -582,17 +600,20 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
             lock.writeLock().unlock();
         }
         FutureUtil.completeAfter(closeFuture, storageClosed.thenCompose(ignored -> FutureUtil.supplySafely(
-                () -> closeResources(disconnectClients, closeWithoutWaitingClientDisconnect))));
+                () -> closeResources(disconnectClients, closeWithoutWaitingClientDisconnect, clientsRemoved))));
         return transferring ? closeFuture.copy() : closeFuture;
     }
 
     private CompletableFuture<Void> closeResources(
-            boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect) {
+            boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect, boolean clientsRemoved) {
         CompletableFuture<Void> closeFuture = new CompletableFuture<>();
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
-        replicators.forEach((cluster, replicator) -> futures.add(FutureUtil.supplySafely(replicator::terminate)));
-        if (disconnectClients) {
+        boolean storageAlreadyClosed = transferring && disconnectClients;
+        if (!storageAlreadyClosed) {
+            replicators.forEach((cluster, replicator) -> futures.add(FutureUtil.supplySafely(replicator::terminate)));
+        }
+        if (disconnectClients && !clientsRemoved) {
             futures.add(ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(
                 brokerService.getPulsar(), topic).thenCompose(lookupData -> {
                     List<CompletableFuture<Void>> disconnects = new ArrayList<>();
@@ -609,12 +630,12 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
                     return FutureUtil.waitForAll(disconnects);
                 }
             ));
-        } else {
+        } else if (!disconnectClients) {
             subscriptions.forEach((s, sub) -> futures.add(
                     FutureUtil.supplySafely(() -> sub.close(false, Optional.empty()))));
         }
 
-        if (entryFilters != null) {
+        if (!storageAlreadyClosed && entryFilters != null) {
             entryFilters.getRight().forEach(filter -> {
                 try {
                     filter.close();
@@ -628,27 +649,19 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
                 disconnectClients && closeWithoutWaitingClientDisconnect ? CompletableFuture.completedFuture(null)
                         : FutureUtil.waitForAll(futures);
 
-        clientCloseFuture.thenRun(() -> {
-            log.info("Topic closed");
-            // unload topic iterates over topics map and removing from the map with the same thread creates deadlock.
-            // so, execute it in different thread
-            brokerService.executor().execute(() -> {
-
-                if (disconnectClients) {
-                    brokerService.removeTopicFromCache(NonPersistentTopic.this);
-                    unregisterTopicPolicyListener();
-                }
-                closeFuture.complete(null);
-
-            });
-        }).exceptionally(exception -> {
-            log.error().exception(exception).log("Error closing topic");
-            if (!transferring) {
-                isFenced = false;
-            }
-            closeFuture.completeExceptionally(exception);
-            return null;
-        });
+        FutureUtil.completeAfter(closeFuture, clientCloseFuture.thenComposeAsync(ignored -> disconnectClients
+                ? brokerService.removeTopicFromCache(this).thenRun(this::unregisterTopicPolicyListener)
+                : CompletableFuture.completedFuture(null), brokerService.executor())
+                .whenComplete((ignored, exception) -> {
+                    if (exception == null) {
+                        log.info("Topic closed");
+                        return;
+                    }
+                    log.error().exception(exception).log("Error closing topic");
+                    if (!transferring) {
+                        isFenced = false;
+                    }
+                }));
 
         return closeFuture;
     }
@@ -1127,6 +1140,10 @@ public class NonPersistentTopic extends AbstractTopic implements Topic, TopicPol
 
     @Override
     public void checkGC() {
+        if (isTransferring()) {
+            // The transfer owns storage, ownership release and client notification ordering.
+            return;
+        }
         // Close-on-inactive is a broker-level switch and takes precedence over any namespace- or topic-level
         // `deleteWhileInactive` policy, so enabling it can never fall through to the delete path.
         // No delete-mode guard is needed here: isActive() only reports inactivity when there is neither a

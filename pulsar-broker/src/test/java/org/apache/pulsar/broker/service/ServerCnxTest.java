@@ -78,6 +78,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -2939,6 +2940,122 @@ public class ServerCnxTest {
     @DataProvider
     public Object[][] closeNotificationResults() {
         return new Object[][] {{true, true}, {true, false}, {false, true}, {false, false}};
+    }
+
+    @Test(timeOut = 30000)
+    public void testBundleNotificationWaitsForNativeWritesBeforeDisposingTopic() throws Exception {
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        assertTrue(getResponse() instanceof CommandConnected);
+        serverCnx.cancelKeepAliveTask();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "draining-producer", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 2,
+                CommandSubscribe.SubType.Shared, 0, "draining-consumer", 0));
+        assertTrue(getResponse() instanceof CommandSuccess);
+        Topic topic = brokerService.getTopicReference(successTopicName).orElseThrow();
+        CompletableFuture<Void> storageGate = new CompletableFuture<>();
+        CompletableFuture<Void> storageStarted = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            CloseCallback callback = invocation.getArgument(0);
+            Object context = invocation.getArgument(1);
+            storageStarted.complete(null);
+            storageGate.thenRun(() -> callback.closeComplete(context));
+            return null;
+        }).when(ledgerMock).asyncClose(any(), any());
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        NamespaceBundle bundle = mock(NamespaceBundle.class);
+        when(bundle.includes(any(TopicName.class))).thenReturn(true);
+        BrokerService.BundleUnload unload = brokerService.captureShutdownBundle(bundle);
+        List<ChannelPromise> writes = new ArrayList<>();
+        channel.pipeline().addFirst(new ChannelOutboundHandlerAdapter() {
+            @Override
+            public void write(ChannelHandlerContext ctx, Object message, ChannelPromise promise) {
+                ((ByteBuf) message).release();
+                writes.add(promise);
+            }
+        });
+        CompletableFuture<Void> storage = unload.closeStorage();
+        storageStarted.get(5, TimeUnit.SECONDS);
+        channel.runPendingTasks();
+        assertThat(writes).isEmpty();
+        assertThat(topic.getProducers()).hasSize(1);
+        assertThat(topic.getSubscription(successSubName).getConsumers()).hasSize(1);
+        storageGate.complete(null);
+        storage.get(5, TimeUnit.SECONDS);
+        // The owner invokes Phase B only after its separate metadata ownership boundary has completed.
+        CompletableFuture<Void> notification = unload.disconnectClients();
+        Awaitility.await().untilAsserted(() -> {
+            channel.runPendingTasks();
+            assertThat(writes).hasSize(2);
+            assertThat(topic.getProducers()).isEmpty();
+            assertThat(topic.getSubscription(successSubName).getConsumers()).isEmpty();
+        });
+        assertThat(notification).isNotDone();
+        assertThat(brokerService.getTopicReference(successTopicName)).containsSame(topic);
+        sendMessage();
+        channel.writeInbound(Commands.newAck(1, 0, 0, null, AckType.Individual,
+                null, Collections.emptyMap(), 10));
+        channel.writeInbound(Commands.newFlow(1, 1));
+        channel.runPendingTasks();
+        assertTrue(channel.isActive());
+        assertThat(writes).hasSize(2);
+        writes.get(0).setSuccess();
+        channel.runPendingTasks();
+        assertThat(notification).isNotDone();
+        assertThat(brokerService.getTopicReference(successTopicName)).containsSame(topic);
+        writes.get(1).setSuccess();
+        Awaitility.await().until(() -> {
+            channel.runPendingTasks();
+            return notification.isDone();
+        });
+        notification.get(5, TimeUnit.SECONDS);
+        assertThat(brokerService.getTopicReference(successTopicName)).isEmpty();
+        assertThat(topic.getSubscriptions()).containsKey(successSubName);
+        verify(ledgerMock, times(1)).asyncClose(any(), any());
+        verify(ledgerMock, never()).asyncDeleteCursor(eq(successSubName), any(), any());
+        channel.finishAndReleaseAll();
+    }
+
+    @Test(timeOut = 30000, dataProvider = "legacyTransferCommands")
+    public void testNativeNotificationRechecksDeadlineBeforeQueuedWrite(boolean producerClose) throws Exception {
+        resetChannel();
+        channel.writeInbound(Commands.newConnect("none", "", null));
+        assertTrue(getResponse() instanceof CommandConnected);
+        serverCnx.cancelKeepAliveTask();
+        channel.writeInbound(Commands.newProducer(successTopicName, 1, 1,
+                "producer", Collections.emptyMap(), false));
+        assertTrue(getResponse() instanceof CommandProducerSuccess);
+        channel.writeInbound(Commands.newSubscribe(successTopicName, successSubName, 1, 2,
+                CommandSubscribe.SubType.Shared, 0, "consumer", 0));
+        assertTrue(getResponse() instanceof CommandSuccess);
+        Producer producer = serverCnx.getProducers().get(1).join();
+        Consumer consumer = serverCnx.getConsumers().get(1).join();
+        pulsar.getBrokerAdmission().close().forEach(Runnable::run);
+        AtomicLong remaining = new AtomicLong(100);
+        CompletableFuture<TransportCnx.CloseNotification> notification = producerClose
+                ? serverCnx.closeProducerAsync(producer, Optional.empty(), remaining::get)
+                : serverCnx.closeConsumerAsync(consumer, Optional.empty(), remaining::get);
+        remaining.set(0);
+        channel.runPendingTasks();
+        assertThat(notification).isCompletedExceptionally();
+        assertTrue(channel.outboundMessages().isEmpty());
+        if (producerClose) {
+            assertFalse(serverCnx.getProducers().containsKey(1));
+            assertSame(serverCnx.getConsumers().get(1).join(), consumer);
+            sendMessage();
+        } else {
+            assertFalse(serverCnx.getConsumers().containsKey(1));
+            assertSame(serverCnx.getProducers().get(1).join(), producer);
+            channel.writeInbound(Commands.newAck(1, 0, 0, null, AckType.Individual,
+                    null, Collections.emptyMap(), 10));
+        }
+        assertTrue(channel.isActive());
+        assertTrue(channel.outboundMessages().isEmpty());
+        producer.closeNow(true);
+        consumer.close();
+        channel.finishAndReleaseAll();
     }
 
     @Test(timeOut = 30000, dataProvider = "closeNotificationResults")

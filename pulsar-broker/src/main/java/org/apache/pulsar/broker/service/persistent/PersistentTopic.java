@@ -1822,6 +1822,20 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     @Override
     public CompletableFuture<Void> close(
             boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect) {
+        return close(disconnectClients, closeWithoutWaitingClientDisconnect, false);
+    }
+
+    @Override
+    public CompletableFuture<Void> disposeAfterTransfer() {
+        if (!producers.isEmpty()
+                || subscriptions.values().stream().anyMatch(sub -> !sub.getConsumers().isEmpty())) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Transfer clients remain registered"));
+        }
+        return close(true, false, true);
+    }
+
+    private CompletableFuture<Void> close(boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect,
+                                          boolean clientsRemoved) {
         lock.writeLock().lock();
         // Choose the close type.
         CloseTypes closeType;
@@ -1838,6 +1852,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         CompletableFuture<Void> inProgressTransferCloseTask = null;
         CloseFutures operation;
         try {
+            if (clientsRemoved && !transferring) {
+                return CompletableFuture.failedFuture(new IllegalStateException(
+                        "Transfer disposal requires fenced storage and removed clients"));
+            }
             // Return in-progress future if exists.
             if (isClosingOrDeleting) {
                 if (closeType == CloseTypes.transferring) {
@@ -1872,7 +1890,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         CompletableFuture<Void> previous = inProgressTransferCloseTask != null
                 ? inProgressTransferCloseTask : CompletableFuture.completedFuture(null);
         CompletableFuture<Void> result = previous.thenCompose(
-                ignored -> FutureUtil.supplySafely(() -> closeResources(closeType, operation)));
+                ignored -> FutureUtil.supplySafely(() -> closeResources(closeType, operation, clientsRemoved)));
         // Also settle callers that joined the second close while the transfer was still pending.
         result.whenComplete((ignored, error) -> {
             if (error != null) {
@@ -1889,12 +1907,16 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         return transferring ? result.copy() : result;
     }
 
-    private CompletableFuture<Void> closeResources(CloseTypes closeType, CloseFutures operation) {
+    private CompletableFuture<Void> closeResources(
+            CloseTypes closeType, CloseFutures operation, boolean clientsRemoved) {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
-        futures.add(FutureUtil.supplySafely(transactionBuffer::closeAsync));
-        replicators.forEach((cluster, replicator) -> futures.add(FutureUtil.supplySafely(replicator::terminate)));
-        shadowReplicators.forEach((__, replicator) -> futures.add(FutureUtil.supplySafely(replicator::terminate)));
-        if (closeType != CloseTypes.transferring) {
+        boolean storageAlreadyClosed = transferring && closeType != CloseTypes.transferring;
+        if (!storageAlreadyClosed) {
+            futures.add(FutureUtil.supplySafely(transactionBuffer::closeAsync));
+            replicators.forEach((cluster, replicator) -> futures.add(FutureUtil.supplySafely(replicator::terminate)));
+            shadowReplicators.forEach((__, replicator) -> futures.add(FutureUtil.supplySafely(replicator::terminate)));
+        }
+        if (closeType != CloseTypes.transferring && !clientsRemoved) {
             futures.add(ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(
                 brokerService.getPulsar(), topic).thenCompose(lookupData -> {
                     List<CompletableFuture<Void>> disconnects = new ArrayList<>();
@@ -1911,13 +1933,13 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                     return FutureUtil.waitForAll(disconnects);
                 }
             ));
-        } else {
+        } else if (closeType == CloseTypes.transferring) {
             subscriptions.forEach((s, sub) -> futures.add(
                     FutureUtil.supplySafely(() -> sub.close(false, Optional.empty()))));
         }
 
         //close entry filters
-        if (entryFilters != null) {
+        if (!storageAlreadyClosed && entryFilters != null) {
             entryFilters.getRight().forEach((filter) -> {
                 try {
                     filter.close();
@@ -1927,7 +1949,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             });
         }
 
-        if (topicCompactionService != null) {
+        if (!storageAlreadyClosed && topicCompactionService != null) {
             try {
                 topicCompactionService.close();
             } catch (Exception e) {
@@ -1955,29 +1977,35 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         }
 
         CompletableFuture<Void> closeFuture = new CompletableFuture<>();
-        Runnable closeLedgerAfterCloseClients = (() -> ledger.asyncClose(new CloseCallback() {
-            @Override
-            public void closeComplete(Object ctx) {
-                if (closeType != CloseTypes.transferring) {
-                    // Everything is now closed, remove the topic from map
-                    disposeTopic(closeFuture);
-                } else {
-                    closeFuture.complete(null);
-                }
+        Runnable closeLedgerAfterCloseClients = () -> {
+            if (storageAlreadyClosed) {
+                disposeTopic(closeFuture);
+                return;
             }
+            ledger.asyncClose(new CloseCallback() {
+                @Override
+                public void closeComplete(Object ctx) {
+                    if (closeType != CloseTypes.transferring) {
+                        // Everything is now closed, remove the topic from map
+                        disposeTopic(closeFuture);
+                    } else {
+                        closeFuture.complete(null);
+                    }
+                }
 
-            @Override
-            public void closeFailed(ManagedLedgerException exception, Object ctx) {
-                log.error()
-                        .exception(exception)
-                        .log("Failed to close managed ledger");
-                if (closeType != CloseTypes.transferring) {
-                    disposeTopic(closeFuture);
-                } else {
-                    closeFuture.completeExceptionally(exception);
+                @Override
+                public void closeFailed(ManagedLedgerException exception, Object ctx) {
+                    log.error()
+                            .exception(exception)
+                            .log("Failed to close managed ledger");
+                    if (closeType != CloseTypes.transferring) {
+                        disposeTopic(closeFuture);
+                    } else {
+                        closeFuture.completeExceptionally(exception);
+                    }
                 }
-            }
-        }, null));
+            }, null);
+        };
 
         if (closeType == CloseTypes.transferring) {
             // Even when another resource fails to close, attempt the ledger and await its physical completion.
@@ -3760,6 +3788,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
     @Override
     public void checkGC() {
+        if (isTransferring()) {
+            // The transfer owns storage, ownership release and client notification ordering.
+            return;
+        }
         if (TopicName.get(topic).isSegment()) {
             // Segment-backing topics are owned by ScalableTopicController; its GC tick
             // decides when a sealed segment is drained + retention-expired and deletes

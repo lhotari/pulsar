@@ -340,7 +340,7 @@ public class ExtensibleLoadManagerImpl implements ExtensibleLoadManager, BrokerS
         }
         var config = pulsar.getConfig();
         if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
-                && config.isLoadBalancerMultiPhaseBundleUnload()) {
+                && (config.isLoadBalancerMultiPhaseBundleUnload() || pulsar.getBrokerAdmission().isClosed())) {
             var topicName = TopicName.get(topic);
             try {
                 return pulsar.getNamespaceService().getBundleAsync(topicName)

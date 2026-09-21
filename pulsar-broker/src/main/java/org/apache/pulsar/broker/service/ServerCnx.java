@@ -66,8 +66,10 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 import javax.naming.AuthenticationException;
 import javax.net.ssl.SSLSession;
@@ -4638,15 +4640,30 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
     @Override
     public CompletableFuture<CloseNotification> closeProducerAsync(
             Producer producer, Optional<BrokerLookupData> assignedBrokerLookupData) {
-        return FutureUtil.composeAsync(() -> closeProducerAndTrack(producer, assignedBrokerLookupData), this::execute);
+        return closeProducerAsync(producer, assignedBrokerLookupData, () -> Long.MAX_VALUE);
+    }
+
+    @Override
+    public CompletableFuture<CloseNotification> closeProducerAsync(
+            Producer producer, Optional<BrokerLookupData> assignedBrokerLookupData, LongSupplier remainingNanos) {
+        return FutureUtil.composeAsync(() -> closeProducerAndTrack(producer, assignedBrokerLookupData, remainingNanos),
+                this::execute);
     }
 
     private CompletableFuture<CloseNotification> closeProducerAndTrack(
             Producer producer, Optional<BrokerLookupData> assignedBrokerLookupData) {
+        return closeProducerAndTrack(producer, assignedBrokerLookupData, () -> Long.MAX_VALUE);
+    }
+
+    private CompletableFuture<CloseNotification> closeProducerAndTrack(
+            Producer producer, Optional<BrokerLookupData> assignedBrokerLookupData, LongSupplier remainingNanos) {
         rememberClosedProducer(producer.getProducerId(), producer.getEpoch());
         CompletableFuture<Void> removed = safelyRemoveProducer(producer);
-        return removed.thenCombine(writeCloseProducer(producer.getProducerId(), assignedBrokerLookupData),
-                (__, notification) -> notification);
+        CompletableFuture<CloseNotification> notification = remainingNanos.getAsLong() > 0
+                ? writeCloseProducer(producer.getProducerId(), assignedBrokerLookupData)
+                : CompletableFuture.failedFuture(new TimeoutException("Producer notification deadline expired"));
+        return removed.thenCombine(notification,
+                (__, outcome) -> outcome);
     }
 
     private LookupData getLookupData(BrokerLookupData lookupData) {
@@ -4705,10 +4722,19 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
     @Override
     public CompletableFuture<CloseNotification> closeConsumerAsync(
             Consumer consumer, Optional<BrokerLookupData> assignedBrokerLookupData) {
+        return closeConsumerAsync(consumer, assignedBrokerLookupData, () -> Long.MAX_VALUE);
+    }
+
+    @Override
+    public CompletableFuture<CloseNotification> closeConsumerAsync(
+            Consumer consumer, Optional<BrokerLookupData> assignedBrokerLookupData, LongSupplier remainingNanos) {
         return FutureUtil.composeAsync(() -> {
             CompletableFuture<Void> removed = safelyRemoveConsumer(consumer);
-            return removed.thenCombine(closeConsumer(consumer.consumerId(), assignedBrokerLookupData),
-                    (__, notification) -> notification);
+            CompletableFuture<CloseNotification> notification = remainingNanos.getAsLong() > 0
+                    ? closeConsumer(consumer.consumerId(), assignedBrokerLookupData)
+                    : CompletableFuture.failedFuture(new TimeoutException("Consumer notification deadline expired"));
+            return removed.thenCombine(notification,
+                    (__, outcome) -> outcome);
         }, this::execute);
     }
 
