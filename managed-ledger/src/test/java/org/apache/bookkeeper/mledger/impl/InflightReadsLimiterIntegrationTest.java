@@ -33,8 +33,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.CustomLog;
+import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.api.LedgerEntries;
+import org.apache.bookkeeper.client.api.OpenBuilder;
 import org.apache.bookkeeper.client.api.ReadHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
 import org.apache.bookkeeper.mledger.Entry;
@@ -433,7 +435,8 @@ public class InflightReadsLimiterIntegrationTest extends MockedBookKeeperTestCas
         ManagedLedgerFactoryConfig factoryConfig = new ManagedLedgerFactoryConfig();
         factoryConfig.setMaxCacheSize(0);
         factoryConfig.setManagedLedgerMaxReadsInFlightSize(10_000);
-        ManagedLedgerFactoryImpl factory = new ManagedLedgerFactoryImpl(metadataStore, bkc, factoryConfig);
+        BookKeeper bookKeeper = Mockito.spy(bkc);
+        ManagedLedgerFactoryImpl factory = new ManagedLedgerFactoryImpl(metadataStore, bookKeeper, factoryConfig);
         try {
             ManagedLedgerImpl ml = (ManagedLedgerImpl) factory.open("cache_disabled_limiter_single_entry_failure",
                     defaultConfig());
@@ -443,6 +446,11 @@ public class InflightReadsLimiterIntegrationTest extends MockedBookKeeperTestCas
             Mockito.when(readHandle.readAsync(0, 0)).thenReturn(CompletableFuture.failedFuture(
                     new ManagedLedgerException("Expected read failure")));
             Mockito.when(readHandle.closeAsync()).thenReturn(CompletableFuture.completedFuture(null));
+            OpenBuilder builder = Mockito.mock(OpenBuilder.class, Mockito.RETURNS_SELF);
+            Mockito.when(builder.execute()).thenReturn(CompletableFuture.completedFuture(readHandle));
+            Mockito.doReturn(builder).when(bookKeeper).newOpenLedgerOp();
+            // Use the real tracked open so invalidation owns this handle's cleanup generation.
+            Assert.assertSame(ml.getLedgerHandle(ledgerId).get(5, TimeUnit.SECONDS), readHandle);
             CompletableFuture<ManagedLedgerException> failure = new CompletableFuture<>();
 
             ml.entryCache.asyncReadEntry(readHandle, PositionFactory.create(ledgerId, 0),
@@ -458,8 +466,9 @@ public class InflightReadsLimiterIntegrationTest extends MockedBookKeeperTestCas
                         }
                     }, new Object());
 
-            Assert.assertEquals(failure.join().getMessage(), "Expected read failure");
-            Mockito.verify(readHandle).closeAsync();
+            Assert.assertEquals(failure.get(5, TimeUnit.SECONDS).getMessage(), "Expected read failure");
+            Awaitility.await().untilAsserted(() -> Mockito.verify(readHandle).closeAsync());
+            Awaitility.await().untilAsserted(() -> Assert.assertEquals(ml.pendingReadHandleOperations(), 0));
         } finally {
             factory.shutdown();
         }
