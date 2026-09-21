@@ -187,6 +187,36 @@ public class BrokerTrafficDrainTest extends ExtensibleLoadManagerImplBaseTest {
             } finally {
                 doCallRealMethod().when(namespace).getBrokerServiceUrlAsync(eq(requested), any(LookupOptions.class));
             }
+            try {
+                int permits = heldBroker.getLookupRequestSemaphore().availablePermits();
+                for (int failure = 0; failure < 3; failure++) {
+                    if (failure == 0) {
+                        doReturn(CompletableFuture.failedFuture(new IllegalStateException("policy unavailable")))
+                                .when(heldBroker).isAllowAutoTopicCreationAsync(requested);
+                    } else {
+                        doReturn(CompletableFuture.completedFuture(true))
+                                .when(heldBroker).isAllowAutoTopicCreationAsync(requested);
+                        PulsarClientException error = failure == 1
+                                ? new PulsarClientException.BrokerMetadataException("metadata unavailable")
+                                : new PulsarClientException.AuthorizationException("not authorized");
+                        doReturn(CompletableFuture.failedFuture(error)).when(heldBroker)
+                                .fetchPartitionedTopicMetadataCheckAllowAutoCreationAsync(requested);
+                    }
+                    long requestId = 21000L + failure;
+                    var metadataError = expectThrows(ExecutionException.class, () -> connection.newLookup(
+                            Commands.newPartitionMetadataRequest(firstTopic, requestId, true), requestId)
+                            .get(5, TimeUnit.SECONDS));
+                    assertTrue(failure == 2
+                                    ? metadataError.getCause() instanceof PulsarClientException.AuthorizationException
+                                    : metadataError.getCause() instanceof PulsarClientException.BrokerMetadataException,
+                            metadataError.toString());
+                    assertTrue(connection.ctx().channel().isActive());
+                    assertEquals(heldBroker.getLookupRequestSemaphore().availablePermits(), permits);
+                }
+            } finally {
+                doCallRealMethod().when(heldBroker).isAllowAutoTopicCreationAsync(requested);
+                doCallRealMethod().when(heldBroker).fetchPartitionedTopicMetadataCheckAllowAutoCreationAsync(requested);
+            }
             for (int i = 0; i < 3; i++) {
                 producer1.send(new byte[]{(byte) i});
                 producer2.send(new byte[]{(byte) i});

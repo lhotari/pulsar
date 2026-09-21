@@ -1408,7 +1408,15 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                     isAuthorized -> {
                 if (isAuthorized) {
                     // Get if exists, respond not found error if not exists.
-                    getBrokerService().isAllowAutoTopicCreationAsync(topicName).thenAccept(brokerAllowAutoCreate -> {
+                    FutureUtil.supplySafely(() -> getBrokerService().isAllowAutoTopicCreationAsync(topicName))
+                            .whenComplete((brokerAllowAutoCreate, policyError) -> {
+                        if (policyError != null) {
+                            lookupSemaphore.release();
+                            commandSender.sendPartitionMetadataResponse(
+                                    TopicLookupBase.unavailableLookupError(service.getPulsar()),
+                                    "Failed to read topic creation policy", requestId);
+                            return;
+                        }
                         boolean autoCreateIfNotExist = partitionMetadata.isMetadataAutoCreationEnabled()
                                 && brokerAllowAutoCreate;
                         if (!autoCreateIfNotExist) {
@@ -1456,20 +1464,22 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                                         int partitions = metadata.partitions;
                                         commandSender.sendPartitionMetadataResponse(partitions, requestId);
                                     } else {
-                                        if (ex instanceof PulsarClientException) {
+                                        Throwable cause = FutureUtil.unwrapCompletionException(ex);
+                                        if (cause instanceof PulsarClientException.AuthorizationException
+                                                || cause instanceof PulsarClientException.AuthenticationException) {
                                             log.warn()
                                                     .attr("role", getRole())
                                                     .attr("topic", topicName)
-                                                    .exceptionMessage(ex)
+                                                    .exceptionMessage(cause)
                                                     .log("Failed to authorize on topic");
                                             commandSender.sendPartitionMetadataResponse(ServerError.AuthorizationError,
-                                                    ex.getMessage(), requestId);
+                                                    cause.getMessage(), requestId);
                                         } else {
                                             ServerError error = TopicLookupBase.unavailableLookupError(
                                                     service.getPulsar());
-                                            if (ex instanceof MetadataStoreException) {
+                                            if (cause instanceof MetadataStoreException) {
                                                 error = ServerError.MetadataError;
-                                            } else if (ex instanceof RestException restException){
+                                            } else if (cause instanceof RestException restException){
                                                 int responseCode = restException.getResponse().getStatus();
                                                 if (responseCode == NOT_FOUND.getStatusCode()){
                                                     error = ServerError.TopicNotFound;
@@ -1480,7 +1490,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                                             if (error == ServerError.TopicNotFound) {
                                                 log.info()
                                                         .attr("topic", topicName)
-                                                        .exceptionMessage(ex)
+                                                        .exceptionMessage(cause)
                                                         .log("Trying to get Partitioned"
                                                                 + " Metadata for"
                                                                 + " nonexistent resource");
@@ -1488,10 +1498,10 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                                                 log.warn()
                                                         .attr("topic", topicName)
 
-                                                        .exception(ex)
+                                                        .exception(cause)
                                                         .log("Failed to get Partitioned Metadata");
                                             }
-                                            commandSender.sendPartitionMetadataResponse(error, ex.getMessage(),
+                                            commandSender.sendPartitionMetadataResponse(error, cause.getMessage(),
                                                     requestId);
                                         }
                                     }
