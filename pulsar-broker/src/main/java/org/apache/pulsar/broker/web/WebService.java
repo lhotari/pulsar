@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.web;
 
+import com.google.common.annotations.VisibleForTesting;
 import io.prometheus.client.CollectorRegistry;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.Filter;
@@ -37,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import lombok.CustomLog;
 import lombok.Getter;
 import org.apache.commons.lang3.StringUtils;
@@ -521,7 +523,20 @@ public class WebService implements AutoCloseable {
         }
     }
 
+    @VisibleForTesting
+    Server getServer() {
+        return server;
+    }
+
     private void doClose() throws Exception {
+        long remainingNanos = pulsar.getRemainingShutdownDrainNanos();
+        if (remainingNanos != Long.MAX_VALUE) {
+            // Include HTTP cleanup in the same budget as bundle drain, preserving the metadata-session reserve.
+            // Jetty skips graceful shutdown notifications for zero, so retain a positive floor even after expiry.
+            long remainingMs = Math.max(1, TimeUnit.NANOSECONDS.toMillis(remainingNanos));
+            long configuredMs = server.getStopTimeout();
+            server.setStopTimeout(configuredMs > 0 ? Math.min(configuredMs, remainingMs) : remainingMs);
+        }
         server.stop();
         // unregister statistics from Prometheus client's default CollectorRegistry singleton
         // to prevent memory leaks in tests

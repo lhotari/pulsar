@@ -22,6 +22,10 @@ import static io.opentelemetry.sdk.testing.assertj.OpenTelemetryAssertions.asser
 import static org.apache.pulsar.broker.stats.BrokerOpenTelemetryTestUtil.assertMetricLongSumValue;
 import static org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsClient.Metric;
 import static org.apache.pulsar.broker.stats.prometheus.PrometheusMetricsClient.parseMetrics;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
@@ -48,6 +52,8 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.ZipException;
 import javax.net.ssl.HttpsURLConnection;
@@ -79,8 +85,10 @@ import org.asynchttpclient.AsyncHttpClient;
 import org.asynchttpclient.BoundRequestBuilder;
 import org.asynchttpclient.DefaultAsyncHttpClient;
 import org.asynchttpclient.Response;
+import org.eclipse.jetty.util.component.Graceful;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 /**
@@ -106,6 +114,42 @@ public class WebServiceTest {
             ResourceUtils.getAbsolutePath("certificate-authority/client-keys/admin.cert.pem");
     private static final String CLIENT_KEY_FILE_PATH =
             ResourceUtils.getAbsolutePath("certificate-authority/client-keys/admin.key-pk8.pem");
+
+    @DataProvider
+    public Object[][] shutdownBudgets() {
+        return new Object[][] {
+                {60_000L, TimeUnit.MILLISECONDS.toNanos(250), 250L},
+                {60_000L, TimeUnit.MICROSECONDS.toNanos(200), 1L},
+                {60_000L, 0L, 1L},
+                {60_000L, Long.MAX_VALUE, 60_000L},
+                {100L, TimeUnit.SECONDS.toNanos(1), 100L},
+                {0L, TimeUnit.MILLISECONDS.toNanos(250), 250L}
+        };
+    }
+
+    @Test(dataProvider = "shutdownBudgets")
+    public void testWebCloseUsesRemainingBudget(long configuredMs, long remainingNanos, long expectedMs)
+            throws Exception {
+        setupEnv(false, false, false, false, -1, false);
+        WebService webService = pulsar.getWebService();
+        var server = webService.getServer();
+        server.setStopTimeout(configuredMs);
+        Graceful activeRequest = mock(Graceful.class);
+        doAnswer(invocation -> {
+            assertEquals(server.getStopTimeout(), expectedMs);
+            return CompletableFuture.completedFuture(null);
+        }).when(activeRequest).shutdown();
+        server.addBean(activeRequest);
+        doReturn(remainingNanos).when(pulsar).getRemainingShutdownDrainNanos();
+        try {
+            webService.close();
+            // Even an exhausted deadline must retain Jetty's graceful shutdown notification.
+            verify(activeRequest).shutdown();
+        } finally {
+            server.removeBean(activeRequest);
+            doReturn(Long.MAX_VALUE).when(pulsar).getRemainingShutdownDrainNanos();
+        }
+    }
 
     @Test
     public void testWebExecutorMetrics() throws Exception {
