@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.common.sasl;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.util.Date;
 import java.util.Random;
 import java.util.Set;
@@ -31,7 +32,7 @@ import lombok.CustomLog;
  * TGT Refresh Thread. Copied from Apache ZooKeeper TGT refresh logic.
  */
 @CustomLog
-public class TGTRefreshThread extends Thread {
+public class TGTRefreshThread extends FastThreadLocalThread {
 
     private static final Random rng = new Random();
 

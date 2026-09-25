@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.functions.worker;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -49,7 +50,7 @@ public class FunctionMetaDataTopicTailer
             throws PulsarClientException {
         this.functionMetaDataManager = functionMetaDataManager;
         this.reader = createReader(workerConfig, readerBuilder, lastMessageSeen);
-        tailerThread = new Thread(this);
+        tailerThread = new FastThreadLocalThread(this);
         tailerThread.setName("function-metadata-tailer-thread");
         this.errorNotifier = errorNotifier;
         exitOnEndOfTopic = false;

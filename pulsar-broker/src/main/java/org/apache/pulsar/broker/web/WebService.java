@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.web;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import io.prometheus.client.CollectorRegistry;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.Filter;
@@ -506,7 +507,7 @@ public class WebService implements AutoCloseable {
             if (waitUtilServerStopped) {
                 doClose();
             } else {
-                Thread webServiceTerminator = new Thread(() -> {
+                Thread webServiceTerminator = new FastThreadLocalThread(() -> {
                     try {
                         doClose();
                     } catch (Exception e) {

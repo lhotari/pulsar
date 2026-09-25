@@ -23,6 +23,7 @@ import static org.apache.pulsar.common.functions.Utils.inferMissingArguments;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParser;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import io.prometheus.client.exporter.HTTPServer;
 import java.io.Closeable;
 import java.io.File;
@@ -261,7 +262,7 @@ public class LocalRunner implements AutoCloseable {
         this.metricsPortStart = metricsPortStart;
         this.exitOnError = exitOnError;
         this.instanceLivenessCheck = exitOnError ? 0 : 30000;
-        shutdownHook = new Thread(() -> {
+        shutdownHook = new FastThreadLocalThread(() -> {
             try {
                 LocalRunner.this.close();
             } catch (Exception exception) {
@@ -618,7 +619,7 @@ public class LocalRunner implements AutoCloseable {
                 }
             }
         }, 30000, 30000);
-        java.lang.Runtime.getRuntime().addShutdownHook(new Thread(statusCheckTimer::cancel));
+        java.lang.Runtime.getRuntime().addShutdownHook(new FastThreadLocalThread(statusCheckTimer::cancel));
     }
 
 
