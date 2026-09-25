@@ -330,6 +330,11 @@ OPTS="-Dio.netty.recycler.maxCapacityPerThread=4096 -Dio.netty.allocator.maxOrde
 # Netty recycler: give every thread a thread-local batch of recycled objects, not only Netty's FastThreadLocalThreads,
 # so that objects recycled and reused on the same thread bypass the pool's shared queue.
 OPTS="-Dio.netty.recycler.batchFastThreadLocalOnly=false $OPTS"
+# Netty recycler: each thread's pool of recycled objects is a queue that grows in chunks of io.netty.recycler.chunkSize
+# entries (default 32) up to io.netty.recycler.maxCapacityPerThread, and a thread with a thread-local batch keeps up to
+# that many objects in it. Objects recycled on other threads are offered to the queue. Larger chunks mean fewer chunk
+# allocations and links as a pool fills up, and larger thread-local batches.
+OPTS="-Dio.netty.recycler.chunkSize=256 $OPTS"
 
 OPTS="-cp $PULSAR_CLASSPATH $OPTS"
 
