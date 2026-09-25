@@ -22,7 +22,6 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static org.apache.pulsar.common.util.Runnables.catchingAndLoggingThrowables;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -184,7 +183,7 @@ public class SchedulerManager implements AutoCloseable {
             this.exclusiveProducer = exclusiveProducer;
             executorService = new ThreadPoolExecutor(1, 5, 0L, TimeUnit.MILLISECONDS,
                     new LinkedBlockingQueue<>(5));
-            executorService.setThreadFactory(new ThreadFactoryBuilder().setNameFormat("worker-scheduler-%d").build());
+            executorService.setThreadFactory(new DefaultThreadFactory("worker-scheduler"));
             scheduledExecutorService = Executors
                     .newSingleThreadScheduledExecutor(new DefaultThreadFactory("worker-assignment-topic-compactor"));
             if (workerConfig.getTopicCompactionFrequencySec() > 0) {

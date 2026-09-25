@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.shell;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -405,7 +406,7 @@ public class PulsarShell {
             };
         }
 
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> quit(terminal)));
+        Runtime.getRuntime().addShutdownHook(new FastThreadLocalThread(() -> quit(terminal)));
         while (true) {
             execState = ExecState.IDLE;
             final List<String> words;

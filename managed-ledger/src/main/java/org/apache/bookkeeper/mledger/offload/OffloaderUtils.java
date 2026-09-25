@@ -18,6 +18,7 @@
  */
 package org.apache.bookkeeper.mledger.offload;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
@@ -72,7 +73,7 @@ public class OffloaderUtils {
             // Try to load offloader factory class and check it implements Offloader interface
             Class<?> factoryClass = ncl.loadClass(conf.getOffloaderFactoryClass());
             CompletableFuture<LedgerOffloaderFactory<?>> loadFuture = new CompletableFuture<>();
-            Thread loadingThread = new Thread(() -> {
+            Thread loadingThread = new FastThreadLocalThread(() -> {
                 Thread.currentThread().setContextClassLoader(ncl);
                 try {
                     Object offloader = factoryClass.getDeclaredConstructor().newInstance();

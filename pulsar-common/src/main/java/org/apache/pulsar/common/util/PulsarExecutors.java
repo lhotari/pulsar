@@ -19,6 +19,7 @@
 package org.apache.pulsar.common.util;
 
 import com.google.common.annotations.VisibleForTesting;
+import io.netty.util.concurrent.DefaultThreadFactory;
 import java.lang.ref.Cleaner;
 import java.lang.ref.Reference;
 import java.util.List;
@@ -39,12 +40,12 @@ public final class PulsarExecutors {
     }
 
     /**
-     * Creates a single-thread executor using the default thread factory.
+     * Creates a single-thread executor using Netty's {@link DefaultThreadFactory}.
      *
      * @see #newSingleThreadExecutor(ThreadFactory)
      */
     public static ExecutorService newSingleThreadExecutor() {
-        return newSingleThreadExecutor(Executors.defaultThreadFactory());
+        return newSingleThreadExecutor(new DefaultThreadFactory("pool"));
     }
 
     /**

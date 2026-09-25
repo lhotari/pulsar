@@ -41,6 +41,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.ssl.SslContext;
 import io.netty.util.concurrent.DefaultThreadFactory;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import io.opentelemetry.api.metrics.LongCounter;
 import io.opentelemetry.api.metrics.ObservableLongUpDownCounter;
 import io.prometheus.client.CollectorRegistry;
@@ -1105,7 +1106,7 @@ public class BrokerService implements Closeable {
                                 return combined;
                             }, runnable -> {
                                 // run the 2nd phase of the shutdown in a separate thread
-                                Thread thread = new Thread(runnable);
+                                Thread thread = new FastThreadLocalThread(runnable);
                                 thread.setName("BrokerService-shutdown-phase2");
                                 thread.setDaemon(false);
                                 thread.start();

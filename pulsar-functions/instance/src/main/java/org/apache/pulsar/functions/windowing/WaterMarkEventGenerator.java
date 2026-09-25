@@ -19,7 +19,7 @@
 package org.apache.pulsar.functions.windowing;
 
 import static org.apache.pulsar.common.util.Runnables.catchingAndLoggingThrowables;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import io.netty.util.concurrent.DefaultThreadFactory;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -64,10 +64,7 @@ public class WaterMarkEventGenerator<T> implements Runnable {
         this.windowManager = windowManager;
         topicToTs = new ConcurrentHashMap<>();
 
-        ThreadFactory threadFactory = new ThreadFactoryBuilder()
-                .setNameFormat("watermark-event-generator-%d")
-                .setDaemon(true)
-                .build();
+        ThreadFactory threadFactory = new DefaultThreadFactory("watermark-event-generator", true);
         executorService = Executors.newSingleThreadScheduledExecutor(threadFactory);
 
         this.intervalMs = intervalMs;

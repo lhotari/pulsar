@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.client.impl.auth.v5;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import io.opentelemetry.api.OpenTelemetry;
 import java.time.Clock;
 import java.util.Optional;
@@ -161,7 +162,7 @@ public final class V5AuthContexts {
             // instead of slower ones. Work beyond the thread ceiling therefore waits.
             ThreadPoolExecutor executor = new ThreadPoolExecutor(MAX_THREADS, MAX_THREADS, 60L,
                     TimeUnit.SECONDS, new LinkedBlockingQueue<>(), runnable -> {
-                        Thread thread = new Thread(runnable, "pulsar-auth-blocking-shared");
+                        Thread thread = new FastThreadLocalThread(runnable, "pulsar-auth-blocking-shared");
                         thread.setDaemon(true);
                         return thread;
                     });
@@ -183,7 +184,7 @@ public final class V5AuthContexts {
 
         private static ScheduledExecutorService create() {
             ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, runnable -> {
-                Thread thread = new Thread(runnable, "pulsar-auth-scheduler-shared");
+                Thread thread = new FastThreadLocalThread(runnable, "pulsar-auth-scheduler-shared");
                 thread.setDaemon(true);
                 return thread;
             });
