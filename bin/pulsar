@@ -327,10 +327,6 @@ OPTS="-XX:+ExitOnOutOfMemoryError -Dpulsar.allocator.exit_on_oom=true $OPTS"
 # Thus, increasing io.netty.allocator.maxOrder to 10 to ensure that a single message is larger
 # than chunk size (8MB) and can reuse Netty's memory pool.
 OPTS="-Dio.netty.recycler.maxCapacityPerThread=4096 -Dio.netty.allocator.maxOrder=10 $OPTS"
-# Netty recycler: let every thread that has a thread-local pool of recycled objects keep a thread-local batch of them.
-# This has no effect with Netty 4.2.18: Recycler.get() uses a thread-local pool only on threads that remove their
-# FastThreadLocals when they end, and those threads keep a batch regardless of this setting.
-OPTS="-Dio.netty.recycler.batchFastThreadLocalOnly=false $OPTS"
 # The common ForkJoinPool runs CompletableFuture's *Async methods (thenApplyAsync, ...) by default. Its workers can't be
 # Netty FastThreadLocalThreads, so Netty's recycler and allocator thread caches aren't used on them; this factory's
 # workers run like FastThreadLocalThreads, and remove their FastThreadLocal values when the pool stops them.
@@ -347,6 +343,7 @@ OPTS="-Dio.netty.recycler.chunkSize=256 $OPTS"
 # to its constructor and run() isn't overridden.
 # AdaptiveByteBufAllocator uses thread-local magazines only on event-loop threads unless
 # io.netty.allocator.useCachedMagazinesForNonEventLoopThreads=true, and only on threads that clean up FastThreadLocals.
+# It uses none when the maximum heap size is 512 MiB or less (Netty's low memory mode, io.netty.allocator.lowMemory).
 # PooledByteBufAllocator gives a thread cache to FastThreadLocalThreads and event-loop threads; with
 # io.netty.allocator.useCacheForAllThreads=true other threads get one too, which a finalizer frees after the thread ends.
 OPTS="-Dio.netty.allocator.useCachedMagazinesForNonEventLoopThreads=true -Dio.netty.allocator.useCacheForAllThreads=true $OPTS"
