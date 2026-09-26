@@ -313,10 +313,10 @@ finalizer to free. Every thread created in the code base must therefore be one o
   the common pool (which runs `CompletableFuture`'s `*Async` methods by default) with
   `-Djava.util.concurrent.ForkJoinPool.common.threadFactory`.
 
-This doesn't apply to Pulsar IO connectors and function examples. They run in a function instance
-whose classloader doesn't include the Netty that Pulsar's client uses, so a `FastThreadLocalThread` there
-would bring no benefit and would need an extra dependency. A `compileOnly` Netty dependency doesn't help
-either: the process and Kubernetes runtimes don't provide Netty to user code.
+This doesn't apply to Pulsar IO connectors and function examples. In the process and Kubernetes
+runtimes, their classloader doesn't include the Netty that Pulsar's client uses, so a
+`FastThreadLocalThread` there would bring no benefit and would need an extra dependency. A `compileOnly`
+Netty dependency doesn't help either, since those runtimes don't provide Netty to user code.
 
 **Never extend `FastThreadLocalThread`, and never override its `run()`.** The constructors without a
 `Runnable` mark the thread as one that doesn't clean up, and an overridden `run()` bypasses the wrapped

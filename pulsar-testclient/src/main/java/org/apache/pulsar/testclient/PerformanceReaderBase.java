@@ -149,9 +149,9 @@ public abstract class PerformanceReaderBase<ClientT, ReaderT, MessageT> {
             printAggregatedStats();
         });
 
+        ScheduledExecutorService timeoutExecutor = null;
         if (arguments.testTime > 0) {
-            ScheduledExecutorService timeoutExecutor =
-                    PulsarExecutors.newSingleThreadScheduledExecutor("perf-reader-test-time", false);
+            timeoutExecutor = PulsarExecutors.newSingleThreadScheduledExecutor("perf-reader-test-time", false);
             timeoutExecutor.schedule(() -> {
                 log.info()
                         .attr("duration", arguments.testTime)
@@ -196,6 +196,9 @@ public abstract class PerformanceReaderBase<ClientT, ReaderT, MessageT> {
             oldTime = now;
         }
 
+        if (timeoutExecutor != null) {
+            timeoutExecutor.shutdownNow();
+        }
         stopReading();
         closeClient(client);
         PerfClientUtils.removeAndRunShutdownHook(shutdownHookThread);

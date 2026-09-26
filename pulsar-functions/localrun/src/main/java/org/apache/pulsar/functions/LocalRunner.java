@@ -615,6 +615,9 @@ public class LocalRunner implements AutoCloseable {
                 }
             } catch (TimeoutException | InterruptedException | ExecutionException e) {
                 log.error("Could not get status from all local instances");
+            } catch (RuntimeException e) {
+                // an exception thrown from the task would cancel its later runs
+                log.error().exception(e).log("Failed to report the status of the local instances");
             }
         }, 30000, 30000, TimeUnit.MILLISECONDS);
         java.lang.Runtime.getRuntime().addShutdownHook(new FastThreadLocalThread(statusCheckExecutor::shutdownNow));
