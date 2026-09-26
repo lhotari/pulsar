@@ -51,8 +51,11 @@ class ThreadLocalAccessor {
 
     void record(KllDoublesSketch aggregateSuccess, @Nullable KllDoublesSketch aggregateFail) {
         map.keySet().forEach(key -> {
+            // Check before merging: once the owner thread has ended, it records no more values, so the merge below
+            // includes all of them. A thread that ends after the check is removed by the next call.
+            boolean remove = key.shouldRemove();
             key.record(aggregateSuccess, aggregateFail);
-            if (key.shouldRemove()) {
+            if (remove) {
                 map.remove(key);
             }
         });
