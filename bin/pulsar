@@ -321,9 +321,10 @@ NETTY_OPTS="$NETTY_OPTS -Dorg.apache.pulsar.shade.io.netty.tryReflectionSetAcces
 NETTY_OPTS="$NETTY_OPTS -Dpulsar.allocator.default.type=adaptive -Dio.netty.allocator.type=adaptive"
 
 # PooledByteBufAllocator (PooledByteBufAllocator.java)
-# - Chunk size: io.netty.allocator.pageSize (default 8 KiB) << io.netty.allocator.maxOrder (default 9), 4 MiB.
-#   Allocations larger than a chunk bypass the pool, and Pulsar's default maximum message size is 5 MB, so use
-#   8 MiB chunks to pool such messages and reduce native memory fragmentation.
+# - Chunk size: calculated with the formula pageSize * 2^maxOrder, where pageSize is io.netty.allocator.pageSize
+#   (default 8 KiB) and maxOrder is io.netty.allocator.maxOrder (default 9): 8 KiB * 2^9 = 4 MiB by default.
+#   Allocations larger than a chunk bypass the pool, and Pulsar's default maximum message size is 5 MB, so set
+#   maxOrder to 10 for 8 KiB * 2^10 = 8 MiB chunks to pool such messages and reduce native memory fragmentation.
 # - Thread caches (io.netty.allocator.useCacheForAllThreads, default false): by default, only FastThreadLocalThreads
 #   and event-loop threads get a thread cache; give one to all threads. Threads that remove their FastThreadLocals
 #   when they end (Pulsar's threads and the common ForkJoinPool's workers below) then free their cache; on other
