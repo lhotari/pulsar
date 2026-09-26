@@ -48,12 +48,13 @@ public class SystemTopicTxnBufferSnapshotService<T> {
 
     private final ConcurrentHashMap<NamespaceName, ReferenceCountedWriter<T>> refCountedWriterMap;
 
-    /** SystemTopicTxnBufferSnapshotService is created only three, see also
-     *  {@link TransactionBufferSnapshotServiceFactory}. At the same time, each object can only
-     * be fixed threads access, see also {@link PulsarService#transactionSnapshotRecoverExecutorProvider}.
-     * So the un-static ThreadLocal is safe.
+    /**
+     * One {@link TableView} per recovery executor. Recovery runs on a single-thread executor chosen from
+     * {@link PulsarService#transactionSnapshotRecoverExecutorProvider}, and that executor is passed to
+     * {@link #getTableView(ScheduledExecutorService)}, so each view, and the readers it caches, is only used by the
+     * executor's thread.
      */
-    private final ThreadLocal<TableView<T>> tableViewThreadLocal = new ThreadLocal<>();
+    private final ConcurrentHashMap<ScheduledExecutorService, TableView<T>> tableViews = new ConcurrentHashMap<>();
 
     // The class ReferenceCountedWriter will maintain the reference count,
     // when the reference count decrement to 0, it will be removed from writerFutureMap, the writer will be closed.
@@ -185,16 +186,12 @@ public class SystemTopicTxnBufferSnapshotService<T> {
             }
         }
         refCountedWriterMap.clear();
+        tableViews.clear();
     }
 
     public TableView<T> getTableView(ScheduledExecutorService scheduledExecutor) {
-        TableView<T> tableView = tableViewThreadLocal.get();
-        if (tableView == null) {
-            tableView = new TableView<>(this::createReader,
-                    pulsarClient.getConfiguration().getOperationTimeoutMs(), scheduledExecutor);
-            tableViewThreadLocal.set(tableView);
-        }
-        return tableView;
+        return tableViews.computeIfAbsent(scheduledExecutor, executor -> new TableView<>(this::createReader,
+                pulsarClient.getConfiguration().getOperationTimeoutMs(), executor));
     }
 
 }
