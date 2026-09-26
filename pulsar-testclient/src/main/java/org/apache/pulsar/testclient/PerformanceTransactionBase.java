@@ -25,6 +25,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.google.common.util.concurrent.RateLimiter;
 import io.github.merlimat.slog.Logger;
+import io.netty.util.concurrent.DefaultThreadFactory;
 import java.io.FileOutputStream;
 import java.io.PrintStream;
 import java.util.ArrayList;
@@ -221,7 +222,7 @@ public abstract class PerformanceTransactionBase<ClientT, ProducerT, ConsumerT, 
             ExecutorService executorService = new ThreadPoolExecutor(arguments.numTestThreads,
                     arguments.numTestThreads,
                     0L, TimeUnit.MILLISECONDS,
-                    new LinkedBlockingQueue<>());
+                    new LinkedBlockingQueue<>(), new DefaultThreadFactory("perf-transaction"));
 
             long startTime = System.nanoTime();
             long testEndTime = startTime + (long) (arguments.testTime * 1e9);
