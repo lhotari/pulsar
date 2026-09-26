@@ -303,6 +303,10 @@ OPTS="-XX:+ExitOnOutOfMemoryError -Dpulsar.allocator.exit_on_oom=true $OPTS"
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Netty settings. They are prepended to OPTS, so PULSAR_EXTRA_OPTS or BOOKIE_EXTRA_OPTS can override each of them.
+# The settings and their default values are defined in:
+#   https://github.com/netty/netty/blob/4.2/buffer/src/main/java/io/netty/buffer/AdaptiveByteBufAllocator.java
+#   https://github.com/netty/netty/blob/4.2/buffer/src/main/java/io/netty/buffer/PooledByteBufAllocator.java
+#   https://github.com/netty/netty/blob/4.2/common/src/main/java/io/netty/util/Recycler.java
 # ---------------------------------------------------------------------------------------------------------------------
 
 # Access to JDK internals: java.nio.DirectByteBuffer and jdk.internal.misc.Unsafe
@@ -321,17 +325,18 @@ NETTY_OPTS="$NETTY_OPTS -Dpulsar.allocator.default.type=adaptive -Dio.netty.allo
 # 8 MiB chunks to pool such messages and reduce native memory fragmentation.
 NETTY_OPTS="$NETTY_OPTS -Dio.netty.allocator.maxOrder=10"
 
-# Allocator thread caches on all threads. By default, PooledByteBufAllocator gives a thread cache only to
-# FastThreadLocalThreads and event-loop threads, and AdaptiveByteBufAllocator gives thread-local magazines only to
-# event-loop threads (and none when the maximum heap size is 512 MiB or less: io.netty.allocator.lowMemory).
+# Allocator thread caches on all threads (both settings default to false). By default, PooledByteBufAllocator gives a
+# thread cache only to FastThreadLocalThreads and event-loop threads, and AdaptiveByteBufAllocator gives thread-local
+# magazines only to event-loop threads, and none when the maximum heap size is 512 MiB or less
+# (io.netty.allocator.lowMemory in AdaptivePoolingAllocator.java).
 # Threads that remove their FastThreadLocals when they end, such as Pulsar's threads and the common ForkJoinPool's
 # workers below, then return their cached buffers to the allocator; on other threads, a finalizer frees the pooled
 # allocator's cache. See "Creating threads" in CODING.md.
 NETTY_OPTS="$NETTY_OPTS -Dio.netty.allocator.useCacheForAllThreads=true"
 NETTY_OPTS="$NETTY_OPTS -Dio.netty.allocator.useCachedMagazinesForNonEventLoopThreads=true"
 
-# Recycler: each thread keeps up to maxCapacityPerThread recycled objects, in a queue that grows in chunks of
-# chunkSize entries (default 32). Larger chunks mean fewer chunk allocations and larger thread-local batches.
+# Recycler: each thread keeps up to maxCapacityPerThread recycled objects (default 4096), in a queue that grows in
+# chunks of chunkSize entries (default 32). Larger chunks mean fewer chunk allocations and larger thread-local batches.
 NETTY_OPTS="$NETTY_OPTS -Dio.netty.recycler.maxCapacityPerThread=4096 -Dio.netty.recycler.chunkSize=256"
 
 # The common ForkJoinPool runs CompletableFuture's *Async methods by default. Run its workers like
