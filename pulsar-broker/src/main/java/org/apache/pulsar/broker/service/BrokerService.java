@@ -41,6 +41,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.ssl.SslContext;
 import io.netty.util.concurrent.DefaultThreadFactory;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import io.opentelemetry.api.metrics.LongCounter;
 import io.opentelemetry.api.metrics.ObservableLongUpDownCounter;
 import io.prometheus.client.CollectorRegistry;
@@ -1105,7 +1106,7 @@ public class BrokerService implements Closeable {
                                 return combined;
                             }, runnable -> {
                                 // run the 2nd phase of the shutdown in a separate thread
-                                Thread thread = new Thread(runnable);
+                                Thread thread = new FastThreadLocalThread(runnable);
                                 thread.setName("BrokerService-shutdown-phase2");
                                 thread.setDaemon(false);
                                 thread.start();
@@ -2576,6 +2577,8 @@ public class BrokerService implements Closeable {
             }
             managedLedgerConfig.setBatchReadEnabled(serviceConfig.isManagedLedgerBatchReadEnabled());
             managedLedgerConfig.setReadEntriesCallbackInline(serviceConfig.isManagedLedgerReadEntriesCallbackInline());
+            managedLedgerConfig.setAddEntryHandoverMaxBatchSize(
+                    Math.max(0, serviceConfig.getManagedLedgerAddEntryHandoverMaxBatchSize()));
             managedLedgerConfig.setMinimumBacklogCursorsForCaching(
                     serviceConfig.getManagedLedgerMinimumBacklogCursorsForCaching());
             managedLedgerConfig.setMinimumBacklogEntriesForCaching(
@@ -3455,6 +3458,13 @@ public class BrokerService implements Closeable {
             }
             return true;
         });
+        addDynamicConfigValidator("managedLedgerAddEntryHandoverMaxBatchSize", (value) -> {
+            try {
+                return Integer.parseInt(value) >= 0;
+            } catch (NumberFormatException e) {
+                return false;
+            }
+        });
 
         // (2) Listener Registration
         // add listener on "maxConcurrentLookupRequest" value change
@@ -3538,6 +3548,11 @@ public class BrokerService implements Closeable {
         });
         // add listener to update managed-ledger config to skipNonRecoverableLedgers
         registerConfigurationListener("autoSkipNonRecoverableData", (skipNonRecoverableLedger) -> {
+            updateManagedLedgerConfig();
+        });
+        // add listener to update managed-ledger config to managedLedgerAddEntryHandoverMaxBatchSize; managed ledgers
+        // apply it when they are opened, so ledgers that are already open keep the value they opened with
+        registerConfigurationListener("managedLedgerAddEntryHandoverMaxBatchSize", (addEntryHandoverMaxBatchSize) -> {
             updateManagedLedgerConfig();
         });
         // add listener to update message-dispatch-rate in msg for subscription
@@ -3760,8 +3775,13 @@ public class BrokerService implements Closeable {
                     if (topic instanceof PersistentTopic) {
                         PersistentTopic persistentTopic = (PersistentTopic) topic;
                         // update skipNonRecoverableLedger configuration
-                        persistentTopic.getManagedLedger().getConfig().setAutoSkipNonRecoverableData(
+                        ManagedLedgerConfig managedLedgerConfig = persistentTopic.getManagedLedger().getConfig();
+                        managedLedgerConfig.setAutoSkipNonRecoverableData(
                                 pulsar.getConfiguration().isAutoSkipNonRecoverableData());
+                        // update addEntryHandoverMaxBatchSize configuration, which applies when a managed ledger
+                        // is opened
+                        managedLedgerConfig.setAddEntryHandoverMaxBatchSize(
+                                Math.max(0, pulsar.getConfiguration().getManagedLedgerAddEntryHandoverMaxBatchSize()));
                     }
                 } catch (Exception e) {
                     log.warn().attr("topic", topic.getName()).exception(e)

@@ -21,6 +21,7 @@
 docker-jdk = "25"
 pulsar-client-python = "3.13.0"
 async-profiler = "4.5"
+jonoffcpu = "0.7.0"
 # Code quality
 checkstyle = "13.3.0"
 # Major frameworks
@@ -112,6 +113,8 @@ prometheus = "0.16.0"
 prometheus-jmx = "0.16.1"
 dropwizardmetrics = "4.2.39"
 hdrHistogram = "2.2.2"
+commonmark = "0.30.0"
+xchart = "4.0.4"
 perfmark = "0.27.0"
 # Auth
 jsonwebtoken = "0.13.0"
@@ -406,6 +409,13 @@ java-semver = { module = "com.github.zafarkhaja:java-semver", version.ref = "jav
 oshi-core = { module = "com.github.oshi:oshi-core-java11", version.ref = "oshi" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 hdrHistogram = { module = "org.hdrhistogram:HdrHistogram", version.ref = "hdrHistogram" }
+jonoffcpu-agent = { module = "io.github.jonoffcpu:jonoffcpu-agent", version.ref = "jonoffcpu" }
+jonoffcpu-correlator = { module = "io.github.jonoffcpu:jonoffcpu-correlator", version.ref = "jonoffcpu" }
+jonoffcpu-jfr-converter = { module = "io.github.jonoffcpu:jonoffcpu-jfr-converter", version.ref = "jonoffcpu" }
+commonmark = { module = "org.commonmark:commonmark", version.ref = "commonmark" }
+commonmark-ext-gfm-tables = { module = "org.commonmark:commonmark-ext-gfm-tables", version.ref = "commonmark" }
+commonmark-ext-heading-anchor = { module = "org.commonmark:commonmark-ext-heading-anchor", version.ref = "commonmark" }
+xchart = { module = "org.knowm.xchart:xchart", version.ref = "xchart" }
 dropwizardmetrics-core = { module = "io.dropwizard.metrics:metrics-core", version.ref = "dropwizardmetrics" }
 dropwizardmetrics-graphite = { module = "io.dropwizard.metrics:metrics-graphite", version.ref = "dropwizardmetrics" }
 dropwizardmetrics-jvm = { module = "io.dropwizard.metrics:metrics-jvm", version.ref = "dropwizardmetrics" }

@@ -20,7 +20,6 @@ package org.apache.pulsar.compaction;
 
 import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import io.netty.channel.EventLoopGroup;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import java.nio.file.Path;
@@ -183,7 +182,7 @@ public class CompactorTool {
 
         @Cleanup(value = "shutdownNow")
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
-                new ThreadFactoryBuilder().setNameFormat("compaction-%d").setDaemon(true).build());
+                new DefaultThreadFactory("compaction", true));
 
         @Cleanup
         MetadataStoreExtended store = MetadataStoreExtended.create(brokerConfig.getMetadataStoreUrl(),

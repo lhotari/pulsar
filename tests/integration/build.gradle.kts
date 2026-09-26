@@ -206,10 +206,15 @@ val integrationTest = tasks.register<Test>("integrationTest") {
 // applied to the kernel that runs the containers (the Docker VM on macOS, the host on Linux) by a
 // privileged throwaway container. Skip it with -Pinttest.asyncprofiler.skipPerfEventTuning when the
 // values are already set, when the Docker setup disallows privileged containers, or when profiling
-// with an engine that does not need perf_events.
-val skipPerfEventTuning = providers.gradleProperty("inttest.asyncprofiler.skipPerfEventTuning").isPresent
+// with an engine that does not need perf_events. The property skips it when it is empty or true, so
+// that a later skipPerfEventTuning=false in gradle.properties can override an earlier true.
+// tests/performance/environment/scripts/configure-perf-test-environment.sh sets it while the TuneD
+// profile that applies these settings is active.
+val skipPerfEventTuning = providers.gradleProperty("inttest.asyncprofiler.skipPerfEventTuning")
+    .map { it.isEmpty() || it.toBoolean() }
+    .getOrElse(false)
 val tuneKernelPerfEvents = tasks.register<Exec>("tuneKernelPerfEvents") {
-    description = "Relax the kernel perf_event limits that async-profiler's cpu engine needs"
+    description = "Relax the kernel perf_event and BPF limits that the profilers need"
     // Copied into a local: a task action that captured the script-level val would capture the
     // script object with it, which the configuration cache cannot serialize.
     val skip = skipPerfEventTuning
@@ -219,14 +224,21 @@ val tuneKernelPerfEvents = tasks.register<Exec>("tuneKernelPerfEvents") {
         "docker", "run", "--rm", "--privileged",
         "--cap-add", "SYS_ADMIN", "--security-opt", "seccomp=unconfined",
         "alpine:3.24", "sh", "-c",
-        "echo 1 > /proc/sys/kernel/perf_event_paranoid "
+        // The BPF syscall gate that jonoffcpu's collector needs, written first and separated by ';' rather
+        // than chained: on a kernel where the value already reads 1 the write fails with EPERM, and 1 is a
+        // one-way latch until the next boot, so chaining would fail everything below over a setting that is
+        // out of reach anyway.
+        "echo 0 > /proc/sys/kernel/unprivileged_bpf_disabled; "
+            + "echo 1 > /proc/sys/kernel/perf_event_paranoid "
             + "&& echo 0 > /proc/sys/kernel/kptr_restrict "
             + "&& echo 1024 > /proc/sys/kernel/perf_event_max_stack "
             + "&& echo 2048 > /proc/sys/kernel/perf_event_mlock_kb "
-            // also optimize for -XX:+UseTransparentHugePages
+            // also optimize for -XX:+UseTransparentHugePages. With defrag=madvise, the madvised heap is
+            // compacted into huge pages when it is touched, so -XX:+AlwaysPreTouch gets them at startup
+            // instead of depending on memory fragmentation and khugepaged collapsing them later.
             + "&& echo madvise > /sys/kernel/mm/transparent_hugepage/enabled "
             + "&& echo advise > /sys/kernel/mm/transparent_hugepage/shmem_enabled "
-            + "&& echo defer > /sys/kernel/mm/transparent_hugepage/defrag "
+            + "&& echo madvise > /sys/kernel/mm/transparent_hugepage/defrag "
             + "&& echo 1 > /sys/kernel/mm/transparent_hugepage/khugepaged/defrag"
     )
     // Best effort: profiling still works without it, only with less accurate native stacks, so a

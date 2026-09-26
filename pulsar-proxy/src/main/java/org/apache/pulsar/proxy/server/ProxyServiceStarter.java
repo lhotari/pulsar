@@ -24,6 +24,7 @@ import static org.apache.commons.lang3.StringUtils.isEmpty;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.apache.pulsar.common.stats.JvmMetrics.getJvmDirectMemoryUsed;
 import com.google.common.annotations.VisibleForTesting;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import io.prometheus.client.Collector;
 import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.Gauge;
@@ -283,7 +284,7 @@ public class ProxyServiceStarter {
         server = new WebServer(config, authenticationService, proxyService.getOpenTelemetry().getOpenTelemetry());
 
         if (!embeddedMode) {
-            Runtime.getRuntime().addShutdownHook(new Thread(this::close));
+            Runtime.getRuntime().addShutdownHook(new FastThreadLocalThread(this::close));
         }
 
         proxyService.start();

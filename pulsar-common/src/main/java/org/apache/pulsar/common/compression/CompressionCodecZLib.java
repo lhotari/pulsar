@@ -32,7 +32,7 @@ import org.apache.pulsar.common.allocator.PulsarByteBufAllocator;
  */
 public class CompressionCodecZLib implements CompressionCodec {
 
-    private final FastThreadLocal<Deflater> deflater = new FastThreadLocal<Deflater>() {
+    private static final FastThreadLocal<Deflater> deflater = new FastThreadLocal<Deflater>() {
         @Override
         protected Deflater initialValue() throws Exception {
             return new Deflater();
@@ -44,7 +44,7 @@ public class CompressionCodecZLib implements CompressionCodec {
         }
     };
 
-    private final FastThreadLocal<Inflater> inflater = new FastThreadLocal<Inflater>() {
+    private static final FastThreadLocal<Inflater> inflater = new FastThreadLocal<Inflater>() {
         @Override
         protected Inflater initialValue() throws Exception {
             return new Inflater();

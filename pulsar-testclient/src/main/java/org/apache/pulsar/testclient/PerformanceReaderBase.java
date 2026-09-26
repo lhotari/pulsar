@@ -26,14 +26,14 @@ import com.google.common.util.concurrent.RateLimiter;
 import io.github.merlimat.slog.Logger;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 import org.HdrHistogram.Histogram;
 import org.HdrHistogram.Recorder;
 import org.apache.pulsar.common.naming.TopicName;
+import org.apache.pulsar.common.util.PulsarExecutors;
 
 /**
  * Client-agnostic implementation of the {@code pulsar-perf} reader benchmark.
@@ -149,19 +149,16 @@ public abstract class PerformanceReaderBase<ClientT, ReaderT, MessageT> {
             printAggregatedStats();
         });
 
+        ScheduledExecutorService timeoutExecutor = null;
         if (arguments.testTime > 0) {
-            TimerTask timoutTask = new TimerTask() {
-                @Override
-                public void run() {
-                    log.info()
-                            .attr("duration", arguments.testTime)
-                            .log("------------- DONE (reached the maximum duration:"
-                                    + " [ seconds] of consumption) --------------");
-                    PerfClientUtils.exit(0);
-                }
-            };
-            Timer timer = new Timer();
-            timer.schedule(timoutTask, arguments.testTime * 1000);
+            timeoutExecutor = PulsarExecutors.newSingleThreadScheduledExecutor("perf-reader-test-time", false);
+            timeoutExecutor.schedule(() -> {
+                log.info()
+                        .attr("duration", arguments.testTime)
+                        .log("------------- DONE (reached the maximum duration:"
+                                + " [ seconds] of consumption) --------------");
+                PerfClientUtils.exit(0);
+            }, arguments.testTime, TimeUnit.SECONDS);
         }
 
         long oldTime = System.nanoTime();
@@ -199,6 +196,9 @@ public abstract class PerformanceReaderBase<ClientT, ReaderT, MessageT> {
             oldTime = now;
         }
 
+        if (timeoutExecutor != null) {
+            timeoutExecutor.shutdownNow();
+        }
         stopReading();
         closeClient(client);
         PerfClientUtils.removeAndRunShutdownHook(shutdownHookThread);

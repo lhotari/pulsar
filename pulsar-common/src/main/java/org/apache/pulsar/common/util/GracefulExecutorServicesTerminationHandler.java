@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.common.util;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -65,7 +66,8 @@ class GracefulExecutorServicesTerminationHandler {
                 terminateExecutors();
                 markShutdownCompleted();
             } else {
-                Thread shutdownWaitingThread = new Thread(this::awaitShutdown, getClass().getSimpleName());
+                Thread shutdownWaitingThread =
+                        new FastThreadLocalThread(this::awaitShutdown, getClass().getSimpleName());
                 shutdownWaitingThread.setDaemon(false);
                 shutdownWaitingThread.setUncaughtExceptionHandler((thread, exception) -> {
                   log.error().attr("thread", thread).exception(exception)

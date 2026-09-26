@@ -19,11 +19,11 @@
 package org.apache.pulsar.functions.instance;
 
 import com.google.common.annotations.VisibleForTesting;
+import io.netty.util.concurrent.DefaultThreadFactory;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.function.Consumer;
@@ -71,7 +71,7 @@ public class JavaInstance implements AutoCloseable {
 
         this.context = contextImpl;
         this.instanceConfig = instanceConfig;
-        this.executor = PulsarExecutors.newSingleThreadExecutor(Executors.defaultThreadFactory(), false);
+        this.executor = PulsarExecutors.newSingleThreadExecutor(new DefaultThreadFactory("pool"), false);
 
         asyncPreserveInputOrderForOutputMessages =
                 resolveAsyncPreserveInputOrderForOutputMessages(instanceConfig);

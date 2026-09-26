@@ -32,14 +32,15 @@ import java.lang.reflect.Field;
 import java.nio.file.Paths;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import lombok.CustomLog;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.common.functions.Resources;
+import org.apache.pulsar.common.util.PulsarExecutors;
 import org.apache.pulsar.functions.auth.FunctionAuthProvider;
 import org.apache.pulsar.functions.auth.KubernetesFunctionAuthProvider;
 import org.apache.pulsar.functions.instance.AuthenticationConfig;
@@ -105,7 +106,7 @@ public class KubernetesRuntimeFactory implements RuntimeFactory {
 
     @ToString.Exclude
     @EqualsAndHashCode.Exclude
-    private Timer changeConfigMapTimer;
+    private ScheduledExecutorService changeConfigMapExecutor;
     @ToString.Exclude
     @EqualsAndHashCode.Exclude
     private AppsV1Api appsClient;
@@ -357,6 +358,9 @@ public class KubernetesRuntimeFactory implements RuntimeFactory {
 
     @Override
     public void close() {
+        if (changeConfigMapExecutor != null) {
+            changeConfigMapExecutor.shutdownNow();
+        }
     }
 
     @Override
@@ -395,14 +399,13 @@ public class KubernetesRuntimeFactory implements RuntimeFactory {
 
             // Setup a timer to change stuff.
             if (!isEmpty(changeConfigMap)) {
-                changeConfigMapTimer = new Timer();
+                changeConfigMapExecutor =
+                        PulsarExecutors.newSingleThreadScheduledExecutor("function-k8s-config-map", false);
                 final KubernetesRuntimeFactory kubernetesRuntimeFactory = this;
-                changeConfigMapTimer.scheduleAtFixedRate(new TimerTask() {
-                    @Override
-                    public void run() {
-                        fetchConfigMap(coreClient, changeConfigMap, changeConfigMapNamespace, kubernetesRuntimeFactory);
-                    }
-                }, 300000, 300000);
+                changeConfigMapExecutor.scheduleAtFixedRate(
+                        () -> fetchConfigMap(coreClient, changeConfigMap, changeConfigMapNamespace,
+                                kubernetesRuntimeFactory),
+                        300000, 300000, TimeUnit.MILLISECONDS);
             }
         }
     }
