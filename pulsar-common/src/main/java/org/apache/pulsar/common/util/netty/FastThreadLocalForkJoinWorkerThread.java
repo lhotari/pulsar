@@ -48,6 +48,9 @@ public final class FastThreadLocalForkJoinWorkerThread extends ForkJoinWorkerThr
 
     FastThreadLocalForkJoinWorkerThread(ForkJoinPool pool) {
         super(pool);
+        // Like the JDK's default worker factory: don't inherit the context class loader of the thread that caused the
+        // worker to be created, such as a function's class loader.
+        setContextClassLoader(ClassLoader.getSystemClassLoader());
     }
 
     @Override
