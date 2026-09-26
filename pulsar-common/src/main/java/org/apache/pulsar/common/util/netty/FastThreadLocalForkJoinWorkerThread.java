@@ -35,6 +35,14 @@ import java.util.concurrent.ForkJoinWorkerThread;
  * {@code Recycler.get()} creates a new object every time. With this worker, those pools and caches are used, and the
  * pool can stop the worker as its load drops without leaving their contents to garbage collection: the values'
  * {@code onRemoval} callbacks release them when the worker terminates.
+ *
+ * <p>This cleanup matters most for the pooled allocators: {@link FastThreadLocal#removeAll()} removes each value
+ * ({@code FastThreadLocal.removeAndGet}), whose {@code onRemoval} returns the thread's cached buffers to the arenas
+ * ({@code PooledByteBufAllocator.PoolThreadLocalCache.onRemoval} calls {@code PoolThreadCache.free(false)}) or frees
+ * the thread-local magazines of {@code AdaptivePoolingAllocator}. A {@link FastThreadLocalThread} runs
+ * {@link FastThreadLocal#removeAll()} only when its {@link Runnable} is passed to its constructor, which wraps it, and
+ * {@link Thread#run()} isn't overridden. This class overrides {@code run()} because it isn't a
+ * {@link FastThreadLocalThread}: {@link FastThreadLocalThread#runWithFastThreadLocal(Runnable)} does the cleanup.
  */
 public final class FastThreadLocalForkJoinWorkerThread extends ForkJoinWorkerThread {
 

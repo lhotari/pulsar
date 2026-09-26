@@ -283,10 +283,44 @@ Focus feedback on correctness, reliability, and maintainability.
 - **Minimize work while holding a lock.** Capture needed state into locals inside the synchronized
   block, then run callbacks, listeners, and IO *outside* it — never call out to listener/callback code
   while holding a lock (this has fixed real deadlocks and contention).
-- Give threads **meaningful names**. When creating thread pools, prefer Netty's
-  **`io.netty.util.concurrent.DefaultThreadFactory`** — it produces **`FastThreadLocalThread`**
-  instances (lower overhead `FastThreadLocal` lookups, which matter on Netty paths like the pooled
-  `ByteBuf` allocator) and assigns prefixed thread names.
+- Give threads **meaningful names**.
+- **Create every thread as a Netty `FastThreadLocalThread`** (see
+  [Creating threads](#creating-threads-fastthreadlocalthread)): never `new Thread(...)`,
+  `Executors.defaultThreadFactory()`, or Guava's `ThreadFactoryBuilder`.
+
+### Creating threads: `FastThreadLocalThread`
+
+Netty uses its thread-local recycler pools (`Recycler`) and allocator caches (the `PooledByteBufAllocator`
+thread cache and the `AdaptiveByteBufAllocator` thread-local magazines) fully only on threads that
+**clean up their `FastThreadLocal` values when they end**. At thread exit, `FastThreadLocal.removeAll()`
+calls each value's `onRemoval`, which returns the cached buffers to the allocator (for example
+`PooledByteBufAllocator.PoolThreadLocalCache.onRemoval` → `PoolThreadCache.free(false)`). On other
+threads, `Recycler.get()` creates a new object every time, and any allocator cache is left for a
+finalizer to free. Every thread created in the code base must therefore be one of the following:
+
+- **A thread pool:** use Netty's **`io.netty.util.concurrent.DefaultThreadFactory`**. It creates
+  `FastThreadLocalThread`s that clean up, and gives them prefixed names.
+- **A single thread:** `new FastThreadLocalThread(runnable, name)`, or another constructor that
+  **takes the `Runnable`**. That constructor wraps the `Runnable` so that `FastThreadLocal.removeAll()`
+  runs when it returns.
+- **A `ForkJoinPool`:** its workers can't extend `FastThreadLocalThread`. Create them with
+  `org.apache.pulsar.common.util.netty.FastThreadLocalForkJoinWorkerThreadFactory`, whose workers run
+  with `FastThreadLocalThread.runWithFastThreadLocal`. `bin/pulsar` and `bin/bookkeeper` install it for
+  the common pool (which runs `CompletableFuture`'s `*Async` methods by default) with
+  `-Djava.util.concurrent.ForkJoinPool.common.threadFactory`.
+
+**Never extend `FastThreadLocalThread`, and never override its `run()`.** The constructors without a
+`Runnable` mark the thread as one that doesn't clean up, and an overridden `run()` bypasses the wrapped
+`Runnable`, so `FastThreadLocal.removeAll()` never runs. Netty still treats the thread as a
+`FastThreadLocalThread` and gives it a pooled allocator cache that isn't freed when the thread ends. Put
+the thread's work in a `Runnable` class and pass it to the constructor.
+
+**Use Netty's `FastThreadLocal` for thread-local state, not `ThreadLocal`.** On a
+`FastThreadLocalThread` a lookup is an array index instead of a hash-map probe, and the value is
+removed when the thread ends. If a value holds resources beyond its own memory (pooled buffers,
+recycled objects, native memory, registrations, open handles), override `onRemoval(V)` to release
+them. `FastThreadLocal.removeAll()` calls it for every value when a thread that cleans up ends, and
+`remove()` calls it for a single value.
 
 Pulsar has no documented, project-wide concurrency model yet; see
 [`ARCHITECTURE.md` → Concurrency model](ARCHITECTURE.md#concurrency-model-a-known-gap) for the
