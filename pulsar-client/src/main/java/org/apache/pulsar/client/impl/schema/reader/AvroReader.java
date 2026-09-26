@@ -19,6 +19,7 @@
 package org.apache.pulsar.client.impl.schema.reader;
 
 import com.google.common.annotations.VisibleForTesting;
+import io.netty.util.concurrent.FastThreadLocal;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Optional;
@@ -36,8 +37,8 @@ import org.apache.pulsar.client.impl.schema.AvroSchema;
 public class AvroReader<T> implements SchemaReader<T> {
 
     private ReflectDatumReader<T> reader;
-    private static final ThreadLocal<BinaryDecoder> decoders =
-            new ThreadLocal<>();
+    private static final FastThreadLocal<BinaryDecoder> decoders =
+            new FastThreadLocal<>();
     private final Schema schema;
 
     @VisibleForTesting

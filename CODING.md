@@ -322,6 +322,17 @@ recycled objects, native memory, registrations, open handles), override `onRemov
 them. `FastThreadLocal.removeAll()` calls it for every value when a thread that cleans up ends, and
 `remove()` calls it for a single value.
 
+**Declare a `FastThreadLocal` as a `private static final` field**, not as an instance field. Each
+`new FastThreadLocal()` permanently takes a global index that is never reused, and every thread that
+touches it grows its variable table up to that index. A per-instance `FastThreadLocal` in a class
+that's created repeatedly (per topic, connection, or test broker) therefore grows every thread's table
+without bound. Its values also outlive the instance: they stay in each thread's map until the thread
+ends or `remove()` is called. Per-thread scratch state can almost always be static and shared, as
+long as each use resets it first. Use a per-instance `FastThreadLocal` only for a small, fixed number
+of long-lived instances that each need their own per-thread state, and say so in a comment. If a
+class needs per-instance, per-thread state and is created many times, redesign it rather than adding
+a thread local.
+
 Pulsar has no documented, project-wide concurrency model yet; see
 [`ARCHITECTURE.md` → Concurrency model](ARCHITECTURE.md#concurrency-model-a-known-gap) for the
 conventions that *should* govern threads, thread pools, and event loops.

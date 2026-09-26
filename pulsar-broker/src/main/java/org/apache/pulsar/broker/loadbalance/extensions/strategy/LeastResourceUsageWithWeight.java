@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.loadbalance.extensions.strategy;
 
+import io.netty.util.concurrent.FastThreadLocal;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Optional;
@@ -38,14 +39,19 @@ import org.apache.pulsar.common.naming.ServiceUnitId;
 @ThreadSafe
 @CustomLog
 public class LeastResourceUsageWithWeight implements BrokerSelectionStrategy {
-    // Maintain this list to reduce object creation.
-    private final ThreadLocal<ArrayList<String>> bestBrokers;
-    private final ThreadLocal<HashSet<String>> noLoadDataBrokers;
-
-    public LeastResourceUsageWithWeight() {
-        this.bestBrokers = ThreadLocal.withInitial(ArrayList::new);
-        this.noLoadDataBrokers = ThreadLocal.withInitial(HashSet::new);
-    }
+    // Maintain this list to reduce object creation. select() clears them before use, so the instances can share them.
+    private static final FastThreadLocal<ArrayList<String>> BEST_BROKERS = new FastThreadLocal<>() {
+        @Override
+        protected ArrayList<String> initialValue() {
+            return new ArrayList<>();
+        }
+    };
+    private static final FastThreadLocal<HashSet<String>> NO_LOAD_DATA_BROKERS = new FastThreadLocal<>() {
+        @Override
+        protected HashSet<String> initialValue() {
+            return new HashSet<>();
+        }
+    };
 
     // A broker's max resource usage with weight using its historical load and short-term load data with weight.
     private double getMaxResourceUsageWithWeight(final String broker, final BrokerLoadData brokerLoadData,
@@ -88,8 +94,8 @@ public class LeastResourceUsageWithWeight implements BrokerSelectionStrategy {
             return Optional.empty();
         }
 
-        ArrayList<String> bestBrokers = this.bestBrokers.get();
-        HashSet<String> noLoadDataBrokers = this.noLoadDataBrokers.get();
+        ArrayList<String> bestBrokers = BEST_BROKERS.get();
+        HashSet<String> noLoadDataBrokers = NO_LOAD_DATA_BROKERS.get();
 
         bestBrokers.clear();
         noLoadDataBrokers.clear();
