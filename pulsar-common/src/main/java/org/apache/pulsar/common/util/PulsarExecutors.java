@@ -27,6 +27,7 @@ import java.util.Objects;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -46,6 +47,31 @@ public final class PulsarExecutors {
      */
     public static ExecutorService newSingleThreadExecutor() {
         return newSingleThreadExecutor(new DefaultThreadFactory("pool"));
+    }
+
+    /**
+     * Creates a single-thread executor whose worker is a Netty {@code FastThreadLocalThread} created by
+     * {@link DefaultThreadFactory} with the given pool name.
+     *
+     * @param poolName the prefix of the worker thread's name
+     * @param daemon whether the worker thread is a daemon thread
+     * @see #newSingleThreadExecutor(ThreadFactory)
+     */
+    public static ExecutorService newSingleThreadExecutor(String poolName, boolean daemon) {
+        return newSingleThreadExecutor(new DefaultThreadFactory(poolName, daemon));
+    }
+
+    /**
+     * Creates a single-thread scheduled executor whose worker is a Netty {@code FastThreadLocalThread} created by
+     * {@link DefaultThreadFactory} with the given pool name. Use it instead of {@link java.util.Timer}, which starts
+     * a plain thread.
+     *
+     * @param poolName the prefix of the worker thread's name
+     * @param daemon whether the worker thread is a daemon thread
+     * @see Executors#newSingleThreadScheduledExecutor(ThreadFactory)
+     */
+    public static ScheduledExecutorService newSingleThreadScheduledExecutor(String poolName, boolean daemon) {
+        return Executors.newSingleThreadScheduledExecutor(new DefaultThreadFactory(poolName, daemon));
     }
 
     /**

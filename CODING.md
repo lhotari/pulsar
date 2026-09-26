@@ -286,7 +286,8 @@ Focus feedback on correctness, reliability, and maintainability.
 - Give threads **meaningful names**.
 - **Create every thread as a Netty `FastThreadLocalThread`** (see
   [Creating threads](#creating-threads-fastthreadlocalthread)): never `new Thread(...)`,
-  `Executors.defaultThreadFactory()`, or Guava's `ThreadFactoryBuilder`.
+  `java.util.Timer`, `Executors.defaultThreadFactory()`, an `Executors.new*` method without a thread
+  factory, or Guava's `ThreadFactoryBuilder`.
 
 ### Creating threads: `FastThreadLocalThread`
 
@@ -300,6 +301,9 @@ finalizer to free. Every thread created in the code base must therefore be one o
 
 - **A thread pool:** use Netty's **`io.netty.util.concurrent.DefaultThreadFactory`**. It creates
   `FastThreadLocalThread`s that clean up, and gives them prefixed names.
+- **A single-thread executor:** use `org.apache.pulsar.common.util.PulsarExecutors`:
+  `newSingleThreadExecutor(poolName, daemon)`, or `newSingleThreadScheduledExecutor(poolName, daemon)`
+  in place of a `java.util.Timer`. Both create the worker with `DefaultThreadFactory`.
 - **A single thread:** `new FastThreadLocalThread(runnable, name)`, or another constructor that
   **takes the `Runnable`**. That constructor wraps the `Runnable` so that `FastThreadLocal.removeAll()`
   runs when it returns.
@@ -308,6 +312,11 @@ finalizer to free. Every thread created in the code base must therefore be one o
   with `FastThreadLocalThread.runWithFastThreadLocal`. `bin/pulsar` and `bin/bookkeeper` install it for
   the common pool (which runs `CompletableFuture`'s `*Async` methods by default) with
   `-Djava.util.concurrent.ForkJoinPool.common.threadFactory`.
+
+This doesn't apply to Pulsar IO connectors and function examples. They run in a function instance
+whose classloader doesn't include the Netty that Pulsar's client uses, so a `FastThreadLocalThread` there
+would bring no benefit and would need an extra dependency. A `compileOnly` Netty dependency doesn't help
+either: the process and Kubernetes runtimes don't provide Netty to user code.
 
 **Never extend `FastThreadLocalThread`, and never override its `run()`.** The constructors without a
 `Runnable` mark the thread as one that doesn't clean up, and an overridden `run()` bypasses the wrapped

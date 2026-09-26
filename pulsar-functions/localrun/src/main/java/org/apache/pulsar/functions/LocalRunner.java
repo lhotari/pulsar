@@ -37,11 +37,10 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -56,6 +55,7 @@ import org.apache.pulsar.common.io.SinkConfig;
 import org.apache.pulsar.common.io.SourceConfig;
 import org.apache.pulsar.common.nar.FileUtils;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
+import org.apache.pulsar.common.util.PulsarExecutors;
 import org.apache.pulsar.common.util.Reflections;
 import org.apache.pulsar.functions.instance.AuthenticationConfig;
 import org.apache.pulsar.functions.instance.InstanceConfig;
@@ -596,30 +596,28 @@ public class LocalRunner implements AutoCloseable {
             spawners.add(runtimeSpawner);
             runtimeSpawner.start();
         }
-        Timer statusCheckTimer = new Timer();
-        statusCheckTimer.scheduleAtFixedRate(new TimerTask() {
-            @Override
-            public void run() {
-                @SuppressWarnings({"unchecked", "rawtypes"})
-                CompletableFuture<String>[] futures = new CompletableFuture[spawners.size()];
-                int index = 0;
-                for (RuntimeSpawner spawner : spawners) {
-                    futures[index] = spawner.getFunctionStatusAsJson(index);
-                    index++;
-                }
-                try {
-                    CompletableFuture.allOf(futures).get(5, TimeUnit.SECONDS);
-                    for (index = 0; index < futures.length; ++index) {
-                        String json = futures[index].get();
-                        Gson gson = new GsonBuilder().setPrettyPrinting().create();
-                        log.info(gson.toJson(JsonParser.parseString(json)));
-                    }
-                } catch (TimeoutException | InterruptedException | ExecutionException e) {
-                    log.error("Could not get status from all local instances");
-                }
+        ScheduledExecutorService statusCheckExecutor =
+                PulsarExecutors.newSingleThreadScheduledExecutor("function-status-check", false);
+        statusCheckExecutor.scheduleAtFixedRate(() -> {
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            CompletableFuture<String>[] futures = new CompletableFuture[spawners.size()];
+            int index = 0;
+            for (RuntimeSpawner spawner : spawners) {
+                futures[index] = spawner.getFunctionStatusAsJson(index);
+                index++;
             }
-        }, 30000, 30000);
-        java.lang.Runtime.getRuntime().addShutdownHook(new FastThreadLocalThread(statusCheckTimer::cancel));
+            try {
+                CompletableFuture.allOf(futures).get(5, TimeUnit.SECONDS);
+                for (index = 0; index < futures.length; ++index) {
+                    String json = futures[index].get();
+                    Gson gson = new GsonBuilder().setPrettyPrinting().create();
+                    log.info(gson.toJson(JsonParser.parseString(json)));
+                }
+            } catch (TimeoutException | InterruptedException | ExecutionException e) {
+                log.error("Could not get status from all local instances");
+            }
+        }, 30000, 30000, TimeUnit.MILLISECONDS);
+        java.lang.Runtime.getRuntime().addShutdownHook(new FastThreadLocalThread(statusCheckExecutor::shutdownNow));
     }
 
 
