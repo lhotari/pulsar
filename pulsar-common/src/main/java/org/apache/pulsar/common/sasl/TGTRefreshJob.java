@@ -31,22 +31,22 @@ import lombok.CustomLog;
  * TGT refresh job, run by a dedicated thread. Copied from Apache ZooKeeper TGT refresh logic.
  */
 @CustomLog
-public class TGTRefreshJob implements Runnable {
+final class TGTRefreshJob implements Runnable {
 
     private static final Random rng = new Random();
 
     private long lastLogin;
     private final JAASCredentialsContainer container;
 
-    public long getLastLogin() {
+    long getLastLogin() {
         return lastLogin;
     }
 
-    public void setLastLogin(long lastLogin) {
+    void setLastLogin(long lastLogin) {
         this.lastLogin = lastLogin;
     }
 
-    public TGTRefreshJob(JAASCredentialsContainer container) {
+    TGTRefreshJob(JAASCredentialsContainer container) {
         this.container = container;
         // Initialize 'lastLogin' to do a login at first time
         this.lastLogin = System.currentTimeMillis() - MIN_TIME_BEFORE_RELOGIN;
