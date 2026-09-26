@@ -22,6 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.netty.util.Recycler;
 import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.concurrent.FastThreadLocalThread;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
@@ -100,6 +102,24 @@ public class FastThreadLocalForkJoinWorkerThreadFactoryTest {
         assertThat(pool.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
         assertThat(removed.await(10, TimeUnit.SECONDS)).isTrue();
         assertThat(removedValue.get()).isEqualTo("value");
+    }
+
+    @Test
+    public void testWorkerUsesSystemContextClassLoader() throws Exception {
+        // A worker is created by the thread that submits work; it must not keep that thread's context class loader,
+        // such as a function's class loader
+        ClassLoader creatorClassLoader = new URLClassLoader(new URL[0], null);
+        ForkJoinPool pool = new ForkJoinPool(1, new FastThreadLocalForkJoinWorkerThreadFactory(), null, false);
+        Thread currentThread = Thread.currentThread();
+        ClassLoader previous = currentThread.getContextClassLoader();
+        currentThread.setContextClassLoader(creatorClassLoader);
+        try {
+            assertThat(pool.submit(() -> Thread.currentThread().getContextClassLoader()).get(10, TimeUnit.SECONDS))
+                    .isSameAs(ClassLoader.getSystemClassLoader());
+        } finally {
+            currentThread.setContextClassLoader(previous);
+            pool.shutdown();
+        }
     }
 
     @Test
