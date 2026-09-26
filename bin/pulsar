@@ -292,13 +292,6 @@ OPTS="$OPTS --add-opens java.base/java.io=ALL-UNNAMED --add-opens java.base/java
 OPTS="$OPTS --add-opens java.management/sun.management=ALL-UNNAMED"
 # Required by MBeanStatsGenerator
 OPTS="$OPTS --add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED"
-# Allow Netty to use reflection access
-OPTS="$OPTS -Dio.netty.tryReflectionSetAccessible=true"
-OPTS="$OPTS -Dorg.apache.pulsar.shade.io.netty.tryReflectionSetAccessible=true"
-# Netty: enable java.nio.DirectByteBuffer
-# https://github.com/netty/netty/blob/4.1/common/src/main/java/io/netty/util/internal/PlatformDependent0.java
-# https://github.com/netty/netty/issues/12265
-OPTS="$OPTS --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/jdk.internal.misc=ALL-UNNAMED"
 # Required by LinuxInfoUtils
 OPTS="$OPTS --add-opens java.base/jdk.internal.platform=ALL-UNNAMED"
 # Required by RocksDB java.lang.System::loadLibrary call
@@ -307,51 +300,54 @@ OPTS="$OPTS --enable-native-access=ALL-UNNAMED"
 # if it runs out of either Java heap memory or its internal off-heap memory,
 # as these are unrecoverable errors that require a process restart to clear the faulty state and restore operation
 OPTS="-XX:+ExitOnOutOfMemoryError -Dpulsar.allocator.exit_on_oom=true $OPTS"
-# Netty tuning
-# These settings are primarily used to modify the Netty allocator configuration,
-# improving memory utilization and reducing the frequency of requesting off-heap memory from the OS
-#
-# Based on the netty source code, the allocator's default chunk size is calculated as:
-# io.netty.allocator.pageSize (default: 8192) shifted left by
-# io.netty.allocator.maxOrder (default: 9 after Netty 4.1.76.Final version).
-# This equals 8192 * 2^9 = 4 MB：
-# https://github.com/netty/netty/blob/4.1/buffer/src/main/java/io/netty/buffer/PooledByteBufAllocator.java#L105
-#
-# Allocations that are larger than chunk size are considered huge allocations and don't use the pool:
-# https://github.com/netty/netty/blob/4.1/buffer/src/main/java/io/netty/buffer/PoolArena.java#L141-L142
-#
-# Currently, Pulsar defaults to a maximum single message size of 5 MB.
-# Therefore, when frequently producing messages whose size exceeds the chunk size,
-# Netty cannot utilize resources from the memory pool and must frequently allocate native memory.
-# This can lead to increased physical memory fragmentation and higher reclamation costs.
-# Thus, increasing io.netty.allocator.maxOrder to 10 to ensure that a single message is larger
-# than chunk size (8MB) and can reuse Netty's memory pool.
-OPTS="-Dio.netty.recycler.maxCapacityPerThread=4096 -Dio.netty.allocator.maxOrder=10 $OPTS"
-# The common ForkJoinPool runs CompletableFuture's *Async methods (thenApplyAsync, ...) by default. Its workers can't be
-# Netty FastThreadLocalThreads, so Netty's recycler and allocator thread caches aren't used on them; this factory's
-# workers run like FastThreadLocalThreads, and remove their FastThreadLocal values when the pool stops them.
-OPTS="-Djava.util.concurrent.ForkJoinPool.common.threadFactory=org.apache.pulsar.common.util.netty.FastThreadLocalForkJoinWorkerThreadFactory $OPTS"
-# Netty recycler: each thread's pool of recycled objects is a queue that grows in chunks of io.netty.recycler.chunkSize
-# entries (default 32) up to io.netty.recycler.maxCapacityPerThread, and a thread with a thread-local batch keeps up to
-# that many objects in it. Objects recycled on other threads are offered to the queue. Larger chunks mean fewer chunk
-# allocations and links as a pool fills up, and larger thread-local batches.
-OPTS="-Dio.netty.recycler.chunkSize=256 $OPTS"
-# Netty allocator thread caches. When a thread that cleans up its FastThreadLocals ends (Pulsar's FastThreadLocalThreads
-# and the common ForkJoinPool's workers above), FastThreadLocal.removeAll() calls each value's onRemoval, which returns
-# the thread's cached buffers to the allocator: PoolThreadCache.free(false) for PooledByteBufAllocator, and freeing the
-# thread-local magazines for AdaptiveByteBufAllocator. A FastThreadLocalThread cleans up only when its Runnable is passed
-# to its constructor and run() isn't overridden.
-# AdaptiveByteBufAllocator uses thread-local magazines only on event-loop threads unless
-# io.netty.allocator.useCachedMagazinesForNonEventLoopThreads=true, and only on threads that clean up FastThreadLocals.
-# It uses none when the maximum heap size is 512 MiB or less (Netty's low memory mode, io.netty.allocator.lowMemory).
-# PooledByteBufAllocator gives a thread cache to FastThreadLocalThreads and event-loop threads; with
-# io.netty.allocator.useCacheForAllThreads=true other threads get one too, which a finalizer frees after the thread ends.
-OPTS="-Dio.netty.allocator.useCachedMagazinesForNonEventLoopThreads=true -Dio.netty.allocator.useCacheForAllThreads=true $OPTS"
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Netty settings. They are prepended to OPTS, so PULSAR_EXTRA_OPTS or BOOKIE_EXTRA_OPTS can override each of them.
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Access to JDK internals: java.nio.DirectByteBuffer and jdk.internal.misc.Unsafe
+# (https://github.com/netty/netty/issues/12265), and reflection.
+NETTY_OPTS="--add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/jdk.internal.misc=ALL-UNNAMED"
+NETTY_OPTS="$NETTY_OPTS -Dio.netty.tryReflectionSetAccessible=true"
+NETTY_OPTS="$NETTY_OPTS -Dorg.apache.pulsar.shade.io.netty.tryReflectionSetAccessible=true"
+
+# Allocators: Netty's adaptive allocator for Pulsar's default allocator and for Netty's own default allocator (Netty 4.2's
+# default). The named setting takes precedence over -Dpulsar.allocator.type, so select another allocator for general
+# operations with -Dpulsar.allocator.default.type=pooled. See conf/pulsar_env.sh for the allocator settings.
+NETTY_OPTS="$NETTY_OPTS -Dpulsar.allocator.default.type=adaptive -Dio.netty.allocator.type=adaptive"
+
+# PooledByteBufAllocator chunk size: io.netty.allocator.pageSize (8 KiB) << io.netty.allocator.maxOrder (default 9),
+# 4 MiB. Allocations larger than a chunk bypass the pool, and Pulsar's default maximum message size is 5 MB, so use
+# 8 MiB chunks to pool such messages and reduce native memory fragmentation.
+NETTY_OPTS="$NETTY_OPTS -Dio.netty.allocator.maxOrder=10"
+
+# Allocator thread caches on all threads. By default, PooledByteBufAllocator gives a thread cache only to
+# FastThreadLocalThreads and event-loop threads, and AdaptiveByteBufAllocator gives thread-local magazines only to
+# event-loop threads (and none when the maximum heap size is 512 MiB or less: io.netty.allocator.lowMemory).
+# Threads that remove their FastThreadLocals when they end, such as Pulsar's threads and the common ForkJoinPool's
+# workers below, then return their cached buffers to the allocator; on other threads, a finalizer frees the pooled
+# allocator's cache. See "Creating threads" in CODING.md.
+NETTY_OPTS="$NETTY_OPTS -Dio.netty.allocator.useCacheForAllThreads=true"
+NETTY_OPTS="$NETTY_OPTS -Dio.netty.allocator.useCachedMagazinesForNonEventLoopThreads=true"
+
+# Recycler: each thread keeps up to maxCapacityPerThread recycled objects, in a queue that grows in chunks of
+# chunkSize entries (default 32). Larger chunks mean fewer chunk allocations and larger thread-local batches.
+NETTY_OPTS="$NETTY_OPTS -Dio.netty.recycler.maxCapacityPerThread=4096 -Dio.netty.recycler.chunkSize=256"
+
+# The common ForkJoinPool runs CompletableFuture's *Async methods by default. Run its workers like
+# FastThreadLocalThreads, so that they use the recycler and allocator thread caches and release them when they end.
+NETTY_OPTS="$NETTY_OPTS -Djava.util.concurrent.ForkJoinPool.common.threadFactory=org.apache.pulsar.common.util.netty.FastThreadLocalForkJoinWorkerThreadFactory"
+
+# Leak detection: disabled for bookies.
+if [ $COMMAND == "bookie" ]; then
+  NETTY_OPTS="$NETTY_OPTS -Dio.netty.leakDetection.level=disabled"
+fi
+
+OPTS="$NETTY_OPTS $OPTS"
 
 OPTS="-cp $PULSAR_CLASSPATH $OPTS"
 
 if [ $COMMAND == "bookie" ]; then
-  OPTS="-Dio.netty.leakDetection.level=disabled $OPTS"
   # Pass BOOKIE_EXTRA_OPTS option defined in bkenv.sh
   OPTS="$OPTS $BOOKIE_MEM $BOOKIE_GC $BOOKIE_GC_LOG $BOOKIE_EXTRA_OPTS"
 else

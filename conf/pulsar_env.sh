@@ -49,7 +49,8 @@
 #   pooled   - Netty PooledByteBufAllocator; prefers direct buffers (built-in default).
 #   unpooled - Netty UnpooledByteBufAllocator; prefers heap buffers.
 #   adaptive - Netty AdaptiveByteBufAllocator; auto-tunes pooling and prefers direct buffers
-#              (set for the default allocator below).
+#              (bin/pulsar and bin/bookkeeper set -Dpulsar.allocator.default.type=adaptive; override it with
+#              -Dpulsar.allocator.default.type=pooled, since the named setting takes precedence).
 # Named allocators override each setting independently with pulsar.allocator.<id>.<setting>:
 #   pulsar.allocator.default.type  - allocator used by general Pulsar operations
 #   pulsar.allocator.ml-cache.type - separate allocator used for managed-ledger cache copies (default: adaptive)
@@ -66,12 +67,6 @@
 # pulsar.allocator.type takes precedence over the legacy pulsar.allocator.pooled property.
 # If pulsar.allocator.type is unset, pulsar.allocator.pooled=true (or unset) selects pooled;
 # other values of pulsar.allocator.pooled select unpooled.
-
-# Use Netty's adaptive allocator for Pulsar's default allocator, and pin Netty's own default allocator to it (Netty
-# 4.2's default). The options are prepended to OPTS so that the configured options override them; since the named
-# setting takes precedence over -Dpulsar.allocator.type, select another allocator for general operations with
-# -Dpulsar.allocator.default.type=pooled in PULSAR_EXTRA_OPTS.
-OPTS="-Dpulsar.allocator.default.type=adaptive -Dio.netty.allocator.type=adaptive $OPTS"
 
 # Extra options to be passed to the jvm
 PULSAR_MEM=${PULSAR_MEM:-"-Xms2g -Xmx2g -XX:MaxDirectMemorySize=4g"}
