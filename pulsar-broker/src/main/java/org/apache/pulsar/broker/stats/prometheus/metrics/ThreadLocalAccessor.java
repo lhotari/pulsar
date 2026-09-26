@@ -30,25 +30,32 @@ import org.jspecify.annotations.Nullable;
 class ThreadLocalAccessor {
 
     private final ConcurrentHashMap<LocalData, Boolean> map = new ConcurrentHashMap<>();
+    // Per-instance by design: each metric logger keeps its own per-thread sketches. Loggers are long-lived and
+    // created once per metric name or label set, so the number of FastThreadLocal indexes this takes is bounded.
     private final FastThreadLocal<LocalData> localData = new FastThreadLocal<>() {
 
         @Override
         protected LocalData initialValue() {
-            LocalData localData = new LocalData(Thread.currentThread());
+            LocalData localData = new LocalData();
             map.put(localData, Boolean.TRUE);
             return localData;
         }
 
         @Override
         protected void onRemoval(LocalData value) {
-            map.remove(value);
+            // Keep the LocalData in the map so that the next record() call merges the values recorded since the last
+            // call before removing it.
+            value.markOwnerThreadTerminated();
         }
     };
 
     void record(KllDoublesSketch aggregateSuccess, @Nullable KllDoublesSketch aggregateFail) {
         map.keySet().forEach(key -> {
+            // Check before merging: once the owner thread has ended, it records no more values, so the merge below
+            // includes all of them. A thread that ends after the check is removed by the next call.
+            boolean remove = key.shouldRemove();
             key.record(aggregateSuccess, aggregateFail);
-            if (key.shouldRemove()) {
+            if (remove) {
                 map.remove(key);
             }
         });
@@ -70,21 +77,29 @@ class ThreadLocalAccessor {
         private final StampedLock lock = new StampedLock();
         // Keep a weak reference to the owner thread so that we can remove the LocalData when the thread
         // is not alive anymore or has been garbage collected.
-        // This reference isn't needed when the owner thread is a FastThreadLocalThread and will be null in that case.
-        // The removal is handled by FastThreadLocal#onRemoval when the owner thread is a FastThreadLocalThread.
+        // This reference isn't needed when the owner thread removes its FastThreadLocals when it ends, and will be
+        // null in that case: FastThreadLocal#onRemoval sets ownerThreadTerminated.
         private final WeakReference<Thread> ownerThreadReference;
+        private volatile boolean ownerThreadTerminated;
 
-        LocalData(Thread ownerThread) {
-            if (ownerThread instanceof FastThreadLocalThread) {
+        LocalData() {
+            if (FastThreadLocalThread.currentThreadWillCleanupFastThreadLocals()) {
                 ownerThreadReference = null;
             } else {
-                ownerThreadReference = new WeakReference<>(ownerThread);
+                ownerThreadReference = new WeakReference<>(Thread.currentThread());
             }
         }
 
+        void markOwnerThreadTerminated() {
+            ownerThreadTerminated = true;
+        }
+
         private boolean shouldRemove() {
-            if (ownerThreadReference == null) {
-                // the owner is a FastThreadLocalThread which handles the removal using FastThreadLocal#onRemoval
+            if (ownerThreadTerminated) {
+                // the owner thread has removed its FastThreadLocals when it ended
+                return true;
+            } else if (ownerThreadReference == null) {
+                // the owner thread will set ownerThreadTerminated using FastThreadLocal#onRemoval
                 return false;
             } else {
                 Thread ownerThread = ownerThreadReference.get();

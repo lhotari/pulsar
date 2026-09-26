@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.stats.prometheus.metrics;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.testng.Assert.assertEquals;
 import io.netty.util.concurrent.FastThreadLocalThread;
 import java.util.concurrent.Phaser;
@@ -79,9 +80,21 @@ public class ThreadLocalAccessorTest {
         final var accessor = new ThreadLocalAccessor();
         getThread(fastThreadLocalThread, accessor::getLocalData).join();
         System.gc();
-        // FastThreadLocalThread removes the LocalData from the map when the thread finishes
-        assertEquals(accessor.getLocalDataCount(), fastThreadLocalThread ? 0 : 1);
+        // the LocalData stays in the map until the next record call, also when the thread removes its FastThreadLocals
+        assertEquals(accessor.getLocalDataCount(), 1);
         accessor.record(KllDoublesSketch.newHeapInstance(), aggregateFail);
+        assertEquals(accessor.getLocalDataCount(), 0);
+    }
+
+    @Test(dataProvider = "provider")
+    public void testShouldRecordValuesOfTerminatedThread(boolean fastThreadLocalThread,
+                                                        @Nullable KllDoublesSketch aggregateFail) throws Exception {
+        final var accessor = new ThreadLocalAccessor();
+        getThread(fastThreadLocalThread, () -> accessor.getLocalData().updateSuccess(42)).join();
+        KllDoublesSketch aggregateSuccess = KllDoublesSketch.newHeapInstance();
+        accessor.record(aggregateSuccess, aggregateFail);
+        assertThat(aggregateSuccess.getN()).isEqualTo(1);
+        assertThat(aggregateSuccess.getMaxItem()).isEqualTo(42);
         assertEquals(accessor.getLocalDataCount(), 0);
     }
 

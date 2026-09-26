@@ -23,6 +23,7 @@ import com.google.gson.Gson;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.stub.StreamObserver;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -154,7 +155,7 @@ class ProcessRuntime implements Runtime {
      */
     @Override
     public void start() {
-        java.lang.Runtime.getRuntime().addShutdownHook(new Thread(() -> process.destroy()));
+        java.lang.Runtime.getRuntime().addShutdownHook(new FastThreadLocalThread(() -> process.destroy()));
 
         // Note: we create the expected log folder before the function process logger attempts to create it
         // This is because if multiple instances are launched they can encounter a race condition creation of the dir.

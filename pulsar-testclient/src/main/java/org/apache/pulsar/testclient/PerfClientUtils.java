@@ -20,6 +20,7 @@ package org.apache.pulsar.testclient;
 
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import io.github.merlimat.slog.Logger;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
 import java.lang.management.ManagementFactory;
 import java.util.Map;
@@ -292,7 +293,7 @@ public class PerfClientUtils {
      * @return the thread that was registered as a shutdown hook
      */
     public static Thread addShutdownHook(Runnable runnable) {
-        Thread shutdownHookThread = new Thread(runnable, "perf-client-shutdown");
+        Thread shutdownHookThread = new FastThreadLocalThread(runnable, "perf-client-shutdown");
         Runtime.getRuntime().addShutdownHook(shutdownHookThread);
         return shutdownHookThread;
     }

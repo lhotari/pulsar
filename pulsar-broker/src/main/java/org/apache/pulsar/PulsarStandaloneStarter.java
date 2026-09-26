@@ -21,6 +21,7 @@ package org.apache.pulsar;
 import static org.apache.commons.lang3.StringUtils.isBlank;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.io.FileInputStream;
 import java.util.Arrays;
 import lombok.AccessLevel;
@@ -126,7 +127,7 @@ public class PulsarStandaloneStarter extends PulsarStandalone {
         if (shutdownThread != null) {
             throw new IllegalStateException("Shutdown hook already registered");
         }
-        shutdownThread = new Thread(() -> {
+        shutdownThread = new FastThreadLocalThread(() -> {
             try {
                 doClose(false);
             } catch (Exception e) {

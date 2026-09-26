@@ -20,6 +20,7 @@ package org.apache.pulsar.client.admin.internal;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import com.google.common.annotations.VisibleForTesting;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import io.opentelemetry.api.OpenTelemetry;
 import jakarta.ws.rs.client.Client;
 import jakarta.ws.rs.client.ClientBuilder;
@@ -667,7 +668,7 @@ public class PulsarAdminImpl implements PulsarAdmin {
         ThreadPoolExecutor executor = new ThreadPoolExecutor(AUTH_BLOCKING_MAX_THREADS,
                 AUTH_BLOCKING_MAX_THREADS, 60L, TimeUnit.SECONDS, new LinkedBlockingQueue<>(),
                 runnable -> {
-                    Thread thread = new Thread(runnable, "pulsar-admin-auth-blocking");
+                    Thread thread = new FastThreadLocalThread(runnable, "pulsar-admin-auth-blocking");
                     thread.setDaemon(true);
                     return thread;
                 });

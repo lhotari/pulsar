@@ -617,7 +617,7 @@ public class PulsarMockBookKeeper extends BookKeeper {
         this.defaultReadEntriesDelayMillis = defaultReadEntriesDelayMillis;
     }
 
-    private final FastThreadLocal<PulsarMockBookKeeperReadEvent> readEventThreadLocal = new FastThreadLocal<>() {
+    private static final FastThreadLocal<PulsarMockBookKeeperReadEvent> readEventThreadLocal = new FastThreadLocal<>() {
         @Override
         protected PulsarMockBookKeeperReadEvent initialValue() throws Exception {
             return new PulsarMockBookKeeperReadEvent();

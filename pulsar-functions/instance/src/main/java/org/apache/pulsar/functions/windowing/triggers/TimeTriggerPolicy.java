@@ -19,7 +19,7 @@
 package org.apache.pulsar.functions.windowing.triggers;
 
 import static org.apache.pulsar.common.util.Runnables.catchingAndLoggingThrowables;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import io.netty.util.concurrent.DefaultThreadFactory;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -55,10 +55,7 @@ public class TimeTriggerPolicy<T> implements TriggerPolicy<T, Void> {
         this.duration = millis;
         this.handler = handler;
         this.evictionPolicy = evictionPolicy;
-        ThreadFactory threadFactory = new ThreadFactoryBuilder()
-                .setNameFormat("time-trigger-policy-%d")
-                .setDaemon(true)
-                .build();
+        ThreadFactory threadFactory = new DefaultThreadFactory("time-trigger-policy", true);
         this.executor = Executors.newSingleThreadScheduledExecutor(threadFactory);
         this.context = context;
     }

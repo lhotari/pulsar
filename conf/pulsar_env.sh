@@ -46,9 +46,11 @@
 
 # Select the ByteBuf allocator by adding -Dpulsar.allocator.type=<value> to PULSAR_EXTRA_OPTS.
 # Supported values (case-insensitive):
-#   pooled   - Netty PooledByteBufAllocator; prefers direct buffers (default).
+#   pooled   - Netty PooledByteBufAllocator; prefers direct buffers (built-in default).
 #   unpooled - Netty UnpooledByteBufAllocator; prefers heap buffers.
-#   adaptive - Netty AdaptiveByteBufAllocator; auto-tunes pooling and prefers direct buffers.
+#   adaptive - Netty AdaptiveByteBufAllocator; auto-tunes pooling and prefers direct buffers
+#              (bin/pulsar and bin/bookkeeper set -Dpulsar.allocator.default.type=adaptive; override it with
+#              -Dpulsar.allocator.default.type=pooled, since the named setting takes precedence).
 # Named allocators override each setting independently with pulsar.allocator.<id>.<setting>:
 #   pulsar.allocator.default.type  - allocator used by general Pulsar operations
 #   pulsar.allocator.ml-cache.type - separate allocator used for managed-ledger cache copies (default: adaptive)

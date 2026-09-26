@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.functions.worker;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -143,7 +144,7 @@ public class FunctionAssignmentTailer implements AutoCloseable {
     }
 
     private Thread getTailerThread() {
-        Thread t = new Thread(() -> {
+        Thread t = new FastThreadLocalThread(() -> {
             while (isRunning) {
                 try {
                     Message<byte[]> msg = reader.readNext(1, TimeUnit.SECONDS);

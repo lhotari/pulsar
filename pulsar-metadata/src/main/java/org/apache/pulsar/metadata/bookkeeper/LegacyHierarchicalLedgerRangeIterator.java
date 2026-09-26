@@ -20,6 +20,7 @@ package org.apache.pulsar.metadata.bookkeeper;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.pulsar.metadata.bookkeeper.AbstractMetadataDriver.BLOCKING_CALL_TIMEOUT;
+import io.netty.util.concurrent.FastThreadLocal;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
@@ -144,8 +145,12 @@ public class LegacyHierarchicalLedgerRangeIterator implements LedgerManager.Ledg
         return r;
     }
 
-    private static final ThreadLocal<StringBuilder> threadLocalNodeBuilder =
-            ThreadLocal.withInitial(() -> new StringBuilder());
+    private static final FastThreadLocal<StringBuilder> threadLocalNodeBuilder = new FastThreadLocal<>() {
+        @Override
+        protected StringBuilder initialValue() {
+            return new StringBuilder();
+        }
+    };
 
     /**
      * Get a single node level1/level2.
