@@ -243,6 +243,16 @@ OPTS="-Djava.util.concurrent.ForkJoinPool.common.threadFactory=org.apache.pulsar
 # that many objects in it. Objects recycled on other threads are offered to the queue. Larger chunks mean fewer chunk
 # allocations and links as a pool fills up, and larger thread-local batches.
 OPTS="-Dio.netty.recycler.chunkSize=256 $OPTS"
+# Netty allocator thread caches. When a thread that cleans up its FastThreadLocals ends (Pulsar's FastThreadLocalThreads
+# and the common ForkJoinPool's workers above), FastThreadLocal.removeAll() calls each value's onRemoval, which returns
+# the thread's cached buffers to the allocator: PoolThreadCache.free(false) for PooledByteBufAllocator, and freeing the
+# thread-local magazines for AdaptiveByteBufAllocator. A FastThreadLocalThread cleans up only when its Runnable is passed
+# to its constructor and run() isn't overridden.
+# AdaptiveByteBufAllocator uses thread-local magazines only on event-loop threads unless
+# io.netty.allocator.useCachedMagazinesForNonEventLoopThreads=true, and only on threads that clean up FastThreadLocals.
+# PooledByteBufAllocator gives a thread cache to FastThreadLocalThreads and event-loop threads; with
+# io.netty.allocator.useCacheForAllThreads=true other threads get one too, which a finalizer frees after the thread ends.
+OPTS="-Dio.netty.allocator.useCachedMagazinesForNonEventLoopThreads=true -Dio.netty.allocator.useCacheForAllThreads=true $OPTS"
 
 OPTS="$OPTS $BOOKIE_MEM $BOOKIE_GC $BOOKIE_GC_LOG $BOOKIE_EXTRA_OPTS"
 

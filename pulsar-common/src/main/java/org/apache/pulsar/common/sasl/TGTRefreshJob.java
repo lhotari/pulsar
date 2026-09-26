@@ -18,7 +18,6 @@
  */
 package org.apache.pulsar.common.sasl;
 
-import io.netty.util.concurrent.FastThreadLocalThread;
 import java.util.Date;
 import java.util.Random;
 import java.util.Set;
@@ -29,10 +28,10 @@ import javax.security.auth.login.LoginException;
 import lombok.CustomLog;
 
 /**
- * TGT Refresh Thread. Copied from Apache ZooKeeper TGT refresh logic.
+ * TGT refresh job, run by a dedicated thread. Copied from Apache ZooKeeper TGT refresh logic.
  */
 @CustomLog
-public class TGTRefreshThread extends FastThreadLocalThread {
+public class TGTRefreshJob implements Runnable {
 
     private static final Random rng = new Random();
 
@@ -47,12 +46,10 @@ public class TGTRefreshThread extends FastThreadLocalThread {
         this.lastLogin = lastLogin;
     }
 
-    public TGTRefreshThread(JAASCredentialsContainer container) {
+    public TGTRefreshJob(JAASCredentialsContainer container) {
         this.container = container;
         // Initialize 'lastLogin' to do a login at first time
         this.lastLogin = System.currentTimeMillis() - MIN_TIME_BEFORE_RELOGIN;
-        setDaemon(true);
-        setName("pulsar-tgt-refresh-thread");
     } // Initialize 'lastLogin' to do a login at first time
 
     private synchronized KerberosTicket getTGT() {

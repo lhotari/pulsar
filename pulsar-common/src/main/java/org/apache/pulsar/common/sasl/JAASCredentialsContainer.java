@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.common.sasl;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.Map;
@@ -42,7 +43,7 @@ public class JAASCredentialsContainer implements Closeable {
     private String principal;
     private boolean isKrbTicket;
     private boolean isUsingTicketCache;
-    private TGTRefreshThread ticketRefreshThread;
+    private FastThreadLocalThread ticketRefreshThread;
 
     public CallbackHandler callbackHandler;
     private String loginContextName;
@@ -76,7 +77,9 @@ public class JAASCredentialsContainer implements Closeable {
         if (isKrbTicket) {
             this.isUsingTicketCache = SaslConstants.isUsingTicketCache(loginContextName);
             this.principal = SaslConstants.getPrincipal(loginContextName);
-            this.ticketRefreshThread = new TGTRefreshThread(this);
+            this.ticketRefreshThread =
+                    new FastThreadLocalThread(new TGTRefreshJob(this), "pulsar-tgt-refresh-thread");
+            ticketRefreshThread.setDaemon(true);
         } else {
             throw new LoginException("Kerberos authentication without KerberosTicket provided!");
         }
