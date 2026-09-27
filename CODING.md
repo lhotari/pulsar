@@ -309,9 +309,12 @@ finalizer to free. Every thread created in the code base must therefore be one o
   runs when it returns.
 - **A `ForkJoinPool`:** its workers can't extend `FastThreadLocalThread`. Create them with
   `org.apache.pulsar.common.util.netty.FastThreadLocalForkJoinWorkerThreadFactory`, whose workers run
-  with `FastThreadLocalThread.runWithFastThreadLocal`. `bin/pulsar` and `bin/bookkeeper` install it for
-  the common pool (which runs `CompletableFuture`'s `*Async` methods by default) with
-  `-Djava.util.concurrent.ForkJoinPool.common.threadFactory`.
+  with `FastThreadLocalThread.runWithFastThreadLocal`. `conf/pulsar_env.sh` and `conf/bkenv.sh` install
+  it for the common pool (which runs `CompletableFuture`'s `*Async` methods by default) with
+  `-Djava.util.concurrent.ForkJoinPool.common.threadFactory`, up to Java 23 only. From Java 24 on, the
+  JDK's own common-pool workers are isolated: they run in their own thread group and clear their
+  `ThreadLocal`s. This factory's workers can't clear them, since that would also drop Netty's
+  thread-local caches without releasing them.
 
 This doesn't apply to Pulsar IO connectors and function examples. In the process and Kubernetes
 runtimes, their classloader doesn't include the Netty that Pulsar's client uses, so a

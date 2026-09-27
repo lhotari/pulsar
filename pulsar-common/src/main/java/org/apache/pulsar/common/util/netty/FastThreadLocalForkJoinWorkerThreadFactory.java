@@ -26,6 +26,13 @@ import java.util.concurrent.ForkJoinWorkerThread;
  * {@code CompletableFuture} by default, uses it with
  * {@code -Djava.util.concurrent.ForkJoinPool.common.threadFactory=}{@value #CLASS_NAME}; the JDK loads the class
  * with the system class loader and needs its public no-argument constructor.
+ *
+ * <p>{@code conf/pulsar_env.sh} and {@code conf/bkenv.sh} set it for the common pool up to Java 23 only, where its
+ * workers behave like the JDK's default ones apart from the {@code FastThreadLocal} cleanup. From Java 24 on, the
+ * JDK's default common-pool workers are {@code InnocuousForkJoinWorkerThread}s: they run in their own thread group,
+ * instead of the group of the thread that caused them to be created, and clear their {@code ThreadLocal}s when they
+ * go idle. These workers can't do that: clearing the {@code ThreadLocal}s would also drop the map that holds their
+ * {@code FastThreadLocal} values, without running the values' {@code onRemoval} callbacks.
  */
 public final class FastThreadLocalForkJoinWorkerThreadFactory implements ForkJoinPool.ForkJoinWorkerThreadFactory {
     static final String CLASS_NAME = "org.apache.pulsar.common.util.netty.FastThreadLocalForkJoinWorkerThreadFactory";

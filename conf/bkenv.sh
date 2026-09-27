@@ -57,6 +57,44 @@ for token in $("$JAVA_BIN" -version 2>&1 | grep 'version "'); do
     fi
 done
 
+# Netty buffer allocator and recycler settings. conf/pulsar_env.sh sets the same options, and its values take
+# precedence in the scripts that source both files (bin/pulsar for commands other than bookie, and bin/pulsar-perf).
+# BOOKIE_EXTRA_OPTS overrides them. The settings and their default values are defined in:
+#   https://github.com/netty/netty/blob/4.2/buffer/src/main/java/io/netty/buffer/AdaptiveByteBufAllocator.java
+#   https://github.com/netty/netty/blob/4.2/buffer/src/main/java/io/netty/buffer/PooledByteBufAllocator.java
+#   https://github.com/netty/netty/blob/4.2/common/src/main/java/io/netty/util/Recycler.java
+
+# Allocators: Netty's adaptive allocator for Pulsar's default allocator and for Netty's own default allocator (Netty
+# 4.2's default). See conf/pulsar_env.sh for the allocator settings.
+OPTS="$OPTS -Dpulsar.allocator.default.type=adaptive -Dio.netty.allocator.type=adaptive"
+
+# PooledByteBufAllocator: the chunk size is pageSize * 2^maxOrder, where pageSize is io.netty.allocator.pageSize
+# (default 8 KiB) and maxOrder is io.netty.allocator.maxOrder (default 9): 8 KiB * 2^9 = 4 MiB by default. Allocations
+# larger than a chunk bypass the pool, and Pulsar's default maximum message size is 5 MB, so set maxOrder to 10 for
+# 8 KiB * 2^10 = 8 MiB chunks to pool such messages and reduce native memory fragmentation.
+# Only FastThreadLocalThreads and event-loop threads get a thread cache. io.netty.allocator.useCacheForAllThreads stays
+# false: other threads don't release their cache when they end, so it would stay allocated until a finalizer frees it.
+OPTS="$OPTS -Dio.netty.allocator.maxOrder=10"
+
+# AdaptiveByteBufAllocator: by default, only event-loop threads get thread-local magazines. Also give them to the other
+# threads that remove their FastThreadLocals when they end (Pulsar's threads, see "Creating threads" in CODING.md, and
+# the common ForkJoinPool's workers below), which free them then. Other threads use the shared magazines. By default
+# (io.netty.allocator.lowMemory), no thread-local magazines are used when the maximum heap size is 512 MiB or less.
+OPTS="$OPTS -Dio.netty.allocator.useCachedMagazinesForNonEventLoopThreads=true"
+
+# Recycler: for each recycled object type, a thread keeps up to maxCapacityPerThread objects (default 4096) in a queue
+# that grows in chunks of chunkSize entries (default 32), plus a thread-local batch of up to chunkSize objects. Larger
+# chunks mean fewer chunk allocations and larger batches.
+OPTS="$OPTS -Dio.netty.recycler.maxCapacityPerThread=4096 -Dio.netty.recycler.chunkSize=256"
+
+# The common ForkJoinPool runs CompletableFuture's *Async methods by default. Up to Java 23, run its workers like
+# FastThreadLocalThreads, so that they use the recycler and allocator thread caches and release them when they end.
+# From Java 24 on, the JDK's default common-pool workers run in their own thread group and clear their ThreadLocals.
+# Workers that cleared them would drop Netty's thread-local caches without releasing them, so keep the JDK's workers.
+if [[ $JAVA_MAJOR_VERSION -lt 24 ]]; then
+  OPTS="$OPTS -Djava.util.concurrent.ForkJoinPool.common.threadFactory=org.apache.pulsar.common.util.netty.FastThreadLocalForkJoinWorkerThreadFactory"
+fi
+
 # Garbage collection options
 BOOKIE_GC="${BOOKIE_GC:-${PULSAR_GC}}"
 if [ -z "$BOOKIE_GC" ]; then
