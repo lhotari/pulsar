@@ -104,6 +104,7 @@ public class LocalRunner implements AutoCloseable {
     private UserCodeClassLoader transformFunctionCodeClassLoader;
     private RuntimeFactory runtimeFactory;
     private HTTPServer metricsServer;
+    private ScheduledExecutorService statusCheckExecutor;
 
     public enum RuntimeEnv {
         THREAD,
@@ -314,6 +315,11 @@ public class LocalRunner implements AutoCloseable {
 
             if (metricsServer != null) {
                 metricsServer.stop();
+            }
+
+            if (statusCheckExecutor != null) {
+                statusCheckExecutor.shutdown();
+                statusCheckExecutor = null;
             }
 
             for (RuntimeSpawner spawner : spawners) {
@@ -596,17 +602,16 @@ public class LocalRunner implements AutoCloseable {
             spawners.add(runtimeSpawner);
             runtimeSpawner.start();
         }
-        ScheduledExecutorService statusCheckExecutor =
-                PulsarExecutors.newSingleThreadScheduledExecutor("function-status-check", false);
+        statusCheckExecutor = PulsarExecutors.newSingleThreadScheduledExecutor("function-status-check", false);
         statusCheckExecutor.scheduleAtFixedRate(() -> {
-            @SuppressWarnings({"unchecked", "rawtypes"})
-            CompletableFuture<String>[] futures = new CompletableFuture[spawners.size()];
-            int index = 0;
-            for (RuntimeSpawner spawner : spawners) {
-                futures[index] = spawner.getFunctionStatusAsJson(index);
-                index++;
-            }
             try {
+                @SuppressWarnings({"unchecked", "rawtypes"})
+                CompletableFuture<String>[] futures = new CompletableFuture[spawners.size()];
+                int index = 0;
+                for (RuntimeSpawner spawner : spawners) {
+                    futures[index] = spawner.getFunctionStatusAsJson(index);
+                    index++;
+                }
                 CompletableFuture.allOf(futures).get(5, TimeUnit.SECONDS);
                 for (index = 0; index < futures.length; ++index) {
                     String json = futures[index].get();
@@ -620,7 +625,6 @@ public class LocalRunner implements AutoCloseable {
                 log.error().exception(e).log("Failed to report the status of the local instances");
             }
         }, 30000, 30000, TimeUnit.MILLISECONDS);
-        java.lang.Runtime.getRuntime().addShutdownHook(new FastThreadLocalThread(statusCheckExecutor::shutdownNow));
     }
 
 
