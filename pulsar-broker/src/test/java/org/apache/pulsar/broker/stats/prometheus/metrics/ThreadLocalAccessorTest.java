@@ -19,9 +19,14 @@
 package org.apache.pulsar.broker.stats.prometheus.metrics;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 import static org.testng.Assert.assertEquals;
 import io.netty.util.concurrent.FastThreadLocalThread;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Phaser;
+import java.util.concurrent.TimeUnit;
 import org.apache.datasketches.kll.KllDoublesSketch;
 import org.jspecify.annotations.Nullable;
 import org.testng.annotations.DataProvider;
@@ -95,6 +100,40 @@ public class ThreadLocalAccessorTest {
         accessor.record(aggregateSuccess, aggregateFail);
         assertThat(aggregateSuccess.getN()).isEqualTo(1);
         assertThat(aggregateSuccess.getMaxItem()).isEqualTo(42);
+        assertEquals(accessor.getLocalDataCount(), 0);
+    }
+
+    @Test(dataProvider = "provider")
+    public void testShouldKeepLocalDataOfThreadThatEndsWhileRecording(boolean fastThreadLocalThread,
+                                                                     @Nullable KllDoublesSketch aggregateFail)
+            throws Exception {
+        final var accessor = new ThreadLocalAccessor();
+        CountDownLatch updated = new CountDownLatch(1);
+        CountDownLatch end = new CountDownLatch(1);
+        Thread owner = getThread(fastThreadLocalThread, () -> {
+            accessor.getLocalData().updateSuccess(42);
+            updated.countDown();
+            try {
+                end.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        assertThat(updated.await(10, TimeUnit.SECONDS)).isTrue();
+        // End the owner thread while record() merges its values. record() must decide whether to remove the LocalData
+        // before merging: deciding after the merge would drop a value recorded between the merge and the thread's end.
+        KllDoublesSketch aggregateSuccess = spy(KllDoublesSketch.newHeapInstance());
+        doAnswer(invocation -> {
+            Object result = invocation.callRealMethod();
+            end.countDown();
+            owner.join();
+            return result;
+        }).when(aggregateSuccess).merge(any());
+        accessor.record(aggregateSuccess, aggregateFail);
+        assertThat(aggregateSuccess.getN()).isEqualTo(1);
+        // the owner thread ended after the decision, so the LocalData stays until the next call
+        assertEquals(accessor.getLocalDataCount(), 1);
+        accessor.record(KllDoublesSketch.newHeapInstance(), aggregateFail);
         assertEquals(accessor.getLocalDataCount(), 0);
     }
 
