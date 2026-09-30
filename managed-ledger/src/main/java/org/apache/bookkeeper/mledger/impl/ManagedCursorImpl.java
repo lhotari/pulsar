@@ -50,6 +50,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -1150,8 +1151,16 @@ public class ManagedCursorImpl implements ManagedCursor {
             // Check again for new entries after the configured time, then if still no entries are available register
             // to be notified
             if (getConfig().getNewEntriesCheckDelayInMillis() > 0) {
-                ledger.getScheduledExecutor().schedule(() -> checkForNewEntries(opReadId, op, callback, ctx),
-                        getConfig().getNewEntriesCheckDelayInMillis(), TimeUnit.MILLISECONDS);
+                try {
+                    ledger.getScheduledExecutor().schedule(() -> checkForNewEntries(opReadId, op, callback, ctx),
+                            getConfig().getNewEntriesCheckDelayInMillis(), TimeUnit.MILLISECONDS);
+                } catch (RejectedExecutionException e) {
+                    // Registration already accepted this read. Only fail it if notification, cancellation or
+                    // close has not taken ownership in the meantime; those paths may also recycle the operation.
+                    if (takeWaitingRead(opReadId, op)) {
+                        op.failWaitingRead(getManagedLedgerException(e));
+                    }
+                }
             } else {
                 // If there's no delay, check directly from the same thread
                 checkForNewEntries(opReadId, op, callback, ctx);
@@ -1162,6 +1171,12 @@ public class ManagedCursorImpl implements ManagedCursor {
     // Please notice that OpReadEntry might be recycled due to sharing via waitingReadOp field logic
     // That's why the fields cannot be accessed before the reference is removed from waitingReadOp atomically
     // and the id matches the removed reference.
+    private boolean takeWaitingRead(int opReadId, OpReadEntry op) {
+        OpReadEntry previous = WAITING_READ_OP_UPDATER.getAndUpdate(this,
+                current -> current == op && current.id == opReadId ? null : current);
+        return previous == op && previous.id == opReadId;
+    }
+
     private void checkForNewEntries(int opReadId, OpReadEntry op, ReadEntriesCallback callback, Object ctx) {
         try {
             log.debug().attr("opReadId", opReadId).log("Re-trying the read for op id");
@@ -3157,7 +3172,7 @@ public class ManagedCursorImpl implements ManagedCursor {
         OpReadEntry opReadEntry = WAITING_READ_OP_UPDATER.getAndSet(this,
                 OpReadEntry.WAITING_READ_OP_FOR_CLOSED_CURSOR);
         if (opReadEntry != null && opReadEntry != OpReadEntry.WAITING_READ_OP_FOR_CLOSED_CURSOR) {
-            opReadEntry.readEntriesFailed(new CursorAlreadyClosedException("Cursor is closing"), opReadEntry.ctx);
+            opReadEntry.failWaitingRead(new CursorAlreadyClosedException("Cursor is closing"));
         }
     }
 
@@ -3732,8 +3747,8 @@ public class ManagedCursorImpl implements ManagedCursor {
             if (isClosed()) {
                 // If the cursor is closed, we should not read any more entries
                 log.debug("Cursor is already closed, ignoring notification");
-                opReadEntry.readEntriesFailed(new ManagedLedgerException.CursorAlreadyClosedException(
-                        "Cursor was already closed"), opReadEntry.ctx);
+                opReadEntry.failWaitingRead(new ManagedLedgerException.CursorAlreadyClosedException(
+                        "Cursor was already closed"));
                 return;
             }
             PENDING_READ_OPS_UPDATER.incrementAndGet(this);
