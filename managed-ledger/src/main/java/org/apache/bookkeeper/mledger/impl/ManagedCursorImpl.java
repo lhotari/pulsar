@@ -1259,6 +1259,11 @@ public class ManagedCursorImpl implements ManagedCursor {
         return opReadEntry != null && opReadEntry != OpReadEntry.WAITING_READ_OP_FOR_CLOSED_CURSOR;
     }
 
+    @VisibleForTesting
+    OpReadEntry getWaitingReadOp() {
+        return WAITING_READ_OP_UPDATER.get(this);
+    }
+
     @Override
     public boolean hasMoreEntries() {
         // If writer and reader are on the same ledger, we just need to compare the entry id to know if we have more

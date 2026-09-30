@@ -26,10 +26,12 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -165,12 +167,38 @@ public class ManagedCursorReadFailureTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20_000)
     public void testRejectedScheduleDoesNotFailCancelledReadsReplacement() throws Exception {
+        // Netty only pools Recycler objects on threads that clean up their FastThreadLocal state.
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            assertRejectedScheduleDoesNotFailCancelledReadsReplacement();
+            return null;
+        });
+        FastThreadLocalThread thread = new FastThreadLocalThread(task, "cursor-read-recycler-reuse");
+        thread.start();
+        try {
+            task.get(10, TimeUnit.SECONDS);
+        } finally {
+            task.cancel(true);
+            thread.join(TimeUnit.SECONDS.toMillis(5));
+            assertThat(thread.isAlive()).as("the cursor test thread must terminate").isFalse();
+        }
+    }
+
+    private void assertRejectedScheduleDoesNotFailCancelledReadsReplacement() throws Exception {
         ManagedLedgerConfig config = initManagedLedgerConfig(defaultConfig());
-        config.setNewEntriesCheckDelayInMillis(10);
+        config.setNewEntriesCheckDelayInMillis(0);
         @Cleanup
         ManagedLedgerImpl ledger = spy((ManagedLedgerImpl) factory.open("cancel-rearm-before-rejection", config));
         @Cleanup
         ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("cursor");
+        // Warm the thread-local Recycler using actual cursor reads and cancellations. This crosses its
+        // allocation sampling interval so the rejected read and replacement can share a pooled instance.
+        for (int i = 0; i < 32; i++) {
+            CompletableFuture<byte[]> warmupRead = new CompletableFuture<>();
+            cursor.asyncReadEntriesOrWait(1, callback(warmupRead), null, PositionFactory.LATEST);
+            assertThat(cursor.cancelPendingReadRequest()).isTrue();
+            assertThat(warmupRead.isDone()).isFalse();
+        }
+        config.setNewEntriesCheckDelayInMillis(10);
         OrderedScheduler realScheduler = ledger.getScheduledExecutor();
         OrderedScheduler scheduler = mock(OrderedScheduler.class, AdditionalAnswers.delegatesTo(realScheduler));
         AtomicBoolean rejectNextSchedule = new AtomicBoolean(true);
@@ -181,12 +209,22 @@ public class ManagedCursorReadFailureTest extends MockedBookKeeperTestCase {
         Thread callingThread = Thread.currentThread();
         doAnswer(invocation -> {
             if (Thread.currentThread() == callingThread && rejectNextSchedule.compareAndSet(true, false)) {
+                OpReadEntry acceptedOperation = cursor.getWaitingReadOp();
+                assertThat(acceptedOperation).isNotNull();
+                int acceptedOperationId = acceptedOperation.id;
                 assertThat(cursor.cancelPendingReadRequest()).isTrue();
                 // Re-arm on the same thread so the recycled OpReadEntry can be reused. Its new id must
                 // keep the old submission's rejection cleanup from claiming this replacement read.
                 config.setNewEntriesCheckDelayInMillis(0);
                 cursor.asyncReadEntriesOrWait(1, callback(replacementRead, replacementCallbackCount), null,
                         PositionFactory.LATEST);
+                OpReadEntry replacementOperation = cursor.getWaitingReadOp();
+                assertThat(replacementOperation)
+                        .as("the rejection must race reuse of the same pooled operation")
+                        .isSameAs(acceptedOperation);
+                assertThat(replacementOperation.id)
+                        .as("recycled operations need a new identity even when the object is reused")
+                        .isNotEqualTo(acceptedOperationId);
                 assertThat(cursor.hasPendingReadRequest()).isTrue();
                 throw new RejectedExecutionException("cancelled submission rejected after replacement was armed");
             }
