@@ -184,6 +184,11 @@ class OpReadEntry implements ReadEntriesCallback {
         }
     }
 
+    /** Fails a parked read, which has never acquired an in-flight read count. The caller must own it. */
+    void failWaitingRead(ManagedLedgerException exception) {
+        fail(exception, ctx);
+    }
+
     private void internalReadEntriesFailed(ManagedLedgerException exception, Object ctx) {
         cursor.readOperationCompleted();
 
