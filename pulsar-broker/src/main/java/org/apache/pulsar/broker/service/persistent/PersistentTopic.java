@@ -135,7 +135,7 @@ import org.apache.pulsar.broker.service.Subscription;
 import org.apache.pulsar.broker.service.SubscriptionOption;
 import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.broker.service.TopicLoadingContext;
-import org.apache.pulsar.broker.service.TopicLoadingContext.TopicLoadingStage;
+import org.apache.pulsar.broker.service.TopicLoadingTracePoints;
 import org.apache.pulsar.broker.service.TopicPoliciesService;
 import org.apache.pulsar.broker.service.TransportCnx;
 import org.apache.pulsar.broker.service.schema.BookkeeperSchemaStorage;
@@ -143,6 +143,7 @@ import org.apache.pulsar.broker.service.schema.exceptions.IncompatibleSchemaExce
 import org.apache.pulsar.broker.service.schema.exceptions.NotExistSchemaException;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
+import org.apache.pulsar.broker.stats.OpenTelemetryMessageFinderStats.FindReason;
 import org.apache.pulsar.broker.stats.ReplicationMetrics;
 import org.apache.pulsar.broker.transaction.buffer.TransactionBuffer;
 import org.apache.pulsar.broker.transaction.buffer.impl.TopicTransactionBuffer;
@@ -500,7 +501,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         CompletableFuture<Optional<Policies>> namespacePoliciesFuture = brokerService.pulsar().getPulsarResources()
                 .getNamespaceResources().getPoliciesAsync(TopicName.get(topic).getNamespaceObject());
         if (loadingContext != null) {
-            namespacePoliciesFuture = loadingContext.trace(TopicLoadingStage.NAMESPACE_POLICIES,
+            namespacePoliciesFuture = loadingContext.trace(TopicLoadingTracePoints.NAMESPACE_POLICIES,
                     namespacePoliciesFuture);
         }
         final CompletableFuture<Optional<Policies>> trackedNamespacePoliciesFuture = namespacePoliciesFuture;
@@ -533,17 +534,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                     isAllowAutoUpdateSchemaWithReplicator = policies.is_allow_auto_update_schema_with_replicator;
                 }, getPoliciesNotifyThread())
                 .thenCompose(ignore -> loadingContext == null ? initTopicPolicy()
-                        : loadingContext.trace(TopicLoadingStage.TOPIC_POLICIES, initTopicPolicy()))
-                .thenCompose(ignore -> removeOrphanReplicationCursors())
-                .exceptionally(ex -> {
-                    log.warn()
-                            .attr("topic", topic)
-                            .exceptionMessage(ex)
-                            .log("Error loading topic policies during initialization. Ignoring the failure. "
-                                    + "isEncryptionRequired will be set to false.");
-                    isEncryptionRequired = false;
-                    return null;
-                }));
+                        : loadingContext.trace(TopicLoadingTracePoints.LOCAL_TOPIC_POLICIES, initTopicPolicy()))
+                .thenCompose(ignore -> removeOrphanReplicationCursors()));
     }
 
     private void initializeDispatchRateLimiterIfNeeded() {
@@ -1364,7 +1356,19 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         TopicName tn = TopicName.get(MLPendingAckStore
                 .getTransactionPendingAckStoreSuffix(topic, subscriptionName));
         if (brokerService.pulsar().getConfiguration().isTransactionCoordinatorEnabled()) {
-            ManagedLedgerConfig managedLedgerConfig = ledger.getConfig();
+            ManagedLedgerConfig topicConfig = ledger.getConfig();
+            // The pending ack store is a separate managed ledger that owns its ledgers. The config of a shadow
+            // topic carries its shadow source, so a config without topic properties is used in that case. The
+            // storage class and the offloader of the topic are kept, since new pending ack stores are created
+            // with the config of the topic.
+            CompletableFuture<ManagedLedgerConfig> pendingAckStoreConfigFuture = topicConfig.getShadowSource() == null
+                    ? CompletableFuture.completedFuture(topicConfig)
+                    : brokerService.getManagedLedgerConfig(tn).thenApply(pendingAckStoreConfig -> {
+                        pendingAckStoreConfig.setStorageClassName(topicConfig.getStorageClassName());
+                        pendingAckStoreConfig.setLedgerOffloader(topicConfig.getLedgerOffloader());
+                        return pendingAckStoreConfig;
+                    });
+            pendingAckStoreConfigFuture.thenAccept(managedLedgerConfig -> {
                 ManagedLedgerFactory managedLedgerFactory = getBrokerService()
                         .getManagedLedgerFactoryForTopic(tn, managedLedgerConfig.getStorageClassName());
                 managedLedgerFactory.asyncDelete(tn.getPersistenceNamingEncoding(),
@@ -1389,6 +1393,15 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                                     .log("Error deleting subscription pending ack store");
                         }
                     }, null);
+            }).exceptionally(ex -> {
+                Throwable cause = FutureUtil.unwrapCompletionException(ex);
+                unsubscribeFuture.completeExceptionally(cause);
+                log.error()
+                        .attr("subscription", subscriptionName)
+                        .exception(cause)
+                        .log("Error deleting subscription pending ack store");
+                return null;
+            });
         } else {
             asyncDeleteCursorWithClearDelayedMessage(subscriptionName, unsubscribeFuture);
         }
@@ -2371,7 +2384,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     }
 
     private CompletableFuture<Void> checkShadowReplication() {
-        if (CollectionUtils.isEmpty(shadowTopics)) {
+        if (!brokerService.pulsar().getConfiguration().isEnableShadowTopics()
+                || CollectionUtils.isEmpty(shadowTopics)) {
             return CompletableFuture.completedFuture(null);
         }
         List<String> configuredShadowTopics = shadowTopics;
@@ -2444,7 +2458,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         }
         ManagedCursor cursor = cursorWithOldestPosition.getCursor();
         PersistentMessageFinder finder = new PersistentMessageFinder(topic, cursor, brokerService.getPulsar()
-                .getConfig().getManagedLedgerCursorResetLedgerCloseTimestampMaxClockSkewMillis());
+                .getConfig().getManagedLedgerCursorResetLedgerCloseTimestampMaxClockSkewMillis(),
+                brokerService.getPulsar().getOpenTelemetryMessageFinderStats(), FindReason.EXPIRY);
         // Find the target position.
         long expiredMessageTimestamp = System.currentTimeMillis() - TimeUnit.SECONDS.toMillis(messageTtlInSeconds);
         CompletableFuture<Position> positionToMarkDelete = new CompletableFuture<>();
