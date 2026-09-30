@@ -19,6 +19,7 @@
 package org.apache.pulsar.functions.worker;
 
 import static org.apache.commons.lang3.StringUtils.isBlank;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import lombok.CustomLog;
 import org.apache.pulsar.common.util.ShutdownUtil;
 import org.apache.pulsar.docs.tools.CmdGenerateDocs;
@@ -82,7 +83,7 @@ public class FunctionWorkerStarter {
             worker.stop();
             ShutdownUtil.triggerImmediateForcefulShutdown();
         }
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+        Runtime.getRuntime().addShutdownHook(new FastThreadLocalThread(() -> {
             log.info("Stopping function worker service...");
             worker.stop();
         }));

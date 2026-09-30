@@ -22,7 +22,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.RateLimiter;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import io.netty.util.concurrent.DefaultThreadFactory;
 import java.io.IOException;
 import java.util.List;
 import java.util.Set;
@@ -350,10 +350,10 @@ public class PulsarZooKeeperClient extends ZooKeeper implements Watcher, AutoClo
         this.rateLimiter = rate > 0 ? RateLimiter.create(rate) : null;
         this.retryExecutor =
                 Executors.newScheduledThreadPool(retryExecThreadCount,
-                        new ThreadFactoryBuilder().setNameFormat("ZKC-retry-executor-%d").build());
+                        new DefaultThreadFactory("ZKC-retry-executor"));
         this.connectExecutor =
                 PulsarExecutors.newSingleThreadExecutor(
-                        new ThreadFactoryBuilder().setNameFormat("ZKC-connect-executor-%d").build(), false);
+                        new DefaultThreadFactory("ZKC-connect-executor"), false);
         // added itself to the watcher
         watcherManager.addChildWatcher(this);
 

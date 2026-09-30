@@ -85,6 +85,7 @@ Environment variables:
    PULSAR_PROXY_CONF             Configuration file for Pulsar proxy (default: $DEFAULT_PROXY_CONF)
    PULSAR_WORKER_CONF            Configuration file for functions worker (default: $DEFAULT_WORKER_CONF)
    PULSAR_STANDALONE_CONF        Configuration file for standalone (default: $DEFAULT_STANDALONE_CONF)
+   PULSAR_MIN_JAVA_VERSION       Minimum Java version accepted by the launcher (default: 21)
    PULSAR_EXTRA_OPTS             Extra options to be passed to the jvm
    PULSAR_EXTRA_CLASSPATH        Add extra paths to the pulsar classpath
    PULSAR_PID_DIR                Folder where the pulsar server PID file should be stored
@@ -147,8 +148,9 @@ if [[ -z $JAVA_MAJOR_VERSION ]]; then
   done
 fi
 
-if [[ $JAVA_MAJOR_VERSION -lt 17 ]]; then
-    echo "Error: Pulsar requires Java 17 or later." 1>&2
+PULSAR_MIN_JAVA_VERSION=${PULSAR_MIN_JAVA_VERSION:-21}
+if [[ $JAVA_MAJOR_VERSION -lt $PULSAR_MIN_JAVA_VERSION ]]; then
+    echo "Error: Pulsar server commands require Java $PULSAR_MIN_JAVA_VERSION or later." 1>&2
     exit 1
 fi
 
@@ -292,13 +294,6 @@ OPTS="$OPTS --add-opens java.base/java.io=ALL-UNNAMED --add-opens java.base/java
 OPTS="$OPTS --add-opens java.management/sun.management=ALL-UNNAMED"
 # Required by MBeanStatsGenerator
 OPTS="$OPTS --add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED"
-# Allow Netty to use reflection access
-OPTS="$OPTS -Dio.netty.tryReflectionSetAccessible=true"
-OPTS="$OPTS -Dorg.apache.pulsar.shade.io.netty.tryReflectionSetAccessible=true"
-# Netty: enable java.nio.DirectByteBuffer
-# https://github.com/netty/netty/blob/4.1/common/src/main/java/io/netty/util/internal/PlatformDependent0.java
-# https://github.com/netty/netty/issues/12265
-OPTS="$OPTS --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/jdk.internal.misc=ALL-UNNAMED"
 # Required by LinuxInfoUtils
 OPTS="$OPTS --add-opens java.base/jdk.internal.platform=ALL-UNNAMED"
 # Required by RocksDB java.lang.System::loadLibrary call
@@ -307,31 +302,31 @@ OPTS="$OPTS --enable-native-access=ALL-UNNAMED"
 # if it runs out of either Java heap memory or its internal off-heap memory,
 # as these are unrecoverable errors that require a process restart to clear the faulty state and restore operation
 OPTS="-XX:+ExitOnOutOfMemoryError -Dpulsar.allocator.exit_on_oom=true $OPTS"
-# Netty tuning
-# These settings are primarily used to modify the Netty allocator configuration,
-# improving memory utilization and reducing the frequency of requesting off-heap memory from the OS
-#
-# Based on the netty source code, the allocator's default chunk size is calculated as:
-# io.netty.allocator.pageSize (default: 8192) shifted left by
-# io.netty.allocator.maxOrder (default: 9 after Netty 4.1.76.Final version).
-# This equals 8192 * 2^9 = 4 MB：
-# https://github.com/netty/netty/blob/4.1/buffer/src/main/java/io/netty/buffer/PooledByteBufAllocator.java#L105
-#
-# Allocations that are larger than chunk size are considered huge allocations and don't use the pool:
-# https://github.com/netty/netty/blob/4.1/buffer/src/main/java/io/netty/buffer/PoolArena.java#L141-L142
-#
-# Currently, Pulsar defaults to a maximum single message size of 5 MB.
-# Therefore, when frequently producing messages whose size exceeds the chunk size,
-# Netty cannot utilize resources from the memory pool and must frequently allocate native memory.
-# This can lead to increased physical memory fragmentation and higher reclamation costs.
-# Thus, increasing io.netty.allocator.maxOrder to 10 to ensure that a single message is larger
-# than chunk size (8MB) and can reuse Netty's memory pool.
-OPTS="-Dio.netty.recycler.maxCapacityPerThread=4096 -Dio.netty.allocator.maxOrder=10 $OPTS"
+
+# Netty settings. They are prepended to OPTS, so PULSAR_EXTRA_OPTS or BOOKIE_EXTRA_OPTS can override each of them. The
+# buffer allocator and recycler settings are in conf/pulsar_env.sh and conf/bkenv.sh.
+
+# Access to JDK internals: java.nio.DirectByteBuffer and jdk.internal.misc.Unsafe
+# (https://github.com/netty/netty/issues/12265), and reflection.
+NETTY_OPTS="--add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/jdk.internal.misc=ALL-UNNAMED"
+NETTY_OPTS="$NETTY_OPTS -Dio.netty.tryReflectionSetAccessible=true"
+NETTY_OPTS="$NETTY_OPTS -Dorg.apache.pulsar.shade.io.netty.tryReflectionSetAccessible=true"
+
+# Leak detection: disabled for bookies.
+if [ $COMMAND == "bookie" ]; then
+  NETTY_OPTS="$NETTY_OPTS -Dio.netty.leakDetection.level=disabled"
+fi
+
+OPTS="$NETTY_OPTS $OPTS"
 
 OPTS="-cp $PULSAR_CLASSPATH $OPTS"
 
+# Netty's leak detection samples buffer allocations and records access traces for the sampled ones, which costs CPU
+# on every component's hot paths. Disable it by default; the options that come later on the command line, such as
+# -Dio.netty.leakDetection.level=simple in PULSAR_EXTRA_OPTS (BOOKIE_EXTRA_OPTS for bookies), override this.
+OPTS="-Dio.netty.leakDetection.level=disabled $OPTS"
+
 if [ $COMMAND == "bookie" ]; then
-  OPTS="-Dio.netty.leakDetection.level=disabled $OPTS"
   # Pass BOOKIE_EXTRA_OPTS option defined in bkenv.sh
   OPTS="$OPTS $BOOKIE_MEM $BOOKIE_GC $BOOKIE_GC_LOG $BOOKIE_EXTRA_OPTS"
 else

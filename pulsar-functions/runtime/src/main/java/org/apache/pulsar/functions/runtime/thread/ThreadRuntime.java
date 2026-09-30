@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.functions.runtime.thread;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -223,7 +224,7 @@ public class ThreadRuntime implements Runtime {
                 .attr("functionId", instanceConfig.getFunctionId())
                 .attr("namespace", instanceConfig.getFunctionDetails().getNamespace())
                 .log("ThreadContainer starting function");
-        this.fnThread = new Thread(threadGroup, javaInstanceRunnable,
+        this.fnThread = new FastThreadLocalThread(threadGroup, javaInstanceRunnable,
                 String.format("%s-%s",
                         FunctionCommon.getFullyQualifiedName(instanceConfig.getFunctionDetails()),
                         instanceConfig.getInstanceId()));

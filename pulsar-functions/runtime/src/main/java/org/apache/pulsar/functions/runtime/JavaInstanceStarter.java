@@ -25,6 +25,7 @@ import com.google.gson.reflect.TypeToken;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.stub.StreamObserver;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import io.prometheus.client.exporter.HTTPServer;
 import java.lang.reflect.Type;
 import java.net.InetSocketAddress;
@@ -259,7 +260,7 @@ public class JavaInstanceStarter implements AutoCloseable {
                 .build()
                 .start();
         log.info().attr("port", port).log("JavaInstance Server started");
-        java.lang.Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+        java.lang.Runtime.getRuntime().addShutdownHook(new FastThreadLocalThread(() -> {
             // Use stderr here since the logger may have been reset by its JVM shutdown hook.
             try {
                 close();

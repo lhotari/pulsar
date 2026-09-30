@@ -180,15 +180,8 @@ BOOKIE_CLASSPATH="$BOOKIE_JAR:$BOOKIE_CLASSPATH:$BOOKIE_EXTRA_CLASSPATH"
 BOOKIE_CLASSPATH="`dirname $BOOKIE_LOG_CONF`:$BOOKIE_CLASSPATH"
 OPTS="$OPTS -Dlog4j.configurationFile=`basename $BOOKIE_LOG_CONF`"
 
-# Allow Netty to use reflection access
-OPTS="$OPTS -Dio.netty.tryReflectionSetAccessible=true"
-
 # BookKeeper: enable posix_fadvise usage and DirectMemoryCRC32Digest (https://github.com/apache/bookkeeper/pull/3234)
 OPTS="$OPTS --add-opens java.base/java.io=ALL-UNNAMED --add-opens java.base/java.util.zip=ALL-UNNAMED"
-# Netty: enable java.nio.DirectByteBuffer
-# https://github.com/netty/netty/blob/4.1/common/src/main/java/io/netty/util/internal/PlatformDependent0.java
-# https://github.com/netty/netty/issues/12265
-OPTS="$OPTS --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/jdk.internal.misc=ALL-UNNAMED"
 # Required by RocksDB java.lang.System::loadLibrary call
 OPTS="$OPTS --enable-native-access=ALL-UNNAMED"
 
@@ -211,26 +204,19 @@ fi
 if [[ $JAVA_MAJOR_VERSION -eq 25 || $JAVA_MAJOR_VERSION -eq 26 ]]; then
   OPTS="-XX:+UseCompactObjectHeaders $OPTS"
 fi
-# Netty tuning
-# These settings are primarily used to modify the Netty allocator configuration,
-# improving memory utilization and reducing the frequency of requesting off-heap memory from the OS
-#
-# Based on the netty source code, the allocator's default chunk size is calculated as:
-# io.netty.allocator.pageSize (default: 8192) shifted left by
-# io.netty.allocator.maxOrder (default: 9 after Netty 4.1.76.Final version).
-# This equals 8192 * 2^9 = 4 MB：
-# https://github.com/netty/netty/blob/4.1/buffer/src/main/java/io/netty/buffer/PooledByteBufAllocator.java#L105
-#
-# Allocations that are larger than chunk size are considered huge allocations and don't use the pool:
-# https://github.com/netty/netty/blob/4.1/buffer/src/main/java/io/netty/buffer/PoolArena.java#L141-L142
-#
-# Currently, Pulsar defaults to a maximum single message size of 5 MB.
-# Therefore, when frequently producing messages whose size exceeds the chunk size,
-# Netty cannot utilize resources from the memory pool and must frequently allocate native memory.
-# This can lead to increased physical memory fragmentation and higher reclamation costs.
-# Thus, increasing io.netty.allocator.maxOrder to 10 to ensure that a single message is larger
-# than chunk size (8MB) and can reuse Netty's memory pool.
-OPTS="-Dio.netty.leakDetection.level=disabled -Dio.netty.recycler.maxCapacityPerThread=4096 -Dio.netty.allocator.maxOrder=10 $OPTS"
+
+# Netty settings. They are prepended to OPTS, so BOOKIE_EXTRA_OPTS can override each of them. The buffer allocator and
+# recycler settings are in conf/bkenv.sh.
+
+# Access to JDK internals: java.nio.DirectByteBuffer and jdk.internal.misc.Unsafe
+# (https://github.com/netty/netty/issues/12265), and reflection.
+NETTY_OPTS="--add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/jdk.internal.misc=ALL-UNNAMED"
+NETTY_OPTS="$NETTY_OPTS -Dio.netty.tryReflectionSetAccessible=true"
+
+# Leak detection: disabled.
+NETTY_OPTS="$NETTY_OPTS -Dio.netty.leakDetection.level=disabled"
+
+OPTS="$NETTY_OPTS $OPTS"
 
 OPTS="$OPTS $BOOKIE_MEM $BOOKIE_GC $BOOKIE_GC_LOG $BOOKIE_EXTRA_OPTS"
 

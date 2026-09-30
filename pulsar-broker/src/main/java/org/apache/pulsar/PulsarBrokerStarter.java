@@ -24,6 +24,7 @@ import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.apache.pulsar.common.configuration.PulsarConfigurationLoader.create;
 import static org.apache.pulsar.common.configuration.PulsarConfigurationLoader.isComplete;
 import com.google.common.annotations.VisibleForTesting;
+import io.netty.util.concurrent.FastThreadLocalThread;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
@@ -341,7 +342,7 @@ public class PulsarBrokerStarter {
 
         BrokerStarter starter = new BrokerStarter();
         Runtime.getRuntime().addShutdownHook(
-            new Thread(() -> {
+            new FastThreadLocalThread(() -> {
                 try {
                     starter.shutdown();
                 } catch (Throwable t) {

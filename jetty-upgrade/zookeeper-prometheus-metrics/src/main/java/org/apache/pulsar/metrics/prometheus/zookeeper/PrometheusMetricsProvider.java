@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.metrics.prometheus.zookeeper;
 
+import io.netty.util.concurrent.FastThreadLocalThread;
 import io.prometheus.client.Collector;
 import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.exporter.MetricsServlet;
@@ -620,7 +621,7 @@ public class PrometheusMetricsProvider implements MetricsProvider {
         @Override
         public Thread newThread(final Runnable runnable) {
             final String threadName = "PrometheusMetricsProviderWorker-" + workerCounter.getAndIncrement();
-            final Thread thread = new Thread(runnable, threadName);
+            final Thread thread = new FastThreadLocalThread(runnable, threadName);
             thread.setDaemon(true);
             return thread;
         }

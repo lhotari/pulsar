@@ -21,6 +21,7 @@ package org.apache.bookkeeper.mledger.impl;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.CompositeByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.util.concurrent.FastThreadLocal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -69,11 +70,19 @@ public class MetaStoreImpl implements MetaStore, Consumer<Notification> {
 
     // Reusable LightProto objects for compression metadata serialization/deserialization.
     // These are used from MetaStore callbacks which are dispatched on the ordered executor,
-    // so each thread gets its own instance via ThreadLocal.
-    private static final ThreadLocal<ManagedLedgerInfoMetadata> tlMlInfoMetadata =
-            ThreadLocal.withInitial(ManagedLedgerInfoMetadata::new);
-    private static final ThreadLocal<ManagedCursorInfoMetadata> tlCursorInfoMetadata =
-            ThreadLocal.withInitial(ManagedCursorInfoMetadata::new);
+    // so each thread gets its own instance via FastThreadLocal.
+    private static final FastThreadLocal<ManagedLedgerInfoMetadata> tlMlInfoMetadata = new FastThreadLocal<>() {
+        @Override
+        protected ManagedLedgerInfoMetadata initialValue() {
+            return new ManagedLedgerInfoMetadata();
+        }
+    };
+    private static final FastThreadLocal<ManagedCursorInfoMetadata> tlCursorInfoMetadata = new FastThreadLocal<>() {
+        @Override
+        protected ManagedCursorInfoMetadata initialValue() {
+            return new ManagedCursorInfoMetadata();
+        }
+    };
 
     public MetaStoreImpl(MetadataStore store, OrderedExecutor executor) {
         this.store = store;
