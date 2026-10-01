@@ -337,9 +337,11 @@ public class ServiceConfiguration implements PulsarConfiguration {
     @FieldContext(
         category = CATEGORY_SERVER,
         doc = "Number of threads to use for Netty IO."
-            + " Default is set to `2 * Runtime.getRuntime().availableProcessors()`"
+            + " Default is set to `Math.max(2, Runtime.getRuntime().availableProcessors() / 2)`."
+            + " Fewer, busier event loops batch more work per wakeup and system call, and the threads that hand"
+            + " work over to them, such as the managed ledger's, wake them less often"
     )
-    private int numIOThreads = 2 * Runtime.getRuntime().availableProcessors();
+    private int numIOThreads = Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
 
     @FieldContext(
         category = CATEGORY_SERVER,
