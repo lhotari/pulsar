@@ -23,9 +23,12 @@ import java.io.DataOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 import java.util.Set;
 import java.util.SplittableRandom;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +37,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import org.apache.pulsar.client.api.BatcherBuilder;
 import org.apache.pulsar.client.api.Producer;
+import org.apache.pulsar.client.api.ProducerBuilder;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientSharedResources;
 import picocli.CommandLine.Command;
@@ -102,12 +106,7 @@ final class TelemetryProducer extends PerformanceTool.ScenarioCommand {
                         .build());
             }
             if (scenario.gateways().producer().precreate()) {
-                for (int gateway = 0; gateway < scenario.gatewayCount(); gateway++) {
-                    for (int topic = 0; topic < scenario.topicCount(); topic++) {
-                        int producerIndex = gateway * scenario.topicCount() + topic;
-                        producers[producerIndex] = createProducer(scenario, clients, gateway, topic);
-                    }
-                }
+                precreateProducers(scenario, clients, producers);
             }
             phase = scenario.warmupMessageCount() > 0 ? "warmup" : "measurement";
             SplittableRandom random = new SplittableRandom(0x51c0ffeeL);
@@ -267,14 +266,61 @@ final class TelemetryProducer extends PerformanceTool.ScenarioCommand {
 
     private Producer<byte[]> createProducer(IotScenario scenario, List<PulsarClient> clients,
                                             int gateway, int topic) throws Exception {
+        return producerBuilder(scenario, clients, gateway, topic).create();
+    }
+
+    /**
+     * Creates every gateway's producer of every topic, up to {@code createConcurrency} at a time, in a random order.
+     * Real gateways connect independently, many at the same time, for example when they reconnect after a broker
+     * restart. A gateway's client connects to the service URL for its lookup and then to the topic's broker; created
+     * one at a time, every gateway's two connections would reach the broker one after the other, and a broker, which
+     * assigns the connections that it accepts to its I/O threads in turn, would serve every data connection on every
+     * other I/O thread.
+     */
+    private void precreateProducers(IotScenario scenario, List<PulsarClient> clients, Producer<byte[]>[] producers)
+            throws Exception {
+        int topicCount = scenario.topicCount();
+        int concurrency = scenario.gateways().producer().createConcurrency();
+        List<Integer> order = new ArrayList<>(producers.length);
+        for (int producerIndex = 0; producerIndex < producers.length; producerIndex++) {
+            order.add(producerIndex);
+        }
+        if (concurrency > 1) {
+            Collections.shuffle(order, new Random(0x9a7e3aL));
+        }
+        Semaphore permits = new Semaphore(Math.max(1, concurrency));
+        List<CompletableFuture<?>> creations = new ArrayList<>(producers.length);
+        for (int producerIndex : order) {
+            permits.acquire();
+            int gateway = producerIndex / topicCount;
+            int topic = producerIndex % topicCount;
+            CompletableFuture<Producer<byte[]>> creation;
+            try {
+                creation = producerBuilder(scenario, clients, gateway, topic).createAsync();
+            } catch (RuntimeException e) {
+                permits.release();
+                throw e;
+            }
+            creations.add(creation.whenComplete((producer, failure) -> {
+                if (producer != null) {
+                    producers[producerIndex] = producer;
+                }
+                permits.release();
+            }));
+        }
+        // Throws the first failure; joining the creations also makes their producers visible to this thread
+        CompletableFuture.allOf(creations.toArray(new CompletableFuture<?>[0])).get();
+    }
+
+    private ProducerBuilder<byte[]> producerBuilder(IotScenario scenario, List<PulsarClient> clients,
+                                                    int gateway, int topic) {
         return clients.get(gateway).newProducer()
                 .topic(scenario.topicNames().get(topic))
                 .producerName("iot-gateway-" + gateway + "-topic-" + topic)
                 .batcherBuilder(BatcherBuilder.KEY_BASED)
                 .enableBatching(scenario.gateways().producer().batchingEnabled())
                 .blockIfQueueFull(true)
-                .sendTimeout(0, TimeUnit.SECONDS)
-                .create();
+                .sendTimeout(0, TimeUnit.SECONDS);
     }
 
     private void writeState(long[] sequences) throws Exception {

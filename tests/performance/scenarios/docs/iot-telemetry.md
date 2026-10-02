@@ -112,7 +112,12 @@ separate scenario with normal or deliberately short limits when measuring rollov
 or long-running storage behavior. BookKeeper entry-log flushing and disk-space checks remain enabled.
 
 Set `rate: 0` together with a positive `measurement.messages` to remove producer pacing. Set
-`gateways.producer.precreate: true` to open every gateway/topic producer before throughput timing begins. The gateways'
+`gateways.producer.precreate: true` to open every gateway/topic producer before throughput timing begins. The gateways
+then create their producers in a random order, up to `gateways.producer.createConcurrency` (32) at a time, as
+independent gateways connect: each gateway's client opens a connection for its lookup and then one to the topic's
+broker, and a broker assigns the connections that it accepts to its I/O threads in turn, so gateways that connected
+one at a time would put every data connection on every other I/O thread. `createConcurrency: 1` creates them one at a
+time in the order of the gateways. The gateways'
 summary, `gateways-summary.json`, reports `messagesPerSecond` only for the post-warmup measurement phase and retains
 `wholeRunMessagesPerSecond` as startup and warmup context.
 
@@ -148,6 +153,7 @@ workloads:
         maxOutstanding: 20000  # messages in flight across the gateways
         batchingEnabled: true
         precreate: false       # open every producer before the first message
+        createConcurrency: 32  # producers precreated at the same time, in a random order
       env:                     # the gateways' container, which runs every gateway; from the memory configuration
         PULSAR_MEM: -Xms512m -Xmx512m -XX:MaxDirectMemorySize=256m -XX:+UseTransparentHugePages -XX:+AlwaysPreTouch
     topics:
