@@ -76,11 +76,12 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
      *
      * @param maxOutstanding the most messages in flight across the gateways
      * @param precreate open every gateway's producer of every topic before the first message
-     * @param createConcurrency when precreating, the most producers that the gateways create at the same time, in a
-     *                          random order of the gateways and topics; 1 creates them one at a time in order
+     * @param precreateConcurrency with {@code precreate}, the most producers that the gateways create at the same
+     *                             time, in a random order of the gateways and topics; 1 creates them one at a time in
+     *                             order
      */
     public record Producer(int ioThreads, int listenerThreads, int maxOutstanding, boolean batchingEnabled,
-                           boolean precreate, int createConcurrency) {
+                           boolean precreate, int precreateConcurrency) {
     }
 
     /** The telemetry topics, named {@code <prefix><index>}. */
@@ -178,6 +179,7 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                         && client.listenerThreads() >= 1,
                 "The gateways' and the applications' ioThreads and listenerThreads must be at least 1");
         require(producer.maxOutstanding() >= 1, "gateways.producer.maxOutstanding must be at least 1");
+        require(producer.precreateConcurrency() >= 1, "gateways.producer.precreateConcurrency must be at least 1");
         if (timeoutSeconds < minimumRuntimeSeconds) {
             long warmupTotalSeconds = minimumRuntimeSeconds - durationSeconds;
             throw new IllegalArgumentException(String.format(Locale.ROOT, "Invalid IoT scenario: timeoutSeconds is %d,"

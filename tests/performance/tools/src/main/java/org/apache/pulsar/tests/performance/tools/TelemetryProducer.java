@@ -29,6 +29,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.SplittableRandom;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -270,28 +271,27 @@ final class TelemetryProducer extends PerformanceTool.ScenarioCommand {
     }
 
     /**
-     * Creates every gateway's producer of every topic, up to {@code createConcurrency} at a time, in a random order.
-     * Real gateways connect independently, many at the same time, for example when they reconnect after a broker
-     * restart. A gateway's client connects to the service URL for its lookup and then to the topic's broker; created
-     * one at a time, every gateway's two connections would reach the broker one after the other, and a broker, which
-     * assigns the connections that it accepts to its I/O threads in turn, would serve every data connection on every
-     * other I/O thread.
+     * Creates every gateway's producer of every topic, up to {@code precreateConcurrency} at a time, in a random
+     * order. Real gateways connect independently, many at the same time, for example when they reconnect after a
+     * broker restart. A gateway's client connects to the service URL for its lookup and then to the topic's broker;
+     * created one at a time, every gateway's two connections would reach the broker one after the other, and a broker,
+     * which assigns the connections that it accepts to its I/O threads in turn, would serve every data connection on
+     * every other I/O thread. After a creation fails, no more are started, and the failure is thrown once the started
+     * ones have completed.
      */
     private void precreateProducers(IotScenario scenario, List<PulsarClient> clients, Producer<byte[]>[] producers)
             throws Exception {
         int topicCount = scenario.topicCount();
-        int concurrency = scenario.gateways().producer().createConcurrency();
-        List<Integer> order = new ArrayList<>(producers.length);
-        for (int producerIndex = 0; producerIndex < producers.length; producerIndex++) {
-            order.add(producerIndex);
-        }
-        if (concurrency > 1) {
-            Collections.shuffle(order, new Random(0x9a7e3aL));
-        }
-        Semaphore permits = new Semaphore(Math.max(1, concurrency));
+        int concurrency = scenario.gateways().producer().precreateConcurrency();
+        Semaphore permits = new Semaphore(concurrency);
+        AtomicReference<Throwable> firstFailure = new AtomicReference<>();
         List<CompletableFuture<?>> creations = new ArrayList<>(producers.length);
-        for (int producerIndex : order) {
+        for (int producerIndex : precreateOrder(producers.length, concurrency)) {
             permits.acquire();
+            if (firstFailure.get() != null) {
+                permits.release();
+                break;
+            }
             int gateway = producerIndex / topicCount;
             int topic = producerIndex % topicCount;
             CompletableFuture<Producer<byte[]>> creation;
@@ -299,17 +299,44 @@ final class TelemetryProducer extends PerformanceTool.ScenarioCommand {
                 creation = producerBuilder(scenario, clients, gateway, topic).createAsync();
             } catch (RuntimeException e) {
                 permits.release();
-                throw e;
+                firstFailure.compareAndSet(null, e);
+                break;
             }
             creations.add(creation.whenComplete((producer, failure) -> {
                 if (producer != null) {
                     producers[producerIndex] = producer;
+                } else {
+                    firstFailure.compareAndSet(null, failure instanceof CompletionException && failure.getCause()
+                            != null ? failure.getCause() : failure);
                 }
                 permits.release();
             }));
         }
-        // Throws the first failure; joining the creations also makes their producers visible to this thread
-        CompletableFuture.allOf(creations.toArray(new CompletableFuture<?>[0])).get();
+        // Waiting for the started creations also makes their producers visible to this thread, so that they're
+        // closed with the others if a creation failed
+        CompletableFuture.allOf(creations.toArray(new CompletableFuture<?>[0])).handle((ignored, failure) -> null)
+                .get();
+        Throwable failure = firstFailure.get();
+        if (failure instanceof Exception exception) {
+            throw exception;
+        } else if (failure != null) {
+            throw new IllegalStateException("Creating a producer failed", failure);
+        }
+    }
+
+    /**
+     * The order in which the gateways' producers are precreated: the order of the gateways and topics for a
+     * concurrency of 1, otherwise a random order, the same for every run of a scenario.
+     */
+    static int[] precreateOrder(int producerCount, int concurrency) {
+        List<Integer> order = new ArrayList<>(producerCount);
+        for (int producerIndex = 0; producerIndex < producerCount; producerIndex++) {
+            order.add(producerIndex);
+        }
+        if (concurrency > 1) {
+            Collections.shuffle(order, new Random(0x9a7e3aL));
+        }
+        return order.stream().mapToInt(Integer::intValue).toArray();
     }
 
     private ProducerBuilder<byte[]> producerBuilder(IotScenario scenario, List<PulsarClient> clients,
