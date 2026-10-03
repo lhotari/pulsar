@@ -132,6 +132,26 @@ public class RangeCacheReadBenchmark {
         return count;
     }
 
+    @Benchmark
+    public int copyRange() {
+        int currentRange = range++;
+        if (range == RANGE_COUNT) {
+            range = 0;
+        }
+        RangeEntryCacheImpl.CachedEntries result = new RangeEntryCacheImpl.CachedEntries(0, batchSize, null);
+        cache.forEachCopyInRange(firstPositions[currentRange], lastPositions[currentRange], null, result::acceptCopy);
+        int count = 0;
+        if (result.entries != null) {
+            for (Entry entry : result.entries) {
+                if (entry != null) {
+                    count++;
+                    entry.release();
+                }
+            }
+        }
+        return count;
+    }
+
     private static class CountingVisitor implements Consumer<ReferenceCountedEntry> {
         private int count;
 

@@ -437,20 +437,10 @@ public class RangeEntryCacheImpl implements EntryCache {
     void doAsyncReadEntriesByPosition(ReadHandle lh, Position firstPosition, Position lastPosition, int numberOfEntries,
                                       long maxSizeBytes, IntSupplier expectedReadCount,
                                       final ReadEntriesCallback callback, Object ctx) {
+        String metadataManagedLedgerName = ml.getConfig().isPulsarMessageEntries() ? ml.getName() : null;
         CachedEntries cachedEntries = new CachedEntries(firstPosition.getEntryId(), numberOfEntries,
-                ml.getConfig().isPulsarMessageEntries() ? ml.getName() : null);
-        if (firstPosition.compareTo(lastPosition) == 0) {
-            ReferenceCountedEntry cachedEntry = entries.get(firstPosition);
-            if (cachedEntry != null) {
-                try {
-                    cachedEntries.accept(cachedEntry);
-                } finally {
-                    cachedEntry.release();
-                }
-            }
-        } else {
-            entries.forEachInRange(firstPosition, lastPosition, cachedEntries);
-        }
+                metadataManagedLedgerName);
+        entries.forEachCopyInRange(firstPosition, lastPosition, metadataManagedLedgerName, cachedEntries::acceptCopy);
 
         if (cachedEntries.count > 0) {
             final List<Entry> entriesToReturn = cachedEntries.entries;
@@ -555,21 +545,25 @@ public class RangeEntryCacheImpl implements EntryCache {
 
         @Override
         public void accept(ReferenceCountedEntry entry) {
+            // The visitor retains the cached entry while parsing. Initialize on the shared cached entry
+            // before copying, so fanout readers reuse one instance backed by the cache-owned buffer.
+            if (managedLedgerName != null && entry.getMessageMetadata() == null) {
+                ((EntryImpl) entry).initializeMessageMetadataIfNeeded(managedLedgerName);
+            }
+            acceptCopy(EntryImpl.create(entry));
+        }
+
+        /** Adds a copy of a cached entry, which the result owns. */
+        void acceptCopy(EntryImpl copy) {
             if (entries == null) {
                 entries = new ArrayList<>(numberOfEntries);
                 for (int i = 0; i < numberOfEntries; i++) {
                     entries.add(null);
                 }
             }
-            // The visitor retains the cached entry while parsing. Initialize on the shared cached entry
-            // before copying, so fanout readers reuse one instance backed by the cache-owned buffer.
-            if (managedLedgerName != null && entry.getMessageMetadata() == null) {
-                ((EntryImpl) entry).initializeMessageMetadataIfNeeded(managedLedgerName);
-            }
-            int index = (int) (entry.getPosition().getEntryId() - firstEntryId);
-            entries.set(index, EntryImpl.create(entry));
+            entries.set((int) (copy.getEntryId() - firstEntryId), copy);
             count++;
-            totalSize += entry.getLength();
+            totalSize += copy.getLength();
         }
     }
 
