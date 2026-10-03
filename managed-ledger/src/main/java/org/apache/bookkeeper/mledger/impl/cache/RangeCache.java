@@ -30,8 +30,10 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import lombok.CustomLog;
+import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.ReferenceCountedEntry;
+import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.commons.lang3.tuple.Pair;
 
 /**
@@ -343,6 +345,41 @@ class RangeCache {
                     value.release();
                 }
             }
+        });
+    }
+
+    /**
+     * Visits copies of the cached entries of the range in order, as {@link EntryImpl#create(Entry)} makes them, for
+     * the visitor to own and release. It visits the pages of the range sequentially, and copies an entry without
+     * retaining and releasing it in the cache when no concurrent removal changes it, see
+     * {@link RangeCacheEntryWrapper#copyValue}; otherwise it retains the entry to copy it, as
+     * {@link #forEachInRange} does.
+     *
+     * @param metadataManagedLedgerName when not null, an entry's message metadata is parsed on the cached entry
+     *                                  before it's first copied, with this managed ledger's name, so that the copies
+     *                                  share it
+     */
+    public void forEachCopyInRange(Position first, Position last, String metadataManagedLedgerName,
+                                   Consumer<EntryImpl> visitor) {
+        boolean requireMessageMetadata = metadataManagedLedgerName != null;
+        forEachWrapperInRange(first, last, true, (wrapper, ledgerId, entryId) -> {
+            EntryImpl copy = wrapper.copyValue(ledgerId, entryId, requireMessageMetadata);
+            if (copy == null) {
+                ReferenceCountedEntry value = getRetainedValueAt(wrapper, ledgerId, entryId);
+                if (value == null) {
+                    return;
+                }
+                try {
+                    if (requireMessageMetadata && value.getMessageMetadata() == null
+                            && value instanceof EntryImpl entry) {
+                        entry.initializeMessageMetadataIfNeeded(metadataManagedLedgerName);
+                    }
+                    copy = EntryImpl.create(value);
+                } finally {
+                    value.release();
+                }
+            }
+            visitor.accept(copy);
         });
     }
 

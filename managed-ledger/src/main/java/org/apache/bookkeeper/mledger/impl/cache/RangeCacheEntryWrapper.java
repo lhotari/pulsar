@@ -24,6 +24,7 @@ import java.util.function.Function;
 import lombok.CustomLog;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.ReferenceCountedEntry;
+import org.apache.bookkeeper.mledger.impl.EntryImpl;
 
 /**
  * Wrapper around the value to store in a {@link RangeCache} slot. This is needed to ensure that a specific instance
@@ -111,10 +112,60 @@ class RangeCacheEntryWrapper {
         if (localKey == null || localKey.compareTo(ledgerId, entryId) != 0) {
             return null;
         }
-        if (markAccessed) {
+        markAccessed(markAccessed);
+        return localValue;
+    }
+
+    // Writes the flag only when it isn't set: concurrent readers of an entry would otherwise contend on the line
+    private void markAccessed(boolean markAccessed) {
+        if (markAccessed && !accessed) {
             accessed = true;
         }
-        return localValue;
+    }
+
+    /**
+     * Copies the value of the entry at the given position, as {@link EntryImpl#create(EntryImpl)} does, without
+     * retaining the value. The cache removes and releases a value under the wrapper's write lock, so when no write lock
+     * was taken between reading the value and copying it, the cache held the value meanwhile and the copy retained a
+     * live buffer. Returns null when the copy can't be made that way: the wrapper was written meanwhile, it holds
+     * another position or no {@link EntryImpl}, or the value's message metadata has to be initialized first; the
+     * caller then retains the value to copy it.
+     *
+     * @param requireMessageMetadata whether the value must have its message metadata, which the copy shares
+     * @return the copy, which the caller owns, or null
+     */
+    EntryImpl copyValue(long ledgerId, long entryId, boolean requireMessageMetadata) {
+        long stamp = lock.tryOptimisticRead();
+        if (stamp == 0L) {
+            return null;
+        }
+        Position localKey = this.key;
+        ReferenceCountedEntry localValue = this.value;
+        if (localKey == null || localKey.compareTo(ledgerId, entryId) != 0
+                || !(localValue instanceof EntryImpl entry)
+                || (requireMessageMetadata && entry.getMessageMetadata() == null)
+                || !lock.validate(stamp)) {
+            return null;
+        }
+        EntryImpl copy;
+        try {
+            copy = EntryImpl.create(entry);
+        } catch (RuntimeException e) {
+            if (lock.validate(stamp)) {
+                throw e;
+            }
+            // the value was released and recycled meanwhile
+            return null;
+        }
+        if (!lock.validate(stamp)) {
+            // The copy may hold a buffer that was released and reused meanwhile. It wasn't read, so releasing it
+            // doesn't count as a read of the expected read count that it shares.
+            copy.setDecreaseReadCountOnRelease(false);
+            copy.release();
+            return null;
+        }
+        markAccessed(true);
+        return copy;
     }
 
     /**

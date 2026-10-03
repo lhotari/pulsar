@@ -27,7 +27,10 @@ import static org.testng.Assert.assertNotSame;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
+import io.netty.buffer.UnpooledHeapByteBuf;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -723,6 +726,145 @@ public class RangeCacheTest {
     // offers a new entry to the cache, which takes over its reference when it inserts it
     private static void offer(RangeCache.Inserter inserter, Queue<ReferenceCountedEntry> offered, Position position) {
         ReferenceCountedEntry value = createCachedEntry(position, "x");
+        value.retain();
+        offered.add(value);
+        if (!inserter.put(position, value, value.getLength())) {
+            value.release();
+        }
+    }
+
+    @Test
+    public void forEachCopyInRangeCopiesWithoutRetainingTheCachedEntries() {
+        RangeCache cache = new RangeCache(createRemovalQueue());
+        RangeCache.Inserter inserter = cache.newInserter();
+        List<ReferenceCountedEntry> cached = new ArrayList<>();
+        for (int i = 0; i < 3 * RangeCache.PAGE_SIZE; i++) {
+            ReferenceCountedEntry value = createCachedEntry(i, "e" + i);
+            value.retain();
+            cached.add(value);
+            assertTrue(inserter.put(value.getPosition(), value, value.getLength()));
+        }
+        List<EntryImpl> copies = new ArrayList<>();
+        cache.forEachCopyInRange(createPosition(10), createPosition(2 * RangeCache.PAGE_SIZE + 10), null, copy -> {
+            // the cached entry isn't retained while it's copied: the cache's and the test's references
+            assertEquals(cached.get((int) copy.getEntryId()).refCnt(), 2);
+            copies.add(copy);
+        });
+        try {
+            assertThat(copies).hasSize(2 * RangeCache.PAGE_SIZE + 1);
+            for (int i = 0; i < copies.size(); i++) {
+                EntryImpl copy = copies.get(i);
+                assertEquals(copy.getPosition(), createPosition(10 + i));
+                assertEquals(new String(copy.getData()), "e" + (10 + i));
+                assertEquals(copy.refCnt(), 1);
+            }
+        } finally {
+            copies.forEach(EntryImpl::release);
+            cache.clear();
+        }
+        assertThat(cached).allSatisfy(value -> assertEquals(value.refCnt(), 1));
+        cached.forEach(ReferenceCountedEntry::release);
+    }
+
+    @Test
+    public void forEachCopyInRangeDiscardsACopyThatARemovalRaced() {
+        RangeCache cache = new RangeCache(createRemovalQueue());
+        Position position = createPosition(1);
+        // the entry's buffer removes the entry from the cache while the lookup copies it, as a concurrent eviction
+        // would, between the lookup's read of the entry and its check that the entry wasn't written meanwhile
+        AtomicBoolean removeOnCopy = new AtomicBoolean(true);
+        ByteBuf buffer = new UnpooledHeapByteBuf(ByteBufAllocator.DEFAULT, "one".getBytes(), 3) {
+            @Override
+            public ByteBuf retainedDuplicate() {
+                if (removeOnCopy.getAndSet(false)) {
+                    cache.removeRange(position, position, true);
+                }
+                return super.retainedDuplicate();
+            }
+        };
+        EntryImpl entry = EntryImpl.create(0, 1, buffer, 2);
+        // the entry holds the buffer's only reference, and the cache takes over the entry's first one
+        buffer.release();
+        entry.retain();
+        assertTrue(cache.put(position, entry));
+        List<EntryImpl> copies = new ArrayList<>();
+        cache.forEachCopyInRange(position, position, null, copies::add);
+        // the copy was discarded, the removed entry was released by the cache, and the discarded copy's release
+        // didn't count as a read of the entry's expected read count
+        assertThat(copies).isEmpty();
+        assertEquals(entry.refCnt(), 1);
+        assertEquals(entry.getReadCountHandler().getExpectedReadCount(), 2);
+        assertEquals(buffer.refCnt(), 1);
+        entry.release();
+        assertEquals(buffer.refCnt(), 0);
+        cache.clear();
+    }
+
+    @Test
+    public void concurrentCopiesWhileEntriesAreRemovedAndInsertedAgain() throws Exception {
+        RangeCacheRemovalQueue removalQueue = createRemovalQueue();
+        RangeCache cache = new RangeCache(removalQueue);
+        int numberOfEntries = 4 * RangeCache.PAGE_SIZE;
+        Queue<ReferenceCountedEntry> offered = new ConcurrentLinkedQueue<>();
+        AtomicBoolean done = new AtomicBoolean();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        @Cleanup("shutdownNow")
+        ExecutorService executor = Executors.newFixedThreadPool(4);
+        List<Future<?>> futures = new ArrayList<>();
+        for (int r = 0; r < 3; r++) {
+            int seed = r;
+            futures.add(executor.submit(() -> {
+                Random random = new Random(seed);
+                while (!done.get()) {
+                    int first = random.nextInt(numberOfEntries);
+                    int last = Math.min(numberOfEntries - 1, first + random.nextInt(100));
+                    cache.forEachCopyInRange(createPosition(first), createPosition(last), null, copy -> {
+                        try {
+                            // a copy has its own entry's data, never another one's
+                            if (!new String(copy.getData()).equals("e" + copy.getEntryId())
+                                    || copy.getEntryId() < first || copy.getEntryId() > last) {
+                                failure.compareAndSet(null, new AssertionError("Unexpected copy " + copy));
+                            }
+                        } finally {
+                            copy.release();
+                        }
+                    });
+                }
+            }));
+        }
+        futures.add(executor.submit(() -> {
+            while (!done.get()) {
+                removalQueue.evictLeastAccessedEntries(Long.MAX_VALUE);
+            }
+        }));
+        try {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            Random random = new Random(-1);
+            while (System.nanoTime() < deadline) {
+                int first = random.nextInt(numberOfEntries);
+                RangeCache.Inserter inserter = cache.newInserter();
+                for (int i = first; i < Math.min(numberOfEntries, first + 100); i++) {
+                    offer(inserter, offered, createPosition(i), "e" + i);
+                }
+                cache.removeRange(createPosition(first), createPosition(first + 50), true);
+            }
+        } finally {
+            done.set(true);
+        }
+        for (Future<?> future : futures) {
+            future.get(30, TimeUnit.SECONDS);
+        }
+        assertNull(failure.get());
+        cache.clear();
+        removalQueue.evictLeastAccessedEntries(Long.MAX_VALUE);
+        assertEquals(cache.getNumberOfEntries(), 0);
+        assertThat(offered).allSatisfy(value -> assertEquals(value.refCnt(), 1));
+        offered.forEach(ReferenceCountedEntry::release);
+    }
+
+    private static void offer(RangeCache.Inserter inserter, Queue<ReferenceCountedEntry> offered, Position position,
+                              String data) {
+        ReferenceCountedEntry value = createCachedEntry(position, data);
         value.retain();
         offered.add(value);
         if (!inserter.put(position, value, value.getLength())) {
