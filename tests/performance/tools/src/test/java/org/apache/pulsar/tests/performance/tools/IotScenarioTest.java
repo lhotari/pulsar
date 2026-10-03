@@ -104,6 +104,12 @@ public class IotScenarioTest {
     }
 
     @Test
+    public void defaultsAnOmittedPrecreateConcurrency() {
+        assertThat(new IotScenario.Producer(2, 2, 100, true, true, null).precreateConcurrency())
+                .isEqualTo(IotScenario.Producer.DEFAULT_PRECREATE_CONCURRENCY);
+    }
+
+    @Test
     public void rejectsPrecreateConcurrencyBelowOne() {
         assertThatThrownBy(() -> new IotScenario("pulsar://localhost:6650", new IotScenario.Warmup(0, 0, 1, 0),
                 new IotScenario.Measurement(120, 1_000), 0, new IotScenario.Payload(64), new IotScenario.Devices(1_000),

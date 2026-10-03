@@ -36,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.IntFunction;
 import org.apache.pulsar.client.api.BatcherBuilder;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.ProducerBuilder;
@@ -283,28 +284,38 @@ final class TelemetryProducer extends PerformanceTool.ScenarioCommand {
             throws Exception {
         int topicCount = scenario.topicCount();
         int concurrency = scenario.gateways().producer().precreateConcurrency();
+        precreate(precreateOrder(producers.length, concurrency), concurrency, producers,
+                producerIndex -> producerBuilder(scenario, clients, producerIndex / topicCount,
+                        producerIndex % topicCount).createAsync());
+    }
+
+    /**
+     * Creates the objects in the given order, up to {@code concurrency} at a time, into {@code created} at their
+     * index. After a creation fails, no more are started, and the first failure is thrown once the started ones have
+     * completed.
+     */
+    static <T> void precreate(int[] order, int concurrency, T[] created, IntFunction<CompletableFuture<T>> create)
+            throws Exception {
         Semaphore permits = new Semaphore(concurrency);
         AtomicReference<Throwable> firstFailure = new AtomicReference<>();
-        List<CompletableFuture<?>> creations = new ArrayList<>(producers.length);
-        for (int producerIndex : precreateOrder(producers.length, concurrency)) {
+        List<CompletableFuture<?>> creations = new ArrayList<>(order.length);
+        for (int index : order) {
             permits.acquire();
             if (firstFailure.get() != null) {
                 permits.release();
                 break;
             }
-            int gateway = producerIndex / topicCount;
-            int topic = producerIndex % topicCount;
-            CompletableFuture<Producer<byte[]>> creation;
+            CompletableFuture<T> creation;
             try {
-                creation = producerBuilder(scenario, clients, gateway, topic).createAsync();
+                creation = create.apply(index);
             } catch (RuntimeException e) {
                 permits.release();
                 firstFailure.compareAndSet(null, e);
                 break;
             }
-            creations.add(creation.whenComplete((producer, failure) -> {
-                if (producer != null) {
-                    producers[producerIndex] = producer;
+            creations.add(creation.whenComplete((object, failure) -> {
+                if (object != null) {
+                    created[index] = object;
                 } else {
                     firstFailure.compareAndSet(null, failure instanceof CompletionException && failure.getCause()
                             != null ? failure.getCause() : failure);
@@ -312,7 +323,7 @@ final class TelemetryProducer extends PerformanceTool.ScenarioCommand {
                 permits.release();
             }));
         }
-        // Waiting for the started creations also makes their producers visible to this thread, so that they're
+        // Waiting for the started creations also makes the created objects visible to this thread, so that they're
         // closed with the others if a creation failed
         CompletableFuture.allOf(creations.toArray(new CompletableFuture<?>[0])).handle((ignored, failure) -> null)
                 .get();
@@ -320,7 +331,7 @@ final class TelemetryProducer extends PerformanceTool.ScenarioCommand {
         if (failure instanceof Exception exception) {
             throw exception;
         } else if (failure != null) {
-            throw new IllegalStateException("Creating a producer failed", failure);
+            throw new IllegalStateException("A creation failed", failure);
         }
     }
 

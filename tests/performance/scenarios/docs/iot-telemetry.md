@@ -121,11 +121,11 @@ its I/O threads in turn: in this test topology, where the service URL and the to
 gateways that connected one at a time put every data connection on every other I/O thread, so half of the broker's
 I/O threads served the traffic. Concurrent connections spread the data connections over the I/O threads on average,
 not evenly. Runs made before this setting existed created the producers one at a time in the order of the gateways;
-`precreateConcurrency: 1` reproduces that. With `precreate: false`, the gateways create each producer when they first
-send to its topic, one at a time, so the pattern remains.
+`precreateConcurrency: 1` reproduces that, and a scenario without the setting gets 32. With `precreate: false`, the
+gateways create each producer when they first send to its topic, one at a time, so the pattern remains.
 
-The gateways' summary, `gateways-summary.json`, reports `messagesPerSecond` only for the post-warmup measurement phase and retains
-`wholeRunMessagesPerSecond` as startup and warmup context.
+The gateways' summary, `gateways-summary.json`, reports `messagesPerSecond` only for the post-warmup measurement phase
+and retains `wholeRunMessagesPerSecond` as startup and warmup context.
 
 ## Settings
 

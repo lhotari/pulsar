@@ -81,7 +81,15 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
      *                             order
      */
     public record Producer(int ioThreads, int listenerThreads, int maxOutstanding, boolean batchingEnabled,
-                           boolean precreate, int precreateConcurrency) {
+                           boolean precreate, Integer precreateConcurrency) {
+        /** The default of {@code precreateConcurrency}, for scenarios written before it existed. */
+        public static final int DEFAULT_PRECREATE_CONCURRENCY = 32;
+
+        public Producer {
+            if (precreateConcurrency == null) {
+                precreateConcurrency = DEFAULT_PRECREATE_CONCURRENCY;
+            }
+        }
     }
 
     /** The telemetry topics, named {@code <prefix><index>}. */
