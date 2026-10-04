@@ -111,7 +111,8 @@ class RangeCacheEntryWrapper {
         if (localKey == null || localKey.compareTo(ledgerId, entryId) != 0) {
             return null;
         }
-        if (markAccessed) {
+        // written only when unset, so that concurrent readers of the entry don't contend on its cache line
+        if (markAccessed && !accessed) {
             accessed = true;
         }
         return localValue;

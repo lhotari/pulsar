@@ -30,6 +30,7 @@ import static org.testng.Assert.assertNotSame;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.buffer.Unpooled;
 import java.nio.charset.StandardCharsets;
 import org.apache.bookkeeper.mledger.Entry;
@@ -105,6 +106,56 @@ public class EntryImplTest {
         } finally {
             entry.release();
         }
+    }
+
+    @Test
+    public void testCreateSharingHoldsTheCachedEntryInsteadOfTheBuffer() {
+        ByteBuf data = Unpooled.wrappedBuffer("shared-data".getBytes());
+        EntryImpl cached = EntryImpl.create(1, 2, data, 1);
+        data.release();
+        assertEquals(data.refCnt(), 1);
+        cached.retain();
+        EntryImpl copy = EntryImpl.createSharing(cached);
+        // the copy takes over the reference on the cached entry, and doesn't retain the buffer
+        assertEquals(cached.refCnt(), 2);
+        assertEquals(data.refCnt(), 1);
+        assertEntryPosition(copy, cached.getPosition());
+        assertEntryData(copy, "shared-data".getBytes());
+        // a copy of the copy retains the buffer, as a copy of any entry does
+        EntryImpl copyOfCopy = EntryImpl.create(copy);
+        assertEquals(data.refCnt(), 2);
+        // the copy's reader index is its own
+        copy.getDataBuffer().readByte();
+        assertEquals(cached.getDataBuffer().readerIndex(), 0);
+        copy.release();
+        assertEquals(cached.refCnt(), 1);
+        assertEntryData(copyOfCopy, "shared-data".getBytes());
+        copyOfCopy.release();
+        assertEquals(data.refCnt(), 1);
+        cached.release();
+        assertEquals(data.refCnt(), 0);
+    }
+
+    @Test
+    public void testSharedCopyOfAPooledCachedEntryOutlivesItsEviction() {
+        ByteBuf pooled = PooledByteBufAllocator.DEFAULT.directBuffer(16).writeBytes("pooled-data".getBytes());
+        // as the cache inserts an entry
+        EntryImpl cached = EntryImpl.createWithRetainedDuplicate(PositionFactory.create(1, 2), pooled, 1);
+        pooled.release();
+        cached.retain();
+        EntryImpl copy = EntryImpl.createSharing(cached);
+        // as a write to a consumer's connection retains a slice of the copy's data
+        ByteBuf written = copy.getDataBuffer().retainedSlice();
+        // the cache evicts the entry, then the reader releases the copy, which deallocates the cached entry
+        cached.release();
+        assertEquals(cached.refCnt(), 1);
+        copy.release();
+        assertEquals(cached.refCnt(), 0);
+        // the written slice keeps the buffer
+        assertEquals(written.toString(StandardCharsets.UTF_8), "pooled-data");
+        assertEquals(pooled.refCnt(), 1);
+        written.release();
+        assertEquals(pooled.refCnt(), 0);
     }
 
     @Test

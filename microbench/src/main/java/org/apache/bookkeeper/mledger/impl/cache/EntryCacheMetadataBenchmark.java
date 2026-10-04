@@ -93,7 +93,7 @@ public class EntryCacheMetadataBenchmark {
         }
         for (int i = 0; i < readers; i++) {
             RangeEntryCacheImpl.CachedEntries result = new RangeEntryCacheImpl.CachedEntries(0, 1, "benchmark");
-            cache.forEachInRange(position, position, result);
+            cache.forEachRetainedInRange(position, position, result::acceptRetained);
             Entry entry = result.entries.get(0);
             blackhole.consume(entry.getMessageMetadata().getSequenceId());
             blackhole.consume(entry.getMessageMetadata().getPartitionKey());

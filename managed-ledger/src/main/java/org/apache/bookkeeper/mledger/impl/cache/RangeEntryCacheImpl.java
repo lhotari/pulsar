@@ -29,6 +29,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -443,13 +444,14 @@ public class RangeEntryCacheImpl implements EntryCache {
             ReferenceCountedEntry cachedEntry = entries.get(firstPosition);
             if (cachedEntry != null) {
                 try {
-                    cachedEntries.accept(cachedEntry);
-                } finally {
+                    cachedEntries.acceptRetained(cachedEntry);
+                } catch (Throwable t) {
                     cachedEntry.release();
+                    throw t;
                 }
             }
         } else {
-            entries.forEachInRange(firstPosition, lastPosition, cachedEntries);
+            entries.forEachRetainedInRange(firstPosition, lastPosition, cachedEntries::acceptRetained);
         }
 
         if (cachedEntries.count > 0) {
@@ -555,19 +557,52 @@ public class RangeEntryCacheImpl implements EntryCache {
 
         @Override
         public void accept(ReferenceCountedEntry entry) {
+            initializeMessageMetadata(entry);
+            add(entry, EntryImpl.create(entry));
+        }
+
+        /**
+         * Adds a copy of a cached entry that takes over the reference that the caller holds on it, see
+         * {@link EntryImpl#createSharing}.
+         */
+        void acceptRetained(ReferenceCountedEntry entry) {
+            // the cache holds EntryImpl values, see RangeEntryCacheImpl.insert
+            EntryImpl cached = (EntryImpl) entry;
+            initializeMessageMetadata(cached);
+            // nothing may throw after the copy takes over the reference, which the caller releases on a failure
+            int index = indexOf(cached);
+            entries.set(index, EntryImpl.createSharing(cached));
+            added(cached);
+        }
+
+        private void initializeMessageMetadata(ReferenceCountedEntry entry) {
+            // Initialize on the shared cached entry before copying, so fanout readers reuse one instance, which is
+            // decoded when it's parsed.
+            if (managedLedgerName != null && entry.getMessageMetadata() == null) {
+                ((EntryImpl) entry).initializeMessageMetadataIfNeeded(managedLedgerName);
+            }
+        }
+
+        private void add(ReferenceCountedEntry entry, Entry copy) {
+            int index = indexOf(entry);
+            entries.set(index, copy);
+            added(entry);
+        }
+
+        /** The entry's index in the result, which it creates when it's the first entry. */
+        private int indexOf(ReferenceCountedEntry entry) {
             if (entries == null) {
                 entries = new ArrayList<>(numberOfEntries);
                 for (int i = 0; i < numberOfEntries; i++) {
                     entries.add(null);
                 }
             }
-            // The visitor retains the cached entry while parsing. Initialize on the shared cached entry
-            // before copying, so fanout readers reuse one instance, which is decoded when it's parsed.
-            if (managedLedgerName != null && entry.getMessageMetadata() == null) {
-                ((EntryImpl) entry).initializeMessageMetadataIfNeeded(managedLedgerName);
-            }
-            int index = (int) (entry.getPosition().getEntryId() - firstEntryId);
-            entries.set(index, EntryImpl.create(entry));
+            int index = (int) (entry.getEntryId() - firstEntryId);
+            Objects.checkIndex(index, numberOfEntries);
+            return index;
+        }
+
+        private void added(ReferenceCountedEntry entry) {
             count++;
             totalSize += entry.getLength();
         }
