@@ -272,6 +272,53 @@ public class RangeCacheTest {
     }
 
     @Test
+    public void visitRetainedRangeHandsOverTheReferences() {
+        RangeCache cache = new RangeCache(createRemovalQueue());
+        ReferenceCountedEntry first = createCachedEntry(1, "one");
+        ReferenceCountedEntry last = createCachedEntry(3, "three");
+        assertTrue(cache.put(first.getPosition(), first));
+        assertTrue(cache.put(last.getPosition(), last));
+        try {
+            List<ReferenceCountedEntry> owned = new ArrayList<>();
+            cache.forEachRetainedInRange(createPosition(1), createPosition(3), owned::add);
+            assertThat(owned).containsExactly(first, last);
+            // the visitor owns a reference until it releases it
+            assertEquals(first.refCnt(), 2);
+            assertEquals(last.refCnt(), 2);
+            owned.forEach(ReferenceCountedEntry::release);
+            assertEquals(first.refCnt(), 1);
+
+            // a visitor that throws hasn't taken the reference
+            RuntimeException failure = new RuntimeException("visitor failed");
+            assertThatThrownBy(() -> cache.forEachRetainedInRange(createPosition(1), createPosition(3), entry -> {
+                throw failure;
+            })).isSameAs(failure);
+            assertEquals(first.refCnt(), 1);
+            assertEquals(last.refCnt(), 1);
+        } finally {
+            cache.clear();
+        }
+        assertEquals(first.refCnt(), 0);
+        assertEquals(last.refCnt(), 0);
+    }
+
+    @Test
+    public void sharedCopiesOfARetainedRangeOutliveTheEviction() {
+        RangeCache cache = new RangeCache(createRemovalQueue());
+        ReferenceCountedEntry entry = createCachedEntry(1, "one");
+        assertTrue(cache.put(entry.getPosition(), entry));
+        List<EntryImpl> copies = new ArrayList<>();
+        cache.forEachRetainedInRange(createPosition(1), createPosition(1),
+                value -> copies.add(EntryImpl.createSharing((EntryImpl) value)));
+        cache.clear();
+        // the copy holds the cached entry
+        assertEquals(entry.refCnt(), 1);
+        assertEquals(new String(copies.get(0).getData()), "one");
+        copies.get(0).release();
+        assertEquals(entry.refCnt(), 0);
+    }
+
+    @Test
     public void visitRangeKeepsEntryAliveDuringEviction() {
         RangeCache cache = new RangeCache(createRemovalQueue());
         ReferenceCountedEntry entry = createCachedEntry(1, "one");
