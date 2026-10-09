@@ -441,12 +441,22 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         .attr("messagesToRead", messagesToRead)
                         .attr("consumersCount", consumerList.size())
                         .log("Schedule read of messages");
+                Position maxReadPosition;
+                Predicate<Position> skipCondition;
+                try {
+                    updateMinReplayedPosition();
+                    messagesToRead = Math.min(messagesToRead, getMaxEntriesReadLimit());
+                    maxReadPosition = topic.getMaxReadPosition();
+                    skipCondition = createReadEntriesSkipConditionForNormalRead();
+                } catch (RuntimeException e) {
+                    // No cursor read has been submitted yet. Arrange another attempt without leaving
+                    // havePendingRead set for an operation that can never invoke its callback.
+                    reScheduleReadWithBackoff();
+                    throw e;
+                }
                 havePendingRead = true;
-                updateMinReplayedPosition();
-
-                messagesToRead = Math.min(messagesToRead, getMaxEntriesReadLimit());
                 cursor.asyncReadEntriesWithSkipOrWait(messagesToRead, bytesToRead, this, ReadType.Normal,
-                        topic.getMaxReadPosition(), createReadEntriesSkipConditionForNormalRead());
+                        maxReadPosition, skipCondition);
             } else {
                 log.debug("Cannot schedule next read until previous one is done");
             }
