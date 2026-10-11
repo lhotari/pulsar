@@ -295,7 +295,11 @@ public class NamespaceService implements AutoCloseable {
         if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)) {
             return;
         }
-        ownershipCache.handleOwnershipTakenOver(topicName);
+        ownershipCache.handleOwnershipTakenOver(topicName).exceptionally(e -> {
+            log.warn().attr("topic", topicName).exception(e)
+                    .log("Failed to stop serving the bundle that another broker took over");
+            return null;
+        });
     }
 
     public NamespaceBundle getBundle(TopicName topicName) {
@@ -520,10 +524,16 @@ public class NamespaceService implements AutoCloseable {
                     resolveBrokerServiceLookupResult(options, nsData.get(), future);
                 }
             }).exceptionally(exception -> {
-                log.warn()
-                        .attr("bundle", bundle)
-                        .exception(exception)
-                        .log("Failed to check owner for bundle");
+                if (FutureUtil.unwrapCompletionException(exception) instanceof ServiceUnitNotReadyException) {
+                    // such as while the metadata session is lost; the client retries the lookup
+                    log.info().attr("bundle", bundle).exceptionMessage(exception)
+                            .log("Failed to check owner for bundle");
+                } else {
+                    log.warn()
+                            .attr("bundle", bundle)
+                            .exception(exception)
+                            .log("Failed to check owner for bundle");
+                }
                 future.completeExceptionally(exception);
                 return null;
             });

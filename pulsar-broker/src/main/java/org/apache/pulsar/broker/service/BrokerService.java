@@ -2314,11 +2314,11 @@ public class BrokerService implements Closeable {
                 loggerContextBuilder.attr("topic", topicName.toString());
             }
             managedLedgerConfig.setLoggerContext(loggerContextBuilder.build());
-            final LatencyTracer.TracePoint openMlTracePoint = context.startTrace(TopicLoadingTracePoints.OPEN_ML);
             // Check the ownership again right before opening the managed ledger: the steps above can wait for the
             // metadata store, and a broker that stopped serving the bundle meanwhile, such as one that another broker
             // took the bundle over from, must not open, and so recover, the new owner's ledger.
-            checkTopicNsOwnership(topic).thenRun(() ->
+            checkTopicNsOwnership(topic).thenRun(() -> {
+                final LatencyTracer.TracePoint openMlTracePoint = context.startTrace(TopicLoadingTracePoints.OPEN_ML);
                 managedLedgerFactory.asyncOpen(topicName.getPersistenceNamingEncoding(), managedLedgerConfig,
                         new OpenLedgerCallback() {
                             @Override
@@ -2408,9 +2408,8 @@ public class BrokerService implements Closeable {
                                     failTopicFuture(topic, topicFuture, new PersistenceException(exception));
                                 }
                             }
-                        }, () -> isTopicNsOwnedByBrokerAsync(topicName), null)
-            ).exceptionally(ex -> {
-                context.finishTrace(openMlTracePoint, ex);
+                        }, () -> isTopicNsOwnedByBrokerAsync(topicName), null);
+            }).exceptionally(ex -> {
                 failTopicFuture(topic, topicFuture, FutureUtil.unwrapCompletionException(ex));
                 return null;
             });

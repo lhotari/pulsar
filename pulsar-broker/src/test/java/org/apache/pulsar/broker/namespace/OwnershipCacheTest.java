@@ -385,16 +385,20 @@ public class OwnershipCacheTest {
                 .mapToObj(i -> TopicName.get("persistent://pulsar/ns-taken-over/topic-" + i))
                 .filter(bundle::includes).limit(2).toList();
         assertEquals(topics.size(), 2);
-        TopicName topic = topics.get(0);
         cache.tryAcquiringOwnership(bundle).get();
         OwnedBundle ownedBundle = cache.getOwnedBundle(bundle);
         assertNotNull(ownedBundle);
         ResourceLock<NamespaceEphemeralData> lock = cache.getLocallyAcquiredLocks().get(bundle);
 
-        cache.handleOwnershipTakenOver(topic);
+        // a report while the session is alive is left to the lock's revalidation
+        cache.handleOwnershipTakenOver(topics.get(0)).get();
+        assertSame(cache.getOwnedBundle(bundle), ownedBundle);
 
-        // The broker stopped serving the bundle: lookups find no cached ownership and topic loads fail the
-        // ownership check. The bundle's topics are closed.
+        when(pulsar.isMetadataSessionLost()).thenReturn(true);
+        cache.handleOwnershipTakenOver(topics.get(0)).get();
+
+        // The broker stopped serving the bundle: topic loads fail the ownership check, and the bundle's topics are
+        // closed.
         assertNull(cache.getOwnedBundle(bundle));
         assertFalse(ownedBundle.isActive());
         assertFalse(cache.checkOwnershipAsync(bundle).get());
@@ -408,11 +412,17 @@ public class OwnershipCacheTest {
         assertTrue(store.exists(ServiceUnitUtils.path(bundle)).join());
 
         // another topic of the bundle reporting the takeover changes nothing
-        cache.handleOwnershipTakenOver(topics.get(1));
+        cache.handleOwnershipTakenOver(topics.get(1)).get();
         verify(brokerService, times(1)).unloadServiceUnit(same(bundle), eq(true), eq(true), anyLong(), any(), any());
         verify(nsService, times(1)).onNamespaceBundleUnload(bundle);
 
-        // When no other broker took the lock after all, the next lookup reacquires the ownership from the lock.
+        // While the session is lost, a lookup that finds this broker's own lock value doesn't reacquire the bundle,
+        // which would wait for the metadata store: it fails, and the client looks the topic up elsewhere.
+        assertThatFailsWithServiceUnitNotReady(cache.getOwnerAsync(bundle));
+        assertNull(cache.getOwnedBundle(bundle));
+
+        // When the session is back and no other broker took the lock after all, the lookup reacquires the bundle.
+        when(pulsar.isMetadataSessionLost()).thenReturn(false);
         Optional<NamespaceEphemeralData> owner = cache.getOwnerAsync(bundle).get();
         assertTrue(owner.isPresent());
         assertEquals(owner.get().getNativeUrl(), selfBrokerUrl);
@@ -421,7 +431,7 @@ public class OwnershipCacheTest {
     }
 
     @Test
-    public void testLookupsOfBundlesNotServedFailWhileTheMetadataSessionIsLost() throws Exception {
+    public void testNoAcquisitionWhileTheMetadataSessionIsLost() throws Exception {
         OwnershipCache cache = new OwnershipCache(this.pulsar, nsService);
         NamespaceBundle owned = new NamespaceBundle(NamespaceName.get("pulsar/ns-session-lost"),
                 Range.closedOpen(0L, 0x40000000L), bundleFactory);
@@ -434,13 +444,13 @@ public class OwnershipCacheTest {
         // the bundle it serves is still served, as with the reconnect policy for an expired session
         assertTrue(cache.getOwnerAsync(owned).get().isPresent());
         assertTrue(cache.checkOwnershipAsync(owned).get());
-        // lookups of other bundles and acquisitions fail at once instead of waiting for the metadata store
-        assertThatFailsWithServiceUnitNotReady(cache.getOwnerAsync(notOwned));
+        // another bundle is looked up as before, but not acquired
+        assertFalse(cache.getOwnerAsync(notOwned).get().isPresent());
         assertThatFailsWithServiceUnitNotReady(cache.tryAcquiringOwnership(notOwned));
         assertNull(cache.getOwnedBundle(notOwned));
 
         when(pulsar.isMetadataSessionLost()).thenReturn(false);
-        assertFalse(cache.getOwnerAsync(notOwned).get().isPresent());
+        assertEquals(cache.tryAcquiringOwnership(notOwned).get().getNativeUrl(), selfBrokerUrl);
     }
 
     private static void assertThatFailsWithServiceUnitNotReady(CompletableFuture<?> future) {

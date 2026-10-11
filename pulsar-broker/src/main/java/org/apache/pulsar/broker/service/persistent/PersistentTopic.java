@@ -216,6 +216,8 @@ import org.jspecify.annotations.Nullable;
 
 public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCallback {
 
+    // Whether a write showed that another broker took the topic over, which is reported once
+    private final AtomicBoolean ownershipTakeoverReported = new AtomicBoolean();
     private static final Logger LOG = Logger.get(PersistentTopic.class);
     protected final Logger log;
 
@@ -819,7 +821,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         }
 
         if (exception instanceof ManagedLedgerFencedException) {
-            if (exception instanceof ManagedLedgerFencedByAnotherWriterException) {
+            if (exception instanceof ManagedLedgerFencedByAnotherWriterException
+                    && ownershipTakeoverReported.compareAndSet(false, true)) {
                 // Another broker fenced the ledger after this broker lost its metadata session: it took the topic's
                 // bundle over, so stop serving the bundle instead of answering lookups for it with this broker
                 try {
