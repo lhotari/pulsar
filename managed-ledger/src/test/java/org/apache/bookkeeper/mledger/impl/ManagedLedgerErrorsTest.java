@@ -21,6 +21,8 @@ package org.apache.bookkeeper.mledger.impl;
 import static org.apache.bookkeeper.mledger.util.ManagedLedgerTestUtil.defaultConfig;
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNull;
@@ -659,6 +661,32 @@ public class ManagedLedgerErrorsTest extends MockedBookKeeperTestCase {
         List<Entry> entries = cursor.readEntries(10);
         assertEquals(entries.size(), 3);
         entries.forEach(Entry::release);
+    }
+
+    @Test
+    public void concurrentlyModifiedLedgerFencesWhenMetadataServiceIsUnavailable() throws Exception {
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl factory = spy(new ManagedLedgerFactoryImpl(metadataStore, bkc));
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "concurrentlyModifiedLedgerFencesWhenMetadataServiceIsUnavailable", defaultConfig());
+        ledger.addEntry("entry-1".getBytes());
+        LedgerHandle fencedLedger = ledger.currentLedger;
+
+        // Another broker took the topic over and fenced the ledger while this broker can't reach the metadata
+        // service: the add must fail at once instead of waiting for the metadata service to check the ledger.
+        when(factory.isMetadataServiceAvailable()).thenReturn(false);
+        bkc.addEntryFailAfter(0, BKException.Code.LedgerFencedException);
+
+        ManagedLedgerException e = expectThrows(ManagedLedgerException.class,
+                () -> ledger.addEntry("entry-2".getBytes()));
+        assertThat(e, instanceOf(ManagedLedgerFencedException.class));
+        assertEquals(ledger.getState(), ManagedLedgerImpl.State.Fenced);
+        assertThat(expectThrows(ManagedLedgerException.class, () -> ledger.addEntry("entry-3".getBytes())),
+                instanceOf(ManagedLedgerFencedException.class));
+
+        PulsarMockLedgerHandle mockFencedLedger = (PulsarMockLedgerHandle) fencedLedger;
+        Awaitility.await().untilAsserted(() -> assertTrue(mockFencedLedger.getAsyncCloseCount().get() > 0,
+                "the handle of the concurrently modified ledger must be closed"));
     }
 
     @Test

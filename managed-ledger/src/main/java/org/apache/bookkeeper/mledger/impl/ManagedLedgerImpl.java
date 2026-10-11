@@ -2079,6 +2079,22 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         if (ledgerRecheckInProgress.getLeft() == currentLedger.getId()) {
             return;
         }
+        if (!factory.isMetadataServiceAvailable()) {
+            // Another client fenced or closed the ledger, usually a broker that took the topic over. Without the
+            // metadata service, this broker can neither read the ledger's metadata to check it nor create a new
+            // ledger, so the pending adds would wait until the metadata service returns. Fence the managed ledger
+            // instead: the pending adds fail now, the topic closes, and the clients look the topic up again.
+            ledgerRecheckInProgress = new ImmutablePair<>(currentLedger.getId(),
+                    CompletableFuture.completedFuture(errorCode));
+            log.warn().attr("ledgerId", currentLedger.getId())
+                    .attr("lastAddConfirmed", currentLedger.getLastAddConfirmed())
+                    .attr("rc", errorCode)
+                    .log("Fencing the managed ledger: the current ledger was concurrently modified by another"
+                            + " client while the metadata service is unavailable");
+            setFenced();
+            closeConcurrentlyModifiedLedger(currentLedger);
+            return;
+        }
         ledgerRecheckInProgress = new ImmutablePair<>(currentLedger.getId(), new CompletableFuture<>());
         OpenCallback opencb = (rc, lh, ctx) -> {
             ledgerRecheckInProgress.getRight().complete(rc);
@@ -2090,14 +2106,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                                 + " position when the ledger was concurrently modified"
                                 + " (the ledger may be closed by auto-replication)");
                 ledgerClosed(currentLedger, lh.getLastAddConfirmed());
-                // Close the abandoned write handle, or it leaks with its periodic explicit-LAC flush task.
-                currentLedger.asyncClose((closeRc, closedLedger, closeCtx) -> {
-                    if (closeRc != Code.OK) {
-                        log.debug().attr("ledgerId", currentLedger.getId())
-                                .attr("status", BKException.getMessage(closeRc))
-                                .log("Error when closing ledger after it was concurrently modified");
-                    }
-                }, null);
+                closeConcurrentlyModifiedLedger(currentLedger);
             } else {
                 log.error().attr("ledgerId", currentLedger.getId())
                     .attr("lastAddConfirmed", currentLedger.getLastAddConfirmed())
@@ -2122,6 +2131,17 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 .withOrderingKey(name)
                 .execute()
                 .whenComplete((rh, ex) -> completeOpenCallback(log, currentLedger.getId(), opencb, rh, ex));
+    }
+
+    /** Closes the abandoned write handle, or it leaks with its periodic explicit-LAC flush task. */
+    private void closeConcurrentlyModifiedLedger(LedgerHandle currentLedger) {
+        currentLedger.asyncClose((closeRc, closedLedger, closeCtx) -> {
+            if (closeRc != Code.OK) {
+                log.debug().attr("ledgerId", currentLedger.getId())
+                        .attr("status", BKException.getMessage(closeRc))
+                        .log("Error when closing ledger after it was concurrently modified");
+            }
+        }, null);
     }
 
     synchronized void ledgerClosed(final LedgerHandle lh) {
