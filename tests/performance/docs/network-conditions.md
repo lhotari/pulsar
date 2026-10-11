@@ -262,7 +262,7 @@ cluster. What they showed on `iot-telemetry-small`, at 1,000 messages a second, 
 | `connection-resets` | load balancers resetting connections | a gateway reset costs ~0.2 s; an applications reset stalls everything |
 | `silent-client-disconnect` | the clients' connections vanish without the brokers knowing | the brokers hold every Key_Shared consumer twice until their keep-alive; a 512 MB broker ran out of heap |
 | `silent-broker-disconnect` | the brokers drop the connections without the clients knowing | the producers and consumers stall until their keep-alive, about 45 s |
-| `storage-outage` | every bookie cut off from the brokers for 20 s | a 27 s publish stall: TCP's retransmission backoff delays the recovery by ~7 s |
+| `storage-outage` | every bookie cut off from the brokers for 20 s | a 27 s publish stall: the recovery takes ~7 s more, probably TCP's retransmission backoff |
 | `bookie-metadata-outage` | every bookie cut off from ZooKeeper past the session timeout | with the bookies' embedded AutoRecovery, every bookie shuts down and the run fails |
 | `lossy-storage` | 0.5 % loss in bursts between the brokers and the bookies | the publish p99.9 up by half, the max to a retransmission timeout, ~200 ms |
 | `zookeeper-outage` | every broker cut off from ZooKeeper past the session timeout, with clients looking the topics up | the brokers keep serving their topics; the lookups' reset costs a few seconds |
