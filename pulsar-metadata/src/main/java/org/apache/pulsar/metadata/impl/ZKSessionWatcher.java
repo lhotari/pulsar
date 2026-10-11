@@ -218,9 +218,9 @@ public class ZKSessionWatcher implements AutoCloseable, Watcher {
 
                 SessionEvent previousStatus = currentStatus;
                 // Update the status before notifying the listener: a listener that can't use the new session, such
-                // as ZKMetadataStore when it fails to recreate its persistent watch, calls setSessionInvalid() while
-                // it's notified, and the status it sets must not be overwritten, or the next reconnection would not
-                // send SessionReestablished again.
+                // as ZKMetadataStore when it fails to recreate its persistent watch, calls setSessionReplaced() or
+                // setSessionInvalid() while it's notified, and the status it sets must not be overwritten, or the next
+                // session would not send SessionReestablished again.
                 currentStatus = SessionEvent.SessionReestablished;
                 try {
                     sessionListener.accept(SessionEvent.Reconnected);
