@@ -95,6 +95,13 @@ public final class RunReport {
     public static final String PERF_STAT_HEADER =
             "epochMillis,container,taskClockMillis,contextSwitches,cpuMigrations,pageFaults,cycles,instructions,"
                     + "cacheReferences,cacheMisses,l1dLoadMisses,branchMisses";
+    /**
+     * The network impairments of a run, as the launcher applied them: each one's settings, when it was applied and
+     * removed, its queues' counters, and the impaired containers' TCP retransmissions.
+     */
+    public static final String NETWORK_SUMMARY_FILE = "network-summary.json";
+    /** Every network impairment event of a run, one JSON object per line, appended as they happen. */
+    public static final String NETWORK_EVENTS_FILE = "network-events.jsonl";
     // .txt, so that an HTTP server such as Python's shows the log as text instead of offering a download
     public static final String CONTAINER_LOG = "container.log.txt";
     /** What the launcher printed on the console, from the run directory's creation to the end. */
@@ -320,6 +327,7 @@ public final class RunReport {
         appendRun(report, runDirectory, run, producer, host);
         // The profiles come first so that a profiled run leads to its flame graphs
         appendProfiles(report, runDirectory, mapper);
+        NetworkReport.append(report, runDirectory, mapper, measurementStart);
         appendCorrectness(report, run.workload(), consumers);
         appendThroughput(report, producer, consumers);
         Path stats = runDirectory.resolve(TOPIC_STATS_FILE);
@@ -518,7 +526,8 @@ public final class RunReport {
     private static void appendFiles(StringBuilder report, Path runDirectory, JsonNode workload) {
         List<String> links = new ArrayList<>();
         // The scenario and its resolved configuration are linked from the settings table
-        for (String name : List.of(CONSOLE_LOG, RunInfo.FILE_NAME, METRICS_FILE, "gateways/gateways-summary.json",
+        for (String name : List.of(CONSOLE_LOG, RunInfo.FILE_NAME, METRICS_FILE, NETWORK_SUMMARY_FILE,
+                NETWORK_EVENTS_FILE, "gateways/gateways-summary.json",
                 "gateways/" + CONTAINER_LOG, APPLICATIONS_DIRECTORY + "/" + CONTAINER_LOG)) {
             Path file = runDirectory.resolve(name);
             if (Files.isRegularFile(file)) {

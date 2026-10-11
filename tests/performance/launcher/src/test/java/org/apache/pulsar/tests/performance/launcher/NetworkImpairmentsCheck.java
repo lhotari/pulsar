@@ -1,0 +1,281 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.pulsar.tests.performance.launcher;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+import org.apache.pulsar.tests.performance.report.RunReport;
+import org.testcontainers.containers.Container;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.Network;
+import org.testcontainers.images.builder.ImageFromDockerfile;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.AfterMethod;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.Test;
+
+/**
+ * Checks that {@link NetworkImpairments} does to real containers what the settings ask, with {@code ping} and
+ * {@code iperf3} between small Alpine containers named as the run's: the impaired and the unimpaired destinations, the
+ * timeline, the jitter's order, a loss, a rate, a partition, a reset, and the cleanup. It needs a Docker engine that
+ * can run privileged containers, so it isn't one of the unit tests: {@code ./gradlew
+ * :tests:performance:launcher:networkCheck} runs it.
+ */
+public class NetworkImpairmentsCheck {
+    private static final Pattern ROUND_TRIP = Pattern.compile("round-trip min/avg/max = ([0-9.]+)/([0-9.]+)/([0-9.]+)");
+    private static final Pattern BITRATE = Pattern.compile("([0-9.]+) ([KMG])bits/sec\\s+receiver");
+    private final ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+    private Network network;
+    private final Map<String, GenericContainer<?>> containers = new LinkedHashMap<>();
+    private Path runDirectory;
+    private NetworkImpairments impairments;
+
+    @BeforeClass(alwaysRun = true)
+    @SuppressWarnings("resource")
+    public void startContainers() {
+        network = Network.newNetwork();
+        ImageFromDockerfile image = new ImageFromDockerfile("pulsar-performance-network-check:alpine-3.20", false)
+                .withDockerfileFromBuilder(builder -> builder.from("alpine:3.20")
+                        .run("apk add --no-cache iperf3 iproute2").build());
+        for (String name : List.of("gateways", "broker-0", "broker-1")) {
+            GenericContainer<?> container = new GenericContainer<>(image)
+                    .withNetwork(network)
+                    .withNetworkAliases(name)
+                    .withCommand("sh", "-c", "iperf3 -s -D && sleep infinity");
+            container.start();
+            containers.put(name, container);
+        }
+    }
+
+    @AfterClass(alwaysRun = true)
+    public void stopContainers() {
+        containers.values().forEach(GenericContainer::stop);
+        if (network != null) {
+            network.close();
+        }
+    }
+
+    @BeforeMethod
+    public void createRunDirectory() throws IOException {
+        runDirectory = Files.createTempDirectory("network-impairments-check");
+    }
+
+    @AfterMethod(alwaysRun = true)
+    public void closeImpairments() throws Exception {
+        if (impairments != null) {
+            impairments.close();
+            impairments = null;
+        }
+        // Everything installed is gone: the receivers' veths and the senders' interfaces are back to noqueue
+        for (String name : containers.keySet()) {
+            assertThat(exec(name, "tc qdisc show dev eth0 root 2>/dev/null || true")).doesNotContain("prio");
+        }
+        try (Stream<Path> files = Files.walk(runDirectory)) {
+            for (Path file : files.sorted(Comparator.reverseOrder()).toList()) {
+                Files.delete(file);
+            }
+        }
+    }
+
+    @Test
+    public void delaysOnlyTheImpairedDestination() throws Exception {
+        start("""
+                impairments:
+                  wan:
+                    between: [gateways, broker-0]
+                    delay: 20ms
+                """);
+
+        assertThat(averageRoundTripMillis("gateways", "broker-0")).isBetween(39.0, 50.0);
+        assertThat(averageRoundTripMillis("gateways", "broker-1")).isLessThan(5.0);
+        assertThat(averageRoundTripMillis("broker-1", "broker-0")).isLessThan(5.0);
+    }
+
+    @Test
+    public void appliesAndRemovesTimedImpairmentsOnTheTimeline() throws Exception {
+        start("""
+                impairments:
+                  cut:
+                    between: [gateways, broker-1]
+                    partition: true
+                    anchor: run
+                    start: 2s
+                    duration: 3s
+                """);
+        impairments.startRun();
+
+        assertThat(reachable("gateways", "broker-1")).isTrue();
+        Thread.sleep(3000);
+        assertThat(reachable("gateways", "broker-1")).isFalse();
+        assertThat(reachable("gateways", "broker-0")).isTrue();
+        Thread.sleep(3000);
+        assertThat(reachable("gateways", "broker-1")).isTrue();
+        assertThat(impairments.unexercised()).isEmpty();
+        assertThat(impairments.failure()).isNotDone();
+    }
+
+    @Test
+    public void keepsTheOrderOfJitteredPacketsUnlessAskedToReorder() throws Exception {
+        start("""
+                impairments:
+                  ordered:
+                    from: gateways
+                    to: broker-0
+                    delay: 30ms
+                    jitter: 15ms
+                  reordered:
+                    from: gateways
+                    to: broker-1
+                    delay: 30ms
+                    jitter: 15ms
+                    reorder: true
+                """);
+
+        assertThat(reorderedReplies("gateways", "broker-0")).isZero();
+        assertThat(reorderedReplies("gateways", "broker-1")).isGreaterThan(10);
+    }
+
+    @Test
+    public void losesPacketsAndLimitsTheRate() throws Exception {
+        start("""
+                impairments:
+                  lossy:
+                    from: gateways
+                    to: broker-0
+                    delay: 5ms
+                    loss: 1%
+                  uplink:
+                    from: gateways
+                    to: broker-1
+                    rate: 20mbit
+                """);
+
+        double lossyMbits = megabits(exec("gateways", "iperf3 -c broker-0 -t 4"));
+        // The Mathis model at 10 ms and 1 % loss gives about 14 Mbit/s; far below the unimpaired path's Gbit/s
+        assertThat(lossyMbits).isBetween(3.0, 60.0);
+        double limitedMbits = megabits(exec("gateways", "iperf3 -c broker-1 -t 4"));
+        assertThat(limitedMbits).isBetween(17.0, 20.5);
+        impairments.close();
+        JsonNode summary = new ObjectMapper().readTree(runDirectory.resolve(RunReport.NETWORK_SUMMARY_FILE).toFile());
+        assertThat(summary.path("offloadsOff").toString()).contains("gateways");
+        JsonNode lossy = summary.path("impairments").get(0).path("statistics");
+        long packets = 0;
+        long drops = 0;
+        for (JsonNode device : lossy) {
+            packets += device.path("packets").asLong();
+            drops += device.path("drops").asLong();
+        }
+        // The offloads are off, so that netem drops 1 % of the segments, not of GSO super-packets
+        assertThat(drops * 100.0 / (packets + drops)).isBetween(0.7, 1.3);
+        impairments = null;
+    }
+
+    @Test
+    public void resetsTheConnections() throws Exception {
+        start("""
+                impairments:
+                  reset:
+                    from: gateways
+                    to: broker-0
+                    reset: true
+                    anchor: run
+                    start: 2s
+                """);
+        Container.ExecResult[] transfer = new Container.ExecResult[1];
+        Thread client = new Thread(() -> {
+            try {
+                transfer[0] = containers.get("gateways").execInContainer("iperf3", "-c", "broker-0", "-t", "8",
+                        "-b", "1M");
+            } catch (IOException | InterruptedException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        client.start();
+        Thread.sleep(500);
+        impairments.startRun();
+        client.join(Duration.ofSeconds(20).toMillis());
+
+        assertThat(transfer[0].getExitCode()).isNotZero();
+        assertThat(impairments.unexercised()).isEmpty();
+    }
+
+    private void start(String yaml) throws IOException {
+        NetworkSettings.Topology topology = new NetworkSettings.Topology(2, 0);
+        NetworkSettings settings = NetworkSettings.read(mapper.readTree(yaml), topology, -1);
+        impairments = NetworkImpairments.start(settings, topology, new ObjectMapper(), runDirectory,
+                System.out::println);
+        impairments.setUp(containers, network.getId());
+    }
+
+    private double averageRoundTripMillis(String from, String to) throws Exception {
+        Matcher matcher = ROUND_TRIP.matcher(exec(from, "ping -c 5 -i 0.2 -q " + to));
+        assertThat(matcher.find()).isTrue();
+        return Double.parseDouble(matcher.group(2));
+    }
+
+    private boolean reachable(String from, String to) throws Exception {
+        return containers.get(from).execInContainer("ping", "-c", "1", "-W", "1", to).getExitCode() == 0;
+    }
+
+    private int reorderedReplies(String from, String to) throws Exception {
+        List<Integer> sequences = new ArrayList<>();
+        Matcher matcher = Pattern.compile("seq=([0-9]+)").matcher(exec(from, "ping -c 300 -i 0.005 " + to));
+        while (matcher.find()) {
+            sequences.add(Integer.parseInt(matcher.group(1)));
+        }
+        int reordered = 0;
+        for (int index = 1; index < sequences.size(); index++) {
+            if (sequences.get(index) < sequences.get(index - 1)) {
+                reordered++;
+            }
+        }
+        return reordered;
+    }
+
+    private static double megabits(String iperf) {
+        Matcher matcher = BITRATE.matcher(iperf);
+        assertThat(matcher.find()).as(iperf).isTrue();
+        double value = Double.parseDouble(matcher.group(1));
+        return switch (matcher.group(2)) {
+            case "K" -> value / 1000;
+            case "G" -> value * 1000;
+            default -> value;
+        };
+    }
+
+    private String exec(String container, String command) throws Exception {
+        Container.ExecResult result = containers.get(container).execInContainer("sh", "-c", command);
+        return result.getStdout() + result.getStderr();
+    }
+}

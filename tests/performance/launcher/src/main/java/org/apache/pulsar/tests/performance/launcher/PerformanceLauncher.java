@@ -69,7 +69,9 @@ import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.PulsarAdminException;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.tests.integration.containers.BrokerContainer;
+import org.apache.pulsar.tests.integration.containers.CSContainer;
 import org.apache.pulsar.tests.integration.containers.PulsarContainer;
+import org.apache.pulsar.tests.integration.containers.ZKContainer;
 import org.apache.pulsar.tests.integration.profiling.JonoffcpuAgent;
 import org.apache.pulsar.tests.integration.topologies.PulsarCluster;
 import org.apache.pulsar.tests.integration.topologies.PulsarClusterSpec;
@@ -248,6 +250,10 @@ public class PerformanceLauncher implements Callable<Integer> {
         ClusterSettings clusterSettings = ClusterSettings.read(loader.mapper(), resolved.path("cluster"));
         HeapDumpSettings heapDumpSettings = HeapDumpSettings.read(resolved.path("heapDumps"));
         MetricsSettings metricsSettings = MetricsSettings.read(resolved.path("metrics"));
+        NetworkSettings.Topology topology = new NetworkSettings.Topology(clusterSettings.brokers().replicas(),
+                clusterSettings.bookies().replicas());
+        NetworkSettings networkSettings = NetworkSettings.read(resolved.path("network"), topology,
+                measurementSeconds(workload));
         // The cluster as the scenario wrote it, for the run report
         ObjectNode clusterConfig = (ObjectNode) resolved.get("cluster");
         boolean profilingEnabled = profilingSettings.anyProfiled();
@@ -264,7 +270,7 @@ public class PerformanceLauncher implements Callable<Integer> {
         int applications = workload.path("applications").path("count").intValue();
         String runId = UUID.randomUUID().toString();
         String clusterName = "iot-" + ProcessHandle.current().pid();
-        workload.put("serviceUrl", "pulsar://" + clusterName + "-pulsar-broker-0:6650");
+        workload.put("serviceUrl", clusterSettings.serviceUrl(clusterName));
         checkWorkload(loader.mapper(), workload);
 
         // Whole seconds, as the run directory names the start
@@ -412,6 +418,7 @@ public class PerformanceLauncher implements Callable<Integer> {
         HeapDumper heapDumper = heapDumpSettings.any()
                 ? new HeapDumper(runOutput, PulsarContainer.DEFAULT_IMAGE_NAME, heapDumpSettings.gzipLevel()) : null;
         MetricsCollection metricsCollection = null;
+        NetworkImpairments network = null;
         Instant gatewaysStarted = null;
         String metricsBindAddress = System.getProperty("performance.metrics.bindAddress",
                 ReportsUrl.DEFAULT_BIND_ADDRESS);
@@ -421,6 +428,14 @@ public class PerformanceLauncher implements Callable<Integer> {
             status(String.format(Locale.ROOT, "Starting the Pulsar cluster: %d broker(s), %d bookie(s)%s",
                     spec.numBrokers(), spec.numBookies(),
                     journalTmpfs != null ? ", with each bookie's journal on a tmpfs of " + journalTmpfs : ""));
+            if (networkSettings.any()) {
+                // Before the cluster, so that a Docker engine that can't apply them fails the run at once
+                network = NetworkImpairments.start(networkSettings, topology, loader.mapper(), runOutput,
+                        PerformanceLauncher::status);
+                status("Network impairments: " + networkSettings.impairments().stream()
+                        .map(NetworkSettings.Impairment::name).collect(Collectors.joining(", "))
+                        + "; the Docker engine's host can apply them");
+            }
             long clusterStart = System.nanoTime();
             cluster.start();
             status(String.format(Locale.ROOT, "Started the Pulsar cluster in %.0f s",
@@ -464,13 +479,19 @@ public class PerformanceLauncher implements Callable<Integer> {
 
             Path producerOutput = runOutput.resolve(GATEWAYS_DIRECTORY);
             Files.createDirectories(producerOutput);
+            boolean gatedMeasurement = cooldownCelsius != null || networkSettings.anyMeasurementAnchored();
+            List<String> producerArguments = new ArrayList<>(List.of("--control-port", Integer.toString(CONTROL_PORT)));
+            if (gatedMeasurement) {
+                producerArguments.add("--await-measurement-start");
+            }
+            if (network != null) {
+                producerArguments.add("--await-run-start");
+            }
             producer = workloadContainer(cluster, resolvedToolsDirectory, resolvedConfig,
                     coordinationDirectory, runId, producerOutput, agentJar, profilingSettings.gateways(),
                     GATEWAYS_DIRECTORY, gatewaysEnv, heapDumpSettings.gateways(), heapDumpSettings.gzipLevel(),
-                    heapDumpDirectories.get(HeapDumpSettings.GATEWAYS), "iot-produce", cooldownCelsius != null
-                            ? new String[] {"--control-port", Integer.toString(CONTROL_PORT),
-                                    "--await-measurement-start"}
-                            : new String[] {"--control-port", Integer.toString(CONTROL_PORT)});
+                    heapDumpDirectories.get(HeapDumpSettings.GATEWAYS), "iot-produce",
+                    producerArguments.toArray(String[]::new));
             // The launcher reaches the producer's control endpoints through the port mapped on the host
             producer.withExposedPorts(CONTROL_PORT);
             status(String.format(Locale.ROOT, "Starting the gateways: %,d warmup and %,d measured message(s) at "
@@ -479,6 +500,14 @@ public class PerformanceLauncher implements Callable<Integer> {
                     workload.path("gateways").path("count").intValue(),
                     workload.path("topics").path("count").intValue()));
             startWorkload(producer, ".*CONTROL_READY.*", "The gateways", producerOutput.resolve(CONTAINER_LOG));
+            if (network != null) {
+                // The gateways wait before they create their clients, so that their first lookups and connections
+                // already have the whole-run conditions
+                network.setUp(networkEndpoints(cluster, clusterName, producer, consumer),
+                        cluster.getNetwork().getId());
+                network.startRun();
+                startRun(producer);
+            }
             gatewaysStarted = Instant.now();
             GenericContainer<?> runningProducer = producer;
             List<MeasuredContainer> measured = measuredContainers(cluster, clusterName, producer, consumer);
@@ -490,13 +519,14 @@ public class PerformanceLauncher implements Callable<Integer> {
             }
             progress.follow("producer", controlUrl(producer), runningProducer::isRunning);
             progress.start(progressIntervalSeconds);
-            if (cooldownCelsius != null) {
-                measurementGate = startMeasurementGate(sensors, producer, cooldowns);
+            if (gatedMeasurement) {
+                measurementGate = startMeasurementGate(sensors, producer, cooldowns, network);
             }
             List<Workload> workloads = new ArrayList<>();
             workloads.add(new Workload("The gateways", producer, producerOutput.resolve(CONTAINER_LOG)));
             workloads.add(new Workload("The applications", consumer, applicationsOutput.resolve(CONTAINER_LOG)));
-            awaitWorkloads(workloads, workload.path("timeoutSeconds").intValue() + 60);
+            awaitWorkloads(workloads, workload.path("timeoutSeconds").intValue() + 60,
+                    network != null ? network.failure() : new CompletableFuture<>());
             progress.report();
             progress.close();
             if (heapDumper != null) {
@@ -509,8 +539,12 @@ public class PerformanceLauncher implements Callable<Integer> {
             if (metricsCollection != null) {
                 // The metrics are an addition to the run, which doesn't fail with them
                 try {
-                    String dashboard = metricsCollection.finish(runOutput,
-                            runEvents(loader.mapper(), runOutput, workload, applications, gatewaysStarted),
+                    List<MetricsCollection.Event> events =
+                            runEvents(loader.mapper(), runOutput, workload, applications, gatewaysStarted);
+                    if (network != null) {
+                        events.addAll(network.annotations());
+                    }
+                    String dashboard = metricsCollection.finish(runOutput, events,
                             System.getProperty("performance.metrics.grafanaUrl"), metricsBindAddress,
                             PerformanceLauncher::status);
                     status("Metrics in Grafana: " + dashboard + (metricsCollection.startedStack()
@@ -572,7 +606,19 @@ public class PerformanceLauncher implements Callable<Integer> {
             });
             if (gateToStop != null) {
                 gateToStop.interrupt();
+                try {
+                    gateToStop.join(TimeUnit.SECONDS.toMillis(10));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
+            // While the containers run, so that their interfaces are cleaned up when they are left running
+            NetworkImpairments networkToClose = network;
+            shutDown("removing the network impairments", () -> {
+                if (networkToClose != null) {
+                    networkToClose.close();
+                }
+            });
             if (producerToStop != null) {
                 saveContainerLog(producerToStop, runOutput.resolve(GATEWAYS_DIRECTORY).resolve(CONTAINER_LOG));
                 shutDown("stopping the producer", producerToStop::stop);
@@ -648,6 +694,12 @@ public class PerformanceLauncher implements Callable<Integer> {
                 PulsarContainer.DEFAULT_IMAGE_NAME, clusterConfig, workload, runInfo, workloadFinished,
                 List.copyOf(cooldowns)), loader.mapper());
         printReport("Run report", MarkdownPages.htmlPage(runReport), reportsRoot);
+        List<String> unexercised = network != null ? network.unexercised() : List.of();
+        if (!unexercised.isEmpty()) {
+            status("The run didn't apply its network impairments as the scenario asked: "
+                    + String.join("; ", unexercised));
+            return 1;
+        }
         if (!keepLauncherLog) {
             if (deliveredIncorrectly(loader.mapper(), runOutput, workload, applications)) {
                 System.out.println("Kept " + launcherLog + ", with the containers' logs, since the applications"
@@ -909,6 +961,44 @@ public class PerformanceLauncher implements Callable<Integer> {
         return containers;
     }
 
+    /**
+     * The containers that the network impairments' endpoints name: gateways, applications, broker-N, bookie-N,
+     * zookeeper and configuration-store.
+     */
+    static Map<String, GenericContainer<?>> networkEndpoints(PulsarCluster cluster, String clusterName,
+                                                             GenericContainer<?> producer,
+                                                             GenericContainer<?> consumer) {
+        Map<String, GenericContainer<?>> endpoints = new LinkedHashMap<>();
+        for (MeasuredContainer measured : measuredContainers(cluster, clusterName, producer, consumer)) {
+            if (measured.name().matches("(broker|bookie)-[0-9]+")) {
+                endpoints.put(measured.name(), measured.container());
+            }
+        }
+        endpoints.put(NetworkSettings.GATEWAYS, producer);
+        endpoints.put(NetworkSettings.APPLICATIONS, consumer);
+        cluster.forEachContainer(container -> {
+            if (container instanceof ZKContainer) {
+                endpoints.put(NetworkSettings.ZOOKEEPER, container);
+            } else if (container instanceof CSContainer) {
+                endpoints.put(NetworkSettings.CONFIGURATION_STORE, container);
+            }
+        });
+        return endpoints;
+    }
+
+    /**
+     * The measurement's length in seconds, as the workload sets it or as its messages take at its rate, for checking
+     * the network impairments' times; -1 when it isn't known, without a rate.
+     */
+    static double measurementSeconds(JsonNode workload) {
+        JsonNode measurement = workload.path("measurement");
+        if (measurement.path("seconds").asLong() > 0) {
+            return measurement.path("seconds").asLong();
+        }
+        long rate = workload.path("rate").asLong();
+        return rate > 0 ? (double) measurement.path("messages").asLong() / rate : -1;
+    }
+
     /** The PID of a container's main process in the Docker engine's host, from Docker's container inspect. */
     private static Long pid(MeasuredContainer measured) {
         return measured.container().getContainerInfo().getState().getPidLong();
@@ -1082,22 +1172,36 @@ public class PerformanceLauncher implements Callable<Integer> {
      * that the producer never waits for a launcher that has given up.
      */
     private Thread startMeasurementGate(HostStatsSampler.Sensors sensors, GenericContainer<?> producer,
-                                        List<RunReport.Cooldown> cooldowns) {
+                                        List<RunReport.Cooldown> cooldowns, NetworkImpairments network) {
         String control = "http://" + producer.getHost() + ":" + producer.getMappedPort(CONTROL_PORT);
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
         Thread gate = new Thread(() -> {
+            boolean release = true;
             try {
                 if (awaitReady(client, control, producer)) {
-                    System.out.println("Warmup received; cooling down before the measurement");
-                    RunReport.Cooldown cooldown = coolDown(sensors, RunReport.Cooldown.BEFORE_MEASUREMENT);
-                    if (cooldown != null) {
-                        cooldowns.add(cooldown);
+                    if (cooldownCelsius != null) {
+                        System.out.println("Warmup received; cooling down before the measurement");
+                        RunReport.Cooldown cooldown = coolDown(sensors, RunReport.Cooldown.BEFORE_MEASUREMENT);
+                        if (cooldown != null) {
+                            cooldowns.add(cooldown);
+                        }
+                    }
+                    if (network != null) {
+                        try {
+                            network.startMeasurement();
+                        } catch (RuntimeException e) {
+                            // The measurement doesn't start without its impairments; the run fails with them
+                            release = false;
+                            network.fail(e);
+                        }
                     }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } finally {
-                startMeasurement(client, control);
+                if (release) {
+                    startMeasurement(client, control);
+                }
             }
         }, "measurement-gate");
         gate.setDaemon(true);
@@ -1124,6 +1228,29 @@ public class PerformanceLauncher implements Callable<Integer> {
             }
         }
         return false;
+    }
+
+    /**
+     * Lets the gateways, which wait with {@code --await-run-start}, create their clients and start the run; fails when
+     * they can't be reached.
+     */
+    private static void startRun(GenericContainer<?> producer) throws IOException, InterruptedException {
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+        HttpRequest start = HttpRequest.newBuilder(URI.create(controlUrl(producer) + "/run/start"))
+                .timeout(Duration.ofSeconds(10)).POST(HttpRequest.BodyPublishers.noBody()).build();
+        IOException failure = null;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                int statusCode = client.send(start, HttpResponse.BodyHandlers.discarding()).statusCode();
+                if (statusCode == 200) {
+                    return;
+                }
+                failure = new IOException("The gateways answered " + statusCode + " to the run's start");
+            } catch (IOException e) {
+                failure = e;
+            }
+        }
+        throw new IOException("Couldn't start the gateways' run: " + failure.getMessage(), failure);
     }
 
     private static void startMeasurement(HttpClient client, String control) {
@@ -1401,15 +1528,22 @@ public class PerformanceLauncher implements Callable<Integer> {
      * Waits until every workload has exited, and fails as soon as one exits with an error, or when they haven't
      * finished within {@code timeoutSeconds}, with the cause from the failed workload's log.
      */
-    private static void awaitWorkloads(List<Workload> workloads, int timeoutSeconds) throws Exception {
+    private static void awaitWorkloads(List<Workload> workloads, int timeoutSeconds, CompletableFuture<?> failure)
+            throws Exception {
         Map<Workload, CompletableFuture<Integer>> running = new LinkedHashMap<>();
         for (Workload workload : workloads) {
             running.put(workload, exitCode(workload.container()));
         }
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
         while (!running.isEmpty()) {
+            if (failure.isCompletedExceptionally()) {
+                // Such as a network impairment that couldn't be applied: the run measures something else then
+                failure.get();
+            }
             try {
-                CompletableFuture.anyOf(running.values().toArray(CompletableFuture[]::new)).get(1, TimeUnit.SECONDS);
+                CompletableFuture<?>[] waits = Stream.concat(running.values().stream(), Stream.of(failure))
+                        .toArray(CompletableFuture[]::new);
+                CompletableFuture.anyOf(waits).get(1, TimeUnit.SECONDS);
             } catch (TimeoutException e) {
                 if (System.nanoTime() > deadline) {
                     throw new IllegalStateException("The workload didn't finish within " + timeoutSeconds + " s; "

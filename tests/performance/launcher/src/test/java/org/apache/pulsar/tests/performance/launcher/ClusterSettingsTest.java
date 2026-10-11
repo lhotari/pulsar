@@ -51,6 +51,36 @@ public class ClusterSettingsTest {
     }
 
     @Test
+    public void bootstrapsTheWorkloadsFromTheFirstOrEveryBroker() throws Exception {
+        ClusterSettings first = ClusterSettings.read(mapper, mapper.readTree("""
+                brokers:
+                  replicas: 3
+                bookies:
+                  replicas: 1
+                """));
+        assertThat(first.allBrokersBootstrap()).isFalse();
+        assertThat(first.serviceUrl("iot-1")).isEqualTo("pulsar://iot-1-pulsar-broker-0:6650");
+
+        ClusterSettings all = ClusterSettings.read(mapper, mapper.readTree("""
+                brokers:
+                  replicas: 3
+                  bootstrap: all
+                bookies:
+                  replicas: 1
+                """));
+        assertThat(all.serviceUrl("iot-1")).isEqualTo("pulsar://iot-1-pulsar-broker-0:6650,"
+                + "iot-1-pulsar-broker-1:6650,iot-1-pulsar-broker-2:6650");
+
+        assertThatThrownBy(() -> ClusterSettings.read(mapper, mapper.readTree("""
+                brokers:
+                  replicas: 1
+                  bootstrap: some
+                bookies:
+                  replicas: 1
+                """))).hasMessageContaining("cluster.brokers.bootstrap must be first or all");
+    }
+
+    @Test
     public void putsTheBookiesJournalsOnATmpfs() throws Exception {
         ClusterSettings settings = ClusterSettings.read(mapper, mapper.readTree("""
                 brokers:

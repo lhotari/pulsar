@@ -235,7 +235,9 @@ final class ProgressMonitor implements AutoCloseable {
         return switch (phase) {
             case "warmup" -> clock + " warmup round " + (producer.path("warmupRound").asInt() + 1) + "/"
                     + producer.path("warmupRounds").asInt();
-            case "awaiting-measurement-start" -> clock + " cooling down";
+            // The launcher lets the host cool down, or applies the network impairments of the measurement's start
+            case "awaiting-measurement-start" -> clock + " before the measurement";
+            case "awaiting-run-start" -> clock + " applying the network conditions";
             case "measurement" -> {
                 long start = producer.path("measurementStartEpochMs").asLong(-1);
                 yield start > 0 ? String.format(Locale.ROOT, "%s measurement %d s", clock,

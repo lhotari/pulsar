@@ -35,6 +35,7 @@ import java.util.regex.Pattern;
  * cluster:
  *   brokers:
  *     replicas: 1
+ *     bootstrap: first
  *     env:
  *       brokerDeduplicationEnabled: "true"
  *   bookies:
@@ -43,15 +44,20 @@ import java.util.regex.Pattern;
  *       journalMaxSizeMB: "8192"
  *     journalTmpfs: 2g
  * </pre>
+ *
+ * <p>The brokers' {@code bootstrap} is the brokers in the workloads' service URL: {@code first}, the default, gives the
+ * first broker, and {@code all} every broker, so that the clients can look topics up while a broker is unreachable,
+ * for example cut off by a network partition.
  */
-record ClusterSettings(Component brokers, Component bookies) {
+record ClusterSettings(Component brokers, Component bookies, boolean allBrokersBootstrap) {
     static final String BROKERS = "brokers";
     static final String BOOKIES = "bookies";
     private static final List<String> KEYS = List.of(BROKERS, BOOKIES);
     private static final String REPLICAS = "replicas";
     private static final String ENV = "env";
+    static final String BOOTSTRAP = "bootstrap";
     static final String JOURNAL_TMPFS = "journalTmpfs";
-    private static final List<String> BROKER_KEYS = List.of(REPLICAS, ENV);
+    private static final List<String> BROKER_KEYS = List.of(REPLICAS, ENV, BOOTSTRAP);
     private static final List<String> BOOKIE_KEYS = List.of(REPLICAS, ENV, JOURNAL_TMPFS);
     /** A tmpfs size as Docker takes it: bytes, or a number with the unit k, m or g. */
     private static final Pattern TMPFS_SIZE = Pattern.compile("[1-9][0-9]*[kmgKMG]?");
@@ -116,7 +122,7 @@ record ClusterSettings(Component brokers, Component bookies) {
             }
         });
         return new ClusterSettings(component(mapper, cluster, BROKERS, BROKER_KEYS),
-                component(mapper, cluster, BOOKIES, BOOKIE_KEYS));
+                component(mapper, cluster, BOOKIES, BOOKIE_KEYS), allBrokersBootstrap(cluster.path(BROKERS)));
     }
 
     private static Component component(ObjectMapper mapper, JsonNode cluster, String name, List<String> keys) {
@@ -138,6 +144,31 @@ record ClusterSettings(Component brokers, Component bookies) {
         }
         Map<String, String> env = env(mapper, section.path(ENV), "cluster." + name + "." + ENV);
         return new Component(replicas.intValue(), env, journalTmpfs(section.path(JOURNAL_TMPFS), env, name));
+    }
+
+    /** Whether the brokers' {@code bootstrap} is {@code all}; {@code first} when the setting is missing or null. */
+    private static boolean allBrokersBootstrap(JsonNode brokers) {
+        JsonNode setting = brokers.path(BOOTSTRAP);
+        if (setting.isMissingNode() || setting.isNull()) {
+            return false;
+        }
+        return switch (setting.asText()) {
+            case "first" -> false;
+            case "all" -> true;
+            default -> throw new IllegalArgumentException("cluster." + BROKERS + "." + BOOTSTRAP + " must be first or"
+                    + " all, not " + setting.asText());
+        };
+    }
+
+    /** The workloads' service URL: the first broker, or every broker with {@code bootstrap: all}. */
+    String serviceUrl(String clusterName) {
+        int brokers = allBrokersBootstrap ? this.brokers.replicas() : 1;
+        StringBuilder url = new StringBuilder("pulsar://");
+        for (int broker = 0; broker < brokers; broker++) {
+            url.append(broker > 0 ? "," : "").append(clusterName).append("-pulsar-broker-").append(broker)
+                    .append(":6650");
+        }
+        return url.toString();
     }
 
     /** The size of the bookies' journal tmpfs, null when the setting is missing or null. */
