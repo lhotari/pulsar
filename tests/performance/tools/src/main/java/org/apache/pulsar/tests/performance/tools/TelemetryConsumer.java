@@ -517,7 +517,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                                         decoded.measurement());
                                 tracker.received(decoded.deviceId(), decoded.sequence(), message.getMessageId(),
                                         decoded.sentNanos(), message.getTopicName(),
-                                        Thread.currentThread().getName());
+                                        Thread.currentThread().getName(), message.getRedeliveryCount(),
+                                        receivedEpochMs);
                                 if (decoded.measurement()) {
                                     // after counting the message, which then counts for the catch-up
                                     catchUp.received(message.getTopicName(), message.getPublishTime(),

@@ -67,10 +67,15 @@ final class DeviceSequenceTracker {
     }
 
     void received(long deviceId, long sequence) {
-        received(deviceId, sequence, null, 0, null, null);
+        received(deviceId, sequence, null, 0, null, null, -1, 0);
     }
 
-    void received(long deviceId, long sequence, Object messageId, long sentNanos, String topic, String thread) {
+    /**
+     * Counts a received message. The message's ID, send time, topic, receiving thread, redelivery count and receipt
+     * time go into the samples of ordering violations and republished duplicates.
+     */
+    void received(long deviceId, long sequence, Object messageId, long sentNanos, String topic, String thread,
+                  int redeliveryCount, long receivedEpochMs) {
         if (deviceId < 0 || deviceId >= nextExpected.length || sequence < 0) {
             invalidMessages.incrementAndGet();
             return;
@@ -86,7 +91,7 @@ final class DeviceSequenceTracker {
                         redeliveredDuplicates.incrementAndGet();
                     } else if (republishedDuplicates.incrementAndGet() <= MAX_VIOLATION_SAMPLES) {
                         republishedSamples.add("device=" + deviceId + " sequence=" + sequence
-                                + formatContext(messageId, sentNanos, topic, thread));
+                                + formatContext(messageId, sentNanos, topic, thread, redeliveryCount, receivedEpochMs));
                     }
                 }
                 return;
@@ -97,8 +102,8 @@ final class DeviceSequenceTracker {
                     uniqueMessages.incrementAndGet();
                     long violationNumber = orderingViolations.incrementAndGet();
                     if (violationNumber <= MAX_VIOLATION_SAMPLES) {
-                        violationSamples.add("device=" + deviceId + " expected=" + expected
-                                + " observed=" + sequence + formatContext(messageId, sentNanos, topic, thread));
+                        violationSamples.add("device=" + deviceId + " expected=" + expected + " observed=" + sequence
+                                + formatContext(messageId, sentNanos, topic, thread, redeliveryCount, receivedEpochMs));
                     }
                 } else {
                     duplicates.incrementAndGet();
@@ -115,7 +120,7 @@ final class DeviceSequenceTracker {
             Set<Long> devicePending = pending.get(index);
             if (devicePending != null && violationSamples.size() < MAX_VIOLATION_SAMPLES * 2) {
                 violationSamples.add("device=" + deviceId + " recovered=" + sequence
-                        + formatContext(messageId, sentNanos, topic, thread));
+                        + formatContext(messageId, sentNanos, topic, thread, redeliveryCount, receivedEpochMs));
             }
             expected++;
             while (devicePending != null && devicePending.remove(expected)) {
@@ -166,12 +171,14 @@ final class DeviceSequenceTracker {
         }
     }
 
-    private static String formatContext(Object messageId, long sentNanos, String topic, String thread) {
+    private static String formatContext(Object messageId, long sentNanos, String topic, String thread,
+                                        int redeliveryCount, long receivedEpochMs) {
         if (messageId == null) {
             return "";
         }
         return " messageId=" + messageId + " sentNanos=" + sentNanos
-                + " topic=" + topic + " thread=" + thread;
+                + " topic=" + topic + " thread=" + thread + " redeliveryCount=" + redeliveryCount
+                + " receivedEpochMs=" + receivedEpochMs;
     }
 
     /**

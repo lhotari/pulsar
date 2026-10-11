@@ -55,19 +55,19 @@ public class DeviceSequenceTrackerTest {
     @Test
     public void tellsRedeliveredDuplicatesFromMessagesPersistedTwice() throws Exception {
         DeviceSequenceTracker tracker = new DeviceSequenceTracker(1);
-        tracker.received(0, 0, new MessageIdImpl(5, 0, -1), 0, "t", "x");
+        tracker.received(0, 0, new MessageIdImpl(5, 0, -1), 0, "t", "x", 0, 0);
         // The same message again: redelivered
-        tracker.received(0, 0, new MessageIdImpl(5, 0, -1), 0, "t", "x");
+        tracker.received(0, 0, new MessageIdImpl(5, 0, -1), 0, "t", "x", 0, 0);
         // The same sequence in another entry: the broker persisted it twice
-        tracker.received(0, 0, new MessageIdImpl(5, 7, -1), 0, "t", "x");
-        tracker.received(0, 1, new MessageIdImpl(5, 1, -1), 0, "t", "x");
+        tracker.received(0, 0, new MessageIdImpl(5, 7, -1), 0, "t", "x", 0, 0);
+        tracker.received(0, 1, new MessageIdImpl(5, 1, -1), 0, "t", "x", 0, 0);
         // An older sequence than the latest can't be classified
-        tracker.received(0, 0, new MessageIdImpl(5, 0, -1), 0, "t", "x");
+        tracker.received(0, 0, new MessageIdImpl(5, 0, -1), 0, "t", "x", 0, 0);
 
         assertThat(tracker.summary()).isEqualTo(new DeviceSequenceTracker.Summary(2, 3, 0, 0, 1, 1));
         // Message IDs are compared in full, not by a hash that two of them can share
-        tracker.received(0, 2, new MessageIdImpl(1, 0, -1), 0, "t", "x");
-        tracker.received(0, 2, new MessageIdImpl(368, 350, -1), 0, "t", "x");
+        tracker.received(0, 2, new MessageIdImpl(1, 0, -1), 0, "t", "x", 0, 0);
+        tracker.received(0, 2, new MessageIdImpl(368, 350, -1), 0, "t", "x", 0, 0);
         assertThat(tracker.summary().republishedDuplicates()).isEqualTo(2);
         Path samples = Files.createTempFile("republished", ".txt");
         tracker.writeRepublishedSamples(samples);
