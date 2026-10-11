@@ -171,11 +171,15 @@ public class ZKMetadataStore extends AbstractBatchedMetadataStore
                         } else {
                             log.error().attr("code", Code.get(rc))
                                     .log("Failed to recreate persistent watch on ZooKeeper");
-                            if (sessionWatcher != null) {
-                                sessionWatcher.setSessionInvalid();
-                            }
                             // On the re-connectable client, mark the session as expired to trigger a new reconnect,
-                            // and we will have the chance to set the watch again.
+                            // and we will have the chance to set the watch again on the new session.
+                            if (sessionWatcher != null) {
+                                if (zkc instanceof PulsarZooKeeperClient) {
+                                    sessionWatcher.setSessionReplaced();
+                                } else {
+                                    sessionWatcher.setSessionInvalid();
+                                }
+                            }
                             if (zkc instanceof PulsarZooKeeperClient) {
                                 ((PulsarZooKeeperClient) zkc).process(
                                         new WatchedEvent(Watcher.Event.EventType.None,

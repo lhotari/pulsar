@@ -24,6 +24,7 @@ import static org.mockito.Mockito.when;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.Cleanup;
 import org.apache.pulsar.metadata.api.extended.SessionEvent;
@@ -35,35 +36,47 @@ import org.testng.annotations.Test;
 public class ZKSessionWatcherTest {
 
     /**
-     * A listener that can't use the reestablished session, as ZKMetadataStore when it fails to recreate its
-     * persistent watch, marks the session invalid while it's notified. The next session must send SessionReestablished
-     * again, so that the listeners, such as the lock managers that revalidate their locks, get it.
+     * When ZKMetadataStore can't use a reestablished session, such as when it fails to recreate its persistent watch,
+     * it marks the session replaced while it's notified and makes PulsarZooKeeperClient replace the session. The new
+     * session must send SessionReestablished again, so that the listeners, such as the lock managers that revalidate
+     * their locks, get it, and the replaced session's own events must not reestablish it first.
      */
     @Test(timeOut = 30_000)
-    public void sessionInvalidatedWhileNotifiedIsReestablishedWithNextSession() throws Exception {
+    public void sessionReplacedWhileNotifiedIsReestablishedWithNextSession() throws Exception {
         ZooKeeper zk = mock(ZooKeeper.class);
         // a long session timeout, so that the periodic connection check doesn't run during the test
         when(zk.getSessionTimeout()).thenReturn(600_000);
+        AtomicLong sessionId = new AtomicLong(1);
+        when(zk.getSessionId()).thenAnswer(invocation -> sessionId.get());
         List<SessionEvent> events = new CopyOnWriteArrayList<>();
         AtomicReference<ZKSessionWatcher> watcher = new AtomicReference<>();
-        AtomicBoolean invalidateOnce = new AtomicBoolean(true);
+        AtomicBoolean replaceOnce = new AtomicBoolean(true);
         @Cleanup
         ZKSessionWatcher sessionWatcher = new ZKSessionWatcher(zk, event -> {
             events.add(event);
-            if (event == SessionEvent.SessionReestablished && invalidateOnce.getAndSet(false)) {
-                watcher.get().setSessionInvalid();
+            if (event == SessionEvent.SessionReestablished && replaceOnce.getAndSet(false)) {
+                watcher.get().setSessionReplaced();
             }
         });
         watcher.set(sessionWatcher);
 
+        // the session expired, and PulsarZooKeeperClient replaced it with session 1, closing the previous handle
         sessionWatcher.process(sessionEvent(Watcher.Event.KeeperState.Expired));
+        sessionWatcher.process(sessionEvent(Watcher.Event.KeeperState.Closed));
+        assertThat(events).containsExactly(SessionEvent.SessionLost);
         sessionWatcher.process(sessionEvent(Watcher.Event.KeeperState.SyncConnected));
         assertThat(events).containsExactly(SessionEvent.SessionLost, SessionEvent.Reconnected,
                 SessionEvent.SessionReestablished);
 
-        // The listener invalidated the session and made PulsarZooKeeperClient replace it: the watcher gets the
-        // previous handle's Closed event, and the new handle's SyncConnected.
+        // The listener marked session 1 replaced. A connection check of session 1 that still succeeds, and the
+        // Closed event of its handle, don't reestablish it.
+        sessionWatcher.process(sessionEvent(Watcher.Event.KeeperState.SyncConnected));
         sessionWatcher.process(sessionEvent(Watcher.Event.KeeperState.Closed));
+        assertThat(events).containsExactly(SessionEvent.SessionLost, SessionEvent.Reconnected,
+                SessionEvent.SessionReestablished);
+
+        // session 2 connects
+        sessionId.set(2);
         sessionWatcher.process(sessionEvent(Watcher.Event.KeeperState.SyncConnected));
         assertThat(events).containsExactly(SessionEvent.SessionLost, SessionEvent.Reconnected,
                 SessionEvent.SessionReestablished, SessionEvent.Reconnected, SessionEvent.SessionReestablished);
