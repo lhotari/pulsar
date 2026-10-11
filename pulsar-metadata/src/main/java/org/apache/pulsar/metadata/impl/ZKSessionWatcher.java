@@ -184,17 +184,28 @@ public class ZKSessionWatcher implements AutoCloseable, Watcher {
             }
             break;
 
+        case Closed:
+            // A ZooKeeper handle was closed, such as the previous handle when PulsarZooKeeperClient replaces an
+            // expired session with a new one. It says nothing about the connection of the current handle, whose own
+            // events report the new session.
+            break;
+
         default:
             if (currentStatus != SessionEvent.SessionReestablished) {
                 // since it reconnected to zoo keeper, we reset the disconnected time
                 log.info().attr("currentStatus", currentStatus).log("ZooKeeper client reconnection with server quorum");
                 disconnectedAt = 0;
 
+                SessionEvent previousStatus = currentStatus;
+                // Update the status before notifying the listener: a listener that can't use the new session, such
+                // as ZKMetadataStore when it fails to recreate its persistent watch, calls setSessionInvalid() while
+                // it's notified, and the status it sets must not be overwritten, or the next reconnection would not
+                // send SessionReestablished again.
+                currentStatus = SessionEvent.SessionReestablished;
                 sessionListener.accept(SessionEvent.Reconnected);
-                if (currentStatus == SessionEvent.SessionLost) {
+                if (previousStatus == SessionEvent.SessionLost) {
                     sessionListener.accept(SessionEvent.SessionReestablished);
                 }
-                currentStatus = SessionEvent.SessionReestablished;
             }
             break;
         }
