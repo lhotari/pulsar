@@ -28,6 +28,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
@@ -368,6 +369,44 @@ public class OwnershipCacheTest {
         assertEquals(data1.getNativeUrl(), selfBrokerUrl);
         assertFalse(data1.isDisabled());
         assertEquals(cache.getOwnedBundles().size(), 1);
+    }
+
+    @Test
+    public void testHandleOwnershipTakenOver() throws Exception {
+        OwnershipCache cache = new OwnershipCache(this.pulsar, nsService);
+        NamespaceBundle bundle = new NamespaceBundle(NamespaceName.get("pulsar/ns-taken-over"),
+                Range.closedOpen(0L, (long) Integer.MAX_VALUE),
+                bundleFactory);
+        cache.tryAcquiringOwnership(bundle).get();
+        OwnedBundle ownedBundle = cache.getOwnedBundle(bundle);
+        assertNotNull(ownedBundle);
+        ResourceLock<NamespaceEphemeralData> lock = cache.getLocallyAcquiredLocks().get(bundle);
+
+        cache.handleOwnershipTakenOver(bundle).get();
+
+        // The broker stopped serving the bundle: lookups find no cached ownership and read the lock, and topic loads
+        // fail the ownership check. The bundle's topics were closed.
+        assertNull(cache.getOwnedBundle(bundle));
+        assertFalse(ownedBundle.isActive());
+        assertFalse(cache.checkOwnershipAsync(bundle).get());
+        verify(brokerService).unloadServiceUnit(same(bundle), eq(true), eq(true), anyLong(), any(), any());
+        verify(nsService).onNamespaceBundleUnload(bundle);
+        // The lock isn't released, since releasing it needs the metadata store: its revalidation after the session
+        // is reestablished expires it.
+        assertSame(cache.getLocallyAcquiredLocks().get(bundle), lock);
+        assertTrue(store.exists(ServiceUnitUtils.path(bundle)).join());
+
+        // another topic of the bundle reporting the takeover changes nothing
+        cache.handleOwnershipTakenOver(bundle).get();
+        verify(brokerService, times(1)).unloadServiceUnit(same(bundle), eq(true), eq(true), anyLong(), any(), any());
+        verify(nsService, times(1)).onNamespaceBundleUnload(bundle);
+
+        // When no other broker took the lock after all, the next lookup reacquires the ownership from the lock.
+        Optional<NamespaceEphemeralData> owner = cache.getOwnerAsync(bundle).get();
+        assertTrue(owner.isPresent());
+        assertEquals(owner.get().getNativeUrl(), selfBrokerUrl);
+        assertNotNull(cache.getOwnedBundle(bundle));
+        assertTrue(cache.checkOwnershipAsync(bundle).get());
     }
 
     @Test

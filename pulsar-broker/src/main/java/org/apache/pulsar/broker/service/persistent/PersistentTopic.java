@@ -79,6 +79,7 @@ import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerAlreadyClosedException;
+import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerFencedByAnotherWriterException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerFencedException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerTerminatedException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.MetadataNotFoundException;
@@ -818,6 +819,11 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         }
 
         if (exception instanceof ManagedLedgerFencedException) {
+            if (exception instanceof ManagedLedgerFencedByAnotherWriterException) {
+                // Another broker fenced the ledger while this broker can't reach the metadata store: it took the
+                // topic's bundle over, so stop serving the bundle instead of answering lookups for it with this broker
+                brokerService.getPulsar().getNamespaceService().handleOwnershipTakenOver(TopicName.get(topic));
+            }
             // If the managed ledger has been fenced, we cannot continue using it. We need to close and reopen
             close();
             callback.completed(new TopicFencedException(exception.getMessage()), -1, -1);

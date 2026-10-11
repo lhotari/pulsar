@@ -50,6 +50,7 @@ import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
+import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerFencedByAnotherWriterException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerFencedException;
 import org.apache.bookkeeper.mledger.ManagedLedgerFactory;
 import org.apache.bookkeeper.mledger.Position;
@@ -679,7 +680,7 @@ public class ManagedLedgerErrorsTest extends MockedBookKeeperTestCase {
 
         ManagedLedgerException e = expectThrows(ManagedLedgerException.class,
                 () -> ledger.addEntry("entry-2".getBytes()));
-        assertThat(e, instanceOf(ManagedLedgerFencedException.class));
+        assertThat(e, instanceOf(ManagedLedgerFencedByAnotherWriterException.class));
         assertEquals(ledger.getState(), ManagedLedgerImpl.State.Fenced);
         assertThat(expectThrows(ManagedLedgerException.class, () -> ledger.addEntry("entry-3".getBytes())),
                 instanceOf(ManagedLedgerFencedException.class));

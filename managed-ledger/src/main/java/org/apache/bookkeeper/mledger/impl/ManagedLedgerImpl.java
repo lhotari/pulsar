@@ -111,6 +111,7 @@ import org.apache.bookkeeper.mledger.ManagedLedgerException.CursorNotFoundExcept
 import org.apache.bookkeeper.mledger.ManagedLedgerException.InvalidCursorPositionException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.LedgerNotExistException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerAlreadyClosedException;
+import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerFencedByAnotherWriterException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerFencedException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerInterceptException;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerNotFoundException;
@@ -2091,7 +2092,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                     .attr("rc", errorCode)
                     .log("Fencing the managed ledger: the current ledger was concurrently modified by another"
                             + " client while the metadata service is unavailable");
-            setFenced();
+            setFenced(new ManagedLedgerFencedByAnotherWriterException("ManagedLedger " + name + " is fenced: its"
+                    + " current ledger " + currentLedger.getId() + " was fenced or closed by another client while the"
+                    + " metadata service is unavailable"));
             closeConcurrentlyModifiedLedger(currentLedger);
             return;
         }
@@ -4806,11 +4809,14 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     @VisibleForTesting
     public synchronized void setFenced() {
+        setFenced(new ManagedLedgerFencedException("ManagedLedger " + name + " is fenced"));
+    }
+
+    private synchronized void setFenced(ManagedLedgerFencedException pendingAddsException) {
         log.info().log("Moving to Fenced state");
         State prev = STATE_UPDATER.getAndSet(this, State.Fenced);
         if (prev != State.Fenced) {
-            clearPendingAddEntries(new ManagedLedgerFencedException("ManagedLedger "
-                + name + " is fenced"));
+            clearPendingAddEntries(pendingAddsException);
         }
     }
 

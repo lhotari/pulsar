@@ -2232,6 +2232,10 @@ public class BrokerService implements Closeable {
                 .thenCompose(__ -> isTopicAlreadyMigrated)
                 .thenCompose(__ -> context.trace(TopicLoadingTracePoints.ML_CONFIG,
                         getManagedLedgerConfig(topicName, context)))
+                // Check the ownership again before opening the managed ledger: the steps above can wait for the
+                // metadata store, and a broker that stopped serving the bundle meanwhile, such as one that another
+                // broker took the bundle over from, must not open, and so recover, the new owner's ledger.
+                .thenCompose(managedLedgerConfig -> checkTopicNsOwnership(topic).thenApply(__ -> managedLedgerConfig))
                 .thenCombine(context.trace(TopicLoadingTracePoints.TOPIC_EXISTS,
                         pulsar().getNamespaceService().checkTopicExistsAsync(topicName)).thenApply(n -> {
                             boolean found = n.isExists();
