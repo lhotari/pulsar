@@ -431,8 +431,7 @@ public class PerformanceLauncher implements Callable<Integer> {
                     journalTmpfs != null ? ", with each bookie's journal on a tmpfs of " + journalTmpfs : ""));
             if (networkSettings.any()) {
                 // Before the cluster, so that a Docker engine that can't apply them fails the run at once
-                network = NetworkImpairments.start(networkSettings, topology, loader.mapper(), runOutput,
-                        PerformanceLauncher::status);
+                network = NetworkImpairments.start(networkSettings, topology, runOutput, PerformanceLauncher::status);
                 status("Network impairments: " + (networkSettings.impairments().isEmpty() ? "none, offloads off"
                         : networkSettings.impairments().stream().map(NetworkSettings.Impairment::name)
                         .collect(Collectors.joining(", "))) + "; the Docker engine's host can apply them");

@@ -125,8 +125,9 @@ final class TcCommands {
      * netem's loss of {@code percent} of the packets in bursts of {@code burst} packets on average. Independent losses
      * are netem's random loss. Bursts are the Gilbert-Elliott model: a good state that loses nothing and a bad state
      * that loses every packet, left with the probability 1 / burst, and entered with the probability that gives the
-     * mean loss. netem's correlated random loss ({@code loss random P C}) isn't used: on Linux 7.1 it dropped no
-     * packet at all.
+     * mean loss. netem's correlated random loss ({@code loss random P C}) isn't used: on Linux 7.1, 1 % with a 25 %
+     * correlation dropped 1 of 179,193 packets in a run and none of 3,000 pings, since the correlation changes the
+     * probabilities in ways that are hard to predict.
      */
     static String loss(double percent, double burst) {
         if (burst <= 1) {

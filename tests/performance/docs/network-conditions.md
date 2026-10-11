@@ -101,7 +101,8 @@ An impairment does one of three things:
     independent delays;
   - `loss`, a percentage such as `0.5%`, and `lossBurst`, the mean number of packets lost in a row, for the bursts of
     loss of a radio link or a congested queue. Bursts use netem's Gilbert-Elliott model, a state that loses no packet
-    and a state that loses every packet; netem's correlated random loss dropped no packet at all on Linux 7.1;
+    and a state that loses every packet, whose mean loss and burst length are what they are set to; netem's correlated
+    random loss, 1 % with a 25 % correlation, lost almost no packet on Linux 7.1;
   - `rate`, in bits per second with a unit, `bit`, `kbit`, `mbit` or `gbit`, such as `20mbit`, and its `queue`.
 - **A partition**, `partition: true`, drops every packet, silently, as a cable pull or a firewall would: the senders
   see no error, and their connections time out or wait.

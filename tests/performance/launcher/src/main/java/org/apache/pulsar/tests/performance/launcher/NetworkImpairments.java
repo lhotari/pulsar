@@ -190,12 +190,13 @@ final class NetworkImpairments implements AutoCloseable {
     private boolean closed;
 
     private NetworkImpairments(GenericContainer<?> sidecar, NetworkSettings settings,
-                               NetworkSettings.Topology topology, ObjectMapper mapper, Path runDirectory,
-                               Consumer<String> status) throws IOException {
+                               NetworkSettings.Topology topology, Path runDirectory, Consumer<String> status)
+            throws IOException {
         this.sidecar = sidecar;
         this.settings = settings;
         this.topology = topology;
-        this.mapper = mapper;
+        // JSON, also for the events' lines and tc's JSON output, whatever the launcher reads the scenario with
+        this.mapper = new ObjectMapper();
         this.runDirectory = runDirectory;
         this.status = status;
         this.events = Files.newBufferedWriter(runDirectory.resolve(EVENTS_FILE));
@@ -205,8 +206,8 @@ final class NetworkImpairments implements AutoCloseable {
      * Starts the sidecar and checks that it can apply the impairments; fails, with the sidecar stopped, when it can't.
      */
     @SuppressWarnings("resource")
-    static NetworkImpairments start(NetworkSettings settings, NetworkSettings.Topology topology, ObjectMapper mapper,
-                                    Path runDirectory, Consumer<String> status) throws IOException {
+    static NetworkImpairments start(NetworkSettings settings, NetworkSettings.Topology topology, Path runDirectory,
+                                    Consumer<String> status) throws IOException {
         GenericContainer<?> sidecar = new GenericContainer<>(new ImageFromDockerfile(IMAGE, false)
                 .withDockerfileFromBuilder(builder -> builder.from("alpine:3.20")
                         .run("apk add --no-cache iproute2 ethtool util-linux").build()))
@@ -223,7 +224,7 @@ final class NetworkImpairments implements AutoCloseable {
                 throw new IllegalStateException("The Docker engine's host can't apply network impairments: "
                         + (probe.getStderr() + probe.getStdout()).strip());
             }
-            return new NetworkImpairments(sidecar, settings, topology, mapper, runDirectory, status);
+            return new NetworkImpairments(sidecar, settings, topology, runDirectory, status);
         } catch (InterruptedException e) {
             sidecar.stop();
             Thread.currentThread().interrupt();

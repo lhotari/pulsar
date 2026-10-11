@@ -17,12 +17,14 @@
 
 # The gateways and the applications reach the cluster over a wide-area network, such as the internet between a
 # device fleet's region and the cluster's: 20 ms one way, a round trip of 40 ms, varying by up to 2 ms, for the whole
-# run. Look for: publish and end-to-end latency up by the round trips that a publish and a delivery take, and the
-# throughput that the producers' pending messages keep at that latency.
+# run. Look for: publish latency up by about one round trip, 40 ms, publish-to-consume latency up by the two one-way
+# paths, gateway to broker and broker to application, and the throughput that the producers' pending messages keep at
+# that latency.
 #
 # The gateways create their producers before the warmup, as gateways that connect when they start do: created as the
-# first message of each needs it, the producers would be created one at a time, each in several round trips, and
-# the gateways would send nothing meanwhile.
+# first message of each needs it, the producers would be created one at a time by the workload's single send loop,
+# each in several round trips, and the gateways would send nothing meanwhile, which real gateways, each with its own
+# connection, don't do.
 
 network:
   impairments:

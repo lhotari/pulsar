@@ -188,7 +188,12 @@ public class NetworkImpairmentsCheck {
         double limitedMbits = megabits(exec("gateways", "iperf3 -c broker-1 -t 4"));
         assertThat(limitedMbits).isBetween(17.0, 20.5);
         impairments.close();
-        JsonNode summary = new ObjectMapper().readTree(runDirectory.resolve(RunReport.NETWORK_SUMMARY_FILE).toFile());
+        ObjectMapper json = new ObjectMapper();
+        JsonNode summary = json.readTree(runDirectory.resolve(RunReport.NETWORK_SUMMARY_FILE).toFile());
+        // Every event is a line of JSON
+        for (String line : Files.readAllLines(runDirectory.resolve(RunReport.NETWORK_EVENTS_FILE))) {
+            assertThat(json.readTree(line).path("event").isTextual()).as(line).isTrue();
+        }
         assertThat(summary.path("offloadsOff").toString()).contains("gateways");
         JsonNode lossy = summary.path("impairments").get(0).path("statistics");
         long packets = 0;
@@ -235,8 +240,7 @@ public class NetworkImpairmentsCheck {
     private void start(String yaml) throws IOException {
         NetworkSettings.Topology topology = new NetworkSettings.Topology(2, 0);
         NetworkSettings settings = NetworkSettings.read(mapper.readTree(yaml), topology, -1);
-        impairments = NetworkImpairments.start(settings, topology, new ObjectMapper(), runDirectory,
-                System.out::println);
+        impairments = NetworkImpairments.start(settings, topology, runDirectory, System.out::println);
         impairments.setUp(containers, network.getId());
     }
 

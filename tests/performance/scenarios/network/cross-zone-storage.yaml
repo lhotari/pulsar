@@ -16,9 +16,10 @@
 # under the License.
 
 # The brokers and the bookies are in different availability zones of a region: 1 ms one way between them, varying by
-# up to 0.5 ms, for the whole run. Look for: publish latency up by the round trip of a bookie write, and how much the
-# brokers' batching hides it.
+# up to 0.5 ms, for the whole run, in the failover cluster, whose entries go to three bookies and wait for two. Look
+# for: publish latency up by the round trip of a bookie write, about 2 ms, and how much the brokers' batching hides it.
 
+extends: failover-cluster.yaml
 network:
   impairments:
     brokers-bookies-cross-zone:
