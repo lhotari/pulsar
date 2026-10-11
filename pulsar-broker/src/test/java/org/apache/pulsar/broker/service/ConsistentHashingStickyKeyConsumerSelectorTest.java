@@ -131,6 +131,8 @@ public class ConsistentHashingStickyKeyConsumerSelectorTest {
                     impacted = selector.removeConsumer(added.remove(random.nextInt(added.size()))).orElseThrow();
                 }
                 ConsumerHashAssignmentsSnapshot after = selector.getConsumerHashAssignmentsSnapshot();
+                assertThat(selector.getConsumerKeyHashRanges()).as("ranges, round %d change %d", round, change)
+                        .containsExactlyInAnyOrderEntriesOf(after.getRangesByConsumer());
                 // the results' identity maps compare their values by identity, so compare the entries
                 ImpactedConsumersResult expected = before.resolveImpactedConsumers(after);
                 assertThat(impacted.getRemovedHashRanges()).as("removed, round %d change %d", round, change)
