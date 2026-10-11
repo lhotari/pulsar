@@ -1,0 +1,34 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# The brokers' traffic to the applications is limited to 5 Mbit/s, about half of what they receive, for 60 s of the
+# measurement, as consumers behind a congested link: the applications fall behind and a backlog builds, while the
+# producers' path isn't touched. On iot-telemetry-small, with its 512 MB broker, the broker ran out of heap 14 s after
+# the limit ended, in 2 runs out of 2: the messages dispatched to the slow consumers and not yet acknowledged, on top
+# of the Key_Shared consumers' state, filled it, and the restart stalled every producer for 20-40 s. With a 4 GB broker
+# (configs/iot-telemetry-medium-mem), it didn't, but the producers' publish latency still reached 4 s. Look for: the
+# broker's heap, the publish latency of the untouched producers, the backlog and how fast it drains, and the
+# redeliveries after a restart. Set the rate for the base scenario's traffic, such as
+# --set network.impairments.applications-downlink.rate=2mbit.
+
+network:
+  impairments:
+    applications-downlink:
+      from: brokers
+      to: applications
+      rate: 5mbit
+      start: 30s
+      duration: 60s
