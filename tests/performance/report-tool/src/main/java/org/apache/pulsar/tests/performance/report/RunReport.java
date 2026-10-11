@@ -104,6 +104,8 @@ public final class RunReport {
     public static final String NETWORK_EVENTS_FILE = "network-events.jsonl";
     // .txt, so that an HTTP server such as Python's shows the log as text instead of offering a download
     public static final String CONTAINER_LOG = "container.log.txt";
+    /** The Pulsar client's warnings in a workload container, written only when the client logs one. */
+    public static final String CLIENT_LOG = "pulsar-client.log.txt";
     /** What the launcher printed on the console, from the run directory's creation to the end. */
     public static final String CONSOLE_LOG = "console.log.txt";
     /**
@@ -528,7 +530,8 @@ public final class RunReport {
         // The scenario and its resolved configuration are linked from the settings table
         for (String name : List.of(CONSOLE_LOG, RunInfo.FILE_NAME, METRICS_FILE, NETWORK_SUMMARY_FILE,
                 NETWORK_EVENTS_FILE, "gateways/gateways-summary.json",
-                "gateways/" + CONTAINER_LOG, APPLICATIONS_DIRECTORY + "/" + CONTAINER_LOG)) {
+                "gateways/" + CONTAINER_LOG, "gateways/" + CLIENT_LOG, APPLICATIONS_DIRECTORY + "/" + CONTAINER_LOG,
+                APPLICATIONS_DIRECTORY + "/" + CLIENT_LOG)) {
             Path file = runDirectory.resolve(name);
             if (Files.isRegularFile(file)) {
                 links.add(link(runDirectory, file));
