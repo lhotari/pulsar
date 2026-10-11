@@ -17,8 +17,12 @@
 
 # A broker is cut off from the clients for 30 s of the measurement, in the failover cluster, while it still reaches the
 # other broker, the bookies and ZooKeeper, as a load balancer or a firewall between the clients and one broker would do.
-# The broker keeps its topics. Look for: the clients' reconnections, the producers' pending messages and resends,
-# duplicates and ordering, and how long the backlog takes to drain after it.
+# The broker keeps its topics, a gray failure: the clients wait for it rather than move. On iot-telemetry-small, its
+# topics' publishes stalled for the partition and up to 13 s more, while the connections were found dead or came back;
+# the other broker's topics went on. Look for: the recovery after the partition, the duplicates, and how many pending
+# messages the gateways hold: at about 400 messages a second to the cut-off broker, the gateways' shared limit of
+# 20,000 outstanding messages fills after about 50 s, and then the gateways stop sending to every topic, which is the
+# workload's single send loop, not Pulsar.
 
 extends: failover-cluster.yaml
 network:

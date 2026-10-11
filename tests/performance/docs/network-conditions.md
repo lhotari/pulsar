@@ -218,6 +218,25 @@ containers. Run it on a new host, or after changing the impairments.
 The overlays in [`scenarios/network`](../scenarios/network) model real networks and faults; each describes what it
 models and what to look for. Apply one with `--extends network/<name>` on a base scenario, such as
 `iot-telemetry-small` for a quick run, and compare the run with a run of the base scenario without it.
+The fault overlays run on [`failover-cluster.yaml`](../scenarios/network/failover-cluster.yaml): two brokers, both in
+the service URL, and four bookies with an ensemble, a write quorum and an ack quorum of 3, 3 and 2. What they showed
+on `iot-telemetry-small`, at 1,000 messages a second, is in each file:
+
+| Overlay | Models | What it showed |
+|---|---|---|
+| `wan-clients` | clients over a WAN, 20 ms ± 2 ms | publish latency up by the round trip; nothing else |
+| `mobile-gateways` | cellular gateways, 50 ms ± 20 ms, 1 % loss in bursts | the losses double the publish p99 |
+| `constrained-uplink` | the gateways' uplink below their traffic for 30 s | set the rate for the base scenario |
+| `cross-zone-storage` | brokers and bookies in different zones, 1 ms | publish latency up by a bookie round trip |
+| `slow-bookie` | one bookie 20 ms away | hidden by the ack quorum of 2 |
+| `bookie-partition` | one bookie gone for 30 s | hidden by the ack quorum of 2; with 3, a 30 s stall, the bookie client's timeout |
+| `broker-partition` | clients cut off from one broker | a gray failure: no failover, the topics wait |
+| `broker-isolation` | one broker off the network for 45 s | failover after the metadata session expires; clients notice through their keep-alive |
+| `metadata-partition` | one broker cut off from ZooKeeper for 10 s | nothing; longer, see `metadata-takeover` |
+| `metadata-takeover` | the same for 90 s, with clients looking the topics up | the isolated broker holds producers that it can't serve until ZooKeeper comes back |
+| `return-path-blackhole` | the brokers' packets to the gateways lost | TCP's acknowledgments are lost too, so both directions stall |
+| `connection-resets` | load balancers resetting connections | a gateway reset costs ~0.2 s; an applications reset stalls everything |
+| `consumer-reconnect-storm` | every consumer reconnecting at once | unrelated producers stall for 1-3 s while the brokers resubscribe the Key_Shared consumers |
 
 ## Why not a proxy
 

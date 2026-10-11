@@ -16,9 +16,12 @@
 # under the License.
 
 # The clients' TCP connections to the brokers are reset during the measurement, as a load balancer or a NAT gateway
-# that forgets its connections does: the gateways' at 20 s, 50 s and 80 s, and the applications' at 35 s. Look for:
-# reconnections, the producers' resends and their deduplication, the consumers' redeliveries, duplicates and ordering,
-# and the latency spike of each reset.
+# that resets its connections does: the gateways' at 20 s, 50 s and 80 s, and the applications' at 35 s. On
+# iot-telemetry-small, a reset of the gateways' connections cost 130-200 ms of publish latency, since the clients
+# reconnect after 100 ms, while the applications' reset stalled every producer's publishes for about 3 s, which
+# consumer-reconnect-storm.yaml reproduces on its own. A NAT gateway that forgets its connections without resetting
+# them is a partition instead, which the clients notice through their keep-alive. Look for: reconnections, redelivered
+# duplicates and ordering, and the latency spike of each reset.
 
 network:
   impairments:

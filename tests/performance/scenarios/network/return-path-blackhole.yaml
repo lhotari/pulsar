@@ -17,10 +17,11 @@
 
 # The packets from the brokers to the gateways are lost for 10 s of the measurement while the gateways' packets still
 # arrive, as an asymmetric routing failure does. TCP's acknowledgments take the lost path too, so the gateways' data
-# stalls as soon as their send windows fill: in a run of iot-telemetry-small, the brokers received nothing new after
-# the first moment, and the connections survived it, since the clients' 30 s keep-alive didn't run out. Look for: the
-# latency after the path comes back, which TCP's retransmission backoff stretches beyond the outage, and whether a
-# longer outage, past the keep-alive, makes the producers resend and the brokers deduplicate.
+# stalls as soon as their send windows fill: on iot-telemetry-small the brokers received nothing new after the first
+# moment, and the connections survived, since the clients notice a silent connection only through their keep-alive, in
+# 30-60 s. With --set network.impairments.brokers-to-gateways-lost.duration=75s the keep-alive closes the connections,
+# and the producers resend their pending messages, which the brokers deduplicate. Look for: the latency after the
+# path comes back, which TCP's retransmission backoff stretches beyond the outage, and the resends.
 
 network:
   impairments:

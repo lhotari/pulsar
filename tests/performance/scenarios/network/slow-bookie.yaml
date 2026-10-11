@@ -16,9 +16,9 @@
 # under the License.
 
 # One bookie is on a degraded link: 20 ms one way between it and the brokers, for the whole run, in the failover cluster
-# with an ack quorum of 2 of 3. Look for: whether the ack quorum hides the slow bookie from the publish latency, and the
-# bookie's own queues. Compare with --set cluster.brokers.env.managedLedgerDefaultAckQuorum=3, where every entry waits
-# for it.
+# with an ack quorum of 2 of 3. On iot-telemetry-small, the publish latency didn't change: every entry is acknowledged
+# by the two other bookies first. Compare with --set cluster.brokers.env.managedLedgerDefaultAckQuorum=3, where every
+# entry waits for it, and with a high-rate scenario, where the slow bookie's queue grows.
 
 extends: failover-cluster.yaml
 network:
