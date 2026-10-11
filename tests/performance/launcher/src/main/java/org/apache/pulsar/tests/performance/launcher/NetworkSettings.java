@@ -438,10 +438,15 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
             if (loss == 0) {
                 throw new IllegalArgumentException(path + ": " + LOSS_BURST + " needs a " + LOSS);
             }
-            if (loss >= 100) {
-                throw new IllegalArgumentException(path + ": a " + LOSS + " of 100 % has no bursts; use a partition");
-            }
             lossBurst = burst.doubleValue();
+            // A burst of b packets on average follows at least one packet that isn't lost, so at most b / (b + 1)
+            // of the packets can be lost
+            double maxLoss = 100 * lossBurst / (lossBurst + 1);
+            if (loss > maxLoss) {
+                throw new IllegalArgumentException(String.format(Locale.ROOT, "%s: a %s of %s %% can't come in bursts"
+                        + " of %s packets: at most %s %% can", path, LOSS, number(loss), number(lossBurst),
+                        number(Math.floor(maxLoss * 1000) / 1000)));
+            }
         }
         long rate = rate(section.path(RATE), path + "." + RATE);
         Duration queue = duration(section.path(QUEUE), path + "." + QUEUE, null);

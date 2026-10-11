@@ -146,6 +146,8 @@ final class NetworkImpairments implements AutoCloseable {
         // A reset's senders and the receivers' addresses
         final Map<Target, List<String>> resets = new LinkedHashMap<>();
         Status status = Status.PENDING;
+        // The containers that an applied impairment couldn't act on, since they had exited
+        List<String> skipped = List.of();
         Instant applied;
         Instant removed;
         int resetSockets;
@@ -170,8 +172,8 @@ final class NetworkImpairments implements AutoCloseable {
     // The containers whose offloads were turned off, with whether TSO and GSO were on
     private final Map<Target, boolean[]> offloads = new LinkedHashMap<>();
     private final Map<String, long[]> tcpAtStart = new LinkedHashMap<>();
-    // Each placement's last counters, for a device whose container has exited
-    private final Map<Placement, ObjectNode> lastStatistics = new LinkedHashMap<>();
+    // Each placement's last counters, for a device whose container has exited; the sampler thread updates them too
+    private final Map<Placement, ObjectNode> lastStatistics = new ConcurrentHashMap<>();
     private final Map<String, long[]> tcpAtEnd = new ConcurrentHashMap<>();
     private final ScheduledExecutorService timeline = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "network-impairments");
@@ -380,7 +382,11 @@ final class NetworkImpairments implements AutoCloseable {
         return settings.anyMeasurementAnchored();
     }
 
-    // An observation, off the timeline's thread and lock: a container that has exited keeps its last reading
+    /**
+     * Reads the impaired containers' TCP counters and the impairments' queue counters, off the timeline's thread and
+     * lock: a container that has exited, such as a workload's when it has finished, keeps its last reading. An
+     * observation, so a failed reading is left for the next one, or the one at the end.
+     */
     private void sampleTcp() {
         for (Target target : targets.values()) {
             try {
@@ -388,7 +394,16 @@ final class NetworkImpairments implements AutoCloseable {
                     tcpAtEnd.put(target.name(), tcpCounters(target));
                 }
             } catch (IOException | RuntimeException e) {
-                // The next reading, or the one at the end, counts
+                // The next reading counts
+            }
+        }
+        for (Activation activation : activations) {
+            try {
+                if (!closing) {
+                    statistics(activation);
+                }
+            } catch (IOException | RuntimeException e) {
+                // The next reading counts
             }
         }
     }
@@ -476,6 +491,7 @@ final class NetworkImpairments implements AutoCloseable {
             }
             activation.status = Status.ACTIVE;
             if (!skipped.isEmpty()) {
+                activation.skipped = List.copyOf(skipped);
                 activation.note = "not applied to the exited " + String.join(", ", skipped);
             }
             status.accept("Network: applied " + impairment.name() + " (" + impairment.description() + ", "
@@ -581,6 +597,8 @@ final class NetworkImpairments implements AutoCloseable {
                 default -> {
                     if (activation.impairment.kind() == Kind.RESET && activation.resetSockets == 0) {
                         problems.add(name + " " + activation.note);
+                    } else if (!activation.skipped.isEmpty()) {
+                        problems.add(name + " was applied only in part: " + activation.note);
                     }
                 }
             }

@@ -218,9 +218,10 @@ containers. Run it on a new host, or after changing the impairments.
 The overlays in [`scenarios/network`](../scenarios/network) model real networks and faults; each describes what it
 models and what to look for. Apply one with `--extends network/<name>` on a base scenario, such as
 `iot-telemetry-small` for a quick run, and compare the run with a run of the base scenario without it.
-The fault overlays run on [`failover-cluster.yaml`](../scenarios/network/failover-cluster.yaml): two brokers, both in
-the service URL, and four bookies with an ensemble, a write quorum and an ack quorum of 3, 3 and 2. What they showed
-on `iot-telemetry-small`, at 1,000 messages a second, is in each file:
+The overlays that need a broker or a bookie to fail over to run on
+[`failover-cluster.yaml`](../scenarios/network/failover-cluster.yaml): two brokers, both in the service URL, and four
+bookies with an ensemble, a write quorum and an ack quorum of 3, 3 and 2; the others run on the base scenario's
+cluster. What they showed on `iot-telemetry-small`, at 1,000 messages a second, is in each file:
 
 | Overlay | Models | What it showed |
 |---|---|---|

@@ -16,9 +16,10 @@
 # under the License.
 
 # The gateways' uplink to the cluster drops to a bandwidth near or below what they send, for 30 s of the measurement,
-# as a congested or a degraded link does, with a 100 ms queue at the bottleneck. Set the rate for the base scenario's
-# traffic, such as --set network.impairments.gateways-uplink.rate=2mbit; the run report's Network conditions section
-# shows the bytes that went through it. Look for: the producers' pending messages and publish latency during the
+# as a congested or a degraded link does, with a 100 ms queue at the bottleneck, which holds at least 64 full frames:
+# 775 ms at 1 Mbit/s. Set the rate for the base scenario's traffic, such as
+# --set network.impairments.gateways-uplink.rate=2mbit; the run report's Network conditions section shows the packets
+# that went through it and the queue it got. Look for: the producers' pending messages and publish latency during the
 # limit, whether anything fails, and how long the backlog takes to drain after it.
 
 network:

@@ -24,8 +24,8 @@
 #
 # On iot-telemetry-small, once its ledgers were fenced, the isolated broker held its producers' sends until the
 # metadata stores came back, 50 s later, since recovering from the fencing needs them; then the sends failed, the
-# producers moved to the other broker, and every message arrived once and in order: publish latency up to 55 s and
-# thousands of redelivered duplicates. Look for: how long the isolated broker holds clients after another broker has
+# producers moved to the other broker, and every device's messages arrived complete and in order: publish latency up
+# to 55 s and thousands of duplicates, redeliveries among those the applications could classify. Look for: how long the isolated broker holds clients after another broker has
 # fenced its ledgers, the fencing in the brokers' logs, and the duplicates' kinds in the Correctness section.
 
 extends: failover-cluster.yaml

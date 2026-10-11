@@ -65,6 +65,10 @@ public class DeviceSequenceTrackerTest {
         tracker.received(0, 0, new MessageIdImpl(5, 0, -1), 0, "t", "x");
 
         assertThat(tracker.summary()).isEqualTo(new DeviceSequenceTracker.Summary(2, 3, 0, 0, 1, 1));
+        // Message IDs are compared in full, not by a hash that two of them can share
+        tracker.received(0, 2, new MessageIdImpl(1, 0, -1), 0, "t", "x");
+        tracker.received(0, 2, new MessageIdImpl(368, 350, -1), 0, "t", "x");
+        assertThat(tracker.summary().republishedDuplicates()).isEqualTo(2);
         Path samples = Files.createTempFile("republished", ".txt");
         tracker.writeRepublishedSamples(samples);
         assertThat(Files.readString(samples)).contains("device=0 sequence=0 messageId=5:7:-1");

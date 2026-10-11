@@ -304,6 +304,13 @@ public class NetworkSettingsTest {
         assertInvalid("""
                 offloads: maybe
                 """, "network.offloads must be auto, off or on");
+        assertInvalid("""
+                impairments:
+                  a:
+                    between: [gateways, brokers]
+                    loss: 80%
+                    lossBurst: 2
+                """, "a loss of 80 % can't come in bursts of 2 packets: at most 66.666 % can");
     }
 
     @Test

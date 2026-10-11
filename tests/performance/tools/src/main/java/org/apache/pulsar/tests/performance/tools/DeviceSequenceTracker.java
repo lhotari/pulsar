@@ -37,10 +37,12 @@ final class DeviceSequenceTracker {
     private static final int LOCK_COUNT = 1024;
     private static final int MAX_VIOLATION_SAMPLES = 100;
     private final long[] nextExpected;
-    // Each device's latest in-order message: its sequence and a key of its message ID, to tell a redelivered duplicate,
-    // with the same message ID, from a message persisted twice, with another
+    // Each device's latest in-order message: its sequence and its message ID's ledger, entry and batch index, to tell
+    // a redelivered duplicate, with the same message ID, from a message persisted twice, with another
     private final long[] lastKeyedSequence;
-    private final long[] lastMessageKey;
+    private final long[] lastLedgerId;
+    private final long[] lastEntryId;
+    private final int[] lastBatchIndex;
     private final Object[] locks = new Object[LOCK_COUNT];
     private final ConcurrentHashMap<Integer, Set<Long>> pending = new ConcurrentHashMap<>();
     private final AtomicLong uniqueMessages = new AtomicLong();
@@ -56,7 +58,9 @@ final class DeviceSequenceTracker {
         nextExpected = new long[deviceCount];
         lastKeyedSequence = new long[deviceCount];
         Arrays.fill(lastKeyedSequence, -1);
-        lastMessageKey = new long[deviceCount];
+        lastLedgerId = new long[deviceCount];
+        lastEntryId = new long[deviceCount];
+        lastBatchIndex = new int[deviceCount];
         for (int i = 0; i < locks.length; i++) {
             locks[i] = new Object();
         }
@@ -76,9 +80,9 @@ final class DeviceSequenceTracker {
             long expected = nextExpected[index];
             if (sequence < expected) {
                 duplicates.incrementAndGet();
-                long key = messageKey(messageId);
-                if (key != NO_KEY && sequence == lastKeyedSequence[index]) {
-                    if (key == lastMessageKey[index]) {
+                if (messageId instanceof MessageIdAdv id && sequence == lastKeyedSequence[index]) {
+                    if (id.getLedgerId() == lastLedgerId[index] && id.getEntryId() == lastEntryId[index]
+                            && id.getBatchIndex() == lastBatchIndex[index]) {
                         redeliveredDuplicates.incrementAndGet();
                     } else if (republishedDuplicates.incrementAndGet() <= MAX_VIOLATION_SAMPLES) {
                         republishedSamples.add("device=" + deviceId + " sequence=" + sequence
@@ -102,10 +106,11 @@ final class DeviceSequenceTracker {
                 return;
             }
             uniqueMessages.incrementAndGet();
-            long key = messageKey(messageId);
-            if (key != NO_KEY) {
+            if (messageId instanceof MessageIdAdv id) {
                 lastKeyedSequence[index] = sequence;
-                lastMessageKey[index] = key;
+                lastLedgerId[index] = id.getLedgerId();
+                lastEntryId[index] = id.getEntryId();
+                lastBatchIndex[index] = id.getBatchIndex();
             }
             Set<Long> devicePending = pending.get(index);
             if (devicePending != null && violationSamples.size() < MAX_VIOLATION_SAMPLES * 2) {
@@ -136,16 +141,6 @@ final class DeviceSequenceTracker {
                 redeliveredDuplicates.get(), republishedDuplicates.get());
     }
 
-    // A message ID's ledger, entry and batch index in a long; NO_KEY without one
-    private static final long NO_KEY = Long.MIN_VALUE;
-
-    static long messageKey(Object messageId) {
-        if (!(messageId instanceof MessageIdAdv id)) {
-            return NO_KEY;
-        }
-        long key = (id.getLedgerId() * 1_000_003L) ^ (id.getEntryId() << 20) ^ id.getBatchIndex();
-        return key == NO_KEY ? NO_KEY + 1 : key;
-    }
 
     void writeState(Path path) throws IOException {
         Files.createDirectories(path.getParent());
