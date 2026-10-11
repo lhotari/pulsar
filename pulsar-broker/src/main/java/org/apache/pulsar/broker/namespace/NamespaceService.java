@@ -500,6 +500,16 @@ public class NamespaceService implements AutoCloseable {
         }
         LookupRequestKey lookupRequestKey = LookupRequestKey.from(bundle, options);
 
+        if (pulsar.isMetadataSessionLost()) {
+            CompletableFuture<Optional<LookupResult>> pending = targetMap.get(lookupRequestKey);
+            if (pending != null && !pending.isDone()) {
+                // A lookup that is still in progress while the session is lost is waiting for the metadata store,
+                // such as for acquiring the bundle: fail instead of waiting behind it, and the client looks the
+                // topic up again, possibly at another broker.
+                return FutureUtil.failedFuture(new ServiceUnitNotReadyException("Namespace bundle " + bundle
+                        + " is being looked up while this broker's metadata session is lost"));
+            }
+        }
         return targetMap.computeIfAbsent(lookupRequestKey, (k) -> {
             CompletableFuture<Optional<LookupResult>> future = new CompletableFuture<>();
 

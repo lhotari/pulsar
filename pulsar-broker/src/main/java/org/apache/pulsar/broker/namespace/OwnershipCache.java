@@ -550,11 +550,13 @@ public class OwnershipCache {
      * and the next lookup reacquires the ownership from it with a new lock instance, as after any loss of the cache
      * entry; the revalidated instance is then no longer tracked and needs nothing.
      *
-     * <p>The handling runs in the bundle's operation order with the acquisitions (see {@link #serialize}), and only
-     * while the session is lost, when no acquisition can complete: so it can't drop, or close the topics of, a newer
-     * ownership generation. A report that comes after the session was reestablished is ignored: the lock's
-     * revalidation then handles the takeover. The topics are closed on the broker's executor, not on the thread that
-     * reported the takeover.
+     * <p>The handling runs on the broker's executor in the bundle's operation order with the acquisitions (see
+     * {@link #serialize}), until the closing of the topics has started, and only while the session is lost, when no
+     * acquisition can complete: so a report can't drop, or close the topics of, a generation acquired after the
+     * session came back, and a report that comes after the session was reestablished is ignored, leaving the
+     * takeover to the lock's revalidation. The report doesn't carry its topic's generation: a topic of an old
+     * generation that survived the generation's unload, and whose ledger is fenced while a later session is lost,
+     * would drop the current generation, which a lookup then reacquires if no other broker holds its lock.
      *
      * @return a future that completes when the bundle is no longer served and its topics' closing has started
      */
@@ -573,9 +575,17 @@ public class OwnershipCache {
             return CompletableFuture.completedFuture(null);
         }
         NamespaceBundle takenOverBundle = bundle;
+        // On the broker's executor, not on the thread that reported the takeover, and the bundle's next operation
+        // waits until the closing of its topics has started, so that the closing can't reach a newer generation's
         return serialize(takenOverBundle, () -> {
-            stopServingTakenOverBundle(takenOverBundle, topicName);
-            return CompletableFuture.completedFuture(null);
+            try {
+                return CompletableFuture.runAsync(() -> stopServingTakenOverBundle(takenOverBundle, topicName),
+                        pulsar.getExecutor());
+            } catch (RejectedExecutionException e) {
+                // the broker is shutting down
+                stopServingTakenOverBundle(takenOverBundle, topicName);
+                return CompletableFuture.completedFuture(null);
+            }
         });
     }
 
@@ -607,12 +617,7 @@ public class OwnershipCache {
             namespaceService.onNamespaceBundleUnload(bundle);
             return;
         }
-        try {
-            pulsar.getExecutor().execute(() -> closeTakenOverTopics(bundle, topicFutures));
-        } catch (RejectedExecutionException e) {
-            // the broker is shutting down
-            closeTakenOverTopics(bundle, topicFutures);
-        }
+        closeTakenOverTopics(bundle, topicFutures);
     }
 
     private void closeTakenOverTopics(NamespaceBundle bundle,
