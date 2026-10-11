@@ -283,6 +283,29 @@ public class NetworkImpairmentsCheck {
         assertThat(impairments.unexercised()).isEmpty();
     }
 
+    @Test
+    public void removesATimedSilentDisconnectionOfATargetWithoutConnections() throws Exception {
+        start("""
+                impairments:
+                  silent:
+                    from: gateways
+                    to: brokers
+                    silentDisconnect: true
+                    anchor: run
+                    start: 2s
+                    duration: 2s
+                """);
+        // the gateways have a connection to broker-0 only, so broker-1's devices get no filter
+        startTransfer();
+        impairments.startRun();
+        Thread.sleep(6000);
+
+        assertThat(impairments.failure()).isNotDone();
+        assertThat(impairments.unexercised()).isEmpty();
+        assertThat(reachable("gateways", "broker-0")).isTrue();
+        assertThat(reachable("gateways", "broker-1")).isTrue();
+    }
+
     // A long, slow transfer from the gateways to broker-0, whose result is in the array once it has ended
     private Container.ExecResult[] startTransfer() throws InterruptedException {
         Container.ExecResult[] transfer = new Container.ExecResult[2];

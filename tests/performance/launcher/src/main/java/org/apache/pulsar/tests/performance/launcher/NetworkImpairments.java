@@ -116,6 +116,11 @@ final class NetworkImpairments implements AutoCloseable {
                   String hostInterface) {
     }
 
+    // The workload containers exit when they have finished, before the impairments' counters are read at the end
+    private static boolean isWorkload(Target target) {
+        return NetworkSettings.GATEWAYS.equals(target.name()) || NetworkSettings.APPLICATIONS.equals(target.name());
+    }
+
     /** A device with impairment bands: a receiver's host-side veth, or a sender's own interface. */
     private static final class Device {
         final Target owner;
@@ -157,6 +162,9 @@ final class NetworkImpairments implements AutoCloseable {
         Instant applied;
         Instant removed;
         int resetSockets;
+        // The devices that a silent disconnection added filters to; null for the other kinds, whose filters are on
+        // every placement's device
+        Set<String> filteredDevices;
         String note;
 
         Activation(Impairment impairment, int preference) {
@@ -390,14 +398,15 @@ final class NetworkImpairments implements AutoCloseable {
     }
 
     /**
-     * Reads the impaired containers' TCP counters and the impairments' queue counters, off the timeline's thread and
-     * lock: a container that has exited, such as a workload's when it has finished, keeps its last reading. An
-     * observation, so a failed reading is left for the next one, or the one at the end.
+     * Reads the workload containers' TCP counters and the queue counters of their devices, off the timeline's thread
+     * and lock, so that a workload container that has exited when it has finished keeps its last reading. The
+     * cluster's containers run until the end, where the counters are read once. An observation, so a failed reading
+     * is left for the next one, or the one at the end.
      */
     private void sampleTcp() {
         for (Target target : targets.values()) {
             try {
-                if (!closing && running(target)) {
+                if (!closing && isWorkload(target) && running(target)) {
                     tcpAtEnd.put(target.name(), tcpCounters(target));
                 }
             } catch (IOException | RuntimeException e) {
@@ -407,7 +416,7 @@ final class NetworkImpairments implements AutoCloseable {
         for (Activation activation : activations) {
             try {
                 if (!closing) {
-                    statistics(activation);
+                    statistics(activation, true);
                 }
             } catch (IOException | RuntimeException e) {
                 // The next reading counts
@@ -536,6 +545,7 @@ final class NetworkImpairments implements AutoCloseable {
                 placement));
         Map<Target, List<TcCommands.Connection>> connections = new LinkedHashMap<>();
         List<String> filters = new ArrayList<>();
+        Set<String> filteredDevices = new LinkedHashSet<>();
         for (Map.Entry<Target, List<String>> entry : activation.resets.entrySet()) {
             Target sender = entry.getKey();
             if (!running(sender)) {
@@ -553,9 +563,14 @@ final class NetworkImpairments implements AutoCloseable {
                             toReceiver.slot(), connection.local(), connection.peer()));
                     filters.add(TcCommands.flowFilter(toSender.device().name(), activation.preference,
                             toSender.slot(), connection.peer(), connection.local()));
+                    filteredDevices.add(toReceiver.device().name());
+                    filteredDevices.add(toSender.device().name());
                 }
             }
         }
+        // Only these devices have the impairment's filters to remove: a device whose container had no connection to
+        // disconnect has none, and deleting a filter preference that a device doesn't have fails
+        activation.filteredDevices = filteredDevices;
         if (!filters.isEmpty()) {
             // Every device of a silent disconnection is a veth in the engine's host
             exec(null, String.join("\n", filters));
@@ -592,6 +607,10 @@ final class NetworkImpairments implements AutoCloseable {
         try {
             ObjectNode statistics = statistics(activation);
             for (Placement placement : activation.placements) {
+                if (activation.filteredDevices != null
+                        && !activation.filteredDevices.contains(placement.device().name())) {
+                    continue;
+                }
                 if (running(placement.device().owner)) {
                     exec(placement.device().hostSide ? null : placement.device().owner,
                             TcCommands.deleteFilters(placement.device().name(), activation.preference));
@@ -909,6 +928,13 @@ final class NetworkImpairments implements AutoCloseable {
                 return false;
             } catch (RuntimeException e) {
                 failure = e;
+                // a transient error of the Docker API, which a moment later usually answers
+                try {
+                    Thread.sleep(200L * (attempt + 1));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
             }
         }
         throw new IllegalStateException("Docker can't tell whether " + target.name() + " runs: "
@@ -932,9 +958,16 @@ final class NetworkImpairments implements AutoCloseable {
      * container has exited keeps its last counters.
      */
     private ObjectNode statistics(Activation activation) throws IOException {
+        return statistics(activation, false);
+    }
+
+    private ObjectNode statistics(Activation activation, boolean workloadsOnly) throws IOException {
         ObjectNode statistics = mapper.createObjectNode();
         for (Placement placement : activation.placements) {
             Device device = placement.device();
+            if (workloadsOnly && !isWorkload(device.owner)) {
+                continue;
+            }
             String key = device.owner.name() + " " + (device.hostSide ? "receiver " : "sender ") + device.name();
             if (!device.installed || !running(device.owner)) {
                 ObjectNode last = lastStatistics.get(placement);

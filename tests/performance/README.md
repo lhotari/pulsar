@@ -477,8 +477,8 @@ charts that it writes, in one diagram and in separate panels.
 - [Heap dumps](docs/heap-dumps.md): heap dumps of the broker, the gateways and the applications when they run out of
   memory, at the highest heap usage and at given times.
 - [Network conditions and network faults](docs/network-conditions.md): delay, jitter, packet loss and limited
-  bandwidth between the containers, partitions and connection resets, applied with Linux traffic control, and the
-  network scenarios.
+  bandwidth between the containers, partitions, connection resets and silent disconnections, applied with Linux
+  traffic control, and the network scenarios.
 - [The performance testing environment setup](environment/README.md): configuring a Linux host for consistent
   results, taking the disk out of the way of large-message runs, and freeing Docker disk space.
 - [The legacy TestNG profiling runner](docs/legacy-testng-runner/README.md): the deprecated `pulsar-perf` based runner

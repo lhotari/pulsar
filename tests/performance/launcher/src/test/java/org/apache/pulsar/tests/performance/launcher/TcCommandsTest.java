@@ -151,7 +151,7 @@ public class TcCommandsTest {
         assertThat(TcCommands.defaultRoot("qdisc noqueue 0: root refcnt 2 \n")).isTrue();
         assertThat(TcCommands.defaultRoot("")).isTrue();
         assertThat(TcCommands.defaultRoot("qdisc prio 1: root refcnt 2 bands 4")).isFalse();
-        assertThat(TcCommands.reset("172.18.0.5")).isEqualTo("ss -K -t -n -H dst 172.18.0.5");
+        assertThat(TcCommands.reset("172.18.0.5")).isEqualTo("ss -K -t -n -H state established dst 172.18.0.5");
     }
 
     private NetworkSettings.Impairment impairment(String yaml) throws Exception {

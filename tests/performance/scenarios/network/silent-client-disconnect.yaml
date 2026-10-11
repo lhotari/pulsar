@@ -16,7 +16,8 @@
 # under the License.
 
 # The clients' TCP connections disappear without the brokers knowing, as when a NAT gateway or a firewall in front of
-# the clients forgets its connections, or a client's host drops off the network: the gateways' connections at 30 s of
+# the clients forgets its connections and answers the clients' next packets with resets while it drops the brokers',
+# or a client's host restarts behind it: the gateways' connections at 30 s of
 # the measurement, and the applications' at 100 s. The clients get an error at once and reconnect, on new connections,
 # while their resets are dropped, so that the brokers keep the old connections, with the producers and consumers on
 # them, until the brokers' keep-alive finds them dead, in 30-60 s with the default 30 s interval. The old connections'

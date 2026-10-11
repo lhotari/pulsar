@@ -27,7 +27,10 @@
 -->
 <Configuration xmlns="http://logging.apache.org/log4j/2.0/config" status="WARN">
   <Appenders>
-    <File name="FILE" fileName="/performance-output/pulsar-client.log.txt" createOnDemand="true">
+    <!-- Not flushed on every line: a network fault can make the clients log thousands of lines in a second, on the
+         threads that also send and receive the messages. Log4j flushes the rest when the workload exits. -->
+    <File name="FILE" fileName="/performance-output/pulsar-client.log.txt" createOnDemand="true"
+          immediateFlush="false">
       <PatternLayout pattern="%d{ISO8601_OFFSET_DATE_TIME_HHMM} [%t] %-5level %logger{36} - %msg%equals{ %X}{ {}}{}%n"/>
     </File>
   </Appenders>

@@ -360,6 +360,25 @@ public class NetworkSettingsTest {
     }
 
     @Test
+    public void lossBurstOfOneIsIndependentLoss() throws Exception {
+        NetworkSettings explicit = read("""
+                impairments:
+                  a:
+                    between: [gateways, brokers]
+                    loss: 80%
+                    lossBurst: 1
+                """);
+        NetworkSettings omitted = read("""
+                impairments:
+                  a:
+                    between: [gateways, brokers]
+                    loss: 80%
+                """);
+        assertThat(explicit.impairments()).isEqualTo(omitted.impairments());
+        assertThat(explicit.impairments().get(0).lossBurst()).isEqualTo(1);
+    }
+
+    @Test
     public void limitsTheImpairmentsPerDevice() {
         StringBuilder yaml = new StringBuilder("impairments:\n");
         for (int index = 0; index <= NetworkSettings.MAX_IMPAIRMENTS_PER_DEVICE; index++) {

@@ -36,8 +36,7 @@ import java.util.regex.Pattern;
 /**
  * A scenario's {@code network} section: the network conditions (delay, jitter, loss, a rate limit) and the network
  * faults (partitions, connection resets, silent disconnections) that the launcher applies between the run's containers,
- * each for the whole
- * run or for a time. See {@code docs/network-conditions.md}.
+ * each for the whole run or for a time. See {@code docs/network-conditions.md}.
  *
  * <pre>
  * network:
@@ -132,7 +131,8 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
         /**
          * Destroys the senders' TCP connections to the receivers once without the receivers knowing: the connections'
          * packets are dropped first, so that the senders' resets never arrive, and the receivers keep half-open
-         * connections, as after a NAT gateway or a firewall forgot them or a client's host went away.
+         * connections, as when a NAT gateway or a firewall that forgot the connections answers only the senders'
+         * packets with resets, or a sender's host restarts behind one.
          */
         SILENT_DISCONNECT
     }
@@ -465,9 +465,9 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
             }
             lossBurst = burst.doubleValue();
             // A burst of b packets on average follows at least one packet that isn't lost, so at most b / (b + 1)
-            // of the packets can be lost
+            // of the packets can be lost. A burst of 1 is independent loss, which has no such bound.
             double maxLoss = 100 * lossBurst / (lossBurst + 1);
-            if (loss > maxLoss) {
+            if (lossBurst > 1 && loss > maxLoss) {
                 throw new IllegalArgumentException(String.format(Locale.ROOT, "%s: a %s of %s %% can't come in bursts"
                         + " of %s packets: at most %s %% can", path, LOSS, number(loss), number(lossBurst),
                         number(Math.floor(maxLoss * 1000) / 1000)));

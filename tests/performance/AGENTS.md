@@ -303,8 +303,9 @@ throughput.
   An overlay that needs a second broker or more bookies extends `network/failover-cluster`. Change an impairment's
   timing or target with `--set network.impairments.<name>.<setting>=<value>`, and check `resolved-config.yaml`.
 - Check that the impairments did what they should before reading the results: the report's Network conditions section
-  shows when each one was applied and removed and how many packets its queues passed and dropped. An impairment whose
-  queues passed no packets matched no traffic. A run fails when an impairment couldn't be applied, when one wasn't
+  shows when each one was applied and removed and how many packets its queues passed and dropped. Read both counts
+  together: a partition drops every packet it matches, so it passes none, while an impairment that neither passed nor
+  dropped a packet matched no traffic. A run fails when an impairment couldn't be applied, when one wasn't
   applied before the workloads finished, or when removing the impairments failed.
 - An application that received ordering violations or invalid messages, or not every message, exits with status 1,
   and the run then fails without a report. Read `console.log.txt` and each application's

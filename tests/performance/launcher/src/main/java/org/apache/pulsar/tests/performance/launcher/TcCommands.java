@@ -256,11 +256,11 @@ final class TcCommands {
     }
 
     /**
-     * Destroys the TCP sockets to {@code destination}, which resets the connections on both ends; prints each
+     * Destroys the established TCP connections to {@code destination}, which resets them on both ends; prints each
      * destroyed socket on a line.
      */
     static String reset(String destination) {
-        return "ss -K -t -n -H dst " + ipv4(destination);
+        return "ss -K -t -n -H state established dst " + ipv4(destination);
     }
 
     /** Sets the TCP and the generic segmentation offloads. */

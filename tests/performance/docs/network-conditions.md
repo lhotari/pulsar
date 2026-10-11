@@ -115,8 +115,10 @@ An impairment does one of three things:
 - **A reset**, `reset: true`, destroys the TCP connections between the endpoints once, at its `start`, which resets
   them on both ends, as a load balancer or a NAT gateway that resets its connections does. It has no `duration`.
 - **A silent disconnection**, `silentDisconnect: true`, destroys the TCP connections from `from` to `to` once, at its
-  `start`, without `to` learning it, as a NAT gateway or a firewall that forgets its connections, or a host that drops
-  off the network, does: `from` gets an error at once and reconnects, on new connections, while `to` keeps the old,
+  `start`, without `to` learning it: one side of the connections closes and its close never reaches the other side,
+  as when a NAT gateway or a firewall that has forgotten its connections answers one side's next packets with a reset
+  and drops the other side's, or a host restarts behind one. A gateway that forgets its connections without answering
+  either side is a partition instead. `from` gets an error at once and reconnects, on new connections, while `to` keeps the old,
   half-open connections until something of its own, such as a keep-alive, finds them dead. With `from: applications`
   and `to: brokers`, the brokers don't learn that the consumers have gone; with `from: brokers` and `to: gateways`,
   the producers don't learn that the brokers have dropped them. It needs `from` and `to`, not `between`, and its
@@ -124,7 +126,9 @@ An impairment does one of three things:
   host answers them with a reset.
 
 An impairment without `start` lasts the whole run: the launcher applies it before the gateways create their clients,
-so that their first lookups and connections already see it, and removes it after `duration`, if it has one. With
+so that their first lookups and connections already see it, and removes it after `duration`, if it has one. The
+applications have subscribed by then, over the unimpaired network, so an impairment of theirs acts on their
+established connections and on their reconnections. With
 `start`, it starts that long after its `anchor`:
 
 - `measurement`, the default: when the producers start the measured messages, after the warmup. The launcher holds
@@ -228,7 +232,8 @@ impairments' applications and removals are annotations in Grafana, beside the ru
 
 `./gradlew :tests:performance:launcher:networkCheck` checks that the impairments do what their settings ask on
 small Alpine containers, with `ping` and `iperf3`: a delay on one destination and none on another, a timed partition,
-the jitter's order, a loss and a rate, a reset, and the cleanup. It needs a Docker engine that runs privileged
+the jitter's order, a loss and a rate, a reset, silent disconnections in both directions, a timed silent
+disconnection of a target without connections, and the cleanup. It needs a Docker engine that runs privileged
 containers. Run it on a new host, or after changing the impairments.
 
 ## Network scenarios

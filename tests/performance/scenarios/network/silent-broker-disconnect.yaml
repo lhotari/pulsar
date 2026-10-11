@@ -15,8 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# The brokers' TCP connections to the clients disappear without the clients knowing, as when a NAT gateway or a load
-# balancer in front of the brokers forgets its connections: the gateways' connections at 30 s of the measurement, and
+# The brokers' TCP connections to the clients disappear without the clients knowing, as when a load balancer in front
+# of the brokers times its connections out and resets only its side towards the brokers, or a broker's host restarts
+# behind it: the gateways' connections at 30 s of the measurement, and
 # the applications' at 100 s. The brokers close the connections, and their producers and consumers, at once, while
 # their resets are dropped, so that the clients keep sending and waiting on connections that lead nowhere, until their
 # keep-alive finds them dead, in 30-60 s with the default 30 s interval. The old connections' packets stay dropped
