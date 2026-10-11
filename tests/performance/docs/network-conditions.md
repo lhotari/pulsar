@@ -255,8 +255,8 @@ cluster. What they showed on `iot-telemetry-small`, at 1,000 messages a second, 
 | `metadata-takeover` | the same for 90 s, with clients looking the topics up | the isolated broker holds producers that it can't serve until ZooKeeper comes back |
 | `return-path-blackhole` | the brokers' packets to the gateways lost | TCP's acknowledgments are lost too, so both directions stall |
 | `connection-resets` | load balancers resetting connections | a gateway reset costs ~0.2 s; an applications reset stalls everything |
-| `silent-client-disconnect` | the clients' connections vanish without the brokers knowing | |
-| `silent-broker-disconnect` | the brokers drop the connections without the clients knowing | |
+| `silent-client-disconnect` | the clients' connections vanish without the brokers knowing | the brokers hold every Key_Shared consumer twice until their keep-alive; a 512 MB broker ran out of heap |
+| `silent-broker-disconnect` | the brokers drop the connections without the clients knowing | the producers and consumers stall until their keep-alive, about 45 s |
 | `consumer-reconnect-storm` | every consumer reconnecting at once | unrelated producers stall for 1-3 s while the brokers resubscribe the Key_Shared consumers |
 
 ## Why not a proxy

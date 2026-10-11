@@ -22,8 +22,10 @@
 # keep-alive finds them dead, in 30-60 s with the default 30 s interval. The old connections' packets stay dropped
 # until the run ends.
 #
-# Look for: how long the producers' sends and the consumers' deliveries stall before the clients reconnect, the
-# producers' resends and their deduplication, and the redelivered duplicates.
+# On iot-telemetry-small, the gateways published nothing for about 45 s, until their keep-alive, and the applications
+# received nothing for up to 60 s; when they reconnected, all at once, the publishes stalled again briefly, as in
+# consumer-reconnect-storm.yaml. Look for: how long the producers' sends and the consumers' deliveries stall before
+# the clients reconnect, the producers' resends and their deduplication, and the redelivered duplicates.
 
 network:
   impairments:
