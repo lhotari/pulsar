@@ -419,6 +419,7 @@ public class PerformanceLauncher implements Callable<Integer> {
                 ? new HeapDumper(runOutput, PulsarContainer.DEFAULT_IMAGE_NAME, heapDumpSettings.gzipLevel()) : null;
         MetricsCollection metricsCollection = null;
         NetworkImpairments network = null;
+        Exception networkCleanupFailure = null;
         Instant gatewaysStarted = null;
         String metricsBindAddress = System.getProperty("performance.metrics.bindAddress",
                 ReportsUrl.DEFAULT_BIND_ADDRESS);
@@ -432,9 +433,9 @@ public class PerformanceLauncher implements Callable<Integer> {
                 // Before the cluster, so that a Docker engine that can't apply them fails the run at once
                 network = NetworkImpairments.start(networkSettings, topology, loader.mapper(), runOutput,
                         PerformanceLauncher::status);
-                status("Network impairments: " + networkSettings.impairments().stream()
-                        .map(NetworkSettings.Impairment::name).collect(Collectors.joining(", "))
-                        + "; the Docker engine's host can apply them");
+                status("Network impairments: " + (networkSettings.impairments().isEmpty() ? "none, offloads off"
+                        : networkSettings.impairments().stream().map(NetworkSettings.Impairment::name)
+                        .collect(Collectors.joining(", "))) + "; the Docker engine's host can apply them");
             }
             long clusterStart = System.nanoTime();
             cluster.start();
@@ -527,6 +528,10 @@ public class PerformanceLauncher implements Callable<Integer> {
             workloads.add(new Workload("The applications", consumer, applicationsOutput.resolve(CONTAINER_LOG)));
             awaitWorkloads(workloads, workload.path("timeoutSeconds").intValue() + 60,
                     network != null ? network.failure() : new CompletableFuture<>());
+            if (network != null) {
+                // No traffic sees an impairment from now on; one that hasn't started is missed
+                network.finishRun();
+            }
             progress.report();
             progress.close();
             if (heapDumper != null) {
@@ -613,12 +618,16 @@ public class PerformanceLauncher implements Callable<Integer> {
                 }
             }
             // While the containers run, so that their interfaces are cleaned up when they are left running
-            NetworkImpairments networkToClose = network;
-            shutDown("removing the network impairments", () -> {
-                if (networkToClose != null) {
-                    networkToClose.close();
+            if (network != null) {
+                try {
+                    network.close();
+                } catch (IOException | RuntimeException e) {
+                    // The run fails with it below: containers left running may keep the impairments
+                    networkCleanupFailure = e;
+                    status("Warning: removing the network impairments failed: " + e.getMessage());
+                    log().warn().exception(e).log("Removing the network impairments failed");
                 }
-            });
+            }
             if (producerToStop != null) {
                 saveContainerLog(producerToStop, runOutput.resolve(GATEWAYS_DIRECTORY).resolve(CONTAINER_LOG));
                 shutDown("stopping the producer", producerToStop::stop);
@@ -698,6 +707,10 @@ public class PerformanceLauncher implements Callable<Integer> {
         if (!unexercised.isEmpty()) {
             status("The run didn't apply its network impairments as the scenario asked: "
                     + String.join("; ", unexercised));
+            return 1;
+        }
+        if (networkCleanupFailure != null) {
+            status("The run failed to remove its network impairments: " + networkCleanupFailure.getMessage());
             return 1;
         }
         if (!keepLauncherLog) {
@@ -1188,7 +1201,7 @@ public class PerformanceLauncher implements Callable<Integer> {
                     }
                     if (network != null) {
                         try {
-                            network.startMeasurement();
+                            network.prepareMeasurement();
                         } catch (RuntimeException e) {
                             // The measurement doesn't start without its impairments; the run fails with them
                             release = false;
@@ -1200,7 +1213,16 @@ public class PerformanceLauncher implements Callable<Integer> {
                 Thread.currentThread().interrupt();
             } finally {
                 if (release) {
-                    startMeasurement(client, control);
+                    boolean started = startMeasurement(client, control);
+                    if (network != null) {
+                        if (started) {
+                            // The impairments' times count from the producers' release
+                            network.startMeasurement();
+                        } else {
+                            network.fail(new IllegalStateException("Couldn't start the measurement, so the network"
+                                    + " impairments that count from it wouldn't happen"));
+                        }
+                    }
                 }
             }
         }, "measurement-gate");
@@ -1253,21 +1275,23 @@ public class PerformanceLauncher implements Callable<Integer> {
         throw new IOException("Couldn't start the gateways' run: " + failure.getMessage(), failure);
     }
 
-    private static void startMeasurement(HttpClient client, String control) {
+    /** Starts the producers' measurement; returns whether they confirmed it. */
+    private static boolean startMeasurement(HttpClient client, String control) {
         HttpRequest start = HttpRequest.newBuilder(URI.create(control + "/measurement/start"))
                 .timeout(Duration.ofSeconds(10)).POST(HttpRequest.BodyPublishers.noBody()).build();
         for (int attempt = 1; attempt <= 3; attempt++) {
             try {
                 if (client.send(start, HttpResponse.BodyHandlers.discarding()).statusCode() == 200) {
-                    return;
+                    return true;
                 }
             } catch (IOException e) {
                 System.out.println("Couldn't start the measurement (attempt " + attempt + "): " + e);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return;
+                return false;
             }
         }
+        return false;
     }
 
     /** The command of {@code jfr configure} that merges {@code input} and applies the event settings after it. */
@@ -1574,6 +1598,9 @@ public class PerformanceLauncher implements Callable<Integer> {
                     status("The gateways have finished; waiting for the applications to receive every message");
                 }
             }
+        }
+        if (failure.isCompletedExceptionally()) {
+            failure.get();
         }
     }
 

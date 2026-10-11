@@ -113,14 +113,29 @@ final class TcCommands {
                     + (impairment.jitter().isZero() ? "" : " " + micros(impairment.jitter())));
         }
         if (impairment.lossPercent() > 0) {
-            arguments.add("loss random " + percent(impairment.lossPercent())
-                    + (impairment.lossCorrelationPercent() > 0 ? " " + percent(impairment.lossCorrelationPercent())
-                    : ""));
+            arguments.add(loss(impairment.lossPercent(), impairment.lossBurst()));
         }
         if (!impairment.jitter().isZero() && !impairment.reorder()) {
             arguments.add("rate " + ORDER_PRESERVING_RATE);
         }
         return String.join(" ", arguments);
+    }
+
+    /**
+     * netem's loss of {@code percent} of the packets in bursts of {@code burst} packets on average. Independent losses
+     * are netem's random loss. Bursts are the Gilbert-Elliott model: a good state that loses nothing and a bad state
+     * that loses every packet, left with the probability 1 / burst, and entered with the probability that gives the
+     * mean loss. netem's correlated random loss ({@code loss random P C}) isn't used: on Linux 7.1 it dropped no
+     * packet at all.
+     */
+    static String loss(double percent, double burst) {
+        if (burst <= 1) {
+            return "loss random " + percent(percent);
+        }
+        double leave = 1 / burst;
+        double fraction = percent / 100;
+        double enter = fraction * leave / (1 - fraction);
+        return "loss gemodel " + percent(enter * 100) + " " + percent(leave * 100) + " 100% 0%";
     }
 
     /** The netem arguments of an impairment's rate limit on its senders, with its bottleneck queue. */

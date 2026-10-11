@@ -175,6 +175,7 @@ public class NetworkImpairmentsCheck {
                     to: broker-0
                     delay: 5ms
                     loss: 1%
+                    lossBurst: 2
                   uplink:
                     from: gateways
                     to: broker-1
@@ -196,8 +197,9 @@ public class NetworkImpairmentsCheck {
             packets += device.path("packets").asLong();
             drops += device.path("drops").asLong();
         }
-        // The offloads are off, so that netem drops 1 % of the segments, not of GSO super-packets
-        assertThat(drops * 100.0 / (packets + drops)).isBetween(0.7, 1.3);
+        // The offloads are off, so that netem drops 1 % of the segments, not of GSO super-packets; in bursts of 2 on
+        // average, so that the share varies more than with independent losses
+        assertThat(drops * 100.0 / (packets + drops)).isBetween(0.6, 1.5);
         impairments = null;
     }
 

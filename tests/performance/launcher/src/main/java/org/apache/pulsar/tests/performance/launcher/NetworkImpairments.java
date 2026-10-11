@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.model.ContainerNetwork;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -38,6 +39,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -168,6 +170,8 @@ final class NetworkImpairments implements AutoCloseable {
     // The containers whose offloads were turned off, with whether TSO and GSO were on
     private final Map<Target, boolean[]> offloads = new LinkedHashMap<>();
     private final Map<String, long[]> tcpAtStart = new LinkedHashMap<>();
+    // Each placement's last counters, for a device whose container has exited
+    private final Map<Placement, ObjectNode> lastStatistics = new LinkedHashMap<>();
     private final Map<String, long[]> tcpAtEnd = new ConcurrentHashMap<>();
     private final ScheduledExecutorService timeline = Executors.newSingleThreadScheduledExecutor(runnable -> {
         Thread thread = new Thread(runnable, "network-impairments");
@@ -276,15 +280,16 @@ final class NetworkImpairments implements AutoCloseable {
         }
         setOffloads();
         for (Device device : devices.values()) {
+            exec(device.hostSide ? null : device.owner, TcCommands.root(device.name(), device.slots.size()));
+            // Installed from now on, so that the cleanup deletes the root also when a band fails
+            device.installed = true;
             List<String> commands = new ArrayList<>();
-            commands.add(TcCommands.root(device.name(), device.slots.size()));
             for (int slot = 0; slot < device.slots.size(); slot++) {
                 Impairment impairment = device.slots.get(slot).impairment;
                 commands.add(TcCommands.netem(device.name(), slot, device.hostSide
                         ? TcCommands.pathNetem(impairment) : TcCommands.rateNetem(impairment)));
             }
             exec(device.hostSide ? null : device.owner, String.join("\n", commands));
-            device.installed = true;
         }
         for (Target target : targets.values()) {
             tcpAtStart.put(target.name(), tcpCounters(target));
@@ -333,9 +338,25 @@ final class NetworkImpairments implements AutoCloseable {
     }
 
     /**
-     * Applies the impairments that start with the measurement and schedules the others that count from it; the
-     * launcher calls it just before it starts the measurement. Fails when an impairment fails, and the measurement
-     * mustn't start then.
+     * Applies the impairments that start with the measurement; the launcher calls it before it lets the producers
+     * start the measurement, and then {@link #startMeasurement()}. Fails when an impairment fails, and the
+     * measurement mustn't start then.
+     */
+    synchronized void prepareMeasurement() {
+        for (Activation activation : activations) {
+            Impairment impairment = activation.impairment;
+            if (!impairment.wholeRun() && impairment.anchor() == Anchor.MEASUREMENT && impairment.start().isZero()) {
+                apply(activation);
+            }
+        }
+        if (activations.stream().anyMatch(activation -> activation.status == Status.FAILED)) {
+            throw new IllegalStateException("Applying the network impairments of the measurement's start failed");
+        }
+    }
+
+    /**
+     * Starts the timeline of the impairments that count from the measurement's start, which is now: the launcher
+     * calls it once the producers have been told to start the measurement.
      */
     synchronized void startMeasurement() {
         measurementStart = Instant.now();
@@ -344,7 +365,6 @@ final class NetworkImpairments implements AutoCloseable {
             Impairment impairment = activation.impairment;
             if (!impairment.wholeRun() && impairment.anchor() == Anchor.MEASUREMENT) {
                 if (impairment.start().isZero()) {
-                    apply(activation);
                     if (impairment.duration() != null) {
                         schedule(anchor, impairment.duration(), () -> remove(activation));
                     }
@@ -352,9 +372,6 @@ final class NetworkImpairments implements AutoCloseable {
                     scheduleTimed(anchor, activation);
                 }
             }
-        }
-        if (activations.stream().anyMatch(activation -> activation.status == Status.FAILED)) {
-            throw new IllegalStateException("Applying the network impairments of the measurement's start failed");
         }
     }
 
@@ -511,6 +528,42 @@ final class NetworkImpairments implements AutoCloseable {
     }
 
     /**
+     * Stops the timeline when the workloads have finished: an impairment that hasn't started by then is missed, since
+     * no traffic would see it. The impairments that are applied stay until {@link #close()}. Fails with the first
+     * failure of an impairment.
+     */
+    void finishRun() throws IOException {
+        stopTimeline();
+        synchronized (this) {
+            for (Activation activation : activations) {
+                if (activation.status == Status.PENDING) {
+                    activation.status = Status.MISSED;
+                    record("missed", activation, node -> { });
+                }
+            }
+        }
+        if (failure.isCompletedExceptionally()) {
+            try {
+                failure.join();
+            } catch (CompletionException e) {
+                throw new IOException(e.getCause().getMessage(), e.getCause());
+            }
+        }
+    }
+
+    private void stopTimeline() {
+        closing = true;
+        timeline.shutdownNow();
+        sampler.shutdownNow();
+        try {
+            timeline.awaitTermination(COMMAND_TIMEOUT_SECONDS + 5, TimeUnit.SECONDS);
+            sampler.awaitTermination(COMMAND_TIMEOUT_SECONDS + 5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
      * The impairments that didn't do what the scenario asked: one that never started (missed) or wasn't applied
      * because its containers had exited (skipped), and a reset that matched no TCP connection. A run with any of them
      * didn't test what it was meant to.
@@ -523,6 +576,7 @@ final class NetworkImpairments implements AutoCloseable {
                 case MISSED -> problems.add(name + " never started: the run ended before it");
                 case SKIPPED -> problems.add(name + " wasn't applied: " + activation.note);
                 case PENDING -> problems.add(name + " never started");
+                case FAILED -> problems.add(name + " failed: " + activation.note);
                 default -> {
                     if (activation.impairment.kind() == Kind.RESET && activation.resetSockets == 0) {
                         problems.add(name + " " + activation.note);
@@ -559,15 +613,7 @@ final class NetworkImpairments implements AutoCloseable {
      */
     @Override
     public void close() throws IOException {
-        closing = true;
-        timeline.shutdownNow();
-        sampler.shutdownNow();
-        try {
-            timeline.awaitTermination(COMMAND_TIMEOUT_SECONDS + 5, TimeUnit.SECONDS);
-            sampler.awaitTermination(COMMAND_TIMEOUT_SECONDS + 5, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        stopTimeline();
         List<Exception> failures = new ArrayList<>();
         Map<Activation, ObjectNode> finalStatistics = new LinkedHashMap<>();
         synchronized (this) {
@@ -745,15 +791,26 @@ final class NetworkImpairments implements AutoCloseable {
         return new Target(name, container, pid, ip, containerInterface, hostInterface);
     }
 
-    /** Whether a target's container still runs the process whose namespace was resolved. */
+    /**
+     * Whether a target's container still runs the process whose namespace was resolved. Fails when Docker can't tell,
+     * after a few attempts, so that an impairment isn't skipped, or left in place, for a container that may run.
+     */
     private static boolean running(Target target) {
-        try {
-            InspectContainerResponse info = target.container().getCurrentContainerInfo();
-            return Boolean.TRUE.equals(info.getState().getRunning())
-                    && Long.valueOf(target.pid()).equals(info.getState().getPidLong());
-        } catch (RuntimeException e) {
-            return false;
+        RuntimeException failure = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                InspectContainerResponse info = target.container().getCurrentContainerInfo();
+                return Boolean.TRUE.equals(info.getState().getRunning())
+                        && Long.valueOf(target.pid()).equals(info.getState().getPidLong());
+            } catch (NotFoundException e) {
+                // Removed
+                return false;
+            } catch (RuntimeException e) {
+                failure = e;
+            }
         }
+        throw new IllegalStateException("Docker can't tell whether " + target.name() + " runs: "
+                + failure.getMessage(), failure);
     }
 
     /** The TCP counters of a target's namespace: the segments sent and retransmitted. */
@@ -768,12 +825,20 @@ final class NetworkImpairments implements AutoCloseable {
                 Long.parseLong(values[names.indexOf("RetransSegs")])};
     }
 
-    /** The counters of an impairment's netem qdiscs on its devices, by device. */
+    /**
+     * The counters of an impairment's netem qdiscs on its devices, by container, side and device. A device whose
+     * container has exited keeps its last counters.
+     */
     private ObjectNode statistics(Activation activation) throws IOException {
         ObjectNode statistics = mapper.createObjectNode();
         for (Placement placement : activation.placements) {
             Device device = placement.device();
+            String key = device.owner.name() + " " + (device.hostSide ? "receiver " : "sender ") + device.name();
             if (!device.installed || !running(device.owner)) {
+                ObjectNode last = lastStatistics.get(placement);
+                if (last != null) {
+                    statistics.set(key, last);
+                }
                 continue;
             }
             JsonNode qdiscs = mapper.readTree(exec(device.hostSide ? null : device.owner,
@@ -781,12 +846,12 @@ final class NetworkImpairments implements AutoCloseable {
             String handle = TcCommands.netemHandle(TcCommands.band(placement.slot()));
             for (JsonNode qdisc : qdiscs) {
                 if ("netem".equals(qdisc.path("kind").asText()) && handle.equals(qdisc.path("handle").asText())) {
-                    statistics.putObject(device.name()).put("container", device.owner.name())
+                    lastStatistics.put(placement, statistics.putObject(key).put("container", device.owner.name())
                             .put("side", device.hostSide ? "receiver" : "sender")
                             .put("packets", qdisc.path("packets").asLong())
                             .put("bytes", qdisc.path("bytes").asLong())
                             .put("drops", qdisc.path("drops").asLong())
-                            .put("backlogPackets", qdisc.path("qlen").asLong());
+                            .put("backlogPackets", qdisc.path("qlen").asLong()));
                 }
             }
         }

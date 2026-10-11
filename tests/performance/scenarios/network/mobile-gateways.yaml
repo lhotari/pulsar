@@ -16,7 +16,7 @@
 # under the License.
 
 # The gateways reach the cluster over a cellular network: 50 ms one way, varying by up to 20 ms, and 1 % of the packets
-# lost, a quarter of the losses following another, for the whole run. The applications are in the cluster's region.
+# lost, in bursts of 2 packets on average, for the whole run. The applications are in the cluster's region.
 # Look for: the latency tail from retransmissions, whether the producers keep the rate, and reconnections.
 
 network:
@@ -26,7 +26,7 @@ network:
       delay: 50ms
       jitter: 20ms
       loss: 1%
-      lossCorrelation: 25%
+      lossBurst: 2
 workloads:
   iotTelemetry:
     gateways:

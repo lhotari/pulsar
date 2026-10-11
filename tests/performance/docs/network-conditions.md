@@ -55,11 +55,13 @@ network:
       delay: 20ms                    # one way
       jitter: 5ms                    # the delay varies by up to this much, keeping the packets' order
       loss: 0.1%                     # of the packets
+      lossBurst: 2                   # optional: the mean number of packets lost in a row; 1, independent, by default
     gateway-uplink:
       from: gateways
       to: brokers
       rate: 20mbit                   # the senders' bandwidth to the receivers
-      queue: 100ms                   # optional: the bottleneck's queue, as a time at the rate; 100ms by default
+      queue: 100ms                   # optional: the bottleneck's queue, as a time at the rate; 100ms by default,
+                                     # and at least 64 full frames, which is longer below about 8 Mbit/s
     broker-1-isolated:
       between: [clients, broker-1]
       partition: true                # drops every packet
@@ -97,8 +99,9 @@ An impairment does one of three things:
     keeps it: netem then sends a packet no earlier than the one before. Under load that shifts the delays towards
     delay + jitter, since a packet waits for an earlier one with a longer delay. `reorder: true` gives netem's
     independent delays;
-  - `loss` and `lossCorrelation`, percentages such as `0.5%`; with a correlation, a packet's loss depends on the
-    previous packet's, for bursts of loss;
+  - `loss`, a percentage such as `0.5%`, and `lossBurst`, the mean number of packets lost in a row, for the bursts of
+    loss of a radio link or a congested queue. Bursts use netem's Gilbert-Elliott model, a state that loses no packet
+    and a state that loses every packet; netem's correlated random loss dropped no packet at all on Linux 7.1;
   - `rate`, in bits per second with a unit, `bit`, `kbit`, `mbit` or `gbit`, such as `20mbit`, and its `queue`.
 - **A partition**, `partition: true`, drops every packet, silently, as a cable pull or a firewall would: the senders
   see no error, and their connections time out or wait.
@@ -110,7 +113,8 @@ so that their first lookups and connections already see it, and removes it after
 `start`, it starts that long after its `anchor`:
 
 - `measurement`, the default: when the producers start the measured messages, after the warmup. The launcher holds
-  the producers at the measurement's start until it has applied the impairments that start then.
+  the producers at the measurement's start until it has applied the impairments that start then, and their times
+  count from the producers' release.
 - `run`: when the gateways start creating their clients, before the warmup.
 
 The launcher rejects a scenario whose impairments it can't apply as written: an unknown setting or endpoint, sides
@@ -173,8 +177,8 @@ TSO and GSO off on the interfaces of the containers that send through an impairm
 before the gateways start and for the whole run, and restores them at the end. A delay alone keeps them.
 
 The offloads change how much CPU the senders use for their TCP traffic, so `offloads: off` turns them off on every
-container of the run: a run without impairments then has the same offloads as a run with a loss, for comparing the
-two. `offloads: on` never changes them.
+container of the run: a run with `network: {offloads: off}` and no impairments then has the same offloads as a run
+with a loss, for comparing the two. `offloads: on` never changes them.
 
 ### When something fails
 
@@ -183,9 +187,11 @@ The launcher removes every filter and qdisc that it installed and restores the o
 containers, also when the run fails, and when `PULSAR_CONTAINERS_LEAVE_RUNNING` leaves the containers running. A device
 that has a qdisc that the launcher didn't install fails the run before anything is changed.
 
-A run whose impairments didn't do what the scenario asked exits with an error after writing its report: an impairment
-that never started because the run ended before it, one that wasn't applied because its containers had exited, and a
-reset that matched no TCP connection.
+The timeline stops when the workloads have finished, so that an impairment that hasn't started by then doesn't
+happen. A run whose impairments didn't do what the scenario asked exits with an error after writing its report: an
+impairment that never started because the workloads finished before it, one that wasn't applied because its
+containers had exited, one that failed, and a reset that matched no TCP connection. So does a run whose impairments
+couldn't be removed at the end.
 
 ## Files
 

@@ -67,8 +67,9 @@ public class TcCommandsTest {
                 delay: 20ms
                 jitter: 5ms
                 loss: 0.5%
-                lossCorrelation: 25%
-                """))).isEqualTo("limit 1000000 delay 20000us 5000us loss random 0.5% 25% rate 100gbit");
+                lossBurst: 2
+                """))).isEqualTo("limit 1000000 delay 20000us 5000us loss gemodel 0.251256% 50% 100% 0% rate 100gbit");
+        assertThat(TcCommands.loss(1, 1)).isEqualTo("loss random 1%");
         assertThat(TcCommands.pathNetem(impairment("""
                 between: [gateways, brokers]
                 delay: 20ms

@@ -21,6 +21,7 @@ package org.apache.pulsar.tests.performance.launcher;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -68,7 +69,7 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
     static final String JITTER = "jitter";
     static final String REORDER = "reorder";
     static final String LOSS = "loss";
-    static final String LOSS_CORRELATION = "lossCorrelation";
+    static final String LOSS_BURST = "lossBurst";
     static final String RATE = "rate";
     static final String QUEUE = "queue";
     static final String PARTITION = "partition";
@@ -77,8 +78,8 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
     static final String START = "start";
     static final String DURATION = "duration";
     private static final List<String> IMPAIRMENT_KEYS = List.of(BETWEEN, FROM, TO, DELAY, JITTER, REORDER, LOSS,
-            LOSS_CORRELATION, RATE, QUEUE, PARTITION, RESET, ANCHOR, START, DURATION);
-    private static final List<String> CONDITION_KEYS = List.of(DELAY, JITTER, REORDER, LOSS, LOSS_CORRELATION, RATE,
+            LOSS_BURST, RATE, QUEUE, PARTITION, RESET, ANCHOR, START, DURATION);
+    private static final List<String> CONDITION_KEYS = List.of(DELAY, JITTER, REORDER, LOSS, LOSS_BURST, RATE,
             QUEUE);
     /** The endpoints that name a group of containers, beside broker-N and bookie-N. */
     static final String GATEWAYS = "gateways";
@@ -149,7 +150,7 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
      * @param reorder whether the jitter may reorder the packets, as netem's independent delays do; without it, a
      *     packet is never sent before an earlier one
      * @param lossPercent the percentage of packets lost
-     * @param lossCorrelationPercent how much a packet's loss depends on the previous packet's
+     * @param lossBurst the mean number of packets lost in a row; 1 for independent losses
      * @param rateBitsPerSecond the sender's rate limit, in bits per second; 0 for none
      * @param queue the bottleneck queue of the rate limit, as a time at the rate
      * @param anchor what {@code start} counts from
@@ -159,7 +160,7 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
      */
     record Impairment(String name, List<String> from, List<String> to, boolean bothDirections, Kind kind,
                       Duration delay, Duration jitter, boolean reorder, double lossPercent,
-                      double lossCorrelationPercent, long rateBitsPerSecond, Duration queue, Anchor anchor,
+                      double lossBurst, long rateBitsPerSecond, Duration queue, Anchor anchor,
                       Duration start, Duration duration) {
         boolean wholeRun() {
             return start == null;
@@ -199,10 +200,15 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
             }
             if (lossPercent > 0) {
                 parts.add(number(lossPercent) + " % loss"
-                        + (lossCorrelationPercent > 0 ? " (" + number(lossCorrelationPercent) + " % correlated)" : ""));
+                        + (lossBurst > 1 ? " in bursts of " + number(lossBurst) : ""));
             }
             if (rateBitsPerSecond > 0) {
-                parts.add(rate(rateBitsPerSecond) + " with a " + millis(queue) + " queue");
+                // The queue holds at least TcCommands.MIN_RATE_LIMIT frames, which is longer at a low rate
+                long packets = TcCommands.rateLimit(rateBitsPerSecond, queue);
+                Duration effective = Duration.ofNanos(packets * TcCommands.FRAME_BYTES * 8 * 1_000_000_000L
+                        / rateBitsPerSecond);
+                parts.add(rate(rateBitsPerSecond) + " with a " + millis(effective.compareTo(queue) > 0
+                        ? effective.truncatedTo(ChronoUnit.MILLIS) : queue) + " queue");
             }
             return String.join(", ", parts);
         }
@@ -266,8 +272,9 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
         return settings;
     }
 
+    /** Whether the network needs the impairments' sidecar: an impairment, or the offloads off everywhere. */
     boolean any() {
-        return !impairments.isEmpty();
+        return !impairments.isEmpty() || offloads == Offloads.OFF;
     }
 
     /** Whether an impairment starts at a time after the measurement's start. */
@@ -421,9 +428,20 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
             throw new IllegalArgumentException(path + ": the " + JITTER + " can't be larger than the " + DELAY);
         }
         double loss = percent(section.path(LOSS), path + "." + LOSS);
-        double lossCorrelation = percent(section.path(LOSS_CORRELATION), path + "." + LOSS_CORRELATION);
-        if (lossCorrelation > 0 && loss == 0) {
-            throw new IllegalArgumentException(path + ": " + LOSS_CORRELATION + " needs a " + LOSS);
+        double lossBurst = 1;
+        JsonNode burst = section.path(LOSS_BURST);
+        if (!burst.isMissingNode() && !burst.isNull()) {
+            if (!burst.isNumber() || burst.doubleValue() < 1 || burst.doubleValue() > 1000) {
+                throw new IllegalArgumentException(path + "." + LOSS_BURST + " must be the mean number of packets lost"
+                        + " in a row, from 1 to 1000, not " + burst.asText());
+            }
+            if (loss == 0) {
+                throw new IllegalArgumentException(path + ": " + LOSS_BURST + " needs a " + LOSS);
+            }
+            if (loss >= 100) {
+                throw new IllegalArgumentException(path + ": a " + LOSS + " of 100 % has no bursts; use a partition");
+            }
+            lossBurst = burst.doubleValue();
         }
         long rate = rate(section.path(RATE), path + "." + RATE);
         Duration queue = duration(section.path(QUEUE), path + "." + QUEUE, null);
@@ -466,7 +484,7 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
                     + " so an impairment that starts %s after its start would never happen", path, START,
                     measurementSeconds, millis(start)));
         }
-        return new Impairment(name, from, to, bothDirections, kind, delay, jitter, reorder, loss, lossCorrelation,
+        return new Impairment(name, from, to, bothDirections, kind, delay, jitter, reorder, loss, lossBurst,
                 rate, rate > 0 ? (queue != null ? queue : DEFAULT_QUEUE) : Duration.ZERO, anchor, start, duration);
     }
 

@@ -47,7 +47,7 @@ public class NetworkSettingsTest {
                     delay: 20ms
                     jitter: 5ms
                     loss: 0.1%
-                    lossCorrelation: 25
+                    lossBurst: 2
                   gateway-uplink:
                     from: gateways
                     to: brokers
@@ -74,12 +74,12 @@ public class NetworkSettingsTest {
         assertThat(wan.delay()).isEqualTo(Duration.ofMillis(20));
         assertThat(wan.jitter()).isEqualTo(Duration.ofMillis(5));
         assertThat(wan.lossPercent()).isEqualTo(0.1);
-        assertThat(wan.lossCorrelationPercent()).isEqualTo(25);
+        assertThat(wan.lossBurst()).isEqualTo(2);
         assertThat(wan.wholeRun()).isTrue();
         assertThat(wan.pathImpairment()).isTrue();
         assertThat(wan.rateLimited()).isFalse();
         assertThat(wan.needsSegmentOffloadsOff()).isTrue();
-        assertThat(wan.description()).isEqualTo("20 ms ± 5 ms delay, 0.1 % loss (25 % correlated)");
+        assertThat(wan.description()).isEqualTo("20 ms ± 5 ms delay, 0.1 % loss in bursts of 2");
         assertThat(wan.endpoints()).isEqualTo("gateways ↔ brokers");
         Impairment uplink = settings.impairments().get(1);
         assertThat(uplink.rateBitsPerSecond()).isEqualTo(20_000_000);
@@ -100,10 +100,25 @@ public class NetworkSettingsTest {
     }
 
     @Test
-    public void isEmptyWithoutTheSection() {
+    public void isEmptyWithoutTheSection() throws Exception {
         NetworkSettings settings = NetworkSettings.read(mapper.missingNode(), TOPOLOGY, 60);
         assertThat(settings.any()).isFalse();
         assertThat(settings.anyMeasurementAnchored()).isFalse();
+        // The offloads off everywhere, for a control run, need the sidecar without impairments
+        assertThat(read("offloads: off").any()).isTrue();
+        assertThat(read("offloads: auto").any()).isFalse();
+    }
+
+    @Test
+    public void describesTheBottleneckQueueThatTheRateGets() throws Exception {
+        // 64 full frames at 1 Mbit/s take 775 ms, longer than the 100 ms asked for
+        assertThat(read("""
+                impairments:
+                  slow:
+                    from: gateways
+                    to: brokers
+                    rate: 1mbit
+                """).impairments().get(0).description()).isEqualTo("1 Mbit/s with a 775 ms queue");
     }
 
     @Test
