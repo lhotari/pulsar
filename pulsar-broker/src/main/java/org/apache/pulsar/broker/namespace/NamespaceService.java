@@ -45,6 +45,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -500,17 +501,9 @@ public class NamespaceService implements AutoCloseable {
         }
         LookupRequestKey lookupRequestKey = LookupRequestKey.from(bundle, options);
 
-        if (pulsar.isMetadataSessionLost()) {
-            CompletableFuture<Optional<LookupResult>> pending = targetMap.get(lookupRequestKey);
-            if (pending != null && !pending.isDone()) {
-                // A lookup that is still in progress while the session is lost is waiting for the metadata store,
-                // such as for acquiring the bundle: fail instead of waiting behind it, and the client looks the
-                // topic up again, possibly at another broker.
-                return FutureUtil.failedFuture(new ServiceUnitNotReadyException("Namespace bundle " + bundle
-                        + " is being looked up while this broker's metadata session is lost"));
-            }
-        }
-        return targetMap.computeIfAbsent(lookupRequestKey, (k) -> {
+        AtomicBoolean started = new AtomicBoolean();
+        CompletableFuture<Optional<LookupResult>> lookup = targetMap.computeIfAbsent(lookupRequestKey, (k) -> {
+            started.set(true);
             CompletableFuture<Optional<LookupResult>> future = new CompletableFuture<>();
 
             // First check if we or someone else already owns the bundle
@@ -554,6 +547,14 @@ public class NamespaceService implements AutoCloseable {
 
             return future;
         });
+        if (!started.get() && !lookup.isDone() && pulsar.isMetadataSessionLost()) {
+            // Another lookup of the bundle is still in progress while the session is lost: it's waiting for the
+            // metadata store, such as for acquiring the bundle. Fail instead of waiting behind it, and the client looks
+            // the topic up again, possibly at another broker.
+            return FutureUtil.failedFuture(new ServiceUnitNotReadyException("Namespace bundle " + bundle
+                    + " is being looked up while this broker's metadata session is lost"));
+        }
+        return lookup;
     }
 
     /**

@@ -822,7 +822,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
 
         if (exception instanceof ManagedLedgerFencedException) {
             if (exception instanceof ManagedLedgerFencedByAnotherWriterException
+                    && brokerService.getTopicReference(topic).orElse(null) == this
                     && ownershipTakeoverReported.compareAndSet(false, true)) {
+                // Only the loaded instance of the topic reports: an instance that an unload already replaced, whose
+                // write failure is reported late, belongs to an older ownership generation of the bundle.
                 // Another broker fenced the ledger after this broker lost its metadata session: it took the topic's
                 // bundle over, so stop serving the bundle instead of answering lookups for it with this broker
                 try {

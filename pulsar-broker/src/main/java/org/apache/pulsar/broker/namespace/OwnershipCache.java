@@ -552,11 +552,12 @@ public class OwnershipCache {
      *
      * <p>The handling runs on the broker's executor in the bundle's operation order with the acquisitions (see
      * {@link #serialize}), until the closing of the topics has started, and only while the session is lost, when no
-     * acquisition can complete: so a report can't drop, or close the topics of, a generation acquired after the
-     * session came back, and a report that comes after the session was reestablished is ignored, leaving the
-     * takeover to the lock's revalidation. The report doesn't carry its topic's generation: a topic of an old
-     * generation that survived the generation's unload, and whose ledger is fenced while a later session is lost,
-     * would drop the current generation, which a lookup then reacquires if no other broker holds its lock.
+     * acquisition can complete, so it can't race with an acquisition. A report that comes after the session was
+     * reestablished is ignored, leaving the takeover to the lock's revalidation. The report doesn't carry its
+     * topic's ownership generation; instead, only the loaded instance of a topic reports (see
+     * {@code PersistentTopic.addFailed}), and the unload of a generation replaces its topics' instances, so a
+     * write failure of an older generation's topic that is reported late, after the session came back, the bundle
+     * was acquired again and the session was lost again, doesn't drop the current generation.
      *
      * @return a future that completes when the bundle is no longer served and its topics' closing has started
      */
