@@ -73,6 +73,12 @@ network:
       reset: true                    # resets the TCP connections, once
       anchor: run                    # start counts from the gateways' start instead of the measurement's
       start: 2m
+    brokers-unaware:
+      from: applications             # the side that drops its connections
+      to: brokers                    # the side that doesn't learn it
+      silentDisconnect: true         # destroys the connections without the other side knowing, once
+      start: 60s
+      duration: 90s                  # optional: how long the old connections' packets stay dropped
 ```
 
 An impairment names its endpoints with `between: [A, B]`, which impairs both directions, or `from` and `to`, which
@@ -107,7 +113,15 @@ An impairment does one of three things:
 - **A partition**, `partition: true`, drops every packet, silently, as a cable pull or a firewall would: the senders
   see no error, and their connections time out or wait.
 - **A reset**, `reset: true`, destroys the TCP connections between the endpoints once, at its `start`, which resets
-  them on both ends, as a load balancer or a NAT gateway that forgets its connections does. It has no `duration`.
+  them on both ends, as a load balancer or a NAT gateway that resets its connections does. It has no `duration`.
+- **A silent disconnection**, `silentDisconnect: true`, destroys the TCP connections from `from` to `to` once, at its
+  `start`, without `to` learning it, as a NAT gateway or a firewall that forgets its connections, or a host that drops
+  off the network, does: `from` gets an error at once and reconnects, on new connections, while `to` keeps the old,
+  half-open connections until something of its own, such as a keep-alive, finds them dead. With `from: applications`
+  and `to: brokers`, the brokers don't learn that the consumers have gone; with `from: brokers` and `to: gateways`,
+  the producers don't learn that the brokers have dropped them. It needs `from` and `to`, not `between`, and its
+  `duration`, until the run ends without it, is how long the old connections' packets stay dropped: after it, `from`'s
+  host answers them with a reset.
 
 An impairment without `start` lasts the whole run: the launcher applies it before the gateways create their clients,
 so that their first lookups and connections already see it, and removes it after `duration`, if it has one. With
@@ -120,9 +134,9 @@ so that their first lookups and connections already see it, and removes it after
 
 The launcher rejects a scenario whose impairments it can't apply as written: an unknown setting or endpoint, sides
 with a container in common, a jitter or a reorder without a delay, a queue without a rate, settings of a condition on
-a partition or a reset, a start after the measurement's estimated end, and two conditions that act on the same pair
-of containers at the same time in the same place (two delays or losses, or two rates; a rate and a delay compose). A
-partition and a reset may overlap conditions and each other; a partition takes precedence over a condition.
+a fault, a start after the measurement's estimated end, and two conditions that act on the same pair of containers at
+the same time in the same place (two delays or losses, or two rates; a rate and a delay compose). Partitions, resets
+and silent disconnections may overlap conditions and each other; a partition takes precedence over a condition.
 
 The impairments are a mapping by name, so that a file applied with `--extends` adds impairments or changes one, as
 the scenario files merge mappings, and `--set network.impairments.gateway-wan.delay=40ms` changes one setting.
@@ -156,6 +170,10 @@ and the run fails before the cluster starts otherwise.
   queue, as a real bottleneck has: what doesn't fit is dropped, and TCP slows down.
 - **A reset** runs `ss -K` in the senders' network namespaces, which destroys the sockets: the sender gets
   `ECONNABORTED`, and the receiver a TCP reset.
+- **A silent disconnection** lists the senders' established connections to the receivers with `ss`, adds filters
+  that drop each connection's packets both ways, by its addresses and ports, on both ends' veths, in a band like a
+  partition's, and then destroys the senders' sockets with `ss -K`. The senders' resets are dropped, and their new
+  connections, on other ports, aren't.
 
 Each device that impairments act on gets a `prio` qdisc with a band for each of its impairments after the three
 bands of the unimpaired traffic, and each band its netem queue, before the gateways start. Applying an impairment adds
@@ -237,6 +255,8 @@ cluster. What they showed on `iot-telemetry-small`, at 1,000 messages a second, 
 | `metadata-takeover` | the same for 90 s, with clients looking the topics up | the isolated broker holds producers that it can't serve until ZooKeeper comes back |
 | `return-path-blackhole` | the brokers' packets to the gateways lost | TCP's acknowledgments are lost too, so both directions stall |
 | `connection-resets` | load balancers resetting connections | a gateway reset costs ~0.2 s; an applications reset stalls everything |
+| `silent-client-disconnect` | the clients' connections vanish without the brokers knowing | |
+| `silent-broker-disconnect` | the brokers drop the connections without the clients knowing | |
 | `consumer-reconnect-storm` | every consumer reconnecting at once | unrelated producers stall for 1-3 s while the brokers resubscribe the Key_Shared consumers |
 
 ## Why not a proxy

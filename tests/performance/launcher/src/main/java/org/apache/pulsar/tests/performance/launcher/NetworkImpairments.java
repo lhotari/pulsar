@@ -45,6 +45,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 import org.apache.pulsar.tests.performance.launcher.NetworkSettings.Anchor;
 import org.apache.pulsar.tests.performance.launcher.NetworkSettings.Impairment;
 import org.apache.pulsar.tests.performance.launcher.NetworkSettings.Kind;
@@ -465,6 +466,10 @@ final class NetworkImpairments implements AutoCloseable {
                 });
                 return;
             }
+            if (impairment.kind() == Kind.SILENT_DISCONNECT) {
+                disconnectSilently(activation);
+                return;
+            }
             List<String> skipped = new ArrayList<>();
             for (Placement placement : activation.placements) {
                 if (!running(placement.device().owner)) {
@@ -509,6 +514,64 @@ final class NetworkImpairments implements AutoCloseable {
             failure.completeExceptionally(new IllegalStateException("Applying the network impairment "
                     + impairment.name() + " failed: " + e.getMessage(), e));
         }
+    }
+
+    /**
+     * Disconnects the senders' TCP connections to the receivers without the receivers knowing: it lists the
+     * connections in each sender's namespace, adds filters that drop each connection's packets both ways, on both
+     * ends' veths, and then destroys the senders' sockets. The senders get an error at once and reconnect, on new
+     * ports, while their resets are dropped, so that the receivers keep the connections until something of theirs,
+     * such as a keep-alive, finds them dead. The filters stay until the impairment's end.
+     */
+    private void disconnectSilently(Activation activation) throws IOException {
+        Impairment impairment = activation.impairment;
+        Map<String, Placement> placementsByContainer = new LinkedHashMap<>();
+        activation.placements.forEach(placement -> placementsByContainer.put(placement.device().owner.name(),
+                placement));
+        Map<Target, List<TcCommands.Connection>> connections = new LinkedHashMap<>();
+        List<String> filters = new ArrayList<>();
+        for (Map.Entry<Target, List<String>> entry : activation.resets.entrySet()) {
+            Target sender = entry.getKey();
+            if (!running(sender)) {
+                continue;
+            }
+            for (String address : entry.getValue()) {
+                Target receiver = targets.values().stream().filter(target -> target.ip().equals(address))
+                        .findFirst().orElseThrow();
+                for (TcCommands.Connection connection : TcCommands.parseConnections(
+                        exec(sender, TcCommands.connections(address)))) {
+                    connections.computeIfAbsent(sender, key -> new ArrayList<>()).add(connection);
+                    Placement toReceiver = placementsByContainer.get(receiver.name());
+                    Placement toSender = placementsByContainer.get(sender.name());
+                    filters.add(TcCommands.flowFilter(toReceiver.device().name(), activation.preference,
+                            toReceiver.slot(), connection.local(), connection.peer()));
+                    filters.add(TcCommands.flowFilter(toSender.device().name(), activation.preference,
+                            toSender.slot(), connection.peer(), connection.local()));
+                }
+            }
+        }
+        if (!filters.isEmpty()) {
+            // Every device of a silent disconnection is a veth in the engine's host
+            exec(null, String.join("\n", filters));
+        }
+        int destroyed = 0;
+        for (Map.Entry<Target, List<TcCommands.Connection>> entry : connections.entrySet()) {
+            String output = exec(entry.getKey(), entry.getValue().stream().map(TcCommands::destroy)
+                    .collect(Collectors.joining("\n")));
+            destroyed += (int) output.lines().filter(line -> !line.isBlank()).count();
+        }
+        activation.resetSockets = destroyed;
+        activation.applied = Instant.now();
+        activation.status = Status.ACTIVE;
+        int listed = connections.values().stream().mapToInt(List::size).sum();
+        if (destroyed == 0) {
+            activation.note = "matched no TCP connection";
+        }
+        status.accept(String.format(Locale.ROOT, "Network: %s: silently disconnected %d of %d TCP connection(s) (%s)",
+                impairment.name(), destroyed, listed, impairment.endpoints()));
+        int finalDestroyed = destroyed;
+        record("silently-disconnected", activation, node -> node.put("connections", listed)
+                .put("destroyed", finalDestroyed));
     }
 
     /**
@@ -595,7 +658,8 @@ final class NetworkImpairments implements AutoCloseable {
                 case PENDING -> problems.add(name + " never started");
                 case FAILED -> problems.add(name + " failed: " + activation.note);
                 default -> {
-                    if (activation.impairment.kind() == Kind.RESET && activation.resetSockets == 0) {
+                    Kind kind = activation.impairment.kind();
+                    if ((kind == Kind.RESET || kind == Kind.SILENT_DISCONNECT) && activation.resetSockets == 0) {
                         problems.add(name + " " + activation.note);
                     } else if (!activation.skipped.isEmpty()) {
                         problems.add(name + " was applied only in part: " + activation.note);
@@ -705,10 +769,23 @@ final class NetworkImpairments implements AutoCloseable {
     private void plan() {
         int index = 0;
         for (Impairment impairment : settings.impairments()) {
-            Activation activation = new Activation(impairment, (impairment.kind() == Kind.PARTITION
+            boolean dropping = impairment.kind() == Kind.PARTITION || impairment.kind() == Kind.SILENT_DISCONNECT;
+            Activation activation = new Activation(impairment, (dropping
                     ? TcCommands.PARTITION_PREFERENCE : TcCommands.CONDITION_PREFERENCE) + index++);
             activations.add(activation);
             List<Pair> pairs = NetworkSettings.pairs(impairment, topology);
+            if (impairment.kind() == Kind.SILENT_DISCONNECT) {
+                // A band on both ends' veths, whose filters the disconnection adds for each connection
+                Set<String> ends = new LinkedHashSet<>();
+                for (Pair pair : pairs) {
+                    ends.add(pair.receiver());
+                    ends.add(pair.sender());
+                    activation.resets.computeIfAbsent(targets.get(pair.sender()), key -> new ArrayList<>())
+                            .add(targets.get(pair.receiver()).ip());
+                }
+                ends.forEach(end -> activation.placements.add(place(activation, targets.get(end), true, List.of())));
+                continue;
+            }
             if (impairment.kind() == Kind.RESET) {
                 for (Pair pair : pairs) {
                     activation.resets.computeIfAbsent(targets.get(pair.sender()), key -> new ArrayList<>())
@@ -908,7 +985,7 @@ final class NetworkImpairments implements AutoCloseable {
             if (activation.removed != null) {
                 node.put("removedEpochMs", activation.removed.toEpochMilli());
             }
-            if (impairment.kind() == Kind.RESET) {
+            if (impairment.kind() == Kind.RESET || impairment.kind() == Kind.SILENT_DISCONNECT) {
                 node.put("resetConnections", activation.resetSockets);
             }
             if (impairment.kind() == Kind.CONDITION) {

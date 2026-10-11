@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import java.time.Duration;
+import java.util.List;
 import org.testng.annotations.Test;
 
 public class TcCommandsTest {
@@ -112,6 +113,28 @@ public class TcCommandsTest {
                 """, "172.20.0.4")).isEqualTo("eth1");
         assertThatThrownBy(() -> TcCommands.interfaceWithAddress("", "172.20.0.4"))
                 .hasMessageContaining("No interface has the address 172.20.0.4");
+    }
+
+    @Test
+    public void filtersAndDestroysSingleConnections() {
+        List<TcCommands.Connection> connections = TcCommands.parseConnections("""
+                0      0      172.19.0.11:42004 172.19.0.9:6650
+                0      0      [::ffff:172.19.0.11]:1 [::1]:2
+                0      0      [::ffff:172.19.0.9]:6650 [::ffff:172.19.0.11]:42010
+                """);
+        assertThat(connections).containsExactly(
+                new TcCommands.Connection(new TcCommands.Endpoint("172.19.0.11", 42004),
+                        new TcCommands.Endpoint("172.19.0.9", 6650)),
+                // A dual-stack server's socket shows the IPv4 addresses mapped into IPv6
+                new TcCommands.Connection(new TcCommands.Endpoint("172.19.0.9", 6650),
+                        new TcCommands.Endpoint("172.19.0.11", 42010)));
+        TcCommands.Connection connection = connections.get(0);
+        assertThat(TcCommands.flowFilter("vethb", 12, 1, connection.local(), connection.peer())).isEqualTo(
+                "tc filter add dev vethb parent 1: protocol ip pref 12 u32 match ip src 172.19.0.11/32 match ip dst"
+                        + " 172.19.0.9/32 match ip sport 42004 0xffff match ip dport 6650 0xffff flowid 1:5");
+        assertThat(TcCommands.destroy(connection))
+                .isEqualTo("ss -K -t -n -H src 172.19.0.11:42004 dst 172.19.0.9:6650");
+        assertThat(TcCommands.connections("172.19.0.9")).isEqualTo("ss -t -n -H state established dst 172.19.0.9");
     }
 
     @Test

@@ -35,7 +35,8 @@ import java.util.regex.Pattern;
 
 /**
  * A scenario's {@code network} section: the network conditions (delay, jitter, loss, a rate limit) and the network
- * faults (partitions, connection resets) that the launcher applies between the run's containers, each for the whole
+ * faults (partitions, connection resets, silent disconnections) that the launcher applies between the run's containers,
+ * each for the whole
  * run or for a time. See {@code docs/network-conditions.md}.
  *
  * <pre>
@@ -74,11 +75,12 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
     static final String QUEUE = "queue";
     static final String PARTITION = "partition";
     static final String RESET = "reset";
+    static final String SILENT_DISCONNECT = "silentDisconnect";
     static final String ANCHOR = "anchor";
     static final String START = "start";
     static final String DURATION = "duration";
     private static final List<String> IMPAIRMENT_KEYS = List.of(BETWEEN, FROM, TO, DELAY, JITTER, REORDER, LOSS,
-            LOSS_BURST, RATE, QUEUE, PARTITION, RESET, ANCHOR, START, DURATION);
+            LOSS_BURST, RATE, QUEUE, PARTITION, RESET, SILENT_DISCONNECT, ANCHOR, START, DURATION);
     private static final List<String> CONDITION_KEYS = List.of(DELAY, JITTER, REORDER, LOSS, LOSS_BURST, RATE,
             QUEUE);
     /** The endpoints that name a group of containers, beside broker-N and bookie-N. */
@@ -126,7 +128,13 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
         /** Drops every packet. */
         PARTITION,
         /** Destroys the TCP connections once, which resets them on both ends. */
-        RESET
+        RESET,
+        /**
+         * Destroys the senders' TCP connections to the receivers once without the receivers knowing: the connections'
+         * packets are dropped first, so that the senders' resets never arrive, and the receivers keep half-open
+         * connections, as after a NAT gateway or a firewall forgot them or a client's host went away.
+         */
+        SILENT_DISCONNECT
     }
 
     /** What an impairment's start counts from. */
@@ -166,9 +174,12 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
             return start == null;
         }
 
-        /** Whether it acts on the path to the receiver: a delay, a jitter or a loss, or a partition. */
+        /**
+         * Whether it acts on the path to the receiver: a delay, a jitter or a loss, a partition, or the dropped packets
+         * of a silent disconnection.
+         */
         boolean pathImpairment() {
-            return kind == Kind.PARTITION || (kind == Kind.CONDITION
+            return kind == Kind.PARTITION || kind == Kind.SILENT_DISCONNECT || (kind == Kind.CONDITION
                     && (!delay.isZero() || !jitter.isZero() || lossPercent > 0));
         }
 
@@ -192,6 +203,9 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
             }
             if (kind == Kind.RESET) {
                 return "connection reset";
+            }
+            if (kind == Kind.SILENT_DISCONNECT) {
+                return "silent disconnection";
             }
             List<String> parts = new ArrayList<>();
             if (!delay.isZero()) {
@@ -396,21 +410,32 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
         }
         boolean partition = bool(section, PARTITION, path);
         boolean reset = bool(section, RESET, path);
+        boolean silentDisconnect = bool(section, SILENT_DISCONNECT, path);
         List<String> conditionKeys = CONDITION_KEYS.stream().filter(section::has).toList();
+        List<String> faults = new ArrayList<>();
+        if (partition) {
+            faults.add(PARTITION);
+        }
+        if (reset) {
+            faults.add(RESET);
+        }
+        if (silentDisconnect) {
+            faults.add(SILENT_DISCONNECT);
+        }
         Kind kind;
-        if (partition || reset) {
-            if (partition && reset) {
-                throw new IllegalArgumentException(path + " is a " + PARTITION + " or a " + RESET + ", not both");
+        if (!faults.isEmpty()) {
+            if (faults.size() > 1) {
+                throw new IllegalArgumentException(path + " is one of " + faults + ", not several");
             }
             if (!conditionKeys.isEmpty()) {
-                throw new IllegalArgumentException(path + " is a " + (partition ? PARTITION : RESET)
-                        + ", which takes no " + conditionKeys);
+                throw new IllegalArgumentException(path + " is a " + faults.get(0) + ", which takes no "
+                        + conditionKeys);
             }
-            kind = partition ? Kind.PARTITION : Kind.RESET;
+            kind = partition ? Kind.PARTITION : reset ? Kind.RESET : Kind.SILENT_DISCONNECT;
         } else {
             if (conditionKeys.isEmpty()) {
                 throw new IllegalArgumentException(path + " does nothing: it needs a condition " + CONDITION_KEYS
-                        + ", " + PARTITION + ": true or " + RESET + ": true");
+                        + ", " + PARTITION + ": true, " + RESET + ": true or " + SILENT_DISCONNECT + ": true");
             }
             kind = Kind.CONDITION;
         }
@@ -475,13 +500,16 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
         if (duration != null && duration.isZero()) {
             throw new IllegalArgumentException(path + "." + DURATION + " must be longer than 0");
         }
-        if (kind == Kind.RESET) {
-            if (duration != null) {
-                throw new IllegalArgumentException(path + ": a " + RESET + " happens once, without a " + DURATION);
-            }
-            if (start == null) {
-                throw new IllegalArgumentException(path + ": a " + RESET + " needs a " + START);
-            }
+        if (kind == Kind.RESET && duration != null) {
+            throw new IllegalArgumentException(path + ": a " + RESET + " happens once, without a " + DURATION);
+        }
+        if (kind == Kind.SILENT_DISCONNECT && bothDirections) {
+            throw new IllegalArgumentException(path + ": a " + SILENT_DISCONNECT + " needs " + FROM + ", the side that"
+                    + " drops the connections, and " + TO + ", the side that doesn't learn it, not " + BETWEEN);
+        }
+        if ((kind == Kind.RESET || kind == Kind.SILENT_DISCONNECT) && start == null) {
+            throw new IllegalArgumentException(path + ": a " + (kind == Kind.RESET ? RESET : SILENT_DISCONNECT)
+                    + " needs a " + START);
         }
         if (start != null && anchor == Anchor.MEASUREMENT && measurementSeconds >= 0
                 && start.toMillis() >= measurementSeconds * 1000) {
@@ -561,6 +589,10 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
             for (Pair pair : pairs(impairment, topology)) {
                 receivers.add(pair.receiver());
                 senders.add(pair.sender());
+            }
+            if (impairment.kind() == Kind.SILENT_DISCONNECT) {
+                // The disconnected connections' packets are dropped both ways
+                receivers.addAll(senders);
             }
             if (impairment.pathImpairment()) {
                 receivers.forEach(receiver -> receiverBands.merge(receiver, 1, Integer::sum));

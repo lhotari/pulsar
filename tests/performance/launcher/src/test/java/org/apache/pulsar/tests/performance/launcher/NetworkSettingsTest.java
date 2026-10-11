@@ -100,6 +100,52 @@ public class NetworkSettingsTest {
     }
 
     @Test
+    public void readsSilentDisconnections() throws Exception {
+        NetworkSettings settings = read("""
+                impairments:
+                  brokers-unaware:
+                    from: applications
+                    to: brokers
+                    silentDisconnect: true
+                    start: 30s
+                  clients-unaware:
+                    from: brokers
+                    to: gateways
+                    silentDisconnect: true
+                    start: 40s
+                    duration: 10s
+                """);
+        Impairment brokersUnaware = settings.impairments().get(0);
+        assertThat(brokersUnaware.kind()).isEqualTo(Kind.SILENT_DISCONNECT);
+        assertThat(brokersUnaware.pathImpairment()).isTrue();
+        assertThat(brokersUnaware.description()).isEqualTo("silent disconnection");
+        assertThat(settings.impairments().get(1).duration()).isEqualTo(Duration.ofSeconds(10));
+        assertInvalid("""
+                impairments:
+                  a:
+                    between: [applications, brokers]
+                    silentDisconnect: true
+                    start: 1s
+                """, "a silentDisconnect needs from, the side that drops the connections, and to");
+        assertInvalid("""
+                impairments:
+                  a:
+                    from: applications
+                    to: brokers
+                    silentDisconnect: true
+                """, "a silentDisconnect needs a start");
+        assertInvalid("""
+                impairments:
+                  a:
+                    from: applications
+                    to: brokers
+                    silentDisconnect: true
+                    reset: true
+                    start: 1s
+                """, "is one of [reset, silentDisconnect], not several");
+    }
+
+    @Test
     public void isEmptyWithoutTheSection() throws Exception {
         NetworkSettings settings = NetworkSettings.read(mapper.missingNode(), TOPOLOGY, 60);
         assertThat(settings.any()).isFalse();

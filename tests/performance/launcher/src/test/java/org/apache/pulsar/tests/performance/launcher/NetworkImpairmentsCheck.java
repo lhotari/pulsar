@@ -101,6 +101,10 @@ public class NetworkImpairmentsCheck {
         for (String name : containers.keySet()) {
             assertThat(exec(name, "tc qdisc show dev eth0 root 2>/dev/null || true")).doesNotContain("prio");
         }
+        // A silent disconnection leaves an iperf3 server busy with a connection that is gone
+        for (String name : containers.keySet()) {
+            exec(name, "pkill iperf3; sleep 0.2; iperf3 -s -D");
+        }
         try (Stream<Path> files = Files.walk(runDirectory)) {
             for (Path file : files.sorted(Comparator.reverseOrder()).toList()) {
                 Files.delete(file);
@@ -235,6 +239,69 @@ public class NetworkImpairmentsCheck {
 
         assertThat(transfer[0].getExitCode()).isNotZero();
         assertThat(impairments.unexercised()).isEmpty();
+    }
+
+    @Test
+    public void disconnectsSilentlyWithoutTheServerKnowing() throws Exception {
+        start("""
+                impairments:
+                  silent:
+                    from: gateways
+                    to: broker-0
+                    silentDisconnect: true
+                    anchor: run
+                    start: 2s
+                """);
+        startTransfer();
+        impairments.startRun();
+        Thread.sleep(4000);
+
+        // The client's connections are gone, while the server keeps them: their resets never arrived
+        assertThat(exec("gateways", "ss -t -n -H state established dst " + ip("broker-0"))).isBlank();
+        assertThat(exec("broker-0", "ss -t -n -H state established src :5201")).contains(ip("gateways"));
+        assertThat(impairments.unexercised()).isEmpty();
+    }
+
+    @Test
+    public void disconnectsSilentlyWithoutTheClientKnowing() throws Exception {
+        start("""
+                impairments:
+                  silent:
+                    from: broker-0
+                    to: gateways
+                    silentDisconnect: true
+                    anchor: run
+                    start: 2s
+                """);
+        startTransfer();
+        impairments.startRun();
+        Thread.sleep(4000);
+
+        // The server's connections are gone, while the client keeps them and sends into them
+        assertThat(exec("broker-0", "ss -t -n -H state established src :5201")).isBlank();
+        assertThat(exec("gateways", "ss -t -n -H state established dst " + ip("broker-0"))).contains(":5201");
+        assertThat(impairments.unexercised()).isEmpty();
+    }
+
+    // A long, slow transfer from the gateways to broker-0, whose result is in the array once it has ended
+    private Container.ExecResult[] startTransfer() throws InterruptedException {
+        Container.ExecResult[] transfer = new Container.ExecResult[2];
+        Thread client = new Thread(() -> {
+            try {
+                transfer[0] = containers.get("gateways").execInContainer("iperf3", "-c", "broker-0", "-t", "20",
+                        "-b", "1M");
+            } catch (IOException | InterruptedException e) {
+                // The check looks at the connections, not at the transfer
+            }
+        });
+        client.setDaemon(true);
+        client.start();
+        Thread.sleep(500);
+        return transfer;
+    }
+
+    private String ip(String container) throws Exception {
+        return exec(container, "hostname -i").strip();
     }
 
     private void start(String yaml) throws IOException {

@@ -1,0 +1,51 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# The clients' TCP connections disappear without the brokers knowing, as when a NAT gateway or a firewall in front of
+# the clients forgets its connections, or a client's host drops off the network: the gateways' connections at 30 s of
+# the measurement, and the applications' at 100 s. The clients get an error at once and reconnect, on new connections,
+# while their resets are dropped, so that the brokers keep the old connections, with the producers and consumers on
+# them, until the brokers' keep-alive finds them dead, in 30-60 s with the default 30 s interval. The old connections'
+# packets stay dropped until the run ends.
+#
+# Look for: producers that can't register again under their name while the broker still has the old producer, and
+# Key_Shared consumers whose hash ranges stay with a consumer that is gone, in the clients' pulsar-client.log.txt and
+# the publish and end-to-end latency, and how long the brokers take to drop the old connections.
+
+network:
+  impairments:
+    gateways-gone:
+      from: gateways
+      to: brokers
+      silentDisconnect: true
+      start: 30s
+    applications-gone:
+      from: applications
+      to: brokers
+      silentDisconnect: true
+      start: 100s
+workloads:
+  iotTelemetry:
+    measurement:
+      seconds: 180
+    timeoutSeconds: 360
+    gateways:
+      env:
+        PULSAR_CLIENT_LOG_LEVEL: info
+    applications:
+      env:
+        PULSAR_CLIENT_LOG_LEVEL: info

@@ -62,7 +62,7 @@ final class NetworkReport {
             String status = impairment.path("status").asText();
             boolean reset = "reset".equals(impairment.path("kind").asText());
             String what = impairment.path("description").asText();
-            if (reset) {
+            if (impairment.has("resetConnections")) {
                 what += String.format(Locale.ROOT, ", %,d connection(s)", impairment.path("resetConnections").asInt());
             }
             String applied = impairment.has("appliedEpochMs")

@@ -103,7 +103,8 @@ final class TcCommands {
      * every packet of a partition. The jitter keeps the packets' order unless the impairment reorders.
      */
     static String pathNetem(NetworkSettings.Impairment impairment) {
-        if (impairment.kind() == NetworkSettings.Kind.PARTITION) {
+        if (impairment.kind() == NetworkSettings.Kind.PARTITION
+                || impairment.kind() == NetworkSettings.Kind.SILENT_DISCONNECT) {
             return "limit " + PATH_LIMIT + " loss 100%";
         }
         List<String> arguments = new ArrayList<>();
@@ -166,6 +167,72 @@ final class TcCommands {
     private static String filter(String device, int preference, int slot, String direction, String address) {
         return "tc filter add dev " + device(device) + " parent 1: protocol ip pref " + preference + " u32 match ip "
                 + direction + " " + ipv4(address) + "/32 flowid " + classId(band(slot));
+    }
+
+    /**
+     * The filter that sends one TCP connection's packets from {@code source} to {@code destination} into an
+     * impairment's band, by the connection's addresses and ports.
+     */
+    static String flowFilter(String device, int preference, int slot, Endpoint source, Endpoint destination) {
+        return "tc filter add dev " + device(device) + " parent 1: protocol ip pref " + preference + " u32"
+                + " match ip src " + ipv4(source.address()) + "/32 match ip dst " + ipv4(destination.address())
+                + "/32 match ip sport " + port(source.port()) + " 0xffff match ip dport " + port(destination.port())
+                + " 0xffff flowid " + classId(band(slot));
+    }
+
+    /** One end of a TCP connection. */
+    record Endpoint(String address, int port) {
+    }
+
+    /** One TCP connection, as {@code ss} shows it in the namespace of its local end. */
+    record Connection(Endpoint local, Endpoint peer) {
+    }
+
+    /** Lists the established TCP connections to {@code destination}, one per line: local and peer address:port. */
+    static String connections(String destination) {
+        return "ss -t -n -H state established dst " + ipv4(destination);
+    }
+
+    /**
+     * The connections in {@code ss -t -n -H state established}'s output: the two fields of each line that are
+     * {@code address:port}, the local end first. A dual-stack socket, such as a Java server's, shows its IPv4 address
+     * mapped into IPv6, as {@code [::ffff:a.b.c.d]:port}; its packets are IPv4, and ss takes its IPv4 address.
+     */
+    static List<Connection> parseConnections(String output) {
+        List<Connection> connections = new ArrayList<>();
+        for (String line : output.lines().toList()) {
+            List<Endpoint> ends = new ArrayList<>();
+            for (String field : line.strip().split("\\s+")) {
+                int colon = field.lastIndexOf(':');
+                if (colon <= 0) {
+                    continue;
+                }
+                String address = field.substring(0, colon);
+                if (address.startsWith("[::ffff:") && address.endsWith("]")) {
+                    address = address.substring("[::ffff:".length(), address.length() - 1);
+                }
+                if (IPV4.matcher(address).matches()) {
+                    ends.add(new Endpoint(address, Integer.parseInt(field.substring(colon + 1))));
+                }
+            }
+            if (ends.size() == 2) {
+                connections.add(new Connection(ends.get(0), ends.get(1)));
+            }
+        }
+        return connections;
+    }
+
+    /** Destroys one TCP connection, by its local and peer ends; prints it when it was destroyed. */
+    static String destroy(Connection connection) {
+        return "ss -K -t -n -H src " + ipv4(connection.local().address()) + ":" + port(connection.local().port())
+                + " dst " + ipv4(connection.peer().address()) + ":" + port(connection.peer().port());
+    }
+
+    private static int port(int port) {
+        if (port < 1 || port > 65535) {
+            throw new IllegalArgumentException("Not a TCP port: " + port);
+        }
+        return port;
     }
 
     /** Deletes an impairment's filters, which removes the impairment; its queued packets are still sent. */
