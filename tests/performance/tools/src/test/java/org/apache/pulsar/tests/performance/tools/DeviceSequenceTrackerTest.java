@@ -19,6 +19,9 @@
 package org.apache.pulsar.tests.performance.tools;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.apache.pulsar.client.impl.MessageIdImpl;
 import org.testng.annotations.Test;
 
 public class DeviceSequenceTrackerTest {
@@ -30,7 +33,7 @@ public class DeviceSequenceTrackerTest {
         tracker.received(1, 0);
         tracker.received(0, 1);
 
-        assertThat(tracker.summary()).isEqualTo(new DeviceSequenceTracker.Summary(3, 1, 0, 0));
+        assertThat(tracker.summary()).isEqualTo(new DeviceSequenceTracker.Summary(3, 1, 0, 0, 0, 0));
         assertThat(tracker.summary().valid()).isTrue();
     }
 
@@ -47,5 +50,24 @@ public class DeviceSequenceTrackerTest {
         assertThat(tracker.summary().uniqueMessages()).isEqualTo(2);
         assertThat(tracker.summary().invalidMessages()).isEqualTo(1);
         assertThat(tracker.summary().valid()).isFalse();
+    }
+
+    @Test
+    public void tellsRedeliveredDuplicatesFromMessagesPersistedTwice() throws Exception {
+        DeviceSequenceTracker tracker = new DeviceSequenceTracker(1);
+        tracker.received(0, 0, new MessageIdImpl(5, 0, -1), 0, "t", "x");
+        // The same message again: redelivered
+        tracker.received(0, 0, new MessageIdImpl(5, 0, -1), 0, "t", "x");
+        // The same sequence in another entry: the broker persisted it twice
+        tracker.received(0, 0, new MessageIdImpl(5, 7, -1), 0, "t", "x");
+        tracker.received(0, 1, new MessageIdImpl(5, 1, -1), 0, "t", "x");
+        // An older sequence than the latest can't be classified
+        tracker.received(0, 0, new MessageIdImpl(5, 0, -1), 0, "t", "x");
+
+        assertThat(tracker.summary()).isEqualTo(new DeviceSequenceTracker.Summary(2, 3, 0, 0, 1, 1));
+        Path samples = Files.createTempFile("republished", ".txt");
+        tracker.writeRepublishedSamples(samples);
+        assertThat(Files.readString(samples)).contains("device=0 sequence=0 messageId=5:7:-1");
+        Files.delete(samples);
     }
 }

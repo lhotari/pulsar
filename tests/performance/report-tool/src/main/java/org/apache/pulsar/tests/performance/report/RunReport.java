@@ -637,6 +637,15 @@ public final class RunReport {
         }
         report.append(clean ? "\nNo duplicates, ordering violations or invalid messages.\n"
                 : "\n**Duplicates, ordering violations or invalid messages were received.**\n");
+        long redelivered = consumers.stream().mapToLong(c -> c.path("redeliveredDuplicates").asLong()).sum();
+        long republished = consumers.stream().mapToLong(c -> c.path("republishedDuplicates").asLong()).sum();
+        if (redelivered > 0 || republished > 0) {
+            // Only a duplicate of a device's latest message can be compared with it
+            report.append(String.format(Locale.ROOT, "%nOf the duplicates of a device's latest message, %,d came"
+                    + " with the same message ID, redelivered, and %,d with another one: the broker persisted the"
+                    + " message twice%s.%n", redelivered, republished, republished > 0
+                    ? ", see each application's `republished-duplicates.txt`" : ""));
+        }
     }
 
     private static void appendThroughput(StringBuilder report, JsonNode producer, List<JsonNode> consumers) {
