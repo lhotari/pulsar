@@ -39,9 +39,11 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import lombok.CustomLog;
 import org.apache.pulsar.broker.PulsarService;
+import org.apache.pulsar.broker.service.BrokerServiceException.ServiceUnitNotReadyException;
 import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.NamespaceBundles;
+import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.stats.CacheMetricsCollector;
 import org.apache.pulsar.common.util.FutureUtil;
 import org.apache.pulsar.metadata.api.coordination.LockManager;
@@ -237,6 +239,14 @@ public class OwnershipCache {
             });
         }
 
+        if (pulsar.isMetadataSessionLost()) {
+            // The bundle's lock can't be read or acquired before the session is reestablished, and the metadata cache
+            // can still hold this broker's own lock value although the store deleted it with the session and another
+            // broker may own the bundle now. Fail at once, so that the client looks the topic up at another broker
+            // instead of waiting for the metadata store here.
+            return FutureUtil.failedFuture(new ServiceUnitNotReadyException("Namespace bundle " + suName
+                    + " isn't served by this broker, whose metadata session is lost"));
+        }
         // If we're not the owner, we need to check if anybody else is
         String path = ServiceUnitUtils.path(suName);
         return lockManager.readLock(path).thenCompose(owner -> {
@@ -272,6 +282,11 @@ public class OwnershipCache {
      * @throws Exception
      */
     public CompletableFuture<NamespaceEphemeralData> tryAcquiringOwnership(NamespaceBundle bundle) throws Exception {
+        if (pulsar.isMetadataSessionLost()) {
+            // acquiring the lock would wait for the session to be reestablished
+            return FutureUtil.failedFuture(new ServiceUnitNotReadyException("Can't acquire namespace bundle "
+                    + bundle + " while the metadata session is lost"));
+        }
         if (!refreshSelfOwnerInfo()) {
             return FutureUtil.failedFuture(
                     new RuntimeException("Namespace service is not ready for acquiring ownership"));
@@ -508,56 +523,85 @@ public class OwnershipCache {
     }
 
     /**
-     * Stops serving a bundle that another broker took over while this broker couldn't reach the metadata store.
+     * Stops serving the bundle of a topic whose ledger another broker fenced after this broker lost its metadata
+     * session, which shows that the other broker took the bundle over.
      *
      * <p>A broker that has lost its metadata session keeps serving its bundles from this cache until it can
-     * revalidate their locks. When another broker acquires a bundle's lock in the meantime and loads one of its
-     * topics, it fences the topic's ledger, and this broker's writes fail: that is the only sign of the takeover this
-     * broker gets before the metadata store is reachable again. Without acting on it, this broker keeps answering
-     * lookups for the bundle with itself and keeps loading its topics, which wait for the metadata store, so the
-     * clients can't move to the new owner until then.
+     * revalidate their locks. When the metadata store expires the session, it deletes the session's locks, and
+     * another broker can acquire a bundle's lock and load its topics, fencing the topics' ledgers. This broker's
+     * writes then fail: that is the only sign of the takeover it gets before its session is reestablished. Without
+     * acting on it, this broker keeps answering lookups for the bundle with itself and keeps loading its topics,
+     * which wait for the metadata store, so the clients can't move to the new owner until then.
      *
-     * <p>This removes the bundle's current ownership generation from the cache and closes the bundle's topics, as an
-     * unload does, but doesn't release the lock, since releasing it needs the metadata store and another broker holds
-     * it. Lookups and topic loads then find no cached ownership: lookups read the lock from the metadata store, and
-     * topic loads fail the ownership check, so the clients look the topic up again until they reach the new owner.
-     * The lock itself expires when the lock manager revalidates it after the session is reestablished; its expiry
-     * listener then finds this generation gone and has nothing left to do. If no other broker holds the lock after
-     * all, the lock revalidates, and the next lookup reacquires the ownership from the lock, as it does after any
-     * loss of the cache entry.
+     * <p>This removes the bundle's ownership generation from the cache and closes the bundle's topics, as an unload
+     * does, but doesn't release the lock, since releasing it needs the metadata store and another broker holds it.
+     * While the session is lost, lookups and ownership acquisitions of bundles that aren't in the cache fail at once
+     * (see {@link #getOwnerAsync(NamespaceBundle)}), and topic loads fail the ownership check, so the clients look
+     * the topic up again until they reach the new owner. When the session is reestablished, the lock manager
+     * revalidates the lock: it finds another broker's lock and expires it, and its expiry listener finds this
+     * generation gone and has nothing left to do. If no other broker holds the lock after all, the lock revalidates,
+     * and the next lookup reacquires the ownership from it with a new lock instance, as after any loss of the cache
+     * entry; the revalidated instance is then no longer tracked and needs nothing.
      *
-     * @return a future that completes when the bundle's topics are closed
+     * <p>Since bundles can't be acquired while the session is lost, a newer generation of the bundle can't be
+     * replaced by a report of the old one. The invalidation and the snapshot of the bundle's topics happen at once;
+     * the topics are closed on the broker's executor, not on the thread that reported the takeover.
      */
-    public CompletableFuture<Void> handleOwnershipTakenOver(NamespaceBundle bundle) {
-        OwnedBundle ownedBundle = getOwnedBundle(bundle);
-        if (ownedBundle == null) {
-            return CompletableFuture.completedFuture(null);
+    public void handleOwnershipTakenOver(TopicName topicName) {
+        OwnedBundle ownedBundle = null;
+        // Find the bundle among the owned ones, which needs no metadata, rather than in the namespace's bundles,
+        // which can have been invalidated in the cache.
+        for (CompletableFuture<OwnedBundle> future : ownedBundlesCache.asMap().values()) {
+            OwnedBundle candidate = future.isDone() && !future.isCompletedExceptionally() ? future.join() : null;
+            if (candidate != null && candidate.getNamespaceBundle().includes(topicName)) {
+                ownedBundle = candidate;
+                break;
+            }
         }
+        if (ownedBundle == null) {
+            return;
+        }
+        NamespaceBundle bundle = ownedBundle.getNamespaceBundle();
         AtomicBoolean invalidated = new AtomicBoolean();
-        // getOwnedBundle returned a published entry, so the invalidation runs synchronously
+        // the entry is a completed future, so the invalidation runs synchronously
         invalidateLocalOwnerCache(bundle, ownedBundle, () -> invalidated.set(true));
         if (!invalidated.get()) {
-            // another call handled this generation, or a newer generation replaced it
-            return CompletableFuture.completedFuture(null);
+            // another topic of the bundle reported the takeover first
+            return;
         }
         ownedBundle.setActive(false);
-        log.warn().attr("bundle", bundle)
-                .log("Another broker took the bundle over while the metadata store is unavailable; stopped serving"
-                        + " it and closing its topics");
-        Map<String, CompletableFuture<Optional<Topic>>> topicFutures =
-                pulsar.getBrokerService().getTopicFuturesInBundle(bundle);
-        return pulsar.getBrokerService().unloadServiceUnit(bundle, true, true,
-                        pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs(), TimeUnit.MILLISECONDS,
-                        topicFutures)
-                .handle((unloadedTopics, ex) -> {
-                    if (ex != null) {
-                        log.warn().attr("bundle", bundle).exception(ex)
-                                .log("Failed to close the topics of a bundle that another broker took over");
-                    }
-                    pulsar.getBrokerService().cleanUnloadedTopicFromCache(bundle, topicFutures);
-                    namespaceService.onNamespaceBundleUnload(bundle);
-                    return null;
-                });
+        log.warn().attr("bundle", bundle).attr("topic", topicName)
+                .log("Another broker took the bundle over after the metadata session was lost; stopped serving it"
+                        + " and closing its topics");
+        try {
+            Map<String, CompletableFuture<Optional<Topic>>> topicFutures =
+                    pulsar.getBrokerService().getTopicFuturesInBundle(bundle);
+            pulsar.getExecutor().execute(() -> closeTakenOverTopics(bundle, topicFutures));
+        } catch (RuntimeException e) {
+            log.warn().attr("bundle", bundle).exception(e)
+                    .log("Failed to close the topics of a bundle that another broker took over");
+            namespaceService.onNamespaceBundleUnload(bundle);
+        }
+    }
+
+    private void closeTakenOverTopics(NamespaceBundle bundle,
+                                      Map<String, CompletableFuture<Optional<Topic>>> topicFutures) {
+        CompletableFuture<Integer> unloadFuture;
+        try {
+            unloadFuture = pulsar.getBrokerService().unloadServiceUnit(bundle, true, true,
+                    pulsar.getConfiguration().getNamespaceBundleUnloadingTimeoutMs(), TimeUnit.MILLISECONDS,
+                    topicFutures);
+        } catch (RuntimeException e) {
+            unloadFuture = FutureUtil.failedFuture(e);
+        }
+        unloadFuture.whenComplete((unloadedTopics, ex) -> {
+            if (ex != null) {
+                log.warn().attr("bundle", bundle).exception(ex)
+                        .log("Failed to close the topics of a bundle that another broker took over");
+            }
+            pulsar.getBrokerService().cleanUnloadedTopicFromCache(bundle, topicFutures);
+            namespaceService.onNamespaceBundleUnload(bundle);
+        });
     }
 
     /**

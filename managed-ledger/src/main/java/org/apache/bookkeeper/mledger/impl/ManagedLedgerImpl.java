@@ -2080,8 +2080,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         if (ledgerRecheckInProgress.getLeft() == currentLedger.getId()) {
             return;
         }
-        if (!factory.isMetadataServiceAvailable()) {
-            // Another client fenced or closed the ledger, usually a broker that took the topic over. Without the
+        if (errorCode == BKException.Code.LedgerFencedException && factory.isMetadataSessionLost()) {
+            // Another client fenced the ledger after this broker lost its metadata session: usually a broker that
+            // took the topic over, once the metadata store expired this broker's session and its locks. Without the
             // metadata service, this broker can neither read the ledger's metadata to check it nor create a new
             // ledger, so the pending adds would wait until the metadata service returns. Fence the managed ledger
             // instead: the pending adds fail now, the topic closes, and the clients look the topic up again.
@@ -2090,11 +2091,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             log.warn().attr("ledgerId", currentLedger.getId())
                     .attr("lastAddConfirmed", currentLedger.getLastAddConfirmed())
                     .attr("rc", errorCode)
-                    .log("Fencing the managed ledger: the current ledger was concurrently modified by another"
-                            + " client while the metadata service is unavailable");
-            setFenced(new ManagedLedgerFencedByAnotherWriterException("ManagedLedger " + name + " is fenced: its"
-                    + " current ledger " + currentLedger.getId() + " was fenced or closed by another client while the"
-                    + " metadata service is unavailable"));
+                    .log("Fencing the managed ledger: another client fenced the current ledger after the metadata"
+                            + " session was lost");
+            setFenced(new ManagedLedgerFencedByAnotherWriterException("ManagedLedger " + name + " is fenced: another"
+                    + " client fenced its current ledger " + currentLedger.getId() + " after the metadata session was"
+                    + " lost"));
             closeConcurrentlyModifiedLedger(currentLedger);
             return;
         }

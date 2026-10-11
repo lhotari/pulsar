@@ -54,16 +54,19 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 import lombok.Cleanup;
 import org.apache.bookkeeper.common.util.OrderedScheduler;
 import org.apache.logging.log4j.Level;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.service.BrokerService;
+import org.apache.pulsar.broker.service.BrokerServiceException;
 import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.NamespaceBundleFactory;
 import org.apache.pulsar.common.naming.NamespaceName;
+import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.metadata.api.MetadataStoreConfig;
 import org.apache.pulsar.metadata.api.MetadataStoreException;
@@ -377,27 +380,35 @@ public class OwnershipCacheTest {
         NamespaceBundle bundle = new NamespaceBundle(NamespaceName.get("pulsar/ns-taken-over"),
                 Range.closedOpen(0L, (long) Integer.MAX_VALUE),
                 bundleFactory);
+        // topics whose hashes fall in the bundle, which covers half of the namespace's hash range
+        List<TopicName> topics = IntStream.range(0, 100)
+                .mapToObj(i -> TopicName.get("persistent://pulsar/ns-taken-over/topic-" + i))
+                .filter(bundle::includes).limit(2).toList();
+        assertEquals(topics.size(), 2);
+        TopicName topic = topics.get(0);
         cache.tryAcquiringOwnership(bundle).get();
         OwnedBundle ownedBundle = cache.getOwnedBundle(bundle);
         assertNotNull(ownedBundle);
         ResourceLock<NamespaceEphemeralData> lock = cache.getLocallyAcquiredLocks().get(bundle);
 
-        cache.handleOwnershipTakenOver(bundle).get();
+        cache.handleOwnershipTakenOver(topic);
 
-        // The broker stopped serving the bundle: lookups find no cached ownership and read the lock, and topic loads
-        // fail the ownership check. The bundle's topics were closed.
+        // The broker stopped serving the bundle: lookups find no cached ownership and topic loads fail the
+        // ownership check. The bundle's topics are closed.
         assertNull(cache.getOwnedBundle(bundle));
         assertFalse(ownedBundle.isActive());
         assertFalse(cache.checkOwnershipAsync(bundle).get());
-        verify(brokerService).unloadServiceUnit(same(bundle), eq(true), eq(true), anyLong(), any(), any());
-        verify(nsService).onNamespaceBundleUnload(bundle);
+        Awaitility.await().untilAsserted(() -> {
+            verify(brokerService).unloadServiceUnit(same(bundle), eq(true), eq(true), anyLong(), any(), any());
+            verify(nsService).onNamespaceBundleUnload(bundle);
+        });
         // The lock isn't released, since releasing it needs the metadata store: its revalidation after the session
         // is reestablished expires it.
         assertSame(cache.getLocallyAcquiredLocks().get(bundle), lock);
         assertTrue(store.exists(ServiceUnitUtils.path(bundle)).join());
 
         // another topic of the bundle reporting the takeover changes nothing
-        cache.handleOwnershipTakenOver(bundle).get();
+        cache.handleOwnershipTakenOver(topics.get(1));
         verify(brokerService, times(1)).unloadServiceUnit(same(bundle), eq(true), eq(true), anyLong(), any(), any());
         verify(nsService, times(1)).onNamespaceBundleUnload(bundle);
 
@@ -407,6 +418,39 @@ public class OwnershipCacheTest {
         assertEquals(owner.get().getNativeUrl(), selfBrokerUrl);
         assertNotNull(cache.getOwnedBundle(bundle));
         assertTrue(cache.checkOwnershipAsync(bundle).get());
+    }
+
+    @Test
+    public void testLookupsOfBundlesNotServedFailWhileTheMetadataSessionIsLost() throws Exception {
+        OwnershipCache cache = new OwnershipCache(this.pulsar, nsService);
+        NamespaceBundle owned = new NamespaceBundle(NamespaceName.get("pulsar/ns-session-lost"),
+                Range.closedOpen(0L, 0x40000000L), bundleFactory);
+        NamespaceBundle notOwned = new NamespaceBundle(NamespaceName.get("pulsar/ns-session-lost"),
+                Range.closedOpen(0x40000000L, 0x80000000L), bundleFactory);
+        cache.tryAcquiringOwnership(owned).get();
+
+        when(pulsar.isMetadataSessionLost()).thenReturn(true);
+
+        // the bundle it serves is still served, as with the reconnect policy for an expired session
+        assertTrue(cache.getOwnerAsync(owned).get().isPresent());
+        assertTrue(cache.checkOwnershipAsync(owned).get());
+        // lookups of other bundles and acquisitions fail at once instead of waiting for the metadata store
+        assertThatFailsWithServiceUnitNotReady(cache.getOwnerAsync(notOwned));
+        assertThatFailsWithServiceUnitNotReady(cache.tryAcquiringOwnership(notOwned));
+        assertNull(cache.getOwnedBundle(notOwned));
+
+        when(pulsar.isMetadataSessionLost()).thenReturn(false);
+        assertFalse(cache.getOwnerAsync(notOwned).get().isPresent());
+    }
+
+    private static void assertThatFailsWithServiceUnitNotReady(CompletableFuture<?> future) {
+        try {
+            future.get(5, TimeUnit.SECONDS);
+            fail("the future should have failed");
+        } catch (Exception e) {
+            assertTrue(e instanceof ExecutionException
+                    && e.getCause() instanceof BrokerServiceException.ServiceUnitNotReadyException, e.toString());
+        }
     }
 
     @Test

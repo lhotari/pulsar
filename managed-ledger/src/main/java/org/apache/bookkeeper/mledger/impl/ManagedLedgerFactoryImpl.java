@@ -154,6 +154,7 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
      */
     @Getter
     private boolean metadataServiceAvailable;
+    private volatile boolean metadataSessionLost;
     private final ManagedLedgerConfig defaultManagedLedgerConfig;
 
     private static class PendingInitializeManagedLedger {
@@ -293,6 +294,19 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
     private synchronized void handleMetadataStoreNotification(SessionEvent e) {
         log.info().attr("event", e).log("Received MetadataStore session event");
         metadataServiceAvailable = e.isConnected();
+        if (e == SessionEvent.SessionLost) {
+            metadataSessionLost = true;
+        } else if (e == SessionEvent.SessionReestablished) {
+            metadataSessionLost = false;
+        }
+    }
+
+    /**
+     * Whether the metadata store's session was lost and not reestablished yet: the store may have deleted the
+     * session's ephemeral nodes, such as its locks, and other clients may have taken over what they protected.
+     */
+    public boolean isMetadataSessionLost() {
+        return metadataSessionLost;
     }
 
     private synchronized void flushCursors() {

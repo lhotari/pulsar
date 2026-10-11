@@ -333,6 +333,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         Init, Started, Closing, Closed
     }
 
+    private volatile boolean metadataSessionLost;
     private volatile State state;
 
     private final ReentrantLock mutex = new ReentrantLock();
@@ -1280,8 +1281,21 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         addBrokerAdditionalServlets(webService, attributeMap, config);
     }
 
+    /**
+     * Whether the local metadata store's session was lost and not reestablished yet. The store may have deleted the
+     * session's ephemeral nodes meanwhile, and another broker may have acquired the bundles whose locks they were.
+     */
+    public boolean isMetadataSessionLost() {
+        return metadataSessionLost;
+    }
+
     private void handleMetadataSessionEvent(SessionEvent e) {
         log.info().attr("event", e).log("Received metadata service session event");
+        if (e == SessionEvent.SessionLost) {
+            metadataSessionLost = true;
+        } else if (e == SessionEvent.SessionReestablished) {
+            metadataSessionLost = false;
+        }
         if (e == SessionEvent.SessionLost
                 && config.getZookeeperSessionExpiredPolicy() == MetadataSessionExpiredPolicy.shutdown) {
             log.warn()

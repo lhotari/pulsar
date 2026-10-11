@@ -286,17 +286,16 @@ public class NamespaceService implements AutoCloseable {
     }
 
     /**
-     * Stops serving the bundle of a topic whose ledger another broker fenced while this broker couldn't reach the
-     * metadata store, which shows that the other broker took the bundle over. See
-     * {@link OwnershipCache#handleOwnershipTakenOver(NamespaceBundle)}. The extensible load manager tracks the
-     * ownerships in its own service unit state channel, which this doesn't apply to.
+     * Stops serving the bundle of a topic whose ledger another broker fenced after this broker lost its metadata
+     * session, which shows that the other broker took the bundle over. See
+     * {@link OwnershipCache#handleOwnershipTakenOver(TopicName)}. The extensible load manager tracks the ownerships
+     * in its own service unit state channel, which this doesn't apply to.
      */
     public void handleOwnershipTakenOver(TopicName topicName) {
         if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)) {
             return;
         }
-        // the topic is loaded, so its namespace's bundles are cached, and this doesn't wait for the metadata store
-        getBundleIfPresent(topicName).ifPresent(ownershipCache::handleOwnershipTakenOver);
+        ownershipCache.handleOwnershipTakenOver(topicName);
     }
 
     public NamespaceBundle getBundle(TopicName topicName) {

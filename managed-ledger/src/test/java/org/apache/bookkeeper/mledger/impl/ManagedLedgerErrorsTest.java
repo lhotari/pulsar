@@ -25,6 +25,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.expectThrows;
@@ -665,17 +666,18 @@ public class ManagedLedgerErrorsTest extends MockedBookKeeperTestCase {
     }
 
     @Test
-    public void concurrentlyModifiedLedgerFencesWhenMetadataServiceIsUnavailable() throws Exception {
+    public void fencedLedgerFencesTheManagedLedgerAfterTheMetadataSessionIsLost() throws Exception {
         @Cleanup("shutdown")
         ManagedLedgerFactoryImpl factory = spy(new ManagedLedgerFactoryImpl(metadataStore, bkc));
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
-                "concurrentlyModifiedLedgerFencesWhenMetadataServiceIsUnavailable", defaultConfig());
+                "fencedLedgerFencesTheManagedLedgerAfterTheMetadataSessionIsLost", defaultConfig());
         ledger.addEntry("entry-1".getBytes());
         LedgerHandle fencedLedger = ledger.currentLedger;
 
-        // Another broker took the topic over and fenced the ledger while this broker can't reach the metadata
-        // service: the add must fail at once instead of waiting for the metadata service to check the ledger.
+        // Another broker took the topic over and fenced the ledger after this broker lost its metadata session: the
+        // add must fail at once instead of waiting for the metadata service to check the ledger.
         when(factory.isMetadataServiceAvailable()).thenReturn(false);
+        when(factory.isMetadataSessionLost()).thenReturn(true);
         bkc.addEntryFailAfter(0, BKException.Code.LedgerFencedException);
 
         ManagedLedgerException e = expectThrows(ManagedLedgerException.class,
@@ -688,6 +690,26 @@ public class ManagedLedgerErrorsTest extends MockedBookKeeperTestCase {
         PulsarMockLedgerHandle mockFencedLedger = (PulsarMockLedgerHandle) fencedLedger;
         Awaitility.await().untilAsserted(() -> assertTrue(mockFencedLedger.getAsyncCloseCount().get() > 0,
                 "the handle of the concurrently modified ledger must be closed"));
+    }
+
+    @Test
+    public void fencedLedgerIsReplacedWhileTheMetadataSessionIsAlive() throws Exception {
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl factory = spy(new ManagedLedgerFactoryImpl(metadataStore, bkc));
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "fencedLedgerIsReplacedWhileTheMetadataSessionIsAlive", defaultConfig());
+        ledger.addEntry("entry-1".getBytes());
+        long fencedLedgerId = ledger.currentLedger.getId();
+
+        // Only the connection is lost, so the session and its locks are still this broker's, and no other broker
+        // can own the topic: the ledger, fenced by someone else such as auto-recovery, is replaced as before.
+        when(factory.isMetadataServiceAvailable()).thenReturn(false);
+        when(factory.isMetadataSessionLost()).thenReturn(false);
+        bkc.addEntryFailAfter(0, BKException.Code.LedgerFencedException);
+
+        ledger.addEntry("entry-2".getBytes());
+        assertEquals(ledger.getState(), ManagedLedgerImpl.State.LedgerOpened);
+        assertNotEquals(ledger.currentLedger.getId(), fencedLedgerId);
     }
 
     @Test

@@ -90,8 +90,8 @@ public class ManagedLedgerException extends Exception {
     }
 
     /**
-     * The managed ledger was fenced because another client fenced or closed its current ledger, such as another
-     * broker that took the topic over, while the metadata service was unavailable.
+     * The managed ledger was fenced because another client fenced its current ledger after the metadata store's
+     * session was lost, such as another broker that took the topic over once the session expired.
      */
     public static class ManagedLedgerFencedByAnotherWriterException extends ManagedLedgerFencedException {
         public ManagedLedgerFencedByAnotherWriterException(String message) {
