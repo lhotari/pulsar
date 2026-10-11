@@ -27,6 +27,7 @@ import com.github.dockerjava.api.exception.NotFoundException;
 import com.github.dockerjava.api.model.ContainerNetwork;
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -44,6 +45,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.apache.pulsar.tests.performance.launcher.NetworkSettings.Anchor;
@@ -55,6 +57,7 @@ import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.images.builder.ImageFromDockerfile;
+import org.testcontainers.images.builder.Transferable;
 
 /**
  * Applies a scenario's network impairments to the run's containers with Linux traffic control, from a privileged
@@ -84,6 +87,8 @@ final class NetworkImpairments implements AutoCloseable {
      * counters of the run are their last reading.
      */
     private static final long TCP_SAMPLE_SECONDS = 5;
+    /** The longest script passed as an argument; a longer one goes into a file in the sidecar. */
+    private static final int MAX_INLINE_SCRIPT = 64 * 1024;
     /** The longest a command may take in the sidecar. */
     private static final int COMMAND_TIMEOUT_SECONDS = 30;
     /**
@@ -187,6 +192,7 @@ final class NetworkImpairments implements AutoCloseable {
         return thread;
     });
     private final CompletableFuture<Void> failure = new CompletableFuture<>();
+    private final AtomicLong scripts = new AtomicLong();
     private Instant measurementStart;
     // Set before the timeline is stopped, so that an interrupted command isn't taken for a failed impairment
     private volatile boolean closing;
@@ -1040,13 +1046,23 @@ final class NetworkImpairments implements AutoCloseable {
         if (target != null) {
             command.addAll(List.of("nsenter", "-t", Long.toString(target.pid()), "-n"));
         }
-        command.addAll(List.of("sh", "-c", "set -e\n" + script));
+        String body = "set -e\n" + script;
+        if (body.length() > MAX_INLINE_SCRIPT) {
+            // Linux takes at most 128 KB in one argument, which the filters of hundreds of connections exceed; a file
+            // in the sidecar works in any network namespace, since nsenter -n keeps the sidecar's file system
+            String file = "/tmp/network-impairments-" + scripts.incrementAndGet() + ".sh";
+            sidecar.copyFileToContainer(Transferable.of(body.getBytes(StandardCharsets.UTF_8)), file);
+            command.addAll(List.of("sh", file));
+        } else {
+            command.addAll(List.of("sh", "-c", body));
+        }
         try {
             Container.ExecResult result = sidecar.execInContainer(command.toArray(String[]::new));
             if (result.getExitCode() != 0) {
-                throw new IOException("`" + script.replace("\n", "; ") + "`" + (target != null ? " in " + target.name()
-                        : "") + " failed with status " + result.getExitCode() + ": "
-                        + (result.getStderr() + result.getStdout()).strip());
+                String shown = script.replace("\n", "; ");
+                throw new IOException("`" + (shown.length() > 300 ? shown.substring(0, 300) + " ..." : shown) + "`"
+                        + (target != null ? " in " + target.name() : "") + " failed with status "
+                        + result.getExitCode() + ": " + (result.getStderr() + result.getStdout()).strip());
             }
             return result.getStdout();
         } catch (InterruptedException e) {
