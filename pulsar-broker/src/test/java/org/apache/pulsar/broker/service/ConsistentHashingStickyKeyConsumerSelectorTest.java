@@ -144,6 +144,44 @@ public class ConsistentHashingStickyKeyConsumerSelectorTest {
         }
     }
 
+    @Test
+    public void testConsumerAddedTwiceStaysUntilRemovedTwice() {
+        ConsistentHashingStickyKeyConsumerSelector selector =
+                new ConsistentHashingStickyKeyConsumerSelector(20, true, 127);
+        Consumer consumer = createMockConsumer("twice", "twice", 1);
+        selector.addConsumer(consumer).join();
+        selector.addConsumer(consumer).join();
+        selector.removeConsumer(consumer);
+        assertLookupMatchesAssignments(selector);
+        assertThat(selector.getConsumerKeyHashRanges()).containsOnlyKeys(consumer);
+        assertThat(selector.getConsumerPointsCount()).isEqualTo(1);
+        selector.removeConsumer(consumer);
+        assertThat(selector.getConsumerKeyHashRanges()).isEmpty();
+        assertThat(selector.getConsumerPointsCount()).isZero();
+        Assert.assertNull(selector.select(1));
+    }
+
+    @Test
+    public void testRemovedConsumersArentRetainedWithoutPoints() {
+        ConsistentHashingStickyKeyConsumerSelector selector = new ConsistentHashingStickyKeyConsumerSelector(0, true);
+        Consumer consumer = createMockConsumer("no-points", "no-points", 1);
+        selector.addConsumer(consumer).join();
+        selector.removeConsumer(consumer);
+        assertThat(selector.getConsumerPointsCount()).isZero();
+    }
+
+    @Test
+    public void testRangesEndingAtMaxValue() {
+        ConsistentHashingStickyKeyConsumerSelector selector =
+                new ConsistentHashingStickyKeyConsumerSelector(3, true, Integer.MAX_VALUE);
+        Consumer consumer = createMockConsumer("max", "max", 1);
+        selector.addConsumer(consumer).join();
+        assertThat(selector.getConsumerKeyHashRanges())
+                .containsExactly(Map.entry(consumer, List.of(Range.of(1, Integer.MAX_VALUE))));
+        assertThat(selector.getConsumerHashAssignmentsSnapshot().getRangesByConsumer())
+                .containsExactly(Map.entry(consumer, List.of(Range.of(1, Integer.MAX_VALUE))));
+    }
+
     private static void assertLookupMatchesAssignments(ConsistentHashingStickyKeyConsumerSelector selector) {
         assertLookupMatchesAssignments(selector, 127);
     }

@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.service;
 
+import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -53,7 +54,7 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
      * modified after publication, so readers capture one ring and its points and consumers always belong to the same
      * completed membership change.
      */
-    record HashRing(int[] points, Consumer[] consumers) {
+    private record HashRing(int[] points, Consumer[] consumers) {
         static final HashRing EMPTY = new HashRing(new int[0], new Consumer[0]);
 
         boolean isEmpty() {
@@ -76,8 +77,8 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
     private Map<Integer, List<Consumer>> collidingConsumers;
     // Tracks the used consumer name indexes for each consumer name
     private final ConsumerNameIndexTracker consumerNameIndexTracker = new ConsumerNameIndexTracker();
-    // The hash ring points of each consumer, by its identity, so that removing a consumer doesn't calculate them
-    // again
+    // The sorted hash ring points of each consumer, by its identity, so that removing a consumer doesn't calculate
+    // them again
     private final Map<Consumer, int[]> consumerPoints = new IdentityHashMap<>();
 
     private final int numberOfPoints;
@@ -129,7 +130,10 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
                     addedPoints[addedPointCount++] = hash;
                 }
             }
-            consumerPoints.put(consumer, points);
+            if (numberOfPoints > 0) {
+                Arrays.sort(points);
+                consumerPoints.put(consumer, points);
+            }
             Arrays.sort(addedPoints, 0, addedPointCount);
             // the consumer's own points can collide with each other too
             int hashPointsAdded = 0;
@@ -221,26 +225,48 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
             ConsumerIdentityWrapper consumerIdentityWrapper = new ConsumerIdentityWrapper(consumer);
             int consumerNameIndex = consumerNameIndexTracker.getTrackedIndex(consumerIdentityWrapper);
             if (consumerNameIndex > -1) {
-                int[] points = consumerPoints.get(consumer);
-                Consumer[] consumers = before.consumers().clone();
-                boolean pointsRemoved = false;
-                // Remove all the points that were added for this consumer
-                for (int i = 0; i < numberOfPoints; i++) {
-                    int hash = points != null ? points[i]
-                            : calculateHashForConsumerAndIndex(consumer, consumerNameIndex, i);
+                int[] points = consumerPoints.remove(consumer);
+                if (points == null) {
+                    points = new int[numberOfPoints];
+                    for (int i = 0; i < numberOfPoints; i++) {
+                        points[i] = calculateHashForConsumerAndIndex(consumer, consumerNameIndex, i);
+                    }
+                    Arrays.sort(points);
+                }
+                // The consumer's points in the ring and each point's consumer after removing this consumer. The
+                // points are sorted, so a point that the consumer has more than once comes in a row.
+                int[] changedIndexes = new int[points.length];
+                Consumer[] changedConsumers = new Consumer[points.length];
+                int changes = 0;
+                int removedPoints = 0;
+                for (int hash : points) {
                     int index = Arrays.binarySearch(before.points(), hash);
                     assert index >= 0 : "hash ring entry wasn't found for hash " + hash;
-                    if (index >= 0) {
-                        consumers[index] = removeConsumerFromPoint(hash, consumers[index], consumer);
-                        pointsRemoved |= consumers[index] == null;
+                    if (index < 0) {
+                        continue;
                     }
+                    if (changes > 0 && changedIndexes[changes - 1] == index) {
+                        Consumer selected = changedConsumers[changes - 1];
+                        if (selected != null) {
+                            changedConsumers[changes - 1] = removeConsumerFromPoint(hash, selected, consumer);
+                            removedPoints += changedConsumers[changes - 1] == null ? 1 : 0;
+                        }
+                    } else {
+                        changedIndexes[changes] = index;
+                        changedConsumers[changes] = removeConsumerFromPoint(hash, before.consumers()[index], consumer);
+                        removedPoints += changedConsumers[changes] == null ? 1 : 0;
+                        changes++;
+                    }
+                }
+                for (int i = 0; i < numberOfPoints; i++) {
                     consumerNameIndexTracker.decreaseConsumerRefCount(consumerIdentityWrapper);
                 }
-                if (consumerNameIndexTracker.getTrackedIndex(consumerIdentityWrapper) == -1) {
-                    consumerPoints.remove(consumer);
+                if (consumerNameIndexTracker.getTrackedIndex(consumerIdentityWrapper) > -1) {
+                    // the consumer was added more than once, and is still in the ring
+                    consumerPoints.put(consumer, points);
                 }
-                after = pointsRemoved ? withoutEmptyPoints(before.points(), consumers)
-                        : new HashRing(before.points(), consumers);
+                after = changes > 0 ? applyChanges(before, changedIndexes, changedConsumers, changes, removedPoints)
+                        : before;
                 ring = after;
             }
             if (!addOrRemoveReturnsImpactedConsumersResult) {
@@ -275,21 +301,28 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
         return selectedConsumer;
     }
 
-    private static HashRing withoutEmptyPoints(int[] beforePoints, Consumer[] beforeConsumers) {
-        int size = 0;
-        for (Consumer consumer : beforeConsumers) {
-            if (consumer != null) {
-                size++;
-            }
-        }
-        int[] points = new int[size];
-        Consumer[] consumers = new Consumer[size];
+    /**
+     * A new ring with the given points' consumers changed, in one pass, leaving out the points whose consumer became
+     * null.
+     */
+    private static HashRing applyChanges(HashRing before, int[] changedIndexes, Consumer[] changedConsumers,
+                                         int changes, int removedPoints) {
+        int[] beforePoints = before.points();
+        Consumer[] beforeConsumers = before.consumers();
+        int[] points = removedPoints > 0 ? new int[beforePoints.length - removedPoints] : beforePoints;
+        Consumer[] consumers = new Consumer[points.length];
         int index = 0;
+        int change = 0;
         for (int i = 0; i < beforePoints.length; i++) {
-            if (beforeConsumers[i] != null) {
-                points[index] = beforePoints[i];
-                consumers[index++] = beforeConsumers[i];
+            Consumer consumer = beforeConsumers[i];
+            if (change < changes && changedIndexes[change] == i) {
+                consumer = changedConsumers[change++];
+                if (consumer == null) {
+                    continue;
+                }
             }
+            points[index] = beforePoints[i];
+            consumers[index++] = consumer;
         }
         return new HashRing(points, consumers);
     }
@@ -299,6 +332,9 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
      * both rings: a hash belongs to the consumer of the first point at or after it.
      */
     private ImpactedConsumersResult resolveImpactedConsumers(HashRing before, HashRing after) {
+        if (before == after) {
+            return ImpactedConsumersResult.of(Map.of(), Map.of());
+        }
         Map<Consumer, List<Range>> removedRanges = new IdentityHashMap<>();
         Map<Consumer, List<Range>> addedRanges = new IdentityHashMap<>();
         int[] beforePoints = before.points();
@@ -352,6 +388,16 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
         return result;
     }
 
+    @VisibleForTesting
+    int getConsumerPointsCount() {
+        membershipLock.lock();
+        try {
+            return consumerPoints.size();
+        } finally {
+            membershipLock.unlock();
+        }
+    }
+
     @Override
     public Consumer select(int hash) {
         HashRing current = ring;
@@ -384,7 +430,8 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
         int[] points = current.points();
         Consumer[] consumers = current.consumers();
         Map<Consumer, List<Range>> rangesByConsumer = new IdentityHashMap<>();
-        int start = keyHashRange.getStart();
+        // a long, since the range can end at Integer.MAX_VALUE
+        long start = keyHashRange.getStart();
         int index = 0;
         while (index < points.length) {
             Consumer consumer = consumers[index];
@@ -397,14 +444,14 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
                 // the last range wraps around to the first point's consumer
                 end = keyHashRange.getEnd();
             }
-            rangesByConsumer.computeIfAbsent(consumer, k -> new ArrayList<>()).add(Range.of(start, end));
-            start = end + 1;
+            rangesByConsumer.computeIfAbsent(consumer, k -> new ArrayList<>()).add(Range.of((int) start, end));
+            start = end + 1L;
             index++;
         }
         if (start <= keyHashRange.getEnd()) {
             // the hashes after the last point belong to the first point's consumer
             rangesByConsumer.computeIfAbsent(consumers[0], k -> new ArrayList<>())
-                    .add(Range.of(start, keyHashRange.getEnd()));
+                    .add(Range.of((int) start, keyHashRange.getEnd()));
         }
         return rangesByConsumer;
     }
@@ -422,14 +469,15 @@ public class ConsistentHashingStickyKeyConsumerSelector implements StickyKeyCons
         int[] points = current.points();
         Consumer[] consumers = current.consumers();
         List<HashRangeAssignment> result = new ArrayList<>();
-        int start = keyHashRange.getStart();
+        // a long, since the range can end at Integer.MAX_VALUE
+        long start = keyHashRange.getStart();
         for (int i = 0; i < points.length; i++) {
-            appendAssignment(result, start, points[i], consumers[i]);
-            start = points[i] + 1;
+            appendAssignment(result, (int) start, points[i], consumers[i]);
+            start = points[i] + 1L;
         }
         // Handle wrap-around
         if (start <= keyHashRange.getEnd()) {
-            appendAssignment(result, start, keyHashRange.getEnd(), consumers[0]);
+            appendAssignment(result, (int) start, keyHashRange.getEnd(), consumers[0]);
         }
         return ConsumerHashAssignmentsSnapshot.of(result);
     }
