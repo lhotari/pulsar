@@ -16,9 +16,10 @@
 # under the License.
 # Every broker is cut off from ZooKeeper and the configuration store for 45 s of the measurement, past the 30 s session
 # timeout, in the failover cluster, as in a metadata store outage; 20 s into the outage, the consumers' connections are
-# reset, so that they look their topics up while the brokers' sessions are lost. With the default
-# zookeeperSessionExpiredPolicy=reconnect, the brokers keep serving the topics they own and answer the lookups from
-# their caches. On iot-telemetry-small, the publish latency max was 3.2-6.4 s, and every message was delivered in
+# reset, so that they look their topics up while the brokers can't reach ZooKeeper, 5 s before the brokers declare
+# their sessions lost (at 5/6 of the session timeout); set reset-applications.start to 60s or later for lookups after
+# that. With the default zookeeperSessionExpiredPolicy=reconnect, the brokers keep serving the topics they own and
+# answer the lookups from their caches. On iot-telemetry-small, the publish latency max was 3.2-6.4 s, and every message was delivered in
 # order. Look for: the brokers' sessions being reestablished and their locks
 # revalidated afterwards ("Revalidating all the existing locks"), lookups failing during the outage in the clients'
 # logs, and the latency of the reset.

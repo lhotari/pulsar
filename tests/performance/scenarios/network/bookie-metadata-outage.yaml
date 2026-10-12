@@ -16,7 +16,7 @@
 # under the License.
 # Every bookie is cut off from ZooKeeper for 45 s of the measurement, past the session timeout, in the failover
 # cluster, while the brokers still reach the bookies and ZooKeeper; the consumers' connections are reset 20 s in, so
-# that topics are loaded again. With Pulsar's default autoRecoveryDaemonEnabled=true, every bookie shut down about
+# that the consumers reconnect, look their topics up and subscribe again. With Pulsar's default autoRecoveryDaemonEnabled=true, every bookie shut down about
 # 25 s into the outage: the AutoRecovery daemon inside it shut down when its metadata session was declared lost, and
 # took the bookie server with it (lhotari/pulsar#355). The test image doesn't restart a bookie that exits, so the
 # brokers had no bookies left and the run failed, with publishing stopped at about 58 % of the messages, in 2 runs out
