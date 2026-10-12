@@ -1218,7 +1218,9 @@ public class MultiTopicsConsumerImpl<T> extends ConsumerBase<T> {
                 .build();
         configurationData.setBatchReceivePolicy(internalBatchReceivePolicy);
         configurationData.setStartPaused(paused);
-        configurationData = configurationData.clone();
+        // only the consumer's own topic: a copy of every topic's name for each consumer would take memory and time
+        // in the square of the number of topics
+        configurationData = configurationData.cloneForTopic(partitionName);
         return ConsumerImpl.newConsumerImpl(client, partitionName,
                 configurationData, client.externalExecutorProvider(),
                 partitionIndex, true, listener != null, subFuture,
