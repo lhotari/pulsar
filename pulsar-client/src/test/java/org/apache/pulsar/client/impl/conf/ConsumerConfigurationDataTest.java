@@ -72,7 +72,7 @@ public class ConsumerConfigurationDataTest {
         assertThat(clone.getSubscriptionName()).isEqualTo("my-sub");
         assertThat(clone.getSubscriptionType()).isEqualTo(SubscriptionType.Shared);
         assertThat(clone.getProperties()).containsEntry("key", "value");
-        // the clone's collections are its own
+        // the clone's topic names and properties are its own
         clone.getTopicNames().add("topic-d");
         clone.getProperties().put("other", "value");
         assertThat(conf.getTopicNames()).containsExactly("topic-a", "topic-b", "topic-c");

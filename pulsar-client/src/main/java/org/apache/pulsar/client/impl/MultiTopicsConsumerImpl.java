@@ -709,7 +709,16 @@ public class MultiTopicsConsumerImpl<T> extends ConsumerBase<T> {
     }
 
     private ConsumerConfigurationData<T> getInternalConsumerConfig() {
-        ConsumerConfigurationData<T> internalConsumerConfig = conf.clone();
+        return initInternalConsumerConfig(conf.clone());
+    }
+
+    /** The internal consumers' configuration for one (partitioned) topic, without the names of the other topics. */
+    private ConsumerConfigurationData<T> getInternalConsumerConfig(String topicName) {
+        return initInternalConsumerConfig(conf.cloneForTopic(topicName));
+    }
+
+    private ConsumerConfigurationData<T> initInternalConsumerConfig(
+            ConsumerConfigurationData<T> internalConsumerConfig) {
         internalConsumerConfig.setSubscriptionName(subscription);
         internalConsumerConfig.setConsumerName(consumerName);
         internalConsumerConfig.setMessageListener(null);
@@ -1132,7 +1141,7 @@ public class MultiTopicsConsumerImpl<T> extends ConsumerBase<T> {
 
             int receiverQueueSize = Math.min(conf.getReceiverQueueSize(),
                 conf.getMaxTotalReceiverQueueSizeAcrossPartitions() / numPartitions);
-            ConsumerConfigurationData<T> configurationData = getInternalConsumerConfig();
+            ConsumerConfigurationData<T> configurationData = getInternalConsumerConfig(topicName);
             configurationData.setReceiverQueueSize(receiverQueueSize);
 
             CompletableFuture<List<Integer>> partitionsFuture;
@@ -1449,7 +1458,7 @@ public class MultiTopicsConsumerImpl<T> extends ConsumerBase<T> {
                     .map(partitionName -> {
                         int partitionIndex = TopicName.getPartitionIndex(partitionName);
                         return addNewConsumerIfNotExists(partitionName,
-                                () -> createInternalConsumer(getInternalConsumerConfig(), partitionName,
+                                () -> createInternalConsumer(getInternalConsumerConfig(topicName), partitionName,
                                         partitionIndex, new CompletableFuture<>(), true, schema));
                     })
                     .collect(Collectors.toList());
