@@ -21,6 +21,7 @@ package org.apache.pulsar.broker.service.persistent;
 import static org.apache.pulsar.broker.service.StickyKeyConsumerSelector.STICKY_KEY_HASH_NOT_SET;
 import com.google.common.annotations.VisibleForTesting;
 import io.github.merlimat.slog.Logger;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -35,6 +36,7 @@ import lombok.Getter;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.Position;
+import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.commons.lang3.mutable.MutableBoolean;
 import org.apache.commons.lang3.mutable.MutableInt;
 import org.apache.pulsar.broker.ServiceConfiguration;
@@ -140,6 +142,42 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
     @VisibleForTesting
     public StickyKeyConsumerSelector getSelector() {
         return selector;
+    }
+
+    // The oldest position of each sticky key hash that was added to the replay queue while a read was in flight,
+    // such as the pending entries of a removed consumer. The read's entries of those hashes that are newer must not be
+    // dispatched before the older ones, which only a later replay read reads.
+    private final Int2ObjectOpenHashMap<Position> replayAdditionsDuringRead = new Int2ObjectOpenHashMap<>();
+    private boolean trackingReplayAdditions;
+
+    @Override
+    protected synchronized void onReadStarted() {
+        replayAdditionsDuringRead.clear();
+        trackingReplayAdditions = !allowOutOfOrderDelivery;
+    }
+
+    @Override
+    protected synchronized boolean addMessageToReplay(long ledgerId, long entryId, long stickyKeyHash) {
+        boolean added = super.addMessageToReplay(ledgerId, entryId, stickyKeyHash);
+        if (added && trackingReplayAdditions) {
+            Position position = PositionFactory.create(ledgerId, entryId);
+            Position oldest = replayAdditionsDuringRead.get((int) stickyKeyHash);
+            if (oldest == null || position.compareTo(oldest) < 0) {
+                replayAdditionsDuringRead.put((int) stickyKeyHash, position);
+            }
+        }
+        return added;
+    }
+
+    // Takes the replay additions of the read that completed and stops tracking them until the next read starts
+    private Int2ObjectOpenHashMap<Position> takeReplayAdditionsDuringRead() {
+        trackingReplayAdditions = false;
+        if (replayAdditionsDuringRead.isEmpty()) {
+            return null;
+        }
+        Int2ObjectOpenHashMap<Position> additions = new Int2ObjectOpenHashMap<>(replayAdditionsDuringRead);
+        replayAdditionsDuringRead.clear();
+        return additions;
     }
 
     @Override
@@ -258,6 +296,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
 
     @Override
     protected synchronized boolean trySendMessagesToConsumers(ReadType readType, List<Entry> entries) {
+        Int2ObjectOpenHashMap<Position> replayAdditions = takeReplayAdditionsDuringRead();
         lastNumberOfEntriesProcessed = 0;
         long totalMessagesSent = 0;
         long totalBytesSent = 0;
@@ -311,7 +350,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         MutableBoolean triggerLookAhead = new MutableBoolean();
         // filter and group the entries by consumer for dispatching
         final Map<Consumer, List<Entry>> entriesByConsumerForDispatching =
-                filterAndGroupEntriesForDispatching(entries, readType, triggerLookAhead);
+                filterAndGroupEntriesForDispatching(entries, readType, triggerLookAhead, replayAdditions);
 
         for (Map.Entry<Consumer, List<Entry>> current : entriesByConsumerForDispatching.entrySet()) {
             Consumer consumer = current.getKey();
@@ -467,7 +506,9 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
     // the entries are handled in the order they are received instead of first grouping them by consumer and
     // then filtering them
     private Map<Consumer, List<Entry>> filterAndGroupEntriesForDispatching(List<Entry> entries, ReadType readType,
-                                                                           MutableBoolean triggerLookAhead) {
+                                                                           MutableBoolean triggerLookAhead,
+                                                                           Int2ObjectOpenHashMap<Position>
+                                                                                   replayAdditions) {
         // entries grouped by consumer
         Map<Consumer, List<Entry>> entriesGroupedByConsumer = new HashMap<>();
         // permits for consumer, permits are for entries/batches
@@ -495,6 +536,15 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             boolean dispatchEntry = false;
             // check if the hash is already blocked
             boolean hashIsAlreadyBlocked = alreadyBlockedHashes.contains(stickyKeyHash);
+            if (!hashIsAlreadyBlocked && replayAdditions != null) {
+                // an older entry of the hash was added to the replay queue while this read was in flight: block the
+                // hash, so that this entry is dispatched after the older one
+                Position olderInReplay = replayAdditions.get(stickyKeyHash);
+                if (olderInReplay != null && olderInReplay.compareTo(entry.getPosition()) < 0) {
+                    alreadyBlockedHashes.add(stickyKeyHash);
+                    hashIsAlreadyBlocked = true;
+                }
+            }
             if (!hashIsAlreadyBlocked) {
                 consumer = selector.select(stickyKeyHash);
                 if (consumer != null) {

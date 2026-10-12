@@ -507,6 +507,13 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     private void updateMinReplayedPosition() {
         minReplayedPosition = getFirstPositionInReplay().orElse(null);
+        onReadStarted();
+    }
+
+    /**
+     * Called under the dispatcher's monitor when a normal or a replay read starts.
+     */
+    protected void onReadStarted() {
     }
 
     private boolean shouldPauseOnAckStatePersist(ReadType readType) {
