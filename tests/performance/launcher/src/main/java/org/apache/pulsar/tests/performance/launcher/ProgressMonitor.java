@@ -75,9 +75,13 @@ final class ProgressMonitor implements AutoCloseable {
     private final Map<String, JsonNode> latest = new LinkedHashMap<>();
     private final Histogram producerLatency = new Histogram(MAX_LATENCY_MICROS, 3);
     private final Histogram consumerLatency = new Histogram(MAX_LATENCY_MICROS, 3);
+    // The sources in the remote cluster, whose messages are the replicated ones, with their applications
+    private final Map<String, Integer> remoteSources = new LinkedHashMap<>();
+    private final Histogram remoteLatency = new Histogram(MAX_LATENCY_MICROS, 3);
     private long lastReportNanos = startedNanos;
     private long lastSent;
     private long lastReceived;
+    private long lastRemoteReceived;
     private volatile boolean closed;
 
     /**
@@ -143,6 +147,20 @@ final class ProgressMonitor implements AutoCloseable {
         }
     }
 
+    /**
+     * Follows the progress stream of the {@code applications} in the remote cluster, which receive the replicated
+     * messages: they get a line of their own.
+     */
+    void followRemote(String source, int applications, String controlUrl, BooleanSupplier running) {
+        addRemote(source, applications);
+        follow(source, controlUrl, running);
+    }
+
+    /** Reports the lines of {@code source} as those of {@code applications} in the remote cluster. */
+    synchronized void addRemote(String source, int applications) {
+        remoteSources.put(source, applications);
+    }
+
     synchronized void accept(String source, JsonNode line) {
         latest.put(source, line);
         JsonNode histogram = line.path("latency").path("histogram");
@@ -150,7 +168,8 @@ final class ProgressMonitor implements AutoCloseable {
             try {
                 Histogram interval = Histogram.decodeFromCompressedByteBuffer(
                         ByteBuffer.wrap(Base64.getDecoder().decode(histogram.textValue())), MAX_LATENCY_MICROS);
-                (PRODUCER.equals(line.path("role").asText()) ? producerLatency : consumerLatency).add(interval);
+                (PRODUCER.equals(line.path("role").asText()) ? producerLatency
+                        : remoteSources.containsKey(source) ? remoteLatency : consumerLatency).add(interval);
             } catch (DataFormatException | RuntimeException e) {
                 // A garbled interval only leaves a gap in the latencies
             }
@@ -171,7 +190,7 @@ final class ProgressMonitor implements AutoCloseable {
         int finishedApplications = 0;
         for (Map.Entry<String, JsonNode> entry : latest.entrySet()) {
             JsonNode line = entry.getValue();
-            if (!PRODUCER.equals(entry.getKey())) {
+            if (!PRODUCER.equals(entry.getKey()) && !remoteSources.containsKey(entry.getKey())) {
                 received += line.path("received").asLong();
                 receivedTarget += line.path("messageCount").asLong();
                 duplicates += line.path("duplicates").asLong();
@@ -217,11 +236,57 @@ final class ProgressMonitor implements AutoCloseable {
         }
         receivedLine.append(latency(consumerLatency));
         out.println(receivedLine);
+        if (!remoteSources.isEmpty()) {
+            out.println(remoteLine(prefix, seconds));
+        }
 
         lastSent = sent;
         lastReceived = received;
         producerLatency.reset();
         consumerLatency.reset();
+        remoteLatency.reset();
+    }
+
+    /** The remote applications' line: what they received of the replicated messages. */
+    private String remoteLine(String prefix, double seconds) {
+        long received = 0;
+        long receivedTarget = 0;
+        long duplicates = 0;
+        long orderingViolations = 0;
+        int finishedApplications = 0;
+        int remoteApplications = 0;
+        for (Map.Entry<String, Integer> source : remoteSources.entrySet()) {
+            remoteApplications += source.getValue();
+            JsonNode line = latest.get(source.getKey());
+            if (line != null) {
+                received += line.path("received").asLong();
+                receivedTarget += line.path("messageCount").asLong();
+                duplicates += line.path("duplicates").asLong();
+                orderingViolations += line.path("orderingViolations").asLong();
+                finishedApplications += line.path("finishedApplications").asInt();
+            }
+        }
+        StringBuilder remoteLine = new StringBuilder(prefix).append(String.format(Locale.ROOT,
+                "Replicated, received in the remote cluster: %,d msg%s --- %,.1f msg/s", received,
+                of(receivedTarget, received), (received - lastRemoteReceived) / seconds));
+        TopicStatsSampler.Backlog currentBacklog = backlog.get();
+        if (currentBacklog != null && currentBacklog.replication() >= 0) {
+            remoteLine.append(String.format(Locale.ROOT, " --- replication backlog: %,d msg",
+                    currentBacklog.replication()));
+        }
+        if (finishedApplications > 0 && finishedApplications < remoteApplications) {
+            remoteLine.append(" --- finished applications: ").append(finishedApplications).append('/')
+                    .append(remoteApplications);
+        }
+        if (duplicates > 0) {
+            remoteLine.append(String.format(Locale.ROOT, " --- duplicates: %,d", duplicates));
+        }
+        if (orderingViolations > 0) {
+            remoteLine.append(String.format(Locale.ROOT, " --- ordering violations: %,d", orderingViolations));
+        }
+        remoteLine.append(latency(remoteLatency));
+        lastRemoteReceived = received;
+        return remoteLine.toString();
     }
 
     /** The producer's phase with its progress, such as "warmup round 1/2" or "measurement 45/120 s". */

@@ -321,6 +321,14 @@ throughput.
 - A fault that the broker handles for the first time runs code that the JIT hasn't compiled yet, so the first
   occurrence in a run is slower than later ones. To tell the two apart, apply the fault once during the warmup and
   again during the measurement, as `consumer-reconnect-storm` does, or compare runs that both apply it once.
+- For geo-replication, extend `network/geo-replication`, which adds a remote cluster that the topics replicate to and
+  remote applications that check every replicated message and its order, or one of the `geo-` overlays, which add a
+  fault between the clusters. Name the remote cluster's containers with the `remote-` endpoints, and both sides with
+  `local-region` and `remote-region`. The other overlays still act on the first cluster, so they compose with it:
+  `--extends network/geo-replication --extends network/<overlay>` checks the replication during that fault. The remote
+  applications' line in the progress has the replication backlog, and `replication-stats.csv` each topic's replicators.
+  The remote cluster isn't in the metrics, the heap dumps or the profiles; its containers' complete logs are in
+  `build/container-logs/` as the first cluster's are.
 - For memory questions, such as a broker that runs out of heap while clients reconnect, add
   `--extends configs/heap-dumps-broker`: it writes a heap dump at the highest heap usage and one at an
   `OutOfMemoryError`, as [Heap dumps](docs/heap-dumps.md) describes. Profile a fault with the `profile` task and
@@ -365,6 +373,7 @@ commit segment can be absent). Use the exact recording names linked from the pro
 | `network-events.jsonl`, `network-summary.json` | With a `network` section: every impairment's application, removal and queue counters as they happened, and each impaired container's TCP segments sent and retransmitted, see [Network conditions](docs/network-conditions.md#files) | `jq` |
 | `gateways/pulsar-client.log.txt`, `applications/pulsar-client.log.txt` | The workloads' Pulsar client logs, at the level of `PULSAR_CLIENT_LOG_LEVEL` in a workload's `env`, `warn` by default | `rg` |
 | `applications/<application>/republished-duplicates.txt` | Samples of the duplicates that the broker persisted twice, when there were any | Read |
+| `remote-applications/`, `replication-stats.csv`, `resolved-config-remote-applications.yaml` | With a remote cluster: the remote applications' outputs, laid out as in `applications/`, each topic's replicators once a second, and the remote applications' configuration, see [Geo-replication](docs/network-conditions.md#geo-replication) | As their `applications/` counterparts; DuckDB for the CSV |
 
 ### Profiles
 

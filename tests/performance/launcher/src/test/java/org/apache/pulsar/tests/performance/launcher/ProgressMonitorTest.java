@@ -64,6 +64,30 @@ public class ProgressMonitorTest {
     }
 
     @Test
+    public void reportsTheRemoteApplicationsOnALineOfTheirOwn() {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        PrintStream out = new PrintStream(output, true, StandardCharsets.UTF_8);
+        TopicStatsSampler.Backlog backlog =
+                new TopicStatsSampler.Backlog(System.currentTimeMillis(), 1_500, 1_000, 2_345);
+        try (ProgressMonitor monitor = new ProgressMonitor(mapper, out, 64, 2, () -> backlog)) {
+            monitor.addRemote("remote-applications", 4);
+            ObjectNode consumer = line("consumer", 500, 10_000);
+            consumer.put("received", 1_000).put("messageCount", 8_000);
+            monitor.accept("applications", consumer);
+            ObjectNode remote = line("consumer", 300, 90_000);
+            remote.put("received", 600).put("messageCount", 16_000).put("finishedApplications", 1)
+                    .put("duplicates", 3);
+            monitor.accept("remote-applications", remote);
+            monitor.report();
+        }
+        String[] lines = output.toString(StandardCharsets.UTF_8).split("\n");
+        assertThat(lines).hasSize(3);
+        assertThat(lines[1]).contains("Received: 1,000 msg of 8,000 (12%)", "Max: 10.0").doesNotContain("duplicates");
+        assertThat(lines[2]).contains("Replicated, received in the remote cluster: 600 msg of 16,000",
+                "replication backlog: 2,345 msg", "finished applications: 1/4", "duplicates: 3", "Max: 90.0");
+    }
+
+    @Test
     public void saysHowOldAnOldBacklogSampleIs() {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         PrintStream out = new PrintStream(output, true, StandardCharsets.UTF_8);

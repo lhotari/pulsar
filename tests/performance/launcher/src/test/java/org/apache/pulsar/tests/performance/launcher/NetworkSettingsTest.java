@@ -179,6 +179,23 @@ public class NetworkSettingsTest {
     }
 
     @Test
+    public void expandsTheRemoteClustersEndpoints() {
+        Topology geo = new Topology(2, 3, 1, 2);
+        assertThat(NetworkSettings.containers(List.of("remote-brokers", "remote-bookie-1", "remote-zookeeper"), geo))
+                .containsExactly("remote-broker-0", "remote-bookie-1", "remote-zookeeper");
+        assertThat(NetworkSettings.containers("local-region", geo)).containsExactly("gateways", "applications",
+                "broker-0", "broker-1", "bookie-0", "bookie-1", "bookie-2", "zookeeper", "configuration-store");
+        assertThat(NetworkSettings.containers("remote-region", geo)).containsExactly("remote-broker-0",
+                "remote-bookie-0", "remote-bookie-1", "remote-zookeeper", "remote-applications");
+        assertThatThrownBy(() -> NetworkSettings.containers("remote-broker-1", geo))
+                .hasMessageContaining("the remote cluster has 1 broker(s), from remote-broker-0");
+        assertThatThrownBy(() -> NetworkSettings.containers("remote-brokers", TOPOLOGY))
+                .hasMessageContaining("an endpoint of the remote cluster, which the scenario hasn't");
+        assertThatThrownBy(() -> NetworkSettings.containers("remote-broker-0", TOPOLOGY))
+                .hasMessageContaining("an endpoint of the remote cluster, which the scenario hasn't");
+    }
+
+    @Test
     public void pairsBothDirectionsOfBetween() throws Exception {
         Impairment impairment = read("""
                 impairments:

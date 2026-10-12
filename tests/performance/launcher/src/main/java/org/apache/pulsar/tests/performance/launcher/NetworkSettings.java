@@ -91,9 +91,24 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
     static final String ZOOKEEPER = "zookeeper";
     static final String CONFIGURATION_STORE = "configuration-store";
     static final String METADATA = "metadata";
+    /** The endpoints of the remote cluster, which a scenario with {@code cluster.remote} has. */
+    static final String REMOTE_PREFIX = "remote-";
+    static final String REMOTE_BROKERS = REMOTE_PREFIX + BROKERS;
+    static final String REMOTE_BOOKIES = REMOTE_PREFIX + BOOKIES;
+    static final String REMOTE_ZOOKEEPER = REMOTE_PREFIX + ZOOKEEPER;
+    static final String REMOTE_APPLICATIONS = REMOTE_PREFIX + APPLICATIONS;
+    /**
+     * Every container on the first cluster's side: its clients, brokers, bookies and ZooKeeper, and the configuration
+     * store, which both clusters share.
+     */
+    static final String LOCAL_REGION = "local-region";
+    /** Every container on the remote cluster's side: its brokers, bookies, ZooKeeper and applications. */
+    static final String REMOTE_REGION = "remote-region";
     private static final List<String> GROUPS = List.of(GATEWAYS, APPLICATIONS, CLIENTS, BROKERS, BOOKIES, ZOOKEEPER,
             CONFIGURATION_STORE, METADATA);
-    private static final Pattern INDEXED = Pattern.compile("(broker|bookie)-([0-9]+)");
+    private static final List<String> REMOTE_GROUPS = List.of(REMOTE_BROKERS, REMOTE_BOOKIES, REMOTE_ZOOKEEPER,
+            REMOTE_APPLICATIONS, LOCAL_REGION, REMOTE_REGION);
+    private static final Pattern INDEXED = Pattern.compile("((?:" + REMOTE_PREFIX + ")?)(broker|bookie)-([0-9]+)");
     /** A name usable in file names, Grafana's annotations and the report. */
     private static final Pattern NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
     private static final Pattern DURATION_VALUE = Pattern.compile("([0-9]+(?:\\.[0-9]+)?)(us|ms|s|m)");
@@ -233,8 +248,19 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
         }
     }
 
-    /** The containers that the endpoints can name: how many brokers and bookies the cluster has. */
-    record Topology(int brokers, int bookies) {
+    /**
+     * The containers that the endpoints can name: how many brokers and bookies the cluster has, and the remote cluster,
+     * when the scenario has one, with its brokers and bookies; a topology without a remote cluster has none of them.
+     */
+    record Topology(int brokers, int bookies, int remoteBrokers, int remoteBookies) {
+        Topology(int brokers, int bookies) {
+            this(brokers, bookies, 0, 0);
+        }
+
+        /** Whether the scenario has a remote cluster. */
+        boolean remote() {
+            return remoteBrokers > 0;
+        }
     }
 
     /**
@@ -299,26 +325,41 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
 
     /**
      * The containers that an endpoint names, as the launcher names them: {@code gateways}, {@code applications},
-     * {@code broker-N}, {@code bookie-N}, {@code zookeeper} and {@code configuration-store}.
+     * {@code broker-N}, {@code bookie-N}, {@code zookeeper} and {@code configuration-store}, and with a remote cluster
+     * {@code remote-broker-N}, {@code remote-bookie-N}, {@code remote-zookeeper} and {@code remote-applications}.
      */
     static List<String> containers(String endpoint, Topology topology) {
+        if (!topology.remote() && (REMOTE_GROUPS.contains(endpoint) || endpoint.startsWith(REMOTE_PREFIX))) {
+            throw new IllegalArgumentException("is an endpoint of the remote cluster, which the scenario hasn't: add"
+                    + " cluster.remote, as network/geo-replication does");
+        }
         return switch (endpoint) {
-            case GATEWAYS, APPLICATIONS, ZOOKEEPER, CONFIGURATION_STORE -> List.of(endpoint);
+            case GATEWAYS, APPLICATIONS, ZOOKEEPER, CONFIGURATION_STORE, REMOTE_ZOOKEEPER, REMOTE_APPLICATIONS ->
+                    List.of(endpoint);
             case CLIENTS -> List.of(GATEWAYS, APPLICATIONS);
             case METADATA -> List.of(ZOOKEEPER, CONFIGURATION_STORE);
             case BROKERS -> indexed("broker", topology.brokers());
             case BOOKIES -> indexed("bookie", topology.bookies());
+            case REMOTE_BROKERS -> indexed(REMOTE_PREFIX + "broker", topology.remoteBrokers());
+            case REMOTE_BOOKIES -> indexed(REMOTE_PREFIX + "bookie", topology.remoteBookies());
+            case LOCAL_REGION -> containers(List.of(CLIENTS, BROKERS, BOOKIES, METADATA), topology);
+            case REMOTE_REGION -> containers(List.of(REMOTE_BROKERS, REMOTE_BOOKIES, REMOTE_ZOOKEEPER,
+                    REMOTE_APPLICATIONS), topology);
             default -> {
                 Matcher matcher = INDEXED.matcher(endpoint);
                 if (!matcher.matches()) {
                     throw new IllegalArgumentException("isn't an endpoint; the endpoints are " + GROUPS
-                            + ", broker-N and bookie-N");
+                            + ", broker-N and bookie-N, and with a remote cluster " + REMOTE_GROUPS
+                            + ", remote-broker-N and remote-bookie-N");
                 }
-                int index = Integer.parseInt(matcher.group(2));
-                int count = matcher.group(1).equals("broker") ? topology.brokers() : topology.bookies();
+                boolean remote = !matcher.group(1).isEmpty();
+                String kind = matcher.group(2);
+                int index = Integer.parseInt(matcher.group(3));
+                int count = kind.equals("broker") ? (remote ? topology.remoteBrokers() : topology.brokers())
+                        : (remote ? topology.remoteBookies() : topology.bookies());
                 if (index >= count) {
-                    throw new IllegalArgumentException("isn't an endpoint: the cluster has " + count + " "
-                            + matcher.group(1) + "(s), from " + matcher.group(1) + "-0");
+                    throw new IllegalArgumentException("isn't an endpoint: the " + (remote ? "remote " : "")
+                            + "cluster has " + count + " " + kind + "(s), from " + matcher.group(1) + kind + "-0");
                 }
                 yield List.of(endpoint);
             }

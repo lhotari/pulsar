@@ -95,6 +95,20 @@ impairs the packets from `from` to `to`. Each side is an endpoint or a list of t
 | `configuration-store` | the configuration metadata store |
 | `metadata` | both stores |
 
+With a [remote cluster](#geo-replication), its containers are endpoints too:
+
+| Endpoint | Containers |
+|---|---|
+| `remote-brokers`, `remote-broker-N` | every remote broker, or one, from `remote-broker-0` |
+| `remote-bookies`, `remote-bookie-N` | every remote bookie, or one, from `remote-bookie-0` |
+| `remote-zookeeper` | the remote cluster's metadata store |
+| `remote-applications` | the remote applications' container |
+| `local-region` | the first cluster's side: `clients`, `brokers`, `bookies` and `metadata`, with the shared configuration store |
+| `remote-region` | the remote cluster's side: its brokers, bookies, ZooKeeper and applications |
+
+The endpoints without `remote-` are the first cluster's, so an overlay written for one cluster acts on the first
+cluster also when the run has a remote one: `clients` doesn't include the remote applications.
+
 An impairment does one of three things:
 
 - **A condition** has any of these settings:
@@ -216,12 +230,51 @@ impairment that never started because the workloads finished before it, one that
 containers had exited, one that failed, and a reset that matched no TCP connection. So does a run whose impairments
 couldn't be removed at the end.
 
+## Geo-replication
+
+A `cluster.remote` section adds a second cluster, the remote one, which shares the configuration store with the first.
+Initializing each cluster's metadata adds the cluster to the replication clusters of the namespace `public/default`,
+so the namespace replicates the workload's topics between the two: the first cluster's brokers replicate every
+message that the gateways publish to the remote cluster. The remote cluster is a copy of the first, its brokers and
+bookies with the settings of `cluster.brokers` and `cluster.bookies`, and the settings under `remote` replace them;
+an `env` replaces only the variables it sets. It runs the same image, without profiling, heap dumps or metrics
+collection.
+
+```yaml
+cluster:
+  remote:
+    brokers:
+      replicas: 1
+      env:
+        PULSAR_MEM: "-Xms1g -Xmx1g"
+    applications:
+      count: 4             # the workload's applications.count without it
+      podsPerApplication: 2
+      env:                 # the workload's applications.env without it
+        PULSAR_MEM: "-Xms512m -Xmx512m"
+```
+
+The gateways publish to the first cluster, and its applications consume there, as without a remote cluster. The
+remote applications run in a container of their own and consume the replicated messages in the remote cluster, with
+the workload's subscriptions and checks: each checks that it received every device's every message, in order, and the
+run fails as it does when an application of the first cluster doesn't. Their publish-to-consume latency includes the
+replication. They open their pods before the gateways start, without the workload's `applications.joinSeconds`, and
+the gateways don't wait for them in the warmup.
+
+The progress shows the remote applications on a line of their own, with the topics' replication backlog. The
+overlay [`geo-replication`](../scenarios/network/geo-replication.yaml) adds a remote cluster with four remote
+applications, and the `geo-` overlays extend it with faults between the clusters. Since the other overlays act on the
+first cluster, they compose with it: `--extends network/geo-replication --extends network/silent-client-disconnect`
+replicates while the first cluster's clients disconnect.
+
 ## Files
 
 | File | Contents |
 |---|---|
 | `network-events.jsonl` | Every event, one JSON object per line, written as it happens, also in a failed run: the resolved containers and devices, the offloads, each impairment's application and removal with its queues' counters, a reset's destroyed connections, failures and the cleanup |
 | `gateways/pulsar-client.log.txt`, `applications/pulsar-client.log.txt` | The Pulsar client's warnings in the workloads, such as its reconnections and timeouts, when it logged any; `PULSAR_CLIENT_LOG_LEVEL: info` in a workload's `env` logs more |
+| `remote-applications/` | The remote applications' outputs, as in `applications/`, their configuration in `resolved-config-remote-applications.yaml` |
+| `replication-stats.csv` | With a remote cluster, each topic's replicators once a second: the backlog to replicate, whether the replicator is connected, the delay of the message it replicates next, and its replicated-message counter |
 | `network-summary.json` | Each impairment's settings, status, times and its queues' final counters, and each impaired container's TCP segments sent and retransmitted during the run |
 
 The run report's **Network conditions** section shows each impairment, when it was applied and removed relative to
@@ -268,6 +321,11 @@ cluster. What they showed on `iot-telemetry-small`, at 1,000 messages a second, 
 | `zookeeper-outage` | every broker cut off from ZooKeeper past the session timeout, with clients looking the topics up | the brokers keep serving their topics; the lookups' reset costs a few seconds |
 | `constrained-consumers` | the consumers' downlink below their traffic for 60 s | a 512 MB broker ran out of heap with the unacknowledged dispatches; with 4 GB, the untouched producers' latency reached 4 s while the backlog drained on the shared host |
 | `consumer-reconnect-storm` | every consumer reconnecting at once | unrelated producers stall for 1-3 s while the brokers resubscribe the Key_Shared consumers |
+| `geo-replication` | a remote cluster that the topics replicate to, with applications there | every message replicated in order; the remote applications' latency about 1 ms above the first cluster's |
+| `geo-wan` | the two regions 40 ms ± 4 ms apart | the replication runs about 250 ms behind, three round trips, with a steady backlog of about 250 messages |
+| `geo-partition` | the brokers of the two clusters cut off from each other for 60 s | the remote topics lost about 12,000 messages and reordered others after the partition, the same in every subscription |
+| `geo-silent-disconnect` | the replicators' connections vanish without the remote brokers knowing | the remote topics lost 76 messages after the replicators reconnected |
+| `geo-constrained-link` | the replication link below the replicated traffic for 60 s | the replication backlog reached 21,000 messages and drained within about 10 s after the limit; nothing lost |
 
 ## Why not a proxy
 

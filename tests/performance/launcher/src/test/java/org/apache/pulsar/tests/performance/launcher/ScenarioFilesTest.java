@@ -152,12 +152,14 @@ public class ScenarioFilesTest {
             ObjectNode resolved = resolve(SCENARIOS.resolve(scenario),
                     List.of(SCENARIOS.resolve("network").resolve(overlay)));
             ClusterSettings cluster = ClusterSettings.read(loader.mapper(), resolved.path("cluster"));
-            NetworkSettings network = NetworkSettings.read(resolved.path("network"),
-                    new NetworkSettings.Topology(cluster.brokers().replicas(), cluster.bookies().replicas()),
+            NetworkSettings network = NetworkSettings.read(resolved.path("network"), cluster.topology(),
                     PerformanceLauncher.measurementSeconds(loader.select(resolved, "workloads.iotTelemetry")));
-            // Every overlay but the cluster that the fault overlays extend impairs something
+            // Every overlay but the clusters that the fault overlays extend impairs something
             assertThat(network.any()).as(overlay + " on " + scenario)
-                    .isEqualTo(!overlay.equals("failover-cluster.yaml"));
+                    .isEqualTo(!List.of("failover-cluster.yaml", "geo-replication.yaml").contains(overlay));
+            // The geo overlays add the remote cluster
+            assertThat(cluster.remote() != null).as(overlay + " on " + scenario)
+                    .isEqualTo(overlay.startsWith("geo-"));
             assertThat(ledgerSetting(cluster, "managedLedgerDefaultEnsembleSize"))
                     .as("the ensemble size of %d bookie(s)", cluster.bookies().replicas())
                     .isBetween(1, cluster.bookies().replicas());

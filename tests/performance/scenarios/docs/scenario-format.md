@@ -31,7 +31,9 @@ into the workload containers.
 - `cluster`: the Pulsar topology. `brokers` and `bookies` each have `replicas`, the number of containers, and `env`,
   their environment variables, such as Pulsar settings and `PULSAR_MEM`. `brokers.bootstrap: all` lists every broker
   in the workloads' service URL instead of the first, see
-  [Brokers in the service URL](../../docs/network-conditions.md#brokers-in-the-service-url). The IoT telemetry scenarios get it from a
+  [Brokers in the service URL](../../docs/network-conditions.md#brokers-in-the-service-url). `remote` adds a second
+  cluster that the workload's topics replicate to, with applications that consume there, see
+  [Geo-replication](../../docs/network-conditions.md#geo-replication). The IoT telemetry scenarios get it from a
   [memory configuration](../README.md#memory-configurations), which also sets the workload containers' `PULSAR_MEM`.
 - `workloads`: named workload configurations, currently `iotTelemetry`, see [the IoT telemetry
   scenario](iot-telemetry.md#settings). Its `gateways.env` and `applications.env` are the environment variables of the

@@ -89,6 +89,7 @@ import org.apache.pulsar.tests.performance.tools.IotScenario;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.Network;
 import org.testcontainers.containers.startupcheck.OneShotStartupCheckStrategy;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -122,6 +123,10 @@ public class PerformanceLauncher implements Callable<Integer> {
     private static final String GATEWAYS_DIRECTORY = "gateways";
     // The applications' outputs: their container's, and a directory per application
     private static final String APPLICATIONS_DIRECTORY = RunReport.APPLICATIONS_DIRECTORY;
+    // The remote applications' outputs, as the network impairments name their container
+    static final String REMOTE_APPLICATIONS_DIRECTORY = NetworkSettings.REMOTE_APPLICATIONS;
+    // The remote applications' configuration: the resolved one with their service URL and their settings
+    static final String REMOTE_APPLICATIONS_CONFIG = "resolved-config-remote-applications.yaml";
     // Every log goes to this file in the run directory, and the console shows only the launcher's own messages
     static final String LAUNCHER_LOG = "launcher.log";
     private static final String LOG_CONFIGURATION = "performance-launcher-log4j2.xml";
@@ -250,8 +255,8 @@ public class PerformanceLauncher implements Callable<Integer> {
         ClusterSettings clusterSettings = ClusterSettings.read(loader.mapper(), resolved.path("cluster"));
         HeapDumpSettings heapDumpSettings = HeapDumpSettings.read(resolved.path("heapDumps"));
         MetricsSettings metricsSettings = MetricsSettings.read(resolved.path("metrics"));
-        NetworkSettings.Topology topology = new NetworkSettings.Topology(clusterSettings.brokers().replicas(),
-                clusterSettings.bookies().replicas());
+        NetworkSettings.Topology topology = clusterSettings.topology();
+        ClusterSettings.Remote remote = clusterSettings.remote();
         NetworkSettings networkSettings = NetworkSettings.read(resolved.path("network"), topology,
                 measurementSeconds(workload));
         // The cluster as the scenario wrote it, for the run report
@@ -272,6 +277,14 @@ public class PerformanceLauncher implements Callable<Integer> {
         String clusterName = "iot-" + ProcessHandle.current().pid();
         workload.put("serviceUrl", clusterSettings.serviceUrl(clusterName));
         checkWorkload(loader.mapper(), workload);
+        String remoteClusterName = ClusterSettings.remoteClusterName(clusterName);
+        ObjectNode remoteWorkload = null;
+        if (remote != null) {
+            remoteWorkload = remoteApplicationsWorkload(workload, remote, remote.serviceUrl(clusterName));
+            checkWorkload(loader.mapper(), remoteWorkload);
+        }
+        int remoteApplications = remoteWorkload != null ? remoteWorkload.path("applications").path("count").intValue()
+                : 0;
 
         // Whole seconds, as the run directory names the start
         RunInfo runInfo = RunInfo.collect(Path.of("").toAbsolutePath(),
@@ -349,6 +362,12 @@ public class PerformanceLauncher implements Callable<Integer> {
                     + cooldownTimeoutSeconds);
         }
         loader.write(resolvedConfig, resolved);
+        Path remoteConfig = runOutput.resolve(REMOTE_APPLICATIONS_CONFIG);
+        if (remoteWorkload != null) {
+            ObjectNode remoteResolved = resolved.deepCopy();
+            ((ObjectNode) remoteResolved.get("workloads")).set("iotTelemetry", remoteWorkload);
+            loader.write(remoteConfig, remoteResolved);
+        }
         status("Scenario " + scenarioName(resolved) + " ("
                 + Stream.concat(Stream.of(scenario), appendedScenarios.stream())
                         .map(file -> file.getFileName().toString()).collect(Collectors.joining(" + "))
@@ -388,6 +407,16 @@ public class PerformanceLauncher implements Callable<Integer> {
                 .brokerMountFiles(brokerMounts)
                 .bookkeeperEnvs(metricsSettings.withBookieStatsSettings(clusterSettings.bookies().containerEnv()))
                 .build();
+        // The remote cluster runs the same image, without profiling, heap dumps or mounts
+        PulsarClusterSpec remoteSpec = remote == null ? null : PulsarClusterSpec.builder()
+                .clusterName(remoteClusterName)
+                .numBrokers(remote.brokers().replicas())
+                .numBookies(remote.bookies().replicas())
+                .numProxies(0)
+                .clusterImage(clusterImage)
+                .brokerEnvs(metricsSettings.withBrokerStatsSettings(remote.brokers().env()))
+                .bookkeeperEnvs(metricsSettings.withBookieStatsSettings(remote.bookies().containerEnv()))
+                .build();
 
         HostStatsSampler.Sensors sensors = HostStatsSampler.discover(sysfs);
         List<RunReport.Cooldown> cooldowns = new CopyOnWriteArrayList<>();
@@ -396,12 +425,32 @@ public class PerformanceLauncher implements Callable<Integer> {
             cooldowns.add(beforeRun);
         }
         Thread measurementGate = null;
-        PulsarCluster cluster = PulsarCluster.forSpec(spec);
+        // With a remote cluster, both clusters share a configuration store, which makes the namespace public/default
+        // replicate to both: initializing a cluster's metadata adds the cluster to the namespace's replication
+        // clusters. Both are in the store's network.
+        CSContainer configurationStore = remote == null ? null
+                : new CSContainer(clusterName, clusterImage != null ? clusterImage : PulsarContainer.DEFAULT_IMAGE_NAME)
+                        .withNetwork(Network.newNetwork())
+                        .withNetworkAliases(CSContainer.NAME);
+        PulsarCluster cluster = configurationStore == null ? PulsarCluster.forSpec(spec)
+                : PulsarCluster.forSpec(spec, configurationStore);
+        PulsarCluster remoteCluster = configurationStore == null ? null
+                : PulsarCluster.forSpec(remoteSpec, configurationStore);
+        if (remoteCluster != null) {
+            // The launcher closes the shared network after both clusters
+            cluster.closeNetworkOnExit = false;
+            remoteCluster.closeNetworkOnExit = false;
+        }
         // The containers are created, not started yet
         Map<String, String> journalTmpfsMount = clusterSettings.bookies().journalTmpfsMount();
         if (!journalTmpfsMount.isEmpty()) {
             cluster.getBookies().forEach(bookie -> bookie.withTmpFs(journalTmpfsMount));
         }
+        if (remoteCluster != null && !remote.bookies().journalTmpfsMount().isEmpty()) {
+            remoteCluster.getBookies().forEach(bookie -> bookie.withTmpFs(remote.bookies().journalTmpfsMount()));
+        }
+        Path remoteApplicationsOutput = runOutput.resolve(REMOTE_APPLICATIONS_DIRECTORY);
+        GenericContainer<?> remoteConsumer = null;
         Path applicationsOutput = runOutput.resolve(APPLICATIONS_DIRECTORY);
         GenericContainer<?> consumer = null;
         GenericContainer<?> producer = null;
@@ -437,9 +486,21 @@ public class PerformanceLauncher implements Callable<Integer> {
                         .collect(Collectors.joining(", "))) + "; the Docker engine's host can apply them");
             }
             long clusterStart = System.nanoTime();
+            if (configurationStore != null) {
+                configurationStore.start();
+            }
             cluster.start();
             status(String.format(Locale.ROOT, "Started the Pulsar cluster in %.0f s",
                     (System.nanoTime() - clusterStart) / 1e9));
+            if (remoteCluster != null) {
+                long remoteStart = System.nanoTime();
+                status(String.format(Locale.ROOT, "Starting the remote cluster %s, which public/default replicates"
+                        + " to: %d broker(s), %d bookie(s)", remoteClusterName, remoteSpec.numBrokers(),
+                        remoteSpec.numBookies()));
+                remoteCluster.start();
+                status(String.format(Locale.ROOT, "Started the remote cluster in %.0f s",
+                        (System.nanoTime() - remoteStart) / 1e9));
+            }
             if (clusterPulsarImage != null) {
                 String clusterVersion = brokerVersion(cluster);
                 runInfo = runInfo.withCluster(new RunInfo.Cluster(clusterPulsarImage, clusterVersion));
@@ -469,13 +530,40 @@ public class PerformanceLauncher implements Callable<Integer> {
                     applicationsOutput.resolve(CONTAINER_LOG));
             status(String.format(Locale.ROOT, "Started the applications in %.0f s",
                     (System.nanoTime() - applicationsStart) / 1e9));
-            topicStatsSampler = startTopicStatsSampler(cluster, workload, runOutput);
+            if (remoteWorkload != null) {
+                status(String.format(Locale.ROOT, "Starting %d remote application(s) with %d pod(s) each, which"
+                        + " consume the replicated messages in the remote cluster", remoteApplications,
+                        remoteWorkload.path("applications").path("podsPerApplication").intValue()));
+                Files.createDirectories(remoteApplicationsOutput);
+                // Their own coordination directory: the gateways wait only for the first cluster's applications in
+                // the warmup, since a replicated warmup message arrives later
+                Path remoteCoordinationDirectory = runOutput.resolve("coordination-remote");
+                Files.createDirectories(remoteCoordinationDirectory);
+                remoteConsumer = workloadContainer(cluster, resolvedToolsDirectory, remoteConfig,
+                        remoteCoordinationDirectory, runId, remoteApplicationsOutput, agentJar,
+                        ProfilingSettings.Component.NONE, REMOTE_APPLICATIONS_DIRECTORY,
+                        remoteApplicationsEnv(applicationsEnv, remote), HeapDumpSettings.Component.NONE,
+                        heapDumpSettings.gzipLevel(), null, "iot-consume", "--control-port",
+                        Integer.toString(CONTROL_PORT))
+                        .withExposedPorts(CONTROL_PORT);
+                long remoteApplicationsStart = System.nanoTime();
+                startWorkload(remoteConsumer, ".*READY applications=.*", "The remote applications",
+                        remoteApplicationsOutput.resolve(CONTAINER_LOG));
+                status(String.format(Locale.ROOT, "Started the remote applications in %.0f s",
+                        (System.nanoTime() - remoteApplicationsStart) / 1e9));
+            }
+            topicStatsSampler = startTopicStatsSampler(cluster, workload, runOutput, remoteCluster != null);
             TopicStatsSampler backlogSource = topicStatsSampler;
             progress = new ProgressMonitor(loader.mapper(), System.out,
                     workload.path("payload").path("size").intValue(),
                     applications, () -> backlogSource != null ? backlogSource.latestBacklog() : null);
             GenericContainer<?> runningConsumer = consumer;
             progress.follow(APPLICATIONS_DIRECTORY, controlUrl(consumer), runningConsumer::isRunning);
+            if (remoteConsumer != null) {
+                GenericContainer<?> runningRemoteConsumer = remoteConsumer;
+                progress.followRemote(REMOTE_APPLICATIONS_DIRECTORY, remoteApplications, controlUrl(remoteConsumer),
+                        runningRemoteConsumer::isRunning);
+            }
 
             Path producerOutput = runOutput.resolve(GATEWAYS_DIRECTORY);
             Files.createDirectories(producerOutput);
@@ -503,14 +591,18 @@ public class PerformanceLauncher implements Callable<Integer> {
             if (network != null) {
                 // The gateways wait before they create their clients, so that their first lookups and connections
                 // already have the whole-run conditions
-                network.setUp(networkEndpoints(cluster, clusterName, producer, consumer),
-                        cluster.getNetwork().getId());
+                network.setUp(networkEndpoints(cluster, clusterName, producer, consumer, remoteCluster,
+                                remoteClusterName, remoteConsumer), cluster.getNetwork().getId());
                 network.startRun();
                 startRun(producer);
             }
             gatewaysStarted = Instant.now();
             GenericContainer<?> runningProducer = producer;
             List<MeasuredContainer> measured = measuredContainers(cluster, clusterName, producer, consumer);
+            if (remoteCluster != null) {
+                measured = new ArrayList<>(measured);
+                measured.addAll(remoteContainers(remoteCluster, remoteClusterName, remoteConsumer));
+            }
             boolean counted = perfStatSidecar != null && countContainers(perfStatSidecar, measured);
             containerStatsSampler = startContainerStatsSampler(measured, engineOnThisHost,
                     counted ? perfStatSidecar : null, runOutput);
@@ -525,6 +617,10 @@ public class PerformanceLauncher implements Callable<Integer> {
             List<Workload> workloads = new ArrayList<>();
             workloads.add(new Workload("The gateways", producer, producerOutput.resolve(CONTAINER_LOG)));
             workloads.add(new Workload("The applications", consumer, applicationsOutput.resolve(CONTAINER_LOG)));
+            if (remoteConsumer != null) {
+                workloads.add(new Workload("The remote applications", remoteConsumer,
+                        remoteApplicationsOutput.resolve(CONTAINER_LOG)));
+            }
             awaitWorkloads(workloads, workload.path("timeoutSeconds").intValue() + 60,
                     network != null ? network.failure() : new CompletableFuture<>());
             if (network != null) {
@@ -539,7 +635,11 @@ public class PerformanceLauncher implements Callable<Integer> {
             // The run's end in the charts: every consumer has finished, before the profiles are processed
             workloadFinished = ZonedDateTime.now().truncatedTo(ChronoUnit.SECONDS);
             status("Every application has received every message; verifying the device sequences");
-            verifyStates(runOutput, workload, applications);
+            verifyStates(runOutput, runOutput.resolve(APPLICATIONS_DIRECTORY), workload, applications);
+            if (remoteWorkload != null) {
+                verifyStates(runOutput, remoteApplicationsOutput, remoteWorkload, remoteApplications);
+                status("Every remote application has received every replicated message, in order");
+            }
             if (metricsCollection != null) {
                 // The metrics are an addition to the run, which doesn't fail with them
                 try {
@@ -570,6 +670,7 @@ public class PerformanceLauncher implements Callable<Integer> {
             Thread gateToStop = measurementGate;
             GenericContainer<?> producerToStop = producer;
             GenericContainer<?> consumerToStop = consumer;
+            GenericContainer<?> remoteConsumerToStop = remoteConsumer;
             // First, so that no dump is being written into a container that stops
             shutDown("finishing the heap dumps", () -> {
                 if (heapDumper != null) {
@@ -635,14 +736,26 @@ public class PerformanceLauncher implements Callable<Integer> {
                 saveContainerLog(consumerToStop, applicationsOutput.resolve(CONTAINER_LOG));
                 shutDown("stopping the applications", consumerToStop::stop);
             }
+            if (remoteConsumerToStop != null) {
+                saveContainerLog(remoteConsumerToStop, remoteApplicationsOutput.resolve(CONTAINER_LOG));
+                shutDown("stopping the remote applications", remoteConsumerToStop::stop);
+            }
             MetricsCollection metricsToClose = metricsCollection;
             shutDown("stopping the metrics collection", () -> {
                 if (metricsToClose != null) {
                     metricsToClose.close();
                 }
             });
+            if (remoteCluster != null) {
+                status("Stopping the remote cluster");
+                shutDown("stopping the remote cluster", remoteCluster::stop);
+            }
             status("Stopping the Pulsar cluster");
             shutDown("stopping the Pulsar cluster", cluster::stop);
+            if (configurationStore != null) {
+                shutDown("stopping the configuration store", configurationStore::stop);
+                shutDown("removing the clusters' network", () -> configurationStore.getNetwork().close());
+            }
         }
         if (profilingEnabled) {
             status("Processing the profiles");
@@ -713,7 +826,9 @@ public class PerformanceLauncher implements Callable<Integer> {
             return 1;
         }
         if (!keepLauncherLog) {
-            if (deliveredIncorrectly(loader.mapper(), runOutput, workload, applications)) {
+            if (deliveredIncorrectly(loader.mapper(), runOutput.resolve(APPLICATIONS_DIRECTORY), workload,
+                    applications) || remoteWorkload != null && deliveredIncorrectly(loader.mapper(),
+                    remoteApplicationsOutput, remoteWorkload, remoteApplications)) {
                 System.out.println("Kept " + launcherLog + ", with the containers' logs, since the applications"
                         + " received duplicates, ordering violations or invalid messages");
             } else {
@@ -723,12 +838,15 @@ public class PerformanceLauncher implements Callable<Integer> {
         return 0;
     }
 
-    /** Whether an application received duplicates, ordering violations or invalid messages in the run. */
-    static boolean deliveredIncorrectly(ObjectMapper mapper, Path runOutput, JsonNode workload, int applications)
-            throws IOException {
+    /**
+     * Whether an application received duplicates, ordering violations or invalid messages in the run: one of the
+     * {@code applications} with their outputs in {@code applicationsDirectory}.
+     */
+    static boolean deliveredIncorrectly(ObjectMapper mapper, Path applicationsDirectory, JsonNode workload,
+                                        int applications) throws IOException {
         for (int application = 0; application < applications; application++) {
-            JsonNode summary = mapper.readTree(applicationOutput(runOutput, workload, application)
-                    .resolve("application-summary.json").toFile());
+            JsonNode summary = mapper.readTree(applicationsDirectory.resolve(
+                    RunReport.applicationName(workload, application)).resolve("application-summary.json").toFile());
             if (summary.path("duplicates").asLong() > 0 || summary.path("orderingViolations").asLong() > 0
                     || summary.path("invalidMessages").asLong() > 0) {
                 return true;
@@ -931,7 +1049,7 @@ public class PerformanceLauncher implements Callable<Integer> {
      * start it is reported and the run goes on without it.
      */
     private static TopicStatsSampler startTopicStatsSampler(PulsarCluster cluster, JsonNode workload,
-                                                            Path runOutput) {
+                                                            Path runOutput, boolean replicated) {
         String prefix = workload.path("topics").path("prefix").textValue();
         List<String> topics = IntStream.range(0, workload.path("topics").path("count").intValue())
                 .mapToObj(topic -> prefix + topic).toList();
@@ -941,7 +1059,7 @@ public class PerformanceLauncher implements Callable<Integer> {
             for (BrokerContainer broker : cluster.getBrokers()) {
                 brokerHttpUrls.put(broker.getContainerName().replaceFirst("^/", ""), broker.getHttpServiceUrl());
             }
-            return TopicStatsSampler.start(brokerHttpUrls, topics, runOutput);
+            return TopicStatsSampler.start(brokerHttpUrls, topics, runOutput, replicated);
         } catch (Exception e) {
             System.out.println("Topic stats sampling is off for this run: " + e);
             return null;
@@ -963,20 +1081,94 @@ public class PerformanceLauncher implements Callable<Integer> {
             clusterContainers.add(cluster.getZooKeeper());
         }
         for (GenericContainer<?> container : clusterContainers) {
-            String name = container.getContainerName().replaceFirst("^/", "")
-                    .replaceFirst("^" + Pattern.quote(clusterName) + "-", "")
-                    .replaceFirst("^pulsar-", "");
-            containers.add(new MeasuredContainer(name, container));
+            containers.add(new MeasuredContainer(componentName(container.getContainerName(), clusterName),
+                    container));
         }
-        containers.add(new MeasuredContainer(GATEWAYS_DIRECTORY, producer));
-        containers.add(new MeasuredContainer(APPLICATIONS_DIRECTORY, consumer));
+        if (producer != null) {
+            containers.add(new MeasuredContainer(GATEWAYS_DIRECTORY, producer));
+        }
+        if (consumer != null) {
+            containers.add(new MeasuredContainer(APPLICATIONS_DIRECTORY, consumer));
+        }
         return containers;
+    }
+
+    /**
+     * A cluster container's name without the cluster's, such as broker-0 for {@code /iot-1-pulsar-broker-0}. A cluster
+     * that shares its configuration store, as with a remote cluster, prefixes its containers' names in its network
+     * with its name, and a broker's container name then repeats it.
+     */
+    static String componentName(String containerName, String clusterName) {
+        return containerName.replaceFirst("^/", "").replaceFirst("^(" + Pattern.quote(clusterName) + "-)+", "")
+                .replaceFirst("^pulsar-", "");
     }
 
     /**
      * The containers that the network impairments' endpoints name: gateways, applications, broker-N, bookie-N,
      * zookeeper and configuration-store.
      */
+    static Map<String, GenericContainer<?>> networkEndpoints(PulsarCluster cluster, String clusterName,
+                                                             GenericContainer<?> producer,
+                                                             GenericContainer<?> consumer,
+                                                             PulsarCluster remoteCluster, String remoteClusterName,
+                                                             GenericContainer<?> remoteConsumer) {
+        Map<String, GenericContainer<?>> endpoints = networkEndpoints(cluster, clusterName, producer, consumer);
+        if (remoteCluster != null) {
+            for (MeasuredContainer measured : remoteContainers(remoteCluster, remoteClusterName, remoteConsumer)) {
+                endpoints.put(measured.name(), measured.container());
+            }
+        }
+        return endpoints;
+    }
+
+    /**
+     * The remote cluster's containers and the remote applications, named as the network impairments' endpoints name
+     * them: remote-broker-N, remote-bookie-N, remote-zookeeper and remote-applications.
+     */
+    static List<MeasuredContainer> remoteContainers(PulsarCluster remoteCluster, String remoteClusterName,
+                                                    GenericContainer<?> remoteConsumer) {
+        List<MeasuredContainer> containers = new ArrayList<>();
+        for (MeasuredContainer measured : measuredContainers(remoteCluster, remoteClusterName, null, null)) {
+            if (measured.container() != null) {
+                containers.add(new MeasuredContainer(NetworkSettings.REMOTE_PREFIX + measured.name(),
+                        measured.container()));
+            }
+        }
+        if (remoteConsumer != null) {
+            containers.add(new MeasuredContainer(REMOTE_APPLICATIONS_DIRECTORY, remoteConsumer));
+        }
+        return containers;
+    }
+
+    /**
+     * The workload of the remote applications: the workload with the remote cluster's service URL and the remote
+     * applications' count and pods. They open their pods at the start, without the workload's {@code joinSeconds},
+     * since they don't see the gateways' measurement start.
+     */
+    static ObjectNode remoteApplicationsWorkload(ObjectNode workload, ClusterSettings.Remote remote,
+                                                 String serviceUrl) {
+        ObjectNode remoteWorkload = workload.deepCopy();
+        remoteWorkload.put("serviceUrl", serviceUrl);
+        ObjectNode applications = (ObjectNode) remoteWorkload.get("applications");
+        if (remote.applications().count() != null) {
+            applications.put("count", remote.applications().count());
+        }
+        if (remote.applications().podsPerApplication() != null) {
+            applications.put("podsPerApplication", remote.applications().podsPerApplication());
+        }
+        applications.remove("joinSeconds");
+        if (remote.applications().env() != null) {
+            applications.set("env", new ObjectMapper().valueToTree(remote.applications().env()));
+        }
+        return remoteWorkload;
+    }
+
+    /** The remote applications' variables: the workload's applications', unless the remote applications set theirs. */
+    static Map<String, String> remoteApplicationsEnv(Map<String, String> applicationsEnv,
+                                                     ClusterSettings.Remote remote) {
+        return remote.applications().env() != null ? remote.applications().env() : applicationsEnv;
+    }
+
     static Map<String, GenericContainer<?>> networkEndpoints(PulsarCluster cluster, String clusterName,
                                                              GenericContainer<?> producer,
                                                              GenericContainer<?> consumer) {
@@ -1650,13 +1842,19 @@ public class PerformanceLauncher implements Callable<Integer> {
         return RunReport.applicationDirectory(runOutput, workload, application);
     }
 
-    private static void verifyStates(Path output, JsonNode workload, int applications) throws Exception {
+    /**
+     * Checks that each of the {@code applications}, with their outputs in {@code applicationsDirectory}, received
+     * every device's sequence that the gateways published.
+     */
+    private static void verifyStates(Path output, Path applicationsDirectory, JsonNode workload, int applications)
+            throws Exception {
         long[] produced = readState(output.resolve("gateways/gateways-state.bin"));
         for (int application = 0; application < applications; application++) {
-            long[] consumed =
-                    readState(applicationOutput(output, workload, application).resolve("application-state.bin"));
+            long[] consumed = readState(applicationsDirectory.resolve(RunReport.applicationName(workload, application))
+                    .resolve("application-state.bin"));
             if (!java.util.Arrays.equals(produced, consumed)) {
-                throw new IllegalStateException("Application " + application
+                throw new IllegalStateException((applicationsDirectory.endsWith(REMOTE_APPLICATIONS_DIRECTORY)
+                        ? "Remote application " : "Application ") + application
                         + " did not receive every device sequence");
             }
         }

@@ -118,7 +118,8 @@ final class NetworkImpairments implements AutoCloseable {
 
     // The workload containers exit when they have finished, before the impairments' counters are read at the end
     private static boolean isWorkload(Target target) {
-        return NetworkSettings.GATEWAYS.equals(target.name()) || NetworkSettings.APPLICATIONS.equals(target.name());
+        return NetworkSettings.GATEWAYS.equals(target.name()) || NetworkSettings.APPLICATIONS.equals(target.name())
+                || NetworkSettings.REMOTE_APPLICATIONS.equals(target.name());
     }
 
     /** A device with impairment bands: a receiver's host-side veth, or a sender's own interface. */
