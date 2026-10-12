@@ -926,6 +926,126 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         allEntries.forEach(Entry::release);
     }
 
+    /**
+     * As {@link #testInFlightReplayReadDoesNotOvertakeRemovedConsumersPendingEntry}, with a normal read in flight at
+     * the same time as the replay read, which completes first: the replay read must still not dispatch the newer
+     * entry before the older one that the removal added to the replay queue.
+     */
+    @Test(timeOut = 30000)
+    public void testOverlappingNormalReadDoesNotConsumeReplayReadsOrderingProtection() throws Exception {
+        persistentDispatcher.close();
+        persistentDispatcher = new PersistentStickyKeyDispatcherMultipleConsumers(
+                topicMock, cursorMock, subscriptionMock, configMock,
+                new KeySharedMeta().setKeySharedMode(KeySharedMode.AUTO_SPLIT)) {
+            @Override
+            protected void reScheduleReadInMs(long readAfterMs) {
+                orderedExecutor.execute(this::readMoreEntries);
+            }
+        };
+        doReturn(PositionFactory.create(1, 0)).when(cursorMock).getMarkDeletedPosition();
+        doReturn(true).when(cursorMock).hasMoreEntries();
+
+        Consumer consumerA = createMockConsumer();
+        doReturn("a").when(consumerA).consumerName();
+        doReturn(true).when(consumerA).isWritable();
+        doReturn(1000).when(consumerA).getAvailablePermits();
+        Consumer consumerB = createMockConsumer();
+        doReturn("b").when(consumerB).consumerName();
+        doReturn(true).when(consumerB).isWritable();
+        doReturn(1000).when(consumerB).getAvailablePermits();
+        Consumer consumerC = createMockConsumer();
+        doReturn("c").when(consumerC).consumerName();
+        doReturn(true).when(consumerC).isWritable();
+        doReturn(0).when(consumerC).getAvailablePermits();
+        for (Consumer consumer : List.of(consumerA, consumerB, consumerC)) {
+            persistentDispatcher.addConsumer(consumer).join();
+        }
+        StickyKeyConsumerSelector selector = persistentDispatcher.getSelector();
+        ConsistentHashingStickyKeyConsumerSelector withoutA = new ConsistentHashingStickyKeyConsumerSelector(20);
+        withoutA.addConsumer(consumerB).join();
+        withoutA.addConsumer(consumerC).join();
+        String movingKey = null;
+        for (int i = 0; movingKey == null; i++) {
+            String key = "key" + i;
+            if (selector.select(key.getBytes(UTF_8)) == consumerA
+                    && withoutA.select(key.getBytes(UTF_8)) == consumerB) {
+                movingKey = key;
+            }
+        }
+        String keyOfB = null;
+        for (int i = 0; keyOfB == null; i++) {
+            String key = "other" + i;
+            if (selector.select(key.getBytes(UTF_8)) == consumerB) {
+                keyOfB = key;
+            }
+        }
+        String keyOfC = generateKeyForConsumer(selector, consumerC);
+        int movingHash = selector.makeStickyKeyHash(movingKey.getBytes(UTF_8));
+
+        Entry oldestOfC = createEntry(1, 1, "c-message", 1, keyOfC);
+        Entry olderOfA = createEntry(1, 3, "message3", 3, movingKey);
+        Entry newerOfA = createEntry(1, 4, "message4", 4, movingKey);
+        Entry unrelatedOfB = createEntry(1, 5, "b-message", 5, keyOfB);
+        List<Entry> allEntries = List.of(oldestOfC, olderOfA, newerOfA, unrelatedOfB);
+
+        PendingAcksMap pendingAcksOfA = consumerA.getPendingAcks();
+        doAnswer(invocation -> {
+            PendingAcksMap.PendingAcksConsumer processor = invocation.getArgument(0);
+            processor.accept(1, 3, 1, movingHash);
+            return null;
+        }).when(pendingAcksOfA).forEachAndClose(any());
+
+        // the first normal read stays in flight until the test completes it with b's unrelated entry
+        CompletableFuture<Runnable> firstNormalRead = new CompletableFuture<>();
+        doAnswer(invocationOnMock -> {
+            AsyncCallbacks.ReadEntriesCallback callback = invocationOnMock.getArgument(2);
+            Object ctx = invocationOnMock.getArgument(3);
+            firstNormalRead.complete(() -> callback.readEntriesComplete(copyEntries(List.of(unrelatedOfB)), ctx));
+            return null;
+        }).when(cursorMock).asyncReadEntriesWithSkipOrWait(anyInt(), anyLong(), any(), any(), any(), any());
+        // the first replay read stays in flight until the test completes it
+        CompletableFuture<Runnable> firstReplayRead = new CompletableFuture<>();
+        doAnswer(invocationOnMock -> {
+            Set<Position> positions = new TreeSet<>(invocationOnMock.getArgument(0, Set.class));
+            List<Entry> entries = allEntries.stream()
+                    .filter(entry -> positions.contains(entry.getPosition()))
+                    .toList();
+            AsyncCallbacks.ReadEntriesCallback callback = invocationOnMock.getArgument(1);
+            Object ctx = invocationOnMock.getArgument(2);
+            Runnable complete = () -> callback.readEntriesComplete(copyEntries(entries), ctx);
+            if (!firstReplayRead.complete(complete)) {
+                complete.run();
+            }
+            return Collections.emptySet();
+        }).when(cursorMock).asyncReplayEntries(anySet(), any(), any(), anyBoolean());
+
+        List<Position> receivedByB = new CopyOnWriteArrayList<>();
+        mockSendMessages(consumerB, entries -> entries.forEach(entry -> receivedByB.add(entry.getPosition())));
+        mockSendMessages(consumerC, entries -> { });
+        mockSendMessages(consumerA, entries -> { });
+
+        // a normal read starts and stays in flight
+        persistentDispatcher.readMoreEntries();
+        Runnable completeFirstNormalRead = firstNormalRead.get(5, TimeUnit.SECONDS);
+        // then the replay queue gets c's oldest entry and a's newer entry, and a replay read starts too
+        for (Entry entry : List.of(oldestOfC, newerOfA)) {
+            ((EntryImpl) entry).retain();
+            persistentDispatcher.addEntryToReplay(entry);
+        }
+        persistentDispatcher.readMoreEntries();
+        Runnable completeFirstReplayRead = firstReplayRead.get(5, TimeUnit.SECONDS);
+        // a is removed while both reads are in flight, and the normal read completes first
+        persistentDispatcher.removeConsumer(consumerA);
+        completeFirstNormalRead.run();
+        completeFirstReplayRead.run();
+
+        Awaitility.await().untilAsserted(() -> assertThat(receivedByB).contains(PositionFactory.create(1, 3),
+                PositionFactory.create(1, 4)));
+        assertThat(receivedByB).as("the key's messages in order").containsSubsequence(PositionFactory.create(1, 3),
+                PositionFactory.create(1, 4));
+        allEntries.forEach(Entry::release);
+    }
+
     private String generateKeyForConsumer(StickyKeyConsumerSelector selector, Consumer consumer) {
         int i = 0;
         while (!Thread.currentThread().isInterrupted()) {

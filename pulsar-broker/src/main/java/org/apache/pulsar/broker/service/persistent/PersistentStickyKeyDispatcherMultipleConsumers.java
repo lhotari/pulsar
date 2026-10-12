@@ -144,40 +144,61 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         return selector;
     }
 
-    // The oldest position of each sticky key hash that was added to the replay queue while a read was in flight,
-    // such as the pending entries of a removed consumer. The read's entries of those hashes that are newer must not be
-    // dispatched before the older ones, which only a later replay read reads.
-    private final Int2ObjectOpenHashMap<Position> replayAdditionsDuringRead = new Int2ObjectOpenHashMap<>();
-    private boolean trackingReplayAdditions;
+    // The oldest position of each sticky key hash that was added to the replay queue while a read was in flight, such
+    // as the pending entries of a removed consumer, for each type of read, since a normal read and a replay read can
+    // be in flight at the same time. The read's entries of those hashes that are newer must not be dispatched before
+    // the older ones, which only a later replay read reads.
+    private static final class ReplayAdditions {
+        final Int2ObjectOpenHashMap<Position> oldestByHash = new Int2ObjectOpenHashMap<>();
+        boolean tracking;
+
+        void add(long ledgerId, long entryId, int stickyKeyHash) {
+            if (!tracking) {
+                return;
+            }
+            Position oldest = oldestByHash.get(stickyKeyHash);
+            if (oldest == null || ledgerId < oldest.getLedgerId()
+                    || (ledgerId == oldest.getLedgerId() && entryId < oldest.getEntryId())) {
+                oldestByHash.put(stickyKeyHash, PositionFactory.create(ledgerId, entryId));
+            }
+        }
+    }
+
+    private final ReplayAdditions replayAdditionsDuringNormalRead = new ReplayAdditions();
+    private final ReplayAdditions replayAdditionsDuringReplayRead = new ReplayAdditions();
+
+    private ReplayAdditions replayAdditions(ReadType readType) {
+        return readType == ReadType.Replay ? replayAdditionsDuringReplayRead : replayAdditionsDuringNormalRead;
+    }
 
     @Override
-    protected synchronized void onReadStarted() {
-        replayAdditionsDuringRead.clear();
-        trackingReplayAdditions = !allowOutOfOrderDelivery;
+    protected synchronized void onReadStarted(ReadType readType) {
+        ReplayAdditions additions = replayAdditions(readType);
+        additions.oldestByHash.clear();
+        additions.tracking = !allowOutOfOrderDelivery;
     }
 
     @Override
     protected synchronized boolean addMessageToReplay(long ledgerId, long entryId, long stickyKeyHash) {
         boolean added = super.addMessageToReplay(ledgerId, entryId, stickyKeyHash);
-        if (added && trackingReplayAdditions) {
-            Position position = PositionFactory.create(ledgerId, entryId);
-            Position oldest = replayAdditionsDuringRead.get((int) stickyKeyHash);
-            if (oldest == null || position.compareTo(oldest) < 0) {
-                replayAdditionsDuringRead.put((int) stickyKeyHash, position);
-            }
+        if (added) {
+            replayAdditionsDuringNormalRead.add(ledgerId, entryId, (int) stickyKeyHash);
+            replayAdditionsDuringReplayRead.add(ledgerId, entryId, (int) stickyKeyHash);
         }
         return added;
     }
 
-    // Takes the replay additions of the read that completed and stops tracking them until the next read starts
-    private Int2ObjectOpenHashMap<Position> takeReplayAdditionsDuringRead() {
-        trackingReplayAdditions = false;
-        if (replayAdditionsDuringRead.isEmpty()) {
+    // Takes the replay additions recorded while the completed read was in flight, and stops recording them for that
+    // type of read until its next read starts
+    private Int2ObjectOpenHashMap<Position> takeReplayAdditionsDuringRead(ReadType readType) {
+        ReplayAdditions additions = replayAdditions(readType);
+        additions.tracking = false;
+        if (additions.oldestByHash.isEmpty()) {
             return null;
         }
-        Int2ObjectOpenHashMap<Position> additions = new Int2ObjectOpenHashMap<>(replayAdditionsDuringRead);
-        replayAdditionsDuringRead.clear();
-        return additions;
+        Int2ObjectOpenHashMap<Position> taken = new Int2ObjectOpenHashMap<>(additions.oldestByHash);
+        additions.oldestByHash.clear();
+        return taken;
     }
 
     @Override
@@ -296,7 +317,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
 
     @Override
     protected synchronized boolean trySendMessagesToConsumers(ReadType readType, List<Entry> entries) {
-        Int2ObjectOpenHashMap<Position> replayAdditions = takeReplayAdditionsDuringRead();
+        Int2ObjectOpenHashMap<Position> replayAdditions = takeReplayAdditionsDuringRead(readType);
         lastNumberOfEntriesProcessed = 0;
         long totalMessagesSent = 0;
         long totalBytesSent = 0;
@@ -351,6 +372,11 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         // filter and group the entries by consumer for dispatching
         final Map<Consumer, List<Entry>> entriesByConsumerForDispatching =
                 filterAndGroupEntriesForDispatching(entries, readType, triggerLookAhead, replayAdditions);
+        if (replayAdditions != null) {
+            // entries added to the replay queue during the read may have blocked some of its entries, which the
+            // next replay read dispatches after them: read again without a backoff
+            skipNextBackoff = true;
+        }
 
         for (Map.Entry<Consumer, List<Entry>> current : entriesByConsumerForDispatching.entrySet()) {
             Consumer consumer = current.getKey();
@@ -543,6 +569,14 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
                 if (olderInReplay != null && olderInReplay.compareTo(entry.getPosition()) < 0) {
                     alreadyBlockedHashes.add(stickyKeyHash);
                     hashIsAlreadyBlocked = true;
+                    if (lookAheadAllowed) {
+                        // the hash's consumer can make progress once the replay read reads the older entry, so
+                        // this isn't a reason for a look-ahead read
+                        Consumer owner = selector.select(stickyKeyHash);
+                        if (owner != null) {
+                            consumersForEntriesForLookaheadCheck.add(owner);
+                        }
+                    }
                 }
             }
             if (!hashIsAlreadyBlocked) {

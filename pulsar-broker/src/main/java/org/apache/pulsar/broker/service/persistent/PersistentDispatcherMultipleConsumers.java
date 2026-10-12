@@ -410,7 +410,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         .attr("consumerCount", consumerList.size())
                         .log("Schedule replay of messages for consumers");
                 havePendingReplayRead = true;
-                updateMinReplayedPosition();
+                updateMinReplayedPosition(ReadType.Replay);
                 Set<? extends Position> deletedMessages = topic.isDelayedDeliveryEnabled()
                         ? asyncReplayEntriesInOrder(messagesToReplayNow)
                         : asyncReplayEntries(messagesToReplayNow);
@@ -442,7 +442,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         .attr("consumersCount", consumerList.size())
                         .log("Schedule read of messages");
                 havePendingRead = true;
-                updateMinReplayedPosition();
+                updateMinReplayedPosition(ReadType.Normal);
 
                 messagesToRead = Math.min(messagesToRead, getMaxEntriesReadLimit());
                 cursor.asyncReadEntriesWithSkipOrWait(messagesToRead, bytesToRead, this, ReadType.Normal,
@@ -505,15 +505,16 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         return true;
     }
 
-    private void updateMinReplayedPosition() {
+    private void updateMinReplayedPosition(ReadType readType) {
         minReplayedPosition = getFirstPositionInReplay().orElse(null);
-        onReadStarted();
+        onReadStarted(readType);
     }
 
     /**
-     * Called under the dispatcher's monitor when a normal or a replay read starts.
+     * Called under the dispatcher's monitor when a normal or a replay read starts. A normal read and a replay read
+     * can be in flight at the same time, but not two reads of the same type.
      */
-    protected void onReadStarted() {
+    protected void onReadStarted(ReadType readType) {
     }
 
     private boolean shouldPauseOnAckStatePersist(ReadType readType) {
