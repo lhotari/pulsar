@@ -293,7 +293,7 @@ Before proposing a change for review, validate it as the [Experiment loop](#expe
 ## Network and fault experiments
 
 [Network conditions](docs/network-conditions.md) describes the `network` section and the overlays in
-`scenarios/network`, which model real networks and faults, each with what it showed. A fault run measures how Pulsar
+`scenarios/network`, which model real networks and faults, each with what to use it for. A fault run measures how Pulsar
 behaves while something goes wrong, so its questions are mostly about correctness, stalls and recovery, not
 throughput.
 

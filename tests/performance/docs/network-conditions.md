@@ -129,15 +129,15 @@ An impairment does one of three things:
 - **A reset**, `reset: true`, destroys the TCP connections between the endpoints once, at its `start`, which resets
   them on both ends, as a load balancer or a NAT gateway that resets its connections does. It has no `duration`.
 - **A silent disconnection**, `silentDisconnect: true`, destroys the TCP connections from `from` to `to` once, at its
-  `start`, without `to` learning it: one side of the connections closes and its close never reaches the other side,
-  as when a NAT gateway or a firewall that has forgotten its connections answers one side's next packets with a reset
-  and drops the other side's, or a host restarts behind one. A gateway that forgets its connections without answering
-  either side is a partition instead. `from` gets an error at once and reconnects, on new connections, while `to` keeps the old,
-  half-open connections until something of its own, such as a keep-alive, finds them dead. With `from: applications`
-  and `to: brokers`, the brokers don't learn that the consumers have gone; with `from: brokers` and `to: gateways`,
-  the producers don't learn that the brokers have dropped them. It needs `from` and `to`, not `between`, and its
-  `duration`, until the run ends without it, is how long the old connections' packets stay dropped: after it, `from`'s
-  host answers them with a reset.
+  `start`, without `to` learning it: one side of the connections closes and its close never reaches the other side, as
+  when a NAT gateway or a firewall that has forgotten its connections answers one side's next packets with a reset and
+  drops the other side's, or a host restarts behind one. A gateway that forgets its connections without answering either
+  side is a partition instead. `from` gets an error at once and reconnects, on new connections, while `to` keeps the
+  old, half-open connections until something of its own, such as a keep-alive, finds them dead. With `from:
+  applications` and `to: brokers`, the brokers don't learn that the consumers have gone; with `from: brokers` and `to:
+  gateways`, the producers don't learn that the brokers have dropped them. It needs `from` and `to`, not `between`, and
+  its `duration`, until the run ends without it, is how long the old connections' packets stay dropped: after it,
+  `from`'s host answers them with a reset.
 
 An impairment without `start` lasts the whole run: the launcher applies it before the gateways create their clients,
 so that their first lookups and connections already see it, and removes it after `duration`, if it has one. The
@@ -262,8 +262,8 @@ replication. They open their pods before the gateways start, without the workloa
 the gateways don't wait for them in the warmup.
 
 The overlay gives both clusters' namespaces a retention of an hour, so that no message is deleted before the run
-has checked it. The progress shows the remote applications on a line of their own, with the remote subscriptions' backlog and the
-topics' replication backlog. The
+has checked it. The progress shows the remote applications on a line of their own, with the remote subscriptions'
+backlog and the topics' replication backlog. The
 overlay [`geo-replication`](../scenarios/network/geo-replication.yaml) adds a remote cluster with four remote
 applications, and the `geo-` overlays extend it with faults between the clusters. Since the other overlays act on the
 first cluster, they compose with it: `--extends network/geo-replication --extends network/silent-client-disconnect`
@@ -300,35 +300,35 @@ models and what to look for. Apply one with `--extends network/<name>` on a base
 The overlays that need a broker or a bookie to fail over to run on
 [`failover-cluster.yaml`](../scenarios/network/failover-cluster.yaml): two brokers, both in the service URL, and four
 bookies with an ensemble, a write quorum and an ack quorum of 3, 3 and 2; the others run on the base scenario's
-cluster. What they showed on `iot-telemetry-small`, at 1,000 messages a second, is in each file:
+cluster. Each file also notes what it showed on `iot-telemetry-small`, at 1,000 messages a second, when it was added.
 
-| Overlay | Models | What it showed |
+| Overlay | Models | Use it to |
 |---|---|---|
-| `wan-clients` | clients over a WAN, 20 ms ± 2 ms | publish latency up by the round trip; nothing else |
-| `mobile-gateways` | cellular gateways, 50 ms ± 20 ms, 1 % loss in bursts | the losses double the publish p99 |
-| `constrained-uplink` | the gateways' uplink below their traffic for 30 s | set the rate for the base scenario |
-| `cross-zone-storage` | brokers and bookies in different zones, 1 ms | publish latency up by a bookie round trip |
-| `slow-bookie` | one bookie 20 ms away | hidden by the ack quorum of 2 |
-| `bookie-partition` | one bookie gone for 30 s | hidden by the ack quorum of 2; with 3, a 30 s stall, the bookie client's timeout |
-| `broker-partition` | clients cut off from one broker | a gray failure: no failover, the topics wait |
-| `broker-isolation` | one broker off the network for 45 s | failover after the metadata session expires; clients notice through their keep-alive |
-| `metadata-partition` | one broker cut off from ZooKeeper for 10 s | nothing; longer, see `metadata-takeover` |
-| `metadata-takeover` | the same for 90 s, with clients looking the topics up | the isolated broker holds producers that it can't serve until ZooKeeper comes back |
-| `return-path-blackhole` | the brokers' packets to the gateways lost | TCP's acknowledgments are lost too, so both directions stall |
-| `connection-resets` | load balancers resetting connections | a gateway reset costs ~0.2 s; an applications reset stalls everything |
-| `silent-client-disconnect` | the clients' connections vanish without the brokers knowing | the brokers hold every Key_Shared consumer twice until their keep-alive; a 512 MB broker ran out of heap |
-| `silent-broker-disconnect` | the brokers drop the connections without the clients knowing | the producers and consumers stall until their keep-alive, about 45 s |
-| `storage-outage` | every bookie cut off from the brokers for 20 s | a 27 s publish stall: the recovery takes ~7 s more, probably TCP's retransmission backoff |
-| `bookie-metadata-outage` | every bookie cut off from ZooKeeper past the session timeout | with the bookies' embedded AutoRecovery, every bookie shuts down and the run fails |
-| `lossy-storage` | 0.5 % loss in bursts between the brokers and the bookies | the publish p99.9 up by half, the max to ~200 ms, probably a retransmission timeout |
-| `zookeeper-outage` | every broker cut off from ZooKeeper past the session timeout, with clients looking the topics up | the brokers keep serving their topics; the lookups' reset costs a few seconds |
-| `constrained-consumers` | the consumers' downlink below their traffic for 60 s | a 512 MB broker ran out of heap with the unacknowledged dispatches; with 4 GB, the untouched producers' latency reached 4 s while the backlog drained on the shared host |
-| `consumer-reconnect-storm` | every consumer reconnecting at once | unrelated producers stall for 1-3 s while the brokers resubscribe the Key_Shared consumers |
-| `geo-replication` | a remote cluster that the topics replicate to, with applications there | every message replicated in order; the remote applications' latency about 1 ms above the first cluster's |
-| `geo-wan` | the two regions 40 ms ± 4 ms apart | the replication runs about 250 ms behind, three round trips, with a steady backlog of about 250 messages |
-| `geo-partition` | the brokers of the two clusters cut off from each other for 60 s | the remote topics lost about 12,000 messages and reordered others after the partition, the same in every subscription |
-| `geo-silent-disconnect` | the replicators' connections vanish without the remote brokers knowing | the remote topics lost 76 messages after the replicators reconnected |
-| `geo-constrained-link` | the replication link below the replicated traffic for 60 s | the replication backlog reached 21,000 messages and drained within about 10 s after the limit; nothing lost |
+| `wan-clients` | clients over a WAN, 20 ms ± 2 ms | measure the latency and throughput that clients far from the cluster get |
+| `mobile-gateways` | cellular gateways, 50 ms ± 20 ms, 1 % loss in bursts | measure the publish latency tail and throughput over a lossy, variable link |
+| `constrained-uplink` | the gateways' uplink below their traffic for 30 s | check how producers queue, time out and recover when their bandwidth drops |
+| `cross-zone-storage` | brokers and bookies in different zones, 1 ms | measure what a storage round trip adds to the publish latency |
+| `slow-bookie` | one bookie 20 ms away | check that the ack quorum hides a slow bookie |
+| `bookie-partition` | one bookie gone for 30 s | check the write path's tolerance of a lost bookie, with and without a spare in the ack quorum |
+| `broker-partition` | clients cut off from one broker | check how clients behave when a broker that keeps its topics can't be reached: a gray failure |
+| `broker-isolation` | one broker off the network for 45 s | check the topics' failover to another broker and the clients' detection of dead connections |
+| `metadata-partition` | one broker cut off from ZooKeeper for 10 s | check that a short metadata outage of a broker goes unnoticed |
+| `metadata-takeover` | the same for 90 s, with clients looking the topics up | check that the topics move to the other broker and that the isolated one stops serving them |
+| `return-path-blackhole` | the brokers' packets to the gateways lost | check the recovery when only one direction of the connections fails |
+| `connection-resets` | load balancers resetting connections | measure what a reset of the producers' or the consumers' connections costs |
+| `silent-client-disconnect` | the clients' connections vanish without the brokers knowing | check the brokers' memory, the duplicated consumers and the ordering while the brokers hold the old connections |
+| `silent-broker-disconnect` | the brokers drop the connections without the clients knowing | measure how long producers and consumers take to notice dead connections |
+| `storage-outage` | every bookie cut off from the brokers for 20 s | measure the publish stall and the recovery after a storage outage |
+| `bookie-metadata-outage` | every bookie cut off from ZooKeeper past the session timeout | check that the bookies keep serving the brokers while their metadata store is away |
+| `lossy-storage` | 0.5 % loss in bursts between the brokers and the bookies | measure the publish latency tail with loss on the storage path |
+| `zookeeper-outage` | every broker cut off from ZooKeeper past the session timeout, with clients looking the topics up | check that the brokers keep serving their topics and that lookups recover |
+| `constrained-consumers` | the consumers' downlink below their traffic for 60 s | check the brokers' memory and the untouched producers' latency while consumers fall behind |
+| `consumer-reconnect-storm` | every consumer reconnecting at once | measure how a mass reconnection of Key_Shared consumers affects unrelated producers |
+| `geo-replication` | a remote cluster that the topics replicate to, with applications there | check that replication delivers every message once and in order, and measure its latency |
+| `geo-wan` | the two regions 40 ms ± 4 ms apart | measure the replication delay and backlog over a WAN |
+| `geo-partition` | the brokers of the two clusters cut off from each other for 60 s | check that replication resumes after a link failure and delivers every message once and in order |
+| `geo-silent-disconnect` | the replicators' connections vanish without the remote brokers knowing | check that the replicators reconnect without losing or duplicating messages |
+| `geo-constrained-link` | the replication link below the replicated traffic for 60 s | measure the replication backlog during a congested link and how long it takes to drain |
 
 ## Why not a proxy
 

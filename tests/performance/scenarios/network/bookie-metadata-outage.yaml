@@ -19,7 +19,7 @@
 # while the brokers still reach the bookies and ZooKeeper; the consumers' connections are reset 20 s in, so that the
 # consumers reconnect, look their topics up and subscribe again. With Pulsar's default autoRecoveryDaemonEnabled=true,
 # every bookie shut down about 25 s into the outage: the AutoRecovery daemon inside it shut down when its metadata
-# session was declared lost, and took the bookie server with it (lhotari/pulsar#355). The test image doesn't restart a
+# session was declared lost, and took the bookie server with it. The test image doesn't restart a
 # bookie that exits, so the brokers had no bookies left and the run failed, with publishing stopped at about 58 % of the
 # messages, in 2 runs out of 2. With --set cluster.bookies.env.autoRecoveryDaemonEnabled=false, the bookies stayed up
 # and every message was delivered. Look for: the bookies' logs in the checkout's build/container-logs, the brokers'
