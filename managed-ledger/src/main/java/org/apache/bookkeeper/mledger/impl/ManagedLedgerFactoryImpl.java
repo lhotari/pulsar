@@ -312,7 +312,7 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
      * Whether the metadata store's session was lost and not reestablished yet: the store may have deleted the
      * session's ephemeral nodes, such as its locks, and other clients may have taken over what they protected.
      */
-    public boolean isMetadataSessionLost() {
+    boolean isMetadataSessionLost() {
         return metadataSessionLost;
     }
 

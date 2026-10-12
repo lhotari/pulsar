@@ -54,6 +54,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
 import lombok.Cleanup;
 import org.apache.bookkeeper.common.util.OrderedScheduler;
@@ -85,6 +86,8 @@ import org.testng.annotations.Test;
 
 @Test(groups = "broker")
 public class OwnershipCacheTest {
+    private final AtomicBoolean metadataSessionLost = new AtomicBoolean();
+    private final AtomicLong metadataSessionLossCount = new AtomicLong();
 
     private PulsarService pulsar;
     private ServiceConfiguration config;
@@ -104,6 +107,11 @@ public class OwnershipCacheTest {
         selfBrokerUrl = "tcp://localhost:" + port;
         pulsar = mock(PulsarService.class);
         when(pulsar.isRunning()).thenReturn(true);
+        // Answered from fields that the tests set, rather than stubbed again in a test while other threads call them
+        metadataSessionLost.set(false);
+        metadataSessionLossCount.set(0);
+        doAnswer(inv -> metadataSessionLost.get()).when(pulsar).isMetadataSessionLost();
+        doAnswer(inv -> metadataSessionLossCount.get()).when(pulsar).getMetadataSessionLossCount();
         config = new ServiceConfiguration();
         executor = OrderedScheduler.newSchedulerBuilder().numThreads(1).name("test").build();
         zookeeperServer = new ZookeeperServerTest(0);
@@ -394,7 +402,7 @@ public class OwnershipCacheTest {
         cache.handleOwnershipTakenOver(topics.get(0)).get();
         assertSame(cache.getOwnedBundle(bundle), ownedBundle);
 
-        when(pulsar.isMetadataSessionLost()).thenReturn(true);
+        metadataSessionLost.set(true);
         cache.handleOwnershipTakenOver(topics.get(0)).get();
 
         // The broker stopped serving the bundle: topic loads fail the ownership check, and the bundle's topics are
@@ -422,7 +430,7 @@ public class OwnershipCacheTest {
         assertNull(cache.getOwnedBundle(bundle));
 
         // When the session is back and no other broker took the lock after all, the lookup reacquires the bundle.
-        when(pulsar.isMetadataSessionLost()).thenReturn(false);
+        metadataSessionLost.set(false);
         Optional<NamespaceEphemeralData> owner = cache.getOwnerAsync(bundle).get();
         assertTrue(owner.isPresent());
         assertEquals(owner.get().getNativeUrl(), selfBrokerUrl);
@@ -439,7 +447,7 @@ public class OwnershipCacheTest {
                 Range.closedOpen(0x40000000L, 0x80000000L), bundleFactory);
         cache.tryAcquiringOwnership(owned).get();
 
-        when(pulsar.isMetadataSessionLost()).thenReturn(true);
+        metadataSessionLost.set(true);
 
         // the bundle it serves is still served, as with the reconnect policy for an expired session
         assertTrue(cache.getOwnerAsync(owned).get().isPresent());
@@ -449,7 +457,7 @@ public class OwnershipCacheTest {
         assertThatFailsWithServiceUnitNotReady(cache.tryAcquiringOwnership(notOwned));
         assertNull(cache.getOwnedBundle(notOwned));
 
-        when(pulsar.isMetadataSessionLost()).thenReturn(false);
+        metadataSessionLost.set(false);
         assertEquals(cache.tryAcquiringOwnership(notOwned).get().getNativeUrl(), selfBrokerUrl);
     }
 
@@ -464,7 +472,7 @@ public class OwnershipCacheTest {
         CompletableFuture<NamespaceEphemeralData> acquisition = cache.tryAcquiringOwnership(bundle);
 
         // the session is lost before its turn comes: acquiring the lock would wait for the metadata store
-        doReturn(true).when(pulsar).isMetadataSessionLost();
+        metadataSessionLost.set(true);
         preceding.complete(null);
 
         assertThatFailsWithServiceUnitNotReady(acquisition);
@@ -484,14 +492,14 @@ public class OwnershipCacheTest {
         OwnedBundle ownedBundle = cache.getOwnedBundle(bundle);
 
         // the report of the first loss of the session waits behind another operation of the bundle
-        doReturn(true).when(pulsar).isMetadataSessionLost();
-        doReturn(1L).when(pulsar).getMetadataSessionLosses();
+        metadataSessionLost.set(true);
+        metadataSessionLossCount.set(1);
         CompletableFuture<Void> preceding = new CompletableFuture<>();
         cache.getBundleOperationBarriers().put(bundle, preceding);
         CompletableFuture<Void> report = cache.handleOwnershipTakenOver(topic);
 
         // meanwhile the session came back, the lock revalidated, and the session was lost again
-        doReturn(2L).when(pulsar).getMetadataSessionLosses();
+        metadataSessionLossCount.set(2);
         preceding.complete(null);
         report.get(5, TimeUnit.SECONDS);
 

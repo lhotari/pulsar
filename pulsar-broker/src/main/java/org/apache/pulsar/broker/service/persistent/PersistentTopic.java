@@ -216,10 +216,11 @@ import org.jspecify.annotations.Nullable;
 
 public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCallback {
 
-    // Whether a write showed that another broker took the topic over, which is reported once
-    private final AtomicBoolean ownershipTakeoverReported = new AtomicBoolean();
     private static final Logger LOG = Logger.get(PersistentTopic.class);
     protected final Logger log;
+
+    // Whether a write showed that another broker took the topic over, which is reported once
+    private final AtomicBoolean ownershipTakeoverReported = new AtomicBoolean();
 
     // Managed ledger associated with the topic
     protected final ManagedLedger ledger;

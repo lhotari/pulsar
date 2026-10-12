@@ -1293,7 +1293,7 @@ public class PulsarService implements AutoCloseable, ShutdownService {
     }
 
     /** How many times the local metadata store's session was lost since the broker started. */
-    public long getMetadataSessionLosses() {
+    public long getMetadataSessionLossCount() {
         return metadataSessionLosses.get();
     }
 

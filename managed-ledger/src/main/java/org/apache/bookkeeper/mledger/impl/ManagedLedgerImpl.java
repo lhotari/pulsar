@@ -2145,16 +2145,28 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
      */
     synchronized void metadataSessionLost() {
         LedgerHandle recheckHandle = ledgerRecheckHandle;
-        if (recheckHandle != null && ledgerRecheckErrorCode == BKException.Code.LedgerFencedException
+        // the session may have been reestablished since the factory scheduled this
+        if (factory.isMetadataSessionLost() && recheckHandle != null
+                && ledgerRecheckErrorCode == BKException.Code.LedgerFencedException
                 && ledgerRecheckInProgress.getLeft() == recheckHandle.getId()
                 && !ledgerRecheckInProgress.getRight().isDone()) {
             fenceByAnotherWriter(recheckHandle, ledgerRecheckErrorCode);
         }
     }
 
+    /** Whether a recheck of the current ledger is waiting for its open with recovery. */
+    @VisibleForTesting
+    synchronized boolean isLedgerRecheckPending() {
+        return ledgerRecheckHandle != null && !ledgerRecheckInProgress.getRight().isDone();
+    }
+
     private void recheckCompleted(LedgerHandle currentLedger, CompletableFuture<Integer> recheck, int rc,
                                   LedgerHandle lh, int errorCode) {
         recheck.complete(rc);
+        if (lh != null) {
+            // A read handle, opened only to recover the ledger and read its last add confirmed
+            closeRecheckHandle(lh);
+        }
         if (ledgerRecheckInProgress.getRight() != recheck) {
             // The managed ledger was fenced meanwhile, after the metadata session was lost
             log.info().attr("ledgerId", currentLedger.getId()).attr("rc", rc)
@@ -2185,6 +2197,15 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             handleBadVersion(new BadVersionException("the current ledger " + currentLedger.getId()
                 + " was concurrent modified by a other bookie client. The error code is: " + errorCode));
         }
+    }
+
+    private void closeRecheckHandle(LedgerHandle lh) {
+        lh.closeAsync().whenComplete((ignore, e) -> {
+            if (e != null) {
+                log.debug().attr("ledgerId", lh.getId()).exceptionMessage(e)
+                        .log("Error when closing the handle of a ledger's recheck");
+            }
+        });
     }
 
     /** Closes the abandoned write handle, or it leaks with its periodic explicit-LAC flush task. */

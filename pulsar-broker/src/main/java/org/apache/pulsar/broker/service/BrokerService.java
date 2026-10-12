@@ -2317,7 +2317,8 @@ public class BrokerService implements Closeable {
             // Check the ownership again right before opening the managed ledger: the steps above can wait for the
             // metadata store, and a broker that stopped serving the bundle meanwhile, such as one that another broker
             // took the bundle over from, must not open, and so recover, the new owner's ledger.
-            checkTopicNsOwnership(topic).thenRun(() -> {
+            context.trace(TopicLoadingTracePoints.OWNERSHIP_BEFORE_OPEN_ML, checkTopicNsOwnership(topic))
+                    .thenRun(() -> {
                 final LatencyTracer.TracePoint openMlTracePoint = context.startTrace(TopicLoadingTracePoints.OPEN_ML);
                 managedLedgerFactory.asyncOpen(topicName.getPersistenceNamingEncoding(), managedLedgerConfig,
                         new OpenLedgerCallback() {

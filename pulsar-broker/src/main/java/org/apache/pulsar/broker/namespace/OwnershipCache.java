@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import lombok.CustomLog;
 import org.apache.pulsar.broker.PulsarService;
-import org.apache.pulsar.broker.service.BrokerServiceException.ServiceUnitNotReadyException;
+import org.apache.pulsar.broker.service.BrokerServiceException.MetadataSessionLostException;
 import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.common.naming.NamespaceBundle;
 import org.apache.pulsar.common.naming.NamespaceBundles;
@@ -274,8 +274,8 @@ public class OwnershipCache {
         });
     }
 
-    private static ServiceUnitNotReadyException sessionLostException(NamespaceBundle bundle) {
-        return new ServiceUnitNotReadyException("Namespace bundle " + bundle
+    private static MetadataSessionLostException sessionLostException(NamespaceBundle bundle) {
+        return new MetadataSessionLostException("Namespace bundle " + bundle
                 + " can't be acquired by this broker while its metadata session is lost");
     }
 
@@ -560,15 +560,15 @@ public class OwnershipCache {
      * <p>The handling runs on the broker's executor in the bundle's operation order with the acquisitions (see
      * {@link #serialize}), until the closing of the topics has started, and only while the session is lost, when no
      * acquisition can complete, so it can't race with an acquisition. A report that comes after the session was
-     * reestablished is ignored, leaving the takeover to the lock's revalidation. The report doesn't carry its
-     * topic's ownership generation; instead, only the loaded instance of a topic reports (see
-     * {@code PersistentTopic.addFailed}), and the unload of a generation replaces its topics' instances, so a
-     * write failure of an older generation's topic that is reported late, after the session came back, the bundle
-     * was acquired again and the session was lost again, doesn't drop the current generation.
+     * reestablished is ignored, leaving the takeover to the lock's revalidation. The report applies to the ownership
+     * generation that served the topic when it was made and to that loss of the session only, so a report that runs
+     * after the bundle was acquired again, or after the session came back and was lost again, changes nothing.
+     * Besides, only the loaded instance of a topic reports (see {@code PersistentTopic.addFailed}).
      *
-     * @return a future that completes when the bundle is no longer served and its topics' closing has started
+     * @return a future that completes when the report has been handled: the bundle is no longer served and its
+     *     topics' closing has started, or the report was ignored
      */
-    public CompletableFuture<Void> handleOwnershipTakenOver(TopicName topicName) {
+    CompletableFuture<Void> handleOwnershipTakenOver(TopicName topicName) {
         // Find the bundle among the owned ones, which needs no metadata, rather than in the namespace's bundles,
         // which can have been invalidated in the cache.
         OwnedBundle reported = null;
@@ -585,7 +585,7 @@ public class OwnershipCache {
         // The report applies to this ownership generation and this loss of the session only: a report that runs
         // after the bundle was reacquired, or after the session came back and was lost again, changes nothing
         OwnedBundle reportedBundle = reported;
-        long sessionLoss = pulsar.getMetadataSessionLosses();
+        long sessionLoss = pulsar.getMetadataSessionLossCount();
         NamespaceBundle takenOverBundle = reported.getNamespaceBundle();
         // On the broker's executor, not on the thread that reported the takeover, and the bundle's next operation
         // waits until the closing of its topics has started, so that the closing can't reach a newer generation's
@@ -603,7 +603,7 @@ public class OwnershipCache {
 
     private void stopServingTakenOverBundle(NamespaceBundle bundle, OwnedBundle ownedBundle, long sessionLoss,
                                             TopicName topicName) {
-        if (!pulsar.isMetadataSessionLost() || pulsar.getMetadataSessionLosses() != sessionLoss) {
+        if (!pulsar.isMetadataSessionLost() || pulsar.getMetadataSessionLossCount() != sessionLoss) {
             return;
         }
         if (getOwnedBundle(bundle) != ownedBundle) {

@@ -36,7 +36,7 @@ import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.authentication.AuthenticationDataSource;
 import org.apache.pulsar.broker.namespace.LookupOptions;
-import org.apache.pulsar.broker.service.BrokerServiceException.ServiceUnitNotReadyException;
+import org.apache.pulsar.broker.service.BrokerServiceException.MetadataSessionLostException;
 import org.apache.pulsar.broker.web.PulsarWebResource;
 import org.apache.pulsar.broker.web.RestException;
 import org.apache.pulsar.common.api.proto.CommandLookupTopicResponse.LookupType;
@@ -360,9 +360,8 @@ public class TopicLookupBase extends PulsarWebResource {
                     .attr("errorMessage", errorMsg)
                     .log("Failed to lookup topic");
             lookupFuture.complete(newLookupErrorResponse(ServerError.MetadataError, errorMsg, requestId));
-        } else if (unwrapEx instanceof ServiceUnitNotReadyException) {
-            // such as while the broker's metadata session is lost; the client looks the topic up again, so it's
-            // expected for every lookup then
+        } else if (unwrapEx instanceof MetadataSessionLostException) {
+            // the client looks the topic up again, so it's expected for every lookup while the session is lost
             LOG.debug()
                     .attr("topic", topicName)
                     .attr("errorMessage", errorMsg)

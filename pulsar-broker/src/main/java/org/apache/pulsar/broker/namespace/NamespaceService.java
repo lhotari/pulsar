@@ -69,6 +69,7 @@ import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl
 import org.apache.pulsar.broker.loadbalance.extensions.manager.RedirectManagerForLoadManagerMigration;
 import org.apache.pulsar.broker.lookup.LookupResult;
 import org.apache.pulsar.broker.resources.NamespaceResources;
+import org.apache.pulsar.broker.service.BrokerServiceException.MetadataSessionLostException;
 import org.apache.pulsar.broker.service.BrokerServiceException.ServiceUnitNotReadyException;
 import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.broker.service.nonpersistent.NonPersistentTopic;
@@ -527,8 +528,8 @@ public class NamespaceService implements AutoCloseable {
                     resolveBrokerServiceLookupResult(options, nsData.get(), future);
                 }
             }).exceptionally(exception -> {
-                if (FutureUtil.unwrapCompletionException(exception) instanceof ServiceUnitNotReadyException) {
-                    // such as while the metadata session is lost; the client retries the lookup
+                if (FutureUtil.unwrapCompletionException(exception) instanceof MetadataSessionLostException) {
+                    // the client retries the lookup
                     log.debug().attr("bundle", bundle).exceptionMessage(exception)
                             .log("Failed to check owner for bundle");
                 } else {
@@ -548,10 +549,11 @@ public class NamespaceService implements AutoCloseable {
             return future;
         });
         if (!started.get() && !lookup.isDone() && pulsar.isMetadataSessionLost()) {
-            // Another lookup of the bundle is still in progress while the session is lost: it's waiting for the
-            // metadata store, such as for acquiring the bundle. Fail instead of waiting behind it, and the client looks
-            // the topic up again, possibly at another broker.
-            return FutureUtil.failedFuture(new ServiceUnitNotReadyException("Namespace bundle " + bundle
+            // Another lookup of the bundle is still in progress while the session is lost: it may be waiting for the
+            // metadata store, such as for acquiring the bundle, which this can't tell from a lookup that is only
+            // choosing a broker to redirect to. Fail rather than risk waiting behind it: the client looks the topic
+            // up again, possibly at another broker.
+            return FutureUtil.failedFuture(new MetadataSessionLostException("Namespace bundle " + bundle
                     + " is being looked up while this broker's metadata session is lost"));
         }
         return lookup;
