@@ -152,6 +152,9 @@ report has these sections:
   Latency section's charts.
 - **Latency**: the publish latency (send to acknowledgment) and each application's end-to-end latency (publish to
   consume) at percentiles from p50 to the maximum, with charts by percentile and over time.
+- **Remote applications**, in a run with a remote cluster
+  ([Geo-replication](network-conditions.md#geo-replication)): the remote applications' correctness, as in the
+  Correctness section, and their end-to-end latency, which includes the replication, with the remote cluster's files.
 - **Backlog and rates**: each subscription's backlog and the per-second rates, sampled from the broker's topic
   stats once per second while the gateways publish and the applications receive. A sampled maximum is not the exact peak
   between samples.

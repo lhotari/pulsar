@@ -108,7 +108,9 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
             CONFIGURATION_STORE, METADATA);
     private static final List<String> REMOTE_GROUPS = List.of(REMOTE_BROKERS, REMOTE_BOOKIES, REMOTE_ZOOKEEPER,
             REMOTE_APPLICATIONS, LOCAL_REGION, REMOTE_REGION);
-    private static final Pattern INDEXED = Pattern.compile("((?:" + REMOTE_PREFIX + ")?)(broker|bookie)-([0-9]+)");
+    // Without leading zeros, as the launcher names the containers
+    private static final Pattern INDEXED =
+            Pattern.compile("((?:" + REMOTE_PREFIX + ")?)(broker|bookie)-(0|[1-9][0-9]*)");
     /** A name usable in file names, Grafana's annotations and the report. */
     private static final Pattern NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
     private static final Pattern DURATION_VALUE = Pattern.compile("([0-9]+(?:\\.[0-9]+)?)(us|ms|s|m)");

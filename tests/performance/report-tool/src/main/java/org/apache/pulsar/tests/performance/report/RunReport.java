@@ -113,6 +113,12 @@ public final class RunReport {
      * {@link #applicationDirectory}.
      */
     public static final String APPLICATIONS_DIRECTORY = "applications";
+    /** The remote applications' outputs in a run with a remote cluster, laid out as the applications'. */
+    public static final String REMOTE_APPLICATIONS_DIRECTORY = "remote-applications";
+    // The files of a run with a remote cluster, which the launcher writes
+    private static final List<String> REMOTE_FILES = List.of("resolved-config-remote-applications.yaml",
+            "remote-topic-stats.csv", "replication-stats.csv", REMOTE_APPLICATIONS_DIRECTORY + "/" + CONTAINER_LOG,
+            REMOTE_APPLICATIONS_DIRECTORY + "/" + CLIENT_LOG);
     private static final String MEASUREMENT_RECORDING_SUFFIX = ".measurement.jfr";
     private static final DateTimeFormatter FOOTER_START = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     // The guide to the performance tests, which the report links to
@@ -330,12 +336,13 @@ public final class RunReport {
         // The profiles come first so that a profiled run leads to its flame graphs
         appendProfiles(report, runDirectory, mapper);
         NetworkReport.append(report, runDirectory, mapper, measurementStart);
-        appendCorrectness(report, run.workload(), consumers);
+        appendCorrectness(report, "Correctness", run.workload(), consumers);
         appendThroughput(report, producer, consumers);
         Path stats = runDirectory.resolve(TOPIC_STATS_FILE);
         Samples samples = Files.isRegularFile(stats) ? readSamples(stats) : null;
         appendCatchUp(report, run.workload(), consumers, samples, measurementStart, measurementEnd);
         appendLatency(report, runDirectory, run, consumerHistograms, measurementStart);
+        appendRemoteApplications(report, runDirectory, run.workload(), mapper);
         if (samples != null) {
             appendTopicStats(report, runDirectory, samples, measurementStart, measurementEnd,
                     run.cooldowns(), chartFooter(run.info(), run.finished()));
@@ -621,9 +628,10 @@ public final class RunReport {
         return value.isEmpty() ? "" : "`" + value + "`";
     }
 
-    private static void appendCorrectness(StringBuilder report, JsonNode workload, List<JsonNode> consumers) {
-        report.append("\n## Correctness\n\n| Application | Unique messages | Duplicates | Ordering violations |"
-                + " Invalid |\n|---|---:|---:|---:|---:|\n");
+    private static void appendCorrectness(StringBuilder report, String heading, JsonNode workload,
+                                          List<JsonNode> consumers) {
+        report.append("\n## ").append(heading).append("\n\n| Application | Unique messages | Duplicates |"
+                + " Ordering violations | Invalid |\n|---|---:|---:|---:|---:|\n");
         boolean clean = true;
         for (JsonNode consumer : consumers) {
             long duplicates = consumer.path("duplicates").asLong();
@@ -645,6 +653,53 @@ public final class RunReport {
                     + " with the same message ID, redelivered, and %,d with another one: the broker persisted the"
                     + " message twice%s.%n", redelivered, republished, republished > 0
                     ? ", see each application's `republished-duplicates.txt`" : ""));
+        }
+    }
+
+    /**
+     * The remote applications of a run with a remote cluster: what each received of the replicated messages, and
+     * their publish-to-consume latency, which includes the replication. Nothing without them.
+     */
+    static void appendRemoteApplications(StringBuilder report, Path runDirectory, JsonNode workload,
+                                         ObjectMapper mapper) throws IOException {
+        Path remote = runDirectory.resolve(REMOTE_APPLICATIONS_DIRECTORY);
+        List<JsonNode> consumers = new ArrayList<>();
+        List<Path> histograms = new ArrayList<>();
+        for (int application = 0; ; application++) {
+            Path directory = remote.resolve(applicationName(workload, application));
+            if (!Files.isRegularFile(directory.resolve("application-summary.json"))) {
+                break;
+            }
+            consumers.add(mapper.readTree(directory.resolve("application-summary.json").toFile()));
+            if (Files.isRegularFile(directory.resolve("application-latency.hdr"))) {
+                histograms.add(directory.resolve("application-latency.hdr"));
+            }
+        }
+        if (consumers.isEmpty()) {
+            return;
+        }
+        appendCorrectness(report, "Remote applications", workload, consumers);
+        report.append("\nThey consume the replicated messages in the remote cluster, so their latency includes the"
+                + " replication.\n");
+        if (!histograms.isEmpty()) {
+            report.append("\n| Latency (ms) | Count | Min | p50 | p90 | p99 | p99.9 | Max |\n"
+                    + "|---|---:|---:|---:|---:|---:|---:|---:|\n");
+            for (Path histogram : histograms) {
+                report.append(latencyRow(applicationOf(histogram) + " (publish to consume, remote)",
+                        HdrHistogramRenderer.readMerged(List.of(histogram))));
+            }
+        }
+        List<String> links = new ArrayList<>();
+        for (String name : REMOTE_FILES) {
+            Path file = runDirectory.resolve(name);
+            if (Files.isRegularFile(file)) {
+                links.add(link(runDirectory, file));
+            }
+        }
+        if (!links.isEmpty()) {
+            report.append("\n<details><summary>The remote cluster's files</summary>\n\n");
+            links.forEach(file -> report.append("- ").append(file).append('\n'));
+            report.append("\n</details>\n");
         }
     }
 

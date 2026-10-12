@@ -22,6 +22,7 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -136,21 +137,28 @@ final class TopicStatsSampler implements AutoCloseable {
     static TopicStatsSampler start(Map<String, String> brokerHttpUrls, List<String> topics, Path runDirectory,
                                    boolean replicated, String fileName) throws IOException {
         Map<String, PulsarAdmin> brokerAdmins = new LinkedHashMap<>();
-        for (Map.Entry<String, String> broker : brokerHttpUrls.entrySet()) {
-            brokerAdmins.put(broker.getKey(), PulsarAdmin.builder()
-                    .serviceHttpUrl(broker.getValue())
-                    .connectionTimeout(5, TimeUnit.SECONDS)
-                    .readTimeout(5, TimeUnit.SECONDS)
-                    .build());
-        }
-        BufferedWriter writer = Files.newBufferedWriter(runDirectory.resolve(fileName));
-        writer.write(HEADER);
-        writer.newLine();
+        BufferedWriter writer = null;
         BufferedWriter replicationWriter = null;
-        if (replicated) {
-            replicationWriter = Files.newBufferedWriter(runDirectory.resolve(REPLICATION_FILE_NAME));
-            replicationWriter.write(REPLICATION_HEADER);
-            replicationWriter.newLine();
+        try {
+            for (Map.Entry<String, String> broker : brokerHttpUrls.entrySet()) {
+                brokerAdmins.put(broker.getKey(), PulsarAdmin.builder()
+                        .serviceHttpUrl(broker.getValue())
+                        .connectionTimeout(5, TimeUnit.SECONDS)
+                        .readTimeout(5, TimeUnit.SECONDS)
+                        .build());
+            }
+            writer = Files.newBufferedWriter(runDirectory.resolve(fileName));
+            writer.write(HEADER);
+            writer.newLine();
+            if (replicated) {
+                replicationWriter = Files.newBufferedWriter(runDirectory.resolve(REPLICATION_FILE_NAME));
+                replicationWriter.write(REPLICATION_HEADER);
+                replicationWriter.newLine();
+            }
+        } catch (IOException | RuntimeException e) {
+            // The launcher goes on without the sampler, so it releases what it opened
+            closeAll(e, writer, replicationWriter, brokerAdmins.values());
+            throw e;
         }
         TopicStatsSampler sampler = new TopicStatsSampler(brokerAdmins, topics, writer, replicationWriter);
         // Fixed delay on one thread: a slow call delays the next sample instead of piling up requests.
@@ -269,13 +277,48 @@ final class TopicStatsSampler implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        try {
-            writer.close();
-            if (replicationWriter != null) {
-                replicationWriter.close();
-            }
-        } finally {
-            brokerAdmins.values().forEach(PulsarAdmin::close);
+        IOException failure = closeAll(null, writer, replicationWriter, brokerAdmins.values());
+        if (failure != null) {
+            throw failure;
         }
+    }
+
+    /**
+     * Closes each writer and admin client, whichever fails. Adds the failures to {@code failure} when there is one;
+     * otherwise returns the first, with the others suppressed by it, or null when everything closed.
+     */
+    private static IOException closeAll(Exception failure, BufferedWriter writer, BufferedWriter replicationWriter,
+                                        Collection<PulsarAdmin> admins) {
+        IOException first = null;
+        for (BufferedWriter toClose : new BufferedWriter[] {writer, replicationWriter}) {
+            if (toClose == null) {
+                continue;
+            }
+            try {
+                toClose.close();
+            } catch (IOException e) {
+                if (failure != null) {
+                    failure.addSuppressed(e);
+                } else if (first == null) {
+                    first = e;
+                } else {
+                    first.addSuppressed(e);
+                }
+            }
+        }
+        for (PulsarAdmin admin : admins) {
+            try {
+                admin.close();
+            } catch (RuntimeException e) {
+                if (failure != null) {
+                    failure.addSuppressed(e);
+                } else if (first == null) {
+                    first = new IOException("Closing an admin client failed", e);
+                } else {
+                    first.addSuppressed(e);
+                }
+            }
+        }
+        return first;
     }
 }

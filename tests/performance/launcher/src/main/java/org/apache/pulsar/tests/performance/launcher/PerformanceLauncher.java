@@ -362,6 +362,10 @@ public class PerformanceLauncher implements Callable<Integer> {
             // The workloads wait while the host cools down before the measurement; give them the time for it
             workload.put("timeoutSeconds", workload.path("timeoutSeconds").intValue()
                     + cooldownTimeoutSeconds);
+            if (remoteWorkload != null) {
+                remoteWorkload.put("timeoutSeconds", remoteWorkload.path("timeoutSeconds").intValue()
+                        + cooldownTimeoutSeconds);
+            }
         }
         loader.write(resolvedConfig, resolved);
         Path remoteConfig = runOutput.resolve(REMOTE_APPLICATIONS_CONFIG);
@@ -1209,16 +1213,19 @@ public class PerformanceLauncher implements Callable<Integer> {
     }
 
     /**
-     * The measurement's length in seconds, as the workload sets it or as its messages take at its rate, for checking
-     * the network impairments' times; -1 when it isn't known, without a rate.
+     * The measurement's length in seconds, for checking the network impairments' times: as long as its messages take
+     * at its rate when it sets a number of messages, which the gateways then send whatever its seconds, or its seconds
+     * otherwise; -1 when it isn't known, a number of messages without a rate.
      */
     static double measurementSeconds(JsonNode workload) {
         JsonNode measurement = workload.path("measurement");
-        if (measurement.path("seconds").asLong() > 0) {
-            return measurement.path("seconds").asLong();
+        long messages = measurement.path("messages").asLong();
+        if (messages > 0) {
+            long rate = workload.path("rate").asLong();
+            return rate > 0 ? (double) messages / rate : -1;
         }
-        long rate = workload.path("rate").asLong();
-        return rate > 0 ? (double) measurement.path("messages").asLong() / rate : -1;
+        long seconds = measurement.path("seconds").asLong();
+        return seconds > 0 ? seconds : -1;
     }
 
     /** The PID of a container's main process in the Docker engine's host, from Docker's container inspect. */

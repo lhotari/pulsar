@@ -278,13 +278,14 @@ final class ProgressMonitor implements AutoCloseable {
                 of(receivedTarget, received), (received - lastRemoteReceived) / seconds));
         TopicStatsSampler.Backlog remote = remoteBacklog.get();
         if (remote != null) {
-            remoteLine.append(String.format(Locale.ROOT, " --- backlog: %,d msg (max per application: %,d)",
-                    remote.total(), remote.maxSubscription()));
+            remoteLine.append(String.format(Locale.ROOT, " --- backlog: %,d msg (max per application: %,d%s)",
+                    remote.total(), remote.maxSubscription(), age(remote)));
         }
         TopicStatsSampler.Backlog currentBacklog = backlog.get();
         if (currentBacklog != null && currentBacklog.replication() >= 0) {
-            remoteLine.append(String.format(Locale.ROOT, " --- replication backlog: %,d msg",
-                    currentBacklog.replication()));
+            String age = age(currentBacklog);
+            remoteLine.append(String.format(Locale.ROOT, " --- replication backlog: %,d msg%s",
+                    currentBacklog.replication(), age.isEmpty() ? "" : " (" + age.substring(2) + ")"));
         }
         if (finishedApplications > 0 && finishedApplications < remoteApplications) {
             remoteLine.append(" --- finished applications: ").append(finishedApplications).append('/')
@@ -299,6 +300,15 @@ final class ProgressMonitor implements AutoCloseable {
         remoteLine.append(latency(remoteLatency));
         lastRemoteReceived = received;
         return remoteLine.toString();
+    }
+
+    /**
+     * ", sampled N s ago" for a sample at least {@link #STALE_BACKLOG_SECONDS} old: the sampler keeps its latest
+     * complete sample while its rounds fail. Empty for a recent sample.
+     */
+    private static String age(TopicStatsSampler.Backlog sample) {
+        long ageSeconds = TimeUnit.MILLISECONDS.toSeconds(System.currentTimeMillis() - sample.epochMs());
+        return ageSeconds >= STALE_BACKLOG_SECONDS ? ", sampled " + ageSeconds + " s ago" : "";
     }
 
     /** The producer's phase with its progress, such as "warmup round 1/2" or "measurement 45/120 s". */

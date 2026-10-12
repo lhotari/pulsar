@@ -261,7 +261,8 @@ run fails as it does when an application of the first cluster doesn't. Their pub
 replication. They open their pods before the gateways start, without the workload's `applications.joinSeconds`, and
 the gateways don't wait for them in the warmup.
 
-The overlay gives both clusters' namespaces a retention of an hour, so that no message is deleted before the run
+The run report has a Remote applications section with their correctness and latency. The overlay gives both
+clusters' namespaces a retention of an hour, so that no message is deleted before the run
 has checked it. The progress shows the remote applications on a line of their own, with the remote subscriptions'
 backlog and the topics' replication backlog. The
 overlay [`geo-replication`](../scenarios/network/geo-replication.yaml) adds a remote cluster with four remote

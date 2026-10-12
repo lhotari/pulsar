@@ -176,6 +176,10 @@ public class NetworkSettingsTest {
                 .hasMessageContaining("the cluster has 2 broker(s)");
         assertThatThrownBy(() -> NetworkSettings.containers("proxy", TOPOLOGY))
                 .hasMessageContaining("isn't an endpoint");
+        assertThatThrownBy(() -> NetworkSettings.containers("broker-00", TOPOLOGY))
+                .hasMessageContaining("isn't an endpoint");
+        assertThatThrownBy(() -> NetworkSettings.containers("remote-bookie-01", new Topology(2, 3, 1, 2)))
+                .hasMessageContaining("isn't an endpoint");
     }
 
     @Test

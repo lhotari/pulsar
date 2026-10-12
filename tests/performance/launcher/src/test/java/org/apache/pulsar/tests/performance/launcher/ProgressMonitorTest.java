@@ -90,6 +90,22 @@ public class ProgressMonitorTest {
     }
 
     @Test
+    public void saysHowOldTheRemoteAndReplicationBacklogSamplesAre() {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        PrintStream out = new PrintStream(output, true, StandardCharsets.UTF_8);
+        TopicStatsSampler.Backlog backlog =
+                new TopicStatsSampler.Backlog(System.currentTimeMillis() - 20_000, 10, 5, 400);
+        try (ProgressMonitor monitor = new ProgressMonitor(mapper, out, 64, 1, () -> backlog)) {
+            monitor.addRemote("remote-applications", 1,
+                    () -> new TopicStatsSampler.Backlog(System.currentTimeMillis() - 30_000, 0, 0));
+            monitor.report();
+        }
+        assertThat(output.toString(StandardCharsets.UTF_8))
+                .contains("backlog: 0 msg (max per application: 0, sampled 30 s ago)",
+                        "replication backlog: 400 msg (sampled 20 s ago)");
+    }
+
+    @Test
     public void saysHowOldAnOldBacklogSampleIs() {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         PrintStream out = new PrintStream(output, true, StandardCharsets.UTF_8);
