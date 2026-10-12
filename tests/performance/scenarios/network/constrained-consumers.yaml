@@ -14,18 +14,18 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+
 # The brokers' traffic to the applications is limited to 5 Mbit/s, about half of what they receive, for 60 s of the
 # measurement, as consumers behind a congested link: the applications fall behind and a backlog builds, while the
 # producers' path isn't touched. On iot-telemetry-small, with its 512 MB broker, the broker ran out of heap 14 s after
-# the limit ended, in 2 runs out of 2: the messages dispatched to the slow consumers and not yet acknowledged, on top
-# of the Key_Shared consumers' state, filled it, and the restart stalled every producer for 20-40 s. With a 4 GB broker
-# (configs/iot-telemetry-medium-mem), it didn't, but the producers' publish latency still reached 4 s, in the 10 s
-# after the limit ended, while the backlog drained at about 100,000 msg/s and saturated the host's CPUs, which the
-# broker shares with the clients and the bookies here; turning the broker's in-flight reads limiter off, which its
-# I/O threads contend on during the drain, didn't change it. Look for: the
-# broker's heap, the publish latency of the untouched producers, the backlog and how fast it drains, and the
-# redeliveries after a restart. Set the rate for the base scenario's traffic, such as
-# --set network.impairments.applications-downlink.rate=2mbit.
+# the limit ended, in 2 runs out of 2: the messages dispatched to the slow consumers and not yet acknowledged, on top of
+# the Key_Shared consumers' state, filled it, and the restart stalled every producer for 20-40 s. With a 4 GB broker
+# (configs/iot-telemetry-medium-mem), it didn't, but the producers' publish latency still reached 4 s, in the 10 s after
+# the limit ended, while the backlog drained at about 100,000 msg/s and saturated the host's CPUs, which the broker
+# shares with the clients and the bookies here; turning the broker's in-flight reads limiter off, which its I/O threads
+# contend on during the drain, didn't change it. Look for: the broker's heap, the publish latency of the untouched
+# producers, the backlog and how fast it drains, and the redeliveries after a restart. Set the rate for the base
+# scenario's traffic, such as --set network.impairments.applications-downlink.rate=2mbit.
 
 network:
   impairments:
