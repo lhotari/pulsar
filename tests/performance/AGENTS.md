@@ -326,7 +326,9 @@ throughput.
   fault between the clusters. Name the remote cluster's containers with the `remote-` endpoints, and both sides with
   `local-region` and `remote-region`. The other overlays still act on the first cluster, so they compose with it:
   `--extends network/geo-replication --extends network/<overlay>` checks the replication during that fault. The remote
-  applications' line in the progress has the replication backlog, and `replication-stats.csv` each topic's replicators.
+  applications' line in the progress has the remote subscriptions' and the replication backlog, `remote-topic-stats.csv`
+  the remote topics' stats, and `replication-stats.csv` each topic's replicators. When the remote applications miss
+  messages, a remote backlog that stays means a delivery problem, and none means the remote topics lack them.
   The remote cluster isn't in the metrics, the heap dumps or the profiles; its containers' complete logs are in
   `build/container-logs/` as the first cluster's are.
 - For memory questions, such as a broker that runs out of heap while clients reconnect, add
@@ -373,7 +375,7 @@ commit segment can be absent). Use the exact recording names linked from the pro
 | `network-events.jsonl`, `network-summary.json` | With a `network` section: every impairment's application, removal and queue counters as they happened, and each impaired container's TCP segments sent and retransmitted, see [Network conditions](docs/network-conditions.md#files) | `jq` |
 | `gateways/pulsar-client.log.txt`, `applications/pulsar-client.log.txt` | The workloads' Pulsar client logs, at the level of `PULSAR_CLIENT_LOG_LEVEL` in a workload's `env`, `warn` by default | `rg` |
 | `applications/<application>/republished-duplicates.txt` | Samples of the duplicates that the broker persisted twice, when there were any | Read |
-| `remote-applications/`, `replication-stats.csv`, `resolved-config-remote-applications.yaml` | With a remote cluster: the remote applications' outputs, laid out as in `applications/`, each topic's replicators once a second, and the remote applications' configuration, see [Geo-replication](docs/network-conditions.md#geo-replication) | As their `applications/` counterparts; DuckDB for the CSV |
+| `remote-applications/`, `remote-topic-stats.csv`, `replication-stats.csv`, `resolved-config-remote-applications.yaml` | With a remote cluster: the remote applications' outputs, laid out as in `applications/`, the remote topics' stats and each topic's replicators once a second, and the remote applications' configuration, see [Geo-replication](docs/network-conditions.md#geo-replication) | As their `applications/` counterparts; DuckDB for the CSV |
 
 ### Profiles
 

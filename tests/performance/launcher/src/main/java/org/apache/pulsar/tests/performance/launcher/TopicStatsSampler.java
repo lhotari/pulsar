@@ -126,6 +126,15 @@ final class TopicStatsSampler implements AutoCloseable {
      */
     static TopicStatsSampler start(Map<String, String> brokerHttpUrls, List<String> topics, Path runDirectory,
                                    boolean replicated) throws IOException {
+        return start(brokerHttpUrls, topics, runDirectory, replicated, FILE_NAME);
+    }
+
+    /**
+     * Starts sampling as {@link #start(Map, List, Path, boolean)} does, into the file {@code fileName} of
+     * {@code runDirectory}, such as the remote cluster's {@code remote-topic-stats.csv}.
+     */
+    static TopicStatsSampler start(Map<String, String> brokerHttpUrls, List<String> topics, Path runDirectory,
+                                   boolean replicated, String fileName) throws IOException {
         Map<String, PulsarAdmin> brokerAdmins = new LinkedHashMap<>();
         for (Map.Entry<String, String> broker : brokerHttpUrls.entrySet()) {
             brokerAdmins.put(broker.getKey(), PulsarAdmin.builder()
@@ -134,7 +143,7 @@ final class TopicStatsSampler implements AutoCloseable {
                     .readTimeout(5, TimeUnit.SECONDS)
                     .build());
         }
-        BufferedWriter writer = Files.newBufferedWriter(runDirectory.resolve(FILE_NAME));
+        BufferedWriter writer = Files.newBufferedWriter(runDirectory.resolve(fileName));
         writer.write(HEADER);
         writer.newLine();
         BufferedWriter replicationWriter = null;

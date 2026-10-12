@@ -127,6 +127,8 @@ public class PerformanceLauncher implements Callable<Integer> {
     static final String REMOTE_APPLICATIONS_DIRECTORY = NetworkSettings.REMOTE_APPLICATIONS;
     // The remote applications' configuration: the resolved one with their service URL and their settings
     static final String REMOTE_APPLICATIONS_CONFIG = "resolved-config-remote-applications.yaml";
+    // The remote cluster's topic stats, as topic-stats.csv has the first cluster's
+    static final String REMOTE_TOPIC_STATS = "remote-topic-stats.csv";
     // Every log goes to this file in the run directory, and the console shows only the launcher's own messages
     static final String LAUNCHER_LOG = "launcher.log";
     private static final String LOG_CONFIGURATION = "performance-launcher-log4j2.xml";
@@ -455,6 +457,7 @@ public class PerformanceLauncher implements Callable<Integer> {
         GenericContainer<?> consumer = null;
         GenericContainer<?> producer = null;
         TopicStatsSampler topicStatsSampler = null;
+        TopicStatsSampler remoteTopicStatsSampler = null;
         ProgressMonitor progress = null;
         HostStatsSampler hostStatsSampler = startHostStatsSampler(sensors, runOutput);
         // The sidecar in the Docker engine's host counts the containers' CPU events, and reads the engine host's
@@ -552,7 +555,14 @@ public class PerformanceLauncher implements Callable<Integer> {
                 status(String.format(Locale.ROOT, "Started the remote applications in %.0f s",
                         (System.nanoTime() - remoteApplicationsStart) / 1e9));
             }
-            topicStatsSampler = startTopicStatsSampler(cluster, workload, runOutput, remoteCluster != null);
+            topicStatsSampler = startTopicStatsSampler(cluster, workload, runOutput, remoteCluster != null,
+                    TopicStatsSampler.FILE_NAME);
+            if (remoteCluster != null) {
+                // The remote subscriptions' backlog tells messages that the remote topics lack from messages that the
+                // remote applications didn't receive
+                remoteTopicStatsSampler = startTopicStatsSampler(remoteCluster, workload, runOutput, false,
+                        REMOTE_TOPIC_STATS);
+            }
             TopicStatsSampler backlogSource = topicStatsSampler;
             progress = new ProgressMonitor(loader.mapper(), System.out,
                     workload.path("payload").path("size").intValue(),
@@ -561,8 +571,10 @@ public class PerformanceLauncher implements Callable<Integer> {
             progress.follow(APPLICATIONS_DIRECTORY, controlUrl(consumer), runningConsumer::isRunning);
             if (remoteConsumer != null) {
                 GenericContainer<?> runningRemoteConsumer = remoteConsumer;
-                progress.followRemote(REMOTE_APPLICATIONS_DIRECTORY, remoteApplications, controlUrl(remoteConsumer),
-                        runningRemoteConsumer::isRunning);
+                TopicStatsSampler remoteBacklogSource = remoteTopicStatsSampler;
+                progress.followRemote(REMOTE_APPLICATIONS_DIRECTORY, remoteApplications,
+                        () -> remoteBacklogSource != null ? remoteBacklogSource.latestBacklog() : null,
+                        controlUrl(remoteConsumer), runningRemoteConsumer::isRunning);
             }
 
             Path producerOutput = runOutput.resolve(GATEWAYS_DIRECTORY);
@@ -667,6 +679,7 @@ public class PerformanceLauncher implements Callable<Integer> {
             // A failure while shutting down is only a warning: it must not hide the run's result or its failure
             ProgressMonitor progressToClose = progress;
             TopicStatsSampler topicStatsToClose = topicStatsSampler;
+            TopicStatsSampler remoteTopicStatsToClose = remoteTopicStatsSampler;
             Thread gateToStop = measurementGate;
             GenericContainer<?> producerToStop = producer;
             GenericContainer<?> consumerToStop = consumer;
@@ -685,6 +698,11 @@ public class PerformanceLauncher implements Callable<Integer> {
             shutDown("closing the topic stats sampler", () -> {
                 if (topicStatsToClose != null) {
                     topicStatsToClose.close();
+                }
+            });
+            shutDown("closing the remote topic stats sampler", () -> {
+                if (remoteTopicStatsToClose != null) {
+                    remoteTopicStatsToClose.close();
                 }
             });
             shutDown("closing the host stats sampler", () -> {
@@ -1049,7 +1067,7 @@ public class PerformanceLauncher implements Callable<Integer> {
      * start it is reported and the run goes on without it.
      */
     private static TopicStatsSampler startTopicStatsSampler(PulsarCluster cluster, JsonNode workload,
-                                                            Path runOutput, boolean replicated) {
+                                                            Path runOutput, boolean replicated, String fileName) {
         String prefix = workload.path("topics").path("prefix").textValue();
         List<String> topics = IntStream.range(0, workload.path("topics").path("count").intValue())
                 .mapToObj(topic -> prefix + topic).toList();
@@ -1059,7 +1077,7 @@ public class PerformanceLauncher implements Callable<Integer> {
             for (BrokerContainer broker : cluster.getBrokers()) {
                 brokerHttpUrls.put(broker.getContainerName().replaceFirst("^/", ""), broker.getHttpServiceUrl());
             }
-            return TopicStatsSampler.start(brokerHttpUrls, topics, runOutput, replicated);
+            return TopicStatsSampler.start(brokerHttpUrls, topics, runOutput, replicated, fileName);
         } catch (Exception e) {
             System.out.println("Topic stats sampling is off for this run: " + e);
             return null;

@@ -261,7 +261,8 @@ run fails as it does when an application of the first cluster doesn't. Their pub
 replication. They open their pods before the gateways start, without the workload's `applications.joinSeconds`, and
 the gateways don't wait for them in the warmup.
 
-The progress shows the remote applications on a line of their own, with the topics' replication backlog. The
+The progress shows the remote applications on a line of their own, with the remote subscriptions' backlog and the
+topics' replication backlog. The
 overlay [`geo-replication`](../scenarios/network/geo-replication.yaml) adds a remote cluster with four remote
 applications, and the `geo-` overlays extend it with faults between the clusters. Since the other overlays act on the
 first cluster, they compose with it: `--extends network/geo-replication --extends network/silent-client-disconnect`
@@ -274,6 +275,7 @@ replicates while the first cluster's clients disconnect.
 | `network-events.jsonl` | Every event, one JSON object per line, written as it happens, also in a failed run: the resolved containers and devices, the offloads, each impairment's application and removal with its queues' counters, a reset's destroyed connections, failures and the cleanup |
 | `gateways/pulsar-client.log.txt`, `applications/pulsar-client.log.txt` | The Pulsar client's warnings in the workloads, such as its reconnections and timeouts, when it logged any; `PULSAR_CLIENT_LOG_LEVEL: info` in a workload's `env` logs more |
 | `remote-applications/` | The remote applications' outputs, as in `applications/`, their configuration in `resolved-config-remote-applications.yaml` |
+| `remote-topic-stats.csv` | With a remote cluster, its topics' stats once a second, as `topic-stats.csv` has the first cluster's: a remote subscription's backlog that stays after the run tells a message that the remote applications didn't receive from one that the remote topic lacks |
 | `replication-stats.csv` | With a remote cluster, each topic's replicators once a second: the backlog to replicate, whether the replicator is connected, the delay of the message it replicates next, and its replicated-message counter |
 | `network-summary.json` | Each impairment's settings, status, times and its queues' final counters, and each impaired container's TCP segments sent and retransmitted during the run |
 

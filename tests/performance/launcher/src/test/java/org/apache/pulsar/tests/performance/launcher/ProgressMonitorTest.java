@@ -70,7 +70,8 @@ public class ProgressMonitorTest {
         TopicStatsSampler.Backlog backlog =
                 new TopicStatsSampler.Backlog(System.currentTimeMillis(), 1_500, 1_000, 2_345);
         try (ProgressMonitor monitor = new ProgressMonitor(mapper, out, 64, 2, () -> backlog)) {
-            monitor.addRemote("remote-applications", 4);
+            monitor.addRemote("remote-applications", 4,
+                    () -> new TopicStatsSampler.Backlog(System.currentTimeMillis(), 8_265, 2_100));
             ObjectNode consumer = line("consumer", 500, 10_000);
             consumer.put("received", 1_000).put("messageCount", 8_000);
             monitor.accept("applications", consumer);
@@ -84,6 +85,7 @@ public class ProgressMonitorTest {
         assertThat(lines).hasSize(3);
         assertThat(lines[1]).contains("Received: 1,000 msg of 8,000 (12%)", "Max: 10.0").doesNotContain("duplicates");
         assertThat(lines[2]).contains("Replicated, received in the remote cluster: 600 msg of 16,000",
+                "backlog: 8,265 msg (max per application: 2,100)",
                 "replication backlog: 2,345 msg", "finished applications: 1/4", "duplicates: 3", "Max: 90.0");
     }
 

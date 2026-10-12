@@ -29,5 +29,10 @@
 
 cluster:
   remote:
+    # Empty, so that --set cluster.remote.brokers.env.<name>=<value> can change a remote setting
+    brokers:
+      env: {}
+    bookies:
+      env: {}
     applications:
       count: 4

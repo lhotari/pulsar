@@ -77,6 +77,8 @@ final class ProgressMonitor implements AutoCloseable {
     private final Histogram consumerLatency = new Histogram(MAX_LATENCY_MICROS, 3);
     // The sources in the remote cluster, whose messages are the replicated ones, with their applications
     private final Map<String, Integer> remoteSources = new LinkedHashMap<>();
+    // The remote subscriptions' backlog, null when not sampled
+    private Supplier<TopicStatsSampler.Backlog> remoteBacklog = () -> null;
     private final Histogram remoteLatency = new Histogram(MAX_LATENCY_MICROS, 3);
     private long lastReportNanos = startedNanos;
     private long lastSent;
@@ -151,14 +153,19 @@ final class ProgressMonitor implements AutoCloseable {
      * Follows the progress stream of the {@code applications} in the remote cluster, which receive the replicated
      * messages: they get a line of their own.
      */
-    void followRemote(String source, int applications, String controlUrl, BooleanSupplier running) {
-        addRemote(source, applications);
+    void followRemote(String source, int applications, Supplier<TopicStatsSampler.Backlog> backlog,
+                      String controlUrl, BooleanSupplier running) {
+        addRemote(source, applications, backlog);
         follow(source, controlUrl, running);
     }
 
-    /** Reports the lines of {@code source} as those of {@code applications} in the remote cluster. */
-    synchronized void addRemote(String source, int applications) {
+    /**
+     * Reports the lines of {@code source} as those of {@code applications} in the remote cluster, with the remote
+     * subscriptions' {@code backlog}.
+     */
+    synchronized void addRemote(String source, int applications, Supplier<TopicStatsSampler.Backlog> backlog) {
         remoteSources.put(source, applications);
+        remoteBacklog = backlog;
     }
 
     synchronized void accept(String source, JsonNode line) {
@@ -269,6 +276,11 @@ final class ProgressMonitor implements AutoCloseable {
         StringBuilder remoteLine = new StringBuilder(prefix).append(String.format(Locale.ROOT,
                 "Replicated, received in the remote cluster: %,d msg%s --- %,.1f msg/s", received,
                 of(receivedTarget, received), (received - lastRemoteReceived) / seconds));
+        TopicStatsSampler.Backlog remote = remoteBacklog.get();
+        if (remote != null) {
+            remoteLine.append(String.format(Locale.ROOT, " --- backlog: %,d msg (max per application: %,d)",
+                    remote.total(), remote.maxSubscription()));
+        }
         TopicStatsSampler.Backlog currentBacklog = backlog.get();
         if (currentBacklog != null && currentBacklog.replication() >= 0) {
             remoteLine.append(String.format(Locale.ROOT, " --- replication backlog: %,d msg",
