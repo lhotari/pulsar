@@ -54,29 +54,32 @@ public class DispatchSmallMessagesCoalescingTest extends ProducerConsumerBase {
 
     @Test(timeOut = 60_000)
     public void testMixedSmallAndLargeMessagesArriveInOrder() throws Exception {
-        verifyDelivery(false);
+        // sizes around the copy limit, and a large message, so that a dispatch has copied and referenced messages
+        verifyDelivery(false, new int[] {1, 100, PulsarCommandSenderImpl.MAX_COPIED_MESSAGE_BYTES - 200,
+                PulsarCommandSenderImpl.MAX_COPIED_MESSAGE_BYTES + 1, 10, 50_000, 300, 1500}, 600);
     }
 
     @Test(timeOut = 60_000)
-    public void testMixedSmallAndLargeBatchesArriveInOrder() throws Exception {
-        verifyDelivery(true);
+    public void testSmallMessagesFillMoreThanOneBuffer() throws Exception {
+        // a backlog of copied messages only, dispatched in reads of up to 100 entries: more bytes per dispatch than a
+        // buffer of copied messages takes
+        verifyDelivery(false, new int[] {1000, 1900, 700}, 500);
     }
 
-    private void verifyDelivery(boolean batching) throws Exception {
+    @Test(timeOut = 60_000)
+    public void testSmallAndLargeBatchesArriveInOrder() throws Exception {
+        // batches of five: the small ones are copied, the large ones referenced
+        verifyDelivery(true, new int[] {10, 100, 200, 50, 300, 5000, 20, 30, 40, 50}, 600);
+    }
+
+    private void verifyDelivery(boolean batching, int[] sizes, int count) throws Exception {
         String topicName = newTopicName();
-        // sizes around the copy limit and beyond the coalesced buffer's size, so that a dispatch has copied and
-        // referenced messages and fills more than one buffer
-        int[] sizes = {1, 100, PulsarCommandSenderImpl.MAX_COPIED_MESSAGE_BYTES - 200,
-                PulsarCommandSenderImpl.MAX_COPIED_MESSAGE_BYTES + 1, 10, 50_000, 300, 1500};
-        int count = 600;
         List<byte[]> sent = new ArrayList<>(count);
-        try (Consumer<byte[]> consumer = pulsarClient.newConsumer()
-                     .topic(topicName)
-                     .subscriptionName("sub")
-                     .subscriptionType(SubscriptionType.Shared)
-                     .receiverQueueSize(1000)
-                     .subscribe();
-             Producer<byte[]> producer = pulsarClient.newProducer()
+        // the subscription exists before the messages, and the consumer comes after them, so that the dispatches
+        // read the backlog in full reads
+        pulsarClient.newConsumer().topic(topicName).subscriptionName("sub")
+                .subscriptionType(SubscriptionType.Shared).subscribe().close();
+        try (Producer<byte[]> producer = pulsarClient.newProducer()
                      .topic(topicName)
                      .enableBatching(batching)
                      .batchingMaxMessages(5)
@@ -90,6 +93,13 @@ public class DispatchSmallMessagesCoalescingTest extends ProducerConsumerBase {
                 producer.sendAsync(payload);
             }
             producer.flush();
+        }
+        try (Consumer<byte[]> consumer = pulsarClient.newConsumer()
+                     .topic(topicName)
+                     .subscriptionName("sub")
+                     .subscriptionType(SubscriptionType.Shared)
+                     .receiverQueueSize(1000)
+                     .subscribe()) {
             for (int i = 0; i < count; i++) {
                 Message<byte[]> message = consumer.receive(10, TimeUnit.SECONDS);
                 assertThat(message).as("message %d", i).isNotNull();
