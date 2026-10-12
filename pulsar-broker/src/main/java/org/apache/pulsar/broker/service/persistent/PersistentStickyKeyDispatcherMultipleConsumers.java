@@ -372,11 +372,6 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         // filter and group the entries by consumer for dispatching
         final Map<Consumer, List<Entry>> entriesByConsumerForDispatching =
                 filterAndGroupEntriesForDispatching(entries, readType, triggerLookAhead, replayAdditions);
-        if (replayAdditions != null) {
-            // entries added to the replay queue during the read may have blocked some of its entries, which the
-            // next replay read dispatches after them: read again without a backoff
-            skipNextBackoff = true;
-        }
 
         for (Map.Entry<Consumer, List<Entry>> current : entriesByConsumerForDispatching.entrySet()) {
             Consumer consumer = current.getKey();
@@ -569,6 +564,8 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
                 if (olderInReplay != null && olderInReplay.compareTo(entry.getPosition()) < 0) {
                     alreadyBlockedHashes.add(stickyKeyHash);
                     hashIsAlreadyBlocked = true;
+                    // the next replay read dispatches this entry after the older one: read again without a backoff
+                    skipNextBackoff = true;
                     if (lookAheadAllowed) {
                         // the hash's consumer can make progress once the replay read reads the older entry, so
                         // this isn't a reason for a look-ahead read

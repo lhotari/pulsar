@@ -512,7 +512,9 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     /**
      * Called under the dispatcher's monitor when a normal or a replay read starts. A normal read and a replay read
-     * can be in flight at the same time, but not two reads of the same type.
+     * can be in flight at the same time. With the default direct dispatch, a read of a type doesn't start before the
+     * previous read of the same type was dispatched; with {@code dispatcherDispatchMessagesInSubscriptionThread}, it
+     * can start while the previous one's dispatch is still queued.
      */
     protected void onReadStarted(ReadType readType) {
     }
