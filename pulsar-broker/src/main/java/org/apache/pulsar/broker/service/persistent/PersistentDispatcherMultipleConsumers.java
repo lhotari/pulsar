@@ -421,6 +421,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                 // next entries as readCompletedEntries-callback was never called
                 if ((messagesToReplayNow.size() - deletedMessages.size()) == 0) {
                     havePendingReplayRead = false;
+                    onReadEnded(ReadType.Replay);
                     readMoreEntriesAsync();
                 }
             } else if (BLOCKED_DISPATCHER_ON_UNACKMSG_UPDATER.get(this) == TRUE) {
@@ -514,9 +515,17 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
      * Called under the dispatcher's monitor when a normal or a replay read starts. A normal read and a replay read
      * can be in flight at the same time. With the default direct dispatch, a read of a type doesn't start before the
      * previous read of the same type was dispatched; with {@code dispatcherDispatchMessagesInSubscriptionThread}, it
-     * can start while the previous one's dispatch is still queued.
+     * can start while the previous one's dispatch is still queued. A read ends with the dispatch of its entries, in
+     * {@link #trySendMessagesToConsumers(ReadType, List)}, or with {@link #onReadEnded(ReadType)}.
      */
     protected void onReadStarted(ReadType readType) {
+    }
+
+    /**
+     * Called under the dispatcher's monitor when a read ends without its entries being dispatched: it failed, was
+     * cancelled, read only deleted entries, or completed after every consumer disconnected.
+     */
+    protected void onReadEnded(ReadType readType) {
     }
 
     private boolean shouldPauseOnAckStatePersist(ReadType readType) {
@@ -673,8 +682,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     protected void cancelPendingRead() {
+        // the callers hold the dispatcher's monitor
         if (havePendingRead && cursor.cancelPendingReadRequest()) {
             havePendingRead = false;
+            onReadEnded(ReadType.Normal);
         }
     }
 
@@ -723,6 +734,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         if (shouldRewindBeforeReadingOrReplaying && readType == ReadType.Normal) {
             // All consumers got disconnected before the completion of the read operation
             entries.forEach(Entry::release);
+            onReadEnded(ReadType.Normal);
             cursor.rewind();
             shouldRewindBeforeReadingOrReplaying = false;
             readMoreEntriesAsync();
@@ -1072,6 +1084,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             cursor.rewind();
         }
 
+        onReadEnded(readType);
         if (readType == ReadType.Normal) {
             havePendingRead = false;
         } else {
