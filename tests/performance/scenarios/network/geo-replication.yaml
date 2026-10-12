@@ -28,6 +28,12 @@
 # the first cluster's applications'.
 
 cluster:
+  # An hour's retention in both clusters, through the namespaces' defaults, which public/default has no policy to
+  # override: no message of a run is deleted before it is checked, also once every subscription has acknowledged it
+  brokers:
+    env:
+      defaultRetentionTimeInMinutes: "60"
+      defaultRetentionSizeInMB: "-1"
   remote:
     # Empty, so that --set cluster.remote.brokers.env.<name>=<value> can change a remote setting
     brokers:
