@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import org.apache.pulsar.client.api.SubscriptionType;
 
 /**
  * Configuration selected from the {@code workloads.iotTelemetry} scenario subtree.
@@ -98,10 +99,9 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
     }
 
     /**
-     * The applications, in one container, as the gateways are. Each application is a Key_Shared subscription of its
-     * own on every topic, named {@code <subscriptionPrefix><index>}, consumed through {@code podsPerApplication}
-     * pods, each a Pulsar client with a consumer of the subscription; the applications differ only in their
-     * subscription.
+     * The applications, in one container, as the gateways are. Each application is a subscription of its own on every
+     * topic, named {@code <subscriptionPrefix><index>}, consumed through {@code podsPerApplication} pods, each a Pulsar
+     * client with a consumer of the subscription; the applications differ only in their subscription.
      *
      * @param client the client resources that every pod's client shares
      * @param env the environment variables of the applications' container, which the launcher sets, such as
@@ -111,11 +111,18 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
      *                    subscription from the start, so it catches up on the backlog that builds up until it joins
      * @param caughtUpLatencyMillis an application that joined later has caught up when it first receives a measured
      *                              message within this time of its publishing
+     * @param subscriptionType the subscriptions' type: {@code Key_Shared}, the default, {@code Shared} or
+     *                         {@code Failover}. A Shared subscription doesn't keep a device's messages in order, so
+     *                         the applications check it for lost and duplicated messages only
      */
     public record Applications(int count, int podsPerApplication, String subscriptionPrefix, Client client,
-                               Map<String, String> env, List<Integer> joinSeconds, Integer caughtUpLatencyMillis) {
+                               Map<String, String> env, List<Integer> joinSeconds, Integer caughtUpLatencyMillis,
+                               String subscriptionType) {
         /** The default of {@code caughtUpLatencyMillis}. */
         public static final int DEFAULT_CAUGHT_UP_LATENCY_MILLIS = 1000;
+        /** The subscription types that the applications support. */
+        static final List<SubscriptionType> SUBSCRIPTION_TYPES =
+                List.of(SubscriptionType.Key_Shared, SubscriptionType.Shared, SubscriptionType.Failover);
 
         public Applications {
             // kept with any nulls, which the scenario's validation rejects with its message
@@ -123,11 +130,19 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
             if (caughtUpLatencyMillis == null) {
                 caughtUpLatencyMillis = DEFAULT_CAUGHT_UP_LATENCY_MILLIS;
             }
+            if (subscriptionType == null) {
+                subscriptionType = SubscriptionType.Key_Shared.name();
+            }
+        }
+
+        public Applications(int count, int podsPerApplication, String subscriptionPrefix, Client client,
+                            Map<String, String> env, List<Integer> joinSeconds, Integer caughtUpLatencyMillis) {
+            this(count, podsPerApplication, subscriptionPrefix, client, env, joinSeconds, caughtUpLatencyMillis, null);
         }
 
         public Applications(int count, int podsPerApplication, String subscriptionPrefix, Client client,
                             Map<String, String> env) {
-            this(count, podsPerApplication, subscriptionPrefix, client, env, null, null);
+            this(count, podsPerApplication, subscriptionPrefix, client, env, null, null, null);
         }
     }
 
@@ -218,6 +233,10 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                 "applications.joinSeconds must be at least 0 with no null value, and the warmup ("
                         + warmupTotalSeconds + " s) and the latest join must be within timeoutSeconds");
         require(applications.caughtUpLatencyMillis() >= 1, "applications.caughtUpLatencyMillis must be at least 1");
+        require(Applications.SUBSCRIPTION_TYPES.stream()
+                        .anyMatch(type -> type.name().equals(applications.subscriptionType())),
+                "applications.subscriptionType must be one of " + Applications.SUBSCRIPTION_TYPES + ", not "
+                        + applications.subscriptionType());
         require(producer.precreateConcurrency() >= 1, "gateways.producer.precreateConcurrency must be at least 1");
         if (timeoutSeconds < minimumRuntimeSeconds) {
             throw new IllegalArgumentException(String.format(Locale.ROOT, "Invalid IoT scenario: timeoutSeconds is %d,"
@@ -281,6 +300,16 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
         return applications.podsPerApplication();
     }
 
+    /** The applications' subscription type. */
+    public SubscriptionType subscriptionType() {
+        return SubscriptionType.valueOf(applications.subscriptionType());
+    }
+
+    /** Whether the subscription type keeps each device's messages in order, which the applications then check. */
+    public boolean keepsDeviceOrder() {
+        return subscriptionType() != SubscriptionType.Shared;
+    }
+
     /** When the application opens its pods, in seconds after the measurement starts; 0 for at the start. */
     public int joinSeconds(int applicationIndex) {
         return applications.joinSeconds().isEmpty() ? 0 : applications.joinSeconds().get(applicationIndex);
@@ -313,9 +342,14 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
     public List<String> topicNames() {
         List<String> result = new ArrayList<>(topics.count());
         for (int i = 0; i < topics.count(); i++) {
-            result.add(topics.prefix() + i);
+            result.add(topicName(i));
         }
         return result;
+    }
+
+    /** The topic with the index, from 0 to {@code topics.count} - 1. */
+    public String topicName(int topicIndex) {
+        return topics.prefix() + topicIndex;
     }
 
     public String subscriptionName(int applicationIndex) {

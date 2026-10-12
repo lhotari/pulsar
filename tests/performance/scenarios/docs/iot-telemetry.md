@@ -181,10 +181,11 @@ workloads:
     topics:
       count: 30
       prefix: persistent://public/default/iot-telemetry-
-    applications:              # each a Key_Shared subscription, consumed through its pods
+    applications:              # each a subscription of its own, consumed through its pods
       count: 20
       podsPerApplication: 100  # a Pulsar client with a consumer of the subscription each
       subscriptionPrefix: iot-application-
+      subscriptionType: Key_Shared  # not set in the base file: Key_Shared, Shared or Failover
       client:                  # the client resources that every pod's client shares
         ioThreads: 8
         listenerThreads: 16
@@ -207,6 +208,12 @@ the warmup. It has caught up when each of its topics has delivered a measured me
 redeliveries a few older messages may still arrive after it. The report's Catch-up section shows when each late
 application joined, its subscription's backlog then, and how long it took to catch up. The warmup and the latest join
 have to be within the timeout, which also has to leave room for the last application to catch up.
+
+`applications.subscriptionType` is the subscriptions' type, Key_Shared by default. With Shared, a device's messages
+arrive in any order, so the applications check for lost and duplicated messages but not for their order, and the
+gateways batch messages of any device together, with the producer's default batcher; with Key_Shared and Failover the
+applications check each device's order, and with Key_Shared the gateways keep a batch to one device, as the next
+section describes.
 
 `timeoutSeconds` bounds the whole workload: the applications stop waiting for messages after it and the run fails,
 the gateways give up waiting for a warmup round or the measurement's start, and the launcher waits for the containers
@@ -276,7 +283,7 @@ application. It must report zero invalid messages and zero ordering violations. 
 for Pulsar's at-least-once delivery model and are counted separately so comparisons can detect changes in their
 frequency. The persisted gateway and application state checks for missing tail messages after all clients stop.
 
-Key_Shared scenarios use the key-based producer batcher. It keeps every batch to one key so the broker can
+Key_Shared scenarios use the key-based producer batcher, and the other subscription types the default one. It keeps every batch to one key so the broker can
 route all messages for a device through the same Key_Shared hash range. Changing the batcher changes the
 ordering contract exercised by the scenario and should not be mixed into a performance comparison.
 

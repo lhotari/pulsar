@@ -53,6 +53,27 @@ public class DeviceSequenceTrackerTest {
     }
 
     @Test
+    public void acceptsAnyOrderWithoutTheOrderingCheck() throws Exception {
+        // A Shared subscription delivers a device's messages in any order
+        DeviceSequenceTracker tracker = new DeviceSequenceTracker(1, false);
+        tracker.received(0, 2);
+        tracker.received(0, 0);
+        tracker.received(0, 2);
+        tracker.received(0, 1);
+        tracker.received(0, 1);
+
+        assertThat(tracker.summary()).isEqualTo(new DeviceSequenceTracker.Summary(3, 2, 0, 0, 0, 0));
+        assertThat(tracker.summary().valid()).isTrue();
+        Path state = Files.createTempFile("device-sequences", ".bin");
+        try {
+            tracker.writeViolationSamples(state);
+            assertThat(Files.readAllLines(state)).isEmpty();
+        } finally {
+            Files.deleteIfExists(state);
+        }
+    }
+
+    @Test
     public void tellsRedeliveredDuplicatesFromMessagesPersistedTwice() throws Exception {
         DeviceSequenceTracker tracker = new DeviceSequenceTracker(1);
         tracker.received(0, 0, new MessageIdImpl(5, 0, -1), 0, "t", "x", 0, 0);
