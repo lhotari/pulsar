@@ -117,6 +117,29 @@ final class NetworkImpairments implements AutoCloseable {
                   String hostInterface) {
     }
 
+    /**
+     * Where the impairments' commands run: the Docker engine's host, through the sidecar, or a fake in the tests.
+     */
+    interface Host {
+        /**
+         * Runs a shell script in the engine host's network namespace, when {@code target} is null, or in the
+         * target's, and returns its output; fails when the script fails.
+         */
+        String exec(Target target, String script) throws IOException;
+
+        /** Whether a target's container still runs the process whose namespace was resolved. */
+        boolean running(Target target);
+
+        /**
+         * Resolves a container: its IP on the cluster's network, its interface with that IP, and that interface's
+         * peer in the engine's host.
+         */
+        Target resolve(String name, GenericContainer<?> container, String networkId) throws IOException;
+
+        /** Releases the host, such as the sidecar. */
+        void close();
+    }
+
     // The workload containers exit when they have finished, before the impairments' counters are read at the end
     private static boolean isWorkload(Target target) {
         return NetworkSettings.GATEWAYS.equals(target.name()) || NetworkSettings.APPLICATIONS.equals(target.name())
@@ -175,7 +198,7 @@ final class NetworkImpairments implements AutoCloseable {
         }
     }
 
-    private final GenericContainer<?> sidecar;
+    private final Host host;
     private final NetworkSettings settings;
     private final NetworkSettings.Topology topology;
     private final ObjectMapper mapper;
@@ -202,16 +225,14 @@ final class NetworkImpairments implements AutoCloseable {
         return thread;
     });
     private final CompletableFuture<Void> failure = new CompletableFuture<>();
-    private final AtomicLong scripts = new AtomicLong();
     private Instant measurementStart;
     // Set before the timeline is stopped, so that an interrupted command isn't taken for a failed impairment
     private volatile boolean closing;
     private boolean closed;
 
-    private NetworkImpairments(GenericContainer<?> sidecar, NetworkSettings settings,
-                               NetworkSettings.Topology topology, Path runDirectory, Consumer<String> status)
-            throws IOException {
-        this.sidecar = sidecar;
+    NetworkImpairments(Host host, NetworkSettings settings, NetworkSettings.Topology topology, Path runDirectory,
+                       Consumer<String> status) throws IOException {
+        this.host = host;
         this.settings = settings;
         this.topology = topology;
         // JSON, also for the events' lines and tc's JSON output, whatever the launcher reads the scenario with
@@ -243,7 +264,7 @@ final class NetworkImpairments implements AutoCloseable {
                 throw new IllegalStateException("The Docker engine's host can't apply network impairments: "
                         + (probe.getStderr() + probe.getStdout()).strip());
             }
-            return new NetworkImpairments(sidecar, settings, topology, runDirectory, status);
+            return new NetworkImpairments(new DockerHost(sidecar), settings, topology, runDirectory, status);
         } catch (InterruptedException e) {
             sidecar.stop();
             Thread.currentThread().interrupt();
@@ -273,6 +294,19 @@ final class NetworkImpairments implements AutoCloseable {
      * @param networkId the ID of the cluster's Docker network
      */
     synchronized void setUp(Map<String, GenericContainer<?>> containers, String networkId) throws IOException {
+        Map<String, Target> resolved = new LinkedHashMap<>();
+        for (String name : used(containers.keySet())) {
+            GenericContainer<?> container = containers.get(name);
+            if (container == null) {
+                throw new IllegalStateException("The run has no container " + name + " for the network impairments");
+            }
+            resolved.put(name, host.resolve(name, container, networkId));
+        }
+        setUpTargets(resolved);
+    }
+
+    /** The containers that the impairments act on, of {@code containers}: all of them with the offloads off. */
+    private Set<String> used(Set<String> containers) {
         Set<String> used = new LinkedHashSet<>();
         for (Impairment impairment : settings.impairments()) {
             for (Pair pair : NetworkSettings.pairs(impairment, topology)) {
@@ -281,14 +315,19 @@ final class NetworkImpairments implements AutoCloseable {
             }
         }
         if (settings.offloads() == NetworkSettings.Offloads.OFF) {
-            used.addAll(containers.keySet());
+            used.addAll(containers);
         }
-        for (String name : used) {
-            GenericContainer<?> container = containers.get(name);
-            if (container == null) {
+        return used;
+    }
+
+    /** {@link #setUp(Map, String)} with the containers resolved: every container that the impairments act on. */
+    synchronized void setUpTargets(Map<String, Target> containers) throws IOException {
+        for (String name : used(containers.keySet())) {
+            Target target = containers.get(name);
+            if (target == null) {
                 throw new IllegalStateException("The run has no container " + name + " for the network impairments");
             }
-            targets.put(name, resolve(name, container, networkId));
+            targets.put(name, target);
         }
         plan();
         for (Device device : devices.values()) {
@@ -811,7 +850,7 @@ final class NetworkImpairments implements AutoCloseable {
         } catch (IOException e) {
             failures.add(e);
         }
-        sidecar.stop();
+        host.close();
         if (!failures.isEmpty()) {
             IOException failure = new IOException("Cleaning up the network impairments failed: "
                     + failures.get(0).getMessage(), failures.get(0));
@@ -915,61 +954,8 @@ final class NetworkImpairments implements AutoCloseable {
         }
     }
 
-    /**
-     * Resolves a container: its IP on the cluster's network, its interface with that IP, and that interface's peer in
-     * the engine's host.
-     */
-    private Target resolve(String name, GenericContainer<?> container, String networkId) throws IOException {
-        InspectContainerResponse info = container.getCurrentContainerInfo();
-        Long pid = info.getState().getPidLong();
-        if (!Boolean.TRUE.equals(info.getState().getRunning()) || pid == null || pid <= 0) {
-            throw new IllegalStateException(name + " isn't running, so its network can't be impaired");
-        }
-        String ip = null;
-        for (ContainerNetwork network : info.getNetworkSettings().getNetworks().values()) {
-            if (networkId.equals(network.getNetworkID())) {
-                ip = network.getIpAddress();
-            }
-        }
-        if (ip == null || ip.isEmpty()) {
-            throw new IllegalStateException(name + " has no IPv4 address on the cluster's network; the network"
-                    + " impairments support IPv4 only");
-        }
-        Target partial = new Target(name, container, pid, ip, null, null);
-        String containerInterface = TcCommands.interfaceWithAddress(exec(partial, "ip -o -4 addr show"), ip);
-        String containerLink = exec(partial, "ip -o link show " + TcCommands.device(containerInterface));
-        String hostInterface = TcCommands.interfaceWithIndex(exec(null, "ip -o link"),
-                TcCommands.peerIndex(containerLink), TcCommands.linkIndex(containerLink));
-        return new Target(name, container, pid, ip, containerInterface, hostInterface);
-    }
-
-    /**
-     * Whether a target's container still runs the process whose namespace was resolved. Fails when Docker can't tell,
-     * after a few attempts, so that an impairment isn't skipped, or left in place, for a container that may run.
-     */
-    private static boolean running(Target target) {
-        RuntimeException failure = null;
-        for (int attempt = 0; attempt < 3; attempt++) {
-            try {
-                InspectContainerResponse info = target.container().getCurrentContainerInfo();
-                return Boolean.TRUE.equals(info.getState().getRunning())
-                        && Long.valueOf(target.pid()).equals(info.getState().getPidLong());
-            } catch (NotFoundException e) {
-                // Removed
-                return false;
-            } catch (RuntimeException e) {
-                failure = e;
-                // a transient error of the Docker API, which a moment later usually answers
-                try {
-                    Thread.sleep(200L * (attempt + 1));
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-        }
-        throw new IllegalStateException("Docker can't tell whether " + target.name() + " runs: "
-                + failure.getMessage(), failure);
+    private boolean running(Target target) {
+        return host.running(target);
     }
 
     /** The TCP counters of a target's namespace: the segments sent and retransmitted. */
@@ -1101,37 +1087,112 @@ final class NetworkImpairments implements AutoCloseable {
         }
     }
 
-    /**
-     * Runs a shell script in the sidecar: in the engine host's network namespace, or in a target's, and returns its
-     * output; fails when it fails or takes longer than {@value #COMMAND_TIMEOUT_SECONDS} s.
-     */
     private String exec(Target target, String script) throws IOException {
-        List<String> command = new ArrayList<>(List.of("timeout", Integer.toString(COMMAND_TIMEOUT_SECONDS)));
-        if (target != null) {
-            command.addAll(List.of("nsenter", "-t", Long.toString(target.pid()), "-n"));
+        return host.exec(target, script);
+    }
+
+    /** The privileged sidecar in the Docker engine host's network and PID namespaces. */
+    private static final class DockerHost implements Host {
+        private final GenericContainer<?> sidecar;
+        private final AtomicLong scripts = new AtomicLong();
+
+        DockerHost(GenericContainer<?> sidecar) {
+            this.sidecar = sidecar;
         }
-        String body = "set -e\n" + script;
-        if (body.length() > MAX_INLINE_SCRIPT) {
-            // Linux takes at most 128 KB in one argument, which the filters of hundreds of connections exceed; a file
-            // in the sidecar works in any network namespace, since nsenter -n keeps the sidecar's file system
-            String file = "/tmp/network-impairments-" + scripts.incrementAndGet() + ".sh";
-            sidecar.copyFileToContainer(Transferable.of(body.getBytes(StandardCharsets.UTF_8)), file);
-            command.addAll(List.of("sh", file));
-        } else {
-            command.addAll(List.of("sh", "-c", body));
-        }
-        try {
-            Container.ExecResult result = sidecar.execInContainer(command.toArray(String[]::new));
-            if (result.getExitCode() != 0) {
-                String shown = script.replace("\n", "; ");
-                throw new IOException("`" + (shown.length() > 300 ? shown.substring(0, 300) + " ..." : shown) + "`"
-                        + (target != null ? " in " + target.name() : "") + " failed with status "
-                        + result.getExitCode() + ": " + (result.getStderr() + result.getStdout()).strip());
+
+        @Override
+        public Target resolve(String name, GenericContainer<?> container, String networkId) throws IOException {
+            InspectContainerResponse info = container.getCurrentContainerInfo();
+            Long pid = info.getState().getPidLong();
+            if (!Boolean.TRUE.equals(info.getState().getRunning()) || pid == null || pid <= 0) {
+                throw new IllegalStateException(name + " isn't running, so its network can't be impaired");
             }
-            return result.getStdout();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrupted while running " + script, e);
+            String ip = null;
+            for (ContainerNetwork network : info.getNetworkSettings().getNetworks().values()) {
+                if (networkId.equals(network.getNetworkID())) {
+                    ip = network.getIpAddress();
+                }
+            }
+            if (ip == null || ip.isEmpty()) {
+                throw new IllegalStateException(name + " has no IPv4 address on the cluster's network; the network"
+                        + " impairments support IPv4 only");
+            }
+            Target partial = new Target(name, container, pid, ip, null, null);
+            String containerInterface = TcCommands.interfaceWithAddress(exec(partial, "ip -o -4 addr show"), ip);
+            String containerLink = exec(partial, "ip -o link show " + TcCommands.device(containerInterface));
+            String hostInterface = TcCommands.interfaceWithIndex(exec(null, "ip -o link"),
+                    TcCommands.peerIndex(containerLink), TcCommands.linkIndex(containerLink));
+            return new Target(name, container, pid, ip, containerInterface, hostInterface);
+        }
+
+        /**
+         * Fails when Docker can't tell, after a few attempts, so that an impairment isn't skipped, or left in place,
+         * for a container that may run.
+         */
+        @Override
+        public boolean running(Target target) {
+            RuntimeException failure = null;
+            for (int attempt = 0; attempt < 3; attempt++) {
+                try {
+                    InspectContainerResponse info = target.container().getCurrentContainerInfo();
+                    return Boolean.TRUE.equals(info.getState().getRunning())
+                            && Long.valueOf(target.pid()).equals(info.getState().getPidLong());
+                } catch (NotFoundException e) {
+                    // Removed
+                    return false;
+                } catch (RuntimeException e) {
+                    failure = e;
+                    // a transient error of the Docker API, which a moment later usually answers
+                    try {
+                        Thread.sleep(200L * (attempt + 1));
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+            throw new IllegalStateException("Docker can't tell whether " + target.name() + " runs: "
+                    + failure.getMessage(), failure);
+        }
+
+        /**
+         * Runs a shell script in the sidecar: in the engine host's network namespace, or in a target's, and returns its
+         * output; fails when it fails or takes longer than {@value NetworkImpairments#COMMAND_TIMEOUT_SECONDS} s.
+         */
+        @Override
+        public String exec(Target target, String script) throws IOException {
+            List<String> command = new ArrayList<>(List.of("timeout", Integer.toString(COMMAND_TIMEOUT_SECONDS)));
+            if (target != null) {
+                command.addAll(List.of("nsenter", "-t", Long.toString(target.pid()), "-n"));
+            }
+            String body = "set -e\n" + script;
+            if (body.length() > MAX_INLINE_SCRIPT) {
+                // Linux takes at most 128 KB in one argument, which the filters of hundreds of connections exceed; a
+                // file in the sidecar works in any network namespace, since nsenter -n keeps the sidecar's file system
+                String file = "/tmp/network-impairments-" + scripts.incrementAndGet() + ".sh";
+                sidecar.copyFileToContainer(Transferable.of(body.getBytes(StandardCharsets.UTF_8)), file);
+                command.addAll(List.of("sh", file));
+            } else {
+                command.addAll(List.of("sh", "-c", body));
+            }
+            try {
+                Container.ExecResult result = sidecar.execInContainer(command.toArray(String[]::new));
+                if (result.getExitCode() != 0) {
+                    String shown = script.replace("\n", "; ");
+                    throw new IOException("`" + (shown.length() > 300 ? shown.substring(0, 300) + " ..." : shown) + "`"
+                            + (target != null ? " in " + target.name() : "") + " failed with status "
+                            + result.getExitCode() + ": " + (result.getStderr() + result.getStdout()).strip());
+                }
+                return result.getStdout();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while running " + script, e);
+            }
+        }
+
+        @Override
+        public void close() {
+            sidecar.stop();
         }
     }
 }

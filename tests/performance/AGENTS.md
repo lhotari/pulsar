@@ -588,4 +588,5 @@ personal fork or another fork.
   starts a cluster or the metrics stack.
 - After changing the network impairments, also run `./gradlew :tests:performance:launcher:networkCheck`, which checks
   them on small containers and needs a Docker engine that runs privileged containers. The unit tests check the
-  settings and the `tc` commands without Docker.
+  settings, the `tc` commands, and the impairments' state machine on a fake host (`NetworkImpairmentsTest`), without
+  Docker.
