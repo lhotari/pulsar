@@ -63,6 +63,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -334,6 +335,8 @@ public class PulsarService implements AutoCloseable, ShutdownService {
     }
 
     private volatile boolean metadataSessionLost;
+    // How many times the local metadata store's session was lost, to tell one loss from the next
+    private final AtomicLong metadataSessionLosses = new AtomicLong();
     private volatile State state;
 
     private final ReentrantLock mutex = new ReentrantLock();
@@ -1289,9 +1292,15 @@ public class PulsarService implements AutoCloseable, ShutdownService {
         return metadataSessionLost;
     }
 
+    /** How many times the local metadata store's session was lost since the broker started. */
+    public long getMetadataSessionLosses() {
+        return metadataSessionLosses.get();
+    }
+
     private void handleMetadataSessionEvent(SessionEvent e) {
         log.info().attr("event", e).log("Received metadata service session event");
         if (e == SessionEvent.SessionLost) {
+            metadataSessionLosses.incrementAndGet();
             metadataSessionLost = true;
         } else if (e == SessionEvent.SessionReestablished) {
             metadataSessionLost = false;

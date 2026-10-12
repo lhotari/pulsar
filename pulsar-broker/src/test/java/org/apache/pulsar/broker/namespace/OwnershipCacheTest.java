@@ -453,6 +453,54 @@ public class OwnershipCacheTest {
         assertEquals(cache.tryAcquiringOwnership(notOwned).get().getNativeUrl(), selfBrokerUrl);
     }
 
+    @Test
+    public void testQueuedAcquisitionFailsWhenTheMetadataSessionIsLostMeanwhile() throws Exception {
+        OwnershipCache cache = new OwnershipCache(this.pulsar, nsService);
+        NamespaceBundle bundle = new NamespaceBundle(NamespaceName.get("pulsar/ns-queued-acquisition"),
+                Range.closedOpen(0L, 0x40000000L), bundleFactory);
+        // another operation of the bundle is in progress, so the acquisition waits for its turn
+        CompletableFuture<Void> preceding = new CompletableFuture<>();
+        cache.getBundleOperationBarriers().put(bundle, preceding);
+        CompletableFuture<NamespaceEphemeralData> acquisition = cache.tryAcquiringOwnership(bundle);
+
+        // the session is lost before its turn comes: acquiring the lock would wait for the metadata store
+        doReturn(true).when(pulsar).isMetadataSessionLost();
+        preceding.complete(null);
+
+        assertThatFailsWithServiceUnitNotReady(acquisition);
+        assertNull(cache.getOwnedBundle(bundle));
+        assertFalse(store.exists(ServiceUnitUtils.path(bundle)).join());
+    }
+
+    @Test
+    public void testTakeoverReportOfAnEarlierSessionLossChangesNothing() throws Exception {
+        OwnershipCache cache = new OwnershipCache(this.pulsar, nsService);
+        NamespaceBundle bundle = new NamespaceBundle(NamespaceName.get("pulsar/ns-earlier-loss"),
+                Range.closedOpen(0L, (long) Integer.MAX_VALUE), bundleFactory);
+        TopicName topic = IntStream.range(0, 100)
+                .mapToObj(i -> TopicName.get("persistent://pulsar/ns-earlier-loss/topic-" + i))
+                .filter(bundle::includes).findFirst().orElseThrow();
+        cache.tryAcquiringOwnership(bundle).get();
+        OwnedBundle ownedBundle = cache.getOwnedBundle(bundle);
+
+        // the report of the first loss of the session waits behind another operation of the bundle
+        doReturn(true).when(pulsar).isMetadataSessionLost();
+        doReturn(1L).when(pulsar).getMetadataSessionLosses();
+        CompletableFuture<Void> preceding = new CompletableFuture<>();
+        cache.getBundleOperationBarriers().put(bundle, preceding);
+        CompletableFuture<Void> report = cache.handleOwnershipTakenOver(topic);
+
+        // meanwhile the session came back, the lock revalidated, and the session was lost again
+        doReturn(2L).when(pulsar).getMetadataSessionLosses();
+        preceding.complete(null);
+        report.get(5, TimeUnit.SECONDS);
+
+        assertSame(cache.getOwnedBundle(bundle), ownedBundle);
+        assertTrue(ownedBundle.isActive());
+        verify(brokerService, never()).unloadServiceUnit(same(bundle), anyBoolean(), anyBoolean(), anyLong(), any(),
+                any());
+    }
+
     private static void assertThatFailsWithServiceUnitNotReady(CompletableFuture<?> future) {
         try {
             future.get(5, TimeUnit.SECONDS);

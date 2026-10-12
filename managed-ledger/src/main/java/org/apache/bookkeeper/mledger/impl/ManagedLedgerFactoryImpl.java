@@ -296,6 +296,13 @@ public class ManagedLedgerFactoryImpl implements ManagedLedgerFactory {
         metadataServiceAvailable = e.isConnected();
         if (e == SessionEvent.SessionLost) {
             metadataSessionLost = true;
+            // Off the store's event thread and this lock: a managed ledger's recheck of a fenced ledger may be
+            // waiting for the metadata service
+            scheduledExecutor.execute(() -> ledgers.values().forEach(future -> {
+                if (future.isDone() && !future.isCompletedExceptionally()) {
+                    future.join().metadataSessionLost();
+                }
+            }));
         } else if (e == SessionEvent.SessionReestablished) {
             metadataSessionLost = false;
         }

@@ -21,6 +21,7 @@ package org.apache.bookkeeper.mledger.impl;
 import static org.apache.bookkeeper.mledger.util.ManagedLedgerTestUtil.defaultConfig;
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
@@ -31,6 +32,7 @@ import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.expectThrows;
 import static org.testng.Assert.fail;
 import io.netty.buffer.ByteBuf;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -690,6 +692,51 @@ public class ManagedLedgerErrorsTest extends MockedBookKeeperTestCase {
         PulsarMockLedgerHandle mockFencedLedger = (PulsarMockLedgerHandle) fencedLedger;
         Awaitility.await().untilAsserted(() -> assertTrue(mockFencedLedger.getAsyncCloseCount().get() > 0,
                 "the handle of the concurrently modified ledger must be closed"));
+    }
+
+    @Test
+    public void pendingRecheckOfAFencedLedgerFencesTheManagedLedgerWhenTheMetadataSessionIsLost() throws Exception {
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl factory = spy(new ManagedLedgerFactoryImpl(metadataStore, bkc));
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "pendingRecheckOfAFencedLedgerFencesTheManagedLedgerWhenTheMetadataSessionIsLost", defaultConfig());
+        ledger.addEntry("entry-1".getBytes());
+        long fencedLedgerId = ledger.currentLedger.getId();
+
+        // The ledger is fenced while only the connection is lost: the recheck opens it with recovery, which waits
+        // for the metadata service
+        when(factory.isMetadataServiceAvailable()).thenReturn(false);
+        when(factory.isMetadataSessionLost()).thenReturn(false);
+        CompletableFuture<Void> recovery = bkc.promiseAfter(0);
+        bkc.addEntryFailAfter(0, BKException.Code.LedgerFencedException);
+        CompletableFuture<Position> add = new CompletableFuture<>();
+        ledger.asyncAddEntry("entry-2".getBytes(), new AddEntryCallback() {
+            @Override
+            public void addComplete(Position position, ByteBuf entryData, Object ctx) {
+                add.complete(position);
+            }
+
+            @Override
+            public void addFailed(ManagedLedgerException exception, Object ctx) {
+                add.completeExceptionally(exception);
+            }
+        }, null);
+
+        // The session is lost while the recheck waits: no other add may fail to tell the managed ledger. Stubbed
+        // with doReturn, since the managed ledger uses the factory meanwhile
+        doReturn(true).when(factory).isMetadataSessionLost();
+        ledger.metadataSessionLost();
+
+        ExecutionException e = expectThrows(ExecutionException.class, () -> add.get(10, TimeUnit.SECONDS));
+        assertThat(e.getCause(), instanceOf(ManagedLedgerFencedByAnotherWriterException.class));
+        assertEquals(ledger.getState(), ManagedLedgerImpl.State.Fenced);
+
+        // The recheck completing later doesn't switch the fenced managed ledger to a new ledger
+        recovery.complete(null);
+        Awaitility.await().pollDelay(Duration.ofMillis(500)).untilAsserted(() -> {
+            assertEquals(ledger.getState(), ManagedLedgerImpl.State.Fenced);
+            assertEquals(ledger.currentLedger.getId(), fencedLedgerId);
+        });
     }
 
     @Test

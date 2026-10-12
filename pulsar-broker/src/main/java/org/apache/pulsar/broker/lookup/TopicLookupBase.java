@@ -361,8 +361,9 @@ public class TopicLookupBase extends PulsarWebResource {
                     .log("Failed to lookup topic");
             lookupFuture.complete(newLookupErrorResponse(ServerError.MetadataError, errorMsg, requestId));
         } else if (unwrapEx instanceof ServiceUnitNotReadyException) {
-            // such as while the broker's metadata session is lost; the client looks the topic up again
-            LOG.info()
+            // such as while the broker's metadata session is lost; the client looks the topic up again, so it's
+            // expected for every lookup then
+            LOG.debug()
                     .attr("topic", topicName)
                     .attr("errorMessage", errorMsg)
                     .log("Failed to lookup topic");

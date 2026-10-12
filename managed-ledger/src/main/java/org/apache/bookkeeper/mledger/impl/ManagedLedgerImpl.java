@@ -290,6 +290,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     // ledger metadata stored. This variable used to record the result of the latest once re-checking.
     private Pair<Long, CompletableFuture<Integer>> ledgerRecheckInProgress = new ImmutablePair<>(-1L,
             CompletableFuture.completedFuture(Code.OK));
+    // The ledger of the recheck in progress and the error that started it, guarded by this: a recheck of a fenced
+    // ledger that started while the metadata session was alive waits for the metadata service, so the managed ledger
+    // is fenced at once if the session is lost meanwhile
+    private LedgerHandle ledgerRecheckHandle;
+    private int ledgerRecheckErrorCode;
 
     public enum State {
         None, // Uninitialized
@@ -2076,53 +2081,28 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     }
 
     synchronized void addEntryFailedDueToConcurrentlyModified(final LedgerHandle currentLedger, int errorCode) {
+        boolean fencedAfterSessionLoss = errorCode == BKException.Code.LedgerFencedException
+                && factory.isMetadataSessionLost();
         // The method "addEntryFailedDueToConcurrentlyModified" will be triggered for a certain ledger at most once.
         if (ledgerRecheckInProgress.getLeft() == currentLedger.getId()) {
+            // A recheck that started while the metadata session was alive waits for the metadata service; a fencing
+            // after the session was lost replaces it
+            if (fencedAfterSessionLoss && !ledgerRecheckInProgress.getRight().isDone()) {
+                fenceByAnotherWriter(currentLedger, errorCode);
+            }
             return;
         }
-        if (errorCode == BKException.Code.LedgerFencedException && factory.isMetadataSessionLost()) {
-            // Another client fenced the ledger after this broker lost its metadata session: usually a broker that
-            // took the topic over, once the metadata store expired this broker's session and its locks. Without the
-            // metadata service, this broker can neither read the ledger's metadata to check it nor create a new
-            // ledger, so the pending adds would wait until the metadata service returns. Fence the managed ledger
-            // instead: the pending adds fail now, the topic closes, and the clients look the topic up again.
-            ledgerRecheckInProgress = new ImmutablePair<>(currentLedger.getId(),
-                    CompletableFuture.completedFuture(errorCode));
-            log.warn().attr("ledgerId", currentLedger.getId())
-                    .attr("lastAddConfirmed", currentLedger.getLastAddConfirmed())
-                    .attr("rc", errorCode)
-                    .log("Fencing the managed ledger: another client fenced the current ledger after the metadata"
-                            + " session was lost");
-            setFenced(new ManagedLedgerFencedByAnotherWriterException("ManagedLedger " + name + " is fenced: another"
-                    + " client fenced its current ledger " + currentLedger.getId() + " after the metadata session was"
-                    + " lost"));
-            closeConcurrentlyModifiedLedger(currentLedger);
+        if (fencedAfterSessionLoss) {
+            fenceByAnotherWriter(currentLedger, errorCode);
             return;
         }
-        ledgerRecheckInProgress = new ImmutablePair<>(currentLedger.getId(), new CompletableFuture<>());
+        CompletableFuture<Integer> recheck = new CompletableFuture<>();
+        ledgerRecheckInProgress = new ImmutablePair<>(currentLedger.getId(), recheck);
+        ledgerRecheckHandle = currentLedger;
+        ledgerRecheckErrorCode = errorCode;
         OpenCallback opencb = (rc, lh, ctx) -> {
-            ledgerRecheckInProgress.getRight().complete(rc);
-            if (rc == Code.OK) {
-                log.info().attr("ledgerId", lh.getId())
-                        .attr("inMemoryLac", currentLedger.getLastAddConfirmed())
-                        .attr("storedLac", lh.getLastAddConfirmed())
-                        .log("Successfully opened ledger to check the last add confirmed"
-                                + " position when the ledger was concurrently modified"
-                                + " (the ledger may be closed by auto-replication)");
-                ledgerClosed(currentLedger, lh.getLastAddConfirmed());
-                closeConcurrentlyModifiedLedger(currentLedger);
-            } else {
-                log.error().attr("ledgerId", currentLedger.getId())
-                    .attr("lastAddConfirmed", currentLedger.getLastAddConfirmed())
-                    .attr("rc", rc)
-                    .log("Fencing the topic to ensure durability and consistency"
-                            + " (the current ledger was concurrently modified"
-                            + " by another bookie client, which is not expected)");
-                // Stop switching ledger and write topic metadata, to avoid messages lost. The doc of
-                // LedgerHandle also mentioned this: https://github.com/apache/bookkeeper/blob/release-4.17.2/
-                // bookkeeper-server/src/main/java/org/apache/bookkeeper/client/LedgerHandle.java#L2047-L2048.
-                handleBadVersion(new BadVersionException("the current ledger " + currentLedger.getId()
-                    + " was concurrent modified by a other bookie client. The error code is: " + errorCode));
+            synchronized (ManagedLedgerImpl.this) {
+                recheckCompleted(currentLedger, recheck, rc, lh, errorCode);
             }
         };
         bookKeeper.newOpenLedgerOp()
@@ -2135,6 +2115,76 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 .withOrderingKey(name)
                 .execute()
                 .whenComplete((rh, ex) -> completeOpenCallback(log, currentLedger.getId(), opencb, rh, ex));
+    }
+
+    /**
+     * Another client fenced the current ledger after this broker lost its metadata session: usually a broker that
+     * took the topic over, once the metadata store expired this broker's session and its locks. Without the metadata
+     * service, this broker can neither read the ledger's metadata to check it nor create a new ledger, so the pending
+     * adds would wait until the metadata service returns. Fence the managed ledger instead: the pending adds fail now,
+     * the topic closes, and the clients look the topic up again.
+     */
+    private synchronized void fenceByAnotherWriter(LedgerHandle currentLedger, int errorCode) {
+        ledgerRecheckInProgress = new ImmutablePair<>(currentLedger.getId(),
+                CompletableFuture.completedFuture(errorCode));
+        ledgerRecheckHandle = null;
+        log.warn().attr("ledgerId", currentLedger.getId())
+                .attr("lastAddConfirmed", currentLedger.getLastAddConfirmed())
+                .attr("rc", errorCode)
+                .log("Fencing the managed ledger: another client fenced the current ledger after the metadata"
+                        + " session was lost");
+        setFenced(new ManagedLedgerFencedByAnotherWriterException("ManagedLedger " + name + " is fenced: another"
+                + " client fenced its current ledger " + currentLedger.getId() + " after the metadata session was"
+                + " lost"));
+        closeConcurrentlyModifiedLedger(currentLedger);
+    }
+
+    /**
+     * The metadata session was lost: a recheck of a fenced ledger that is still waiting for the metadata service
+     * fences the managed ledger at once, since no other add may fail to tell it.
+     */
+    synchronized void metadataSessionLost() {
+        LedgerHandle recheckHandle = ledgerRecheckHandle;
+        if (recheckHandle != null && ledgerRecheckErrorCode == BKException.Code.LedgerFencedException
+                && ledgerRecheckInProgress.getLeft() == recheckHandle.getId()
+                && !ledgerRecheckInProgress.getRight().isDone()) {
+            fenceByAnotherWriter(recheckHandle, ledgerRecheckErrorCode);
+        }
+    }
+
+    private void recheckCompleted(LedgerHandle currentLedger, CompletableFuture<Integer> recheck, int rc,
+                                  LedgerHandle lh, int errorCode) {
+        recheck.complete(rc);
+        if (ledgerRecheckInProgress.getRight() != recheck) {
+            // The managed ledger was fenced meanwhile, after the metadata session was lost
+            log.info().attr("ledgerId", currentLedger.getId()).attr("rc", rc)
+                    .log("Ignoring the recheck of a ledger that another client fenced after the metadata session"
+                            + " was lost");
+            return;
+        }
+        ledgerRecheckHandle = null;
+        if (rc == Code.OK) {
+            log.info().attr("ledgerId", lh.getId())
+                    .attr("inMemoryLac", currentLedger.getLastAddConfirmed())
+                    .attr("storedLac", lh.getLastAddConfirmed())
+                    .log("Successfully opened ledger to check the last add confirmed"
+                            + " position when the ledger was concurrently modified"
+                            + " (the ledger may be closed by auto-replication)");
+            ledgerClosed(currentLedger, lh.getLastAddConfirmed());
+            closeConcurrentlyModifiedLedger(currentLedger);
+        } else {
+            log.error().attr("ledgerId", currentLedger.getId())
+                .attr("lastAddConfirmed", currentLedger.getLastAddConfirmed())
+                .attr("rc", rc)
+                .log("Fencing the topic to ensure durability and consistency"
+                        + " (the current ledger was concurrently modified"
+                        + " by another bookie client, which is not expected)");
+            // Stop switching ledger and write topic metadata, to avoid messages lost. The doc of
+            // LedgerHandle also mentioned this: https://github.com/apache/bookkeeper/blob/release-4.17.2/
+            // bookkeeper-server/src/main/java/org/apache/bookkeeper/client/LedgerHandle.java#L2047-L2048.
+            handleBadVersion(new BadVersionException("the current ledger " + currentLedger.getId()
+                + " was concurrent modified by a other bookie client. The error code is: " + errorCode));
+        }
     }
 
     /** Closes the abandoned write handle, or it leaks with its periodic explicit-LAC flush task. */

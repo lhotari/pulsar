@@ -303,12 +303,19 @@ public class OwnershipCache {
         // Doing a get() on the ownedBundlesCache will trigger an async metadata write to acquire the lock over the
         // service unit. Serialized against both removeOwnership(NamespaceBundle) and removeOwnership(OwnedBundle)
         // for the same bundle: see bundleOperationBarriers.
-        return serialize(bundle, () -> ownedBundlesCache.get(bundle)
-                .thenApply(namespaceBundle -> {
-                    log.info().attr("bundle", namespaceBundle).log("Successfully acquired ownership");
-                    namespaceService.onNamespaceBundleOwned(bundle);
-                    return selfOwnerInfo;
-                }));
+        return serialize(bundle, () -> {
+            // Again when the acquisition's turn comes: an acquisition queued behind another operation of the bundle
+            // may start after the session was lost
+            if (pulsar.isMetadataSessionLost()) {
+                return FutureUtil.failedFuture(sessionLostException(bundle));
+            }
+            return ownedBundlesCache.get(bundle)
+                    .thenApply(namespaceBundle -> {
+                        log.info().attr("bundle", namespaceBundle).log("Successfully acquired ownership");
+                        namespaceService.onNamespaceBundleOwned(bundle);
+                        return selfOwnerInfo;
+                    });
+        });
     }
 
     /**
@@ -564,39 +571,43 @@ public class OwnershipCache {
     public CompletableFuture<Void> handleOwnershipTakenOver(TopicName topicName) {
         // Find the bundle among the owned ones, which needs no metadata, rather than in the namespace's bundles,
         // which can have been invalidated in the cache.
-        NamespaceBundle bundle = null;
+        OwnedBundle reported = null;
         for (CompletableFuture<OwnedBundle> future : ownedBundlesCache.asMap().values()) {
             OwnedBundle candidate = future.isDone() && !future.isCompletedExceptionally() ? future.join() : null;
             if (candidate != null && candidate.getNamespaceBundle().includes(topicName)) {
-                bundle = candidate.getNamespaceBundle();
+                reported = candidate;
                 break;
             }
         }
-        if (bundle == null) {
+        if (reported == null || !pulsar.isMetadataSessionLost()) {
             return CompletableFuture.completedFuture(null);
         }
-        NamespaceBundle takenOverBundle = bundle;
+        // The report applies to this ownership generation and this loss of the session only: a report that runs
+        // after the bundle was reacquired, or after the session came back and was lost again, changes nothing
+        OwnedBundle reportedBundle = reported;
+        long sessionLoss = pulsar.getMetadataSessionLosses();
+        NamespaceBundle takenOverBundle = reported.getNamespaceBundle();
         // On the broker's executor, not on the thread that reported the takeover, and the bundle's next operation
         // waits until the closing of its topics has started, so that the closing can't reach a newer generation's
         return serialize(takenOverBundle, () -> {
             try {
-                return CompletableFuture.runAsync(() -> stopServingTakenOverBundle(takenOverBundle, topicName),
-                        pulsar.getExecutor());
+                return CompletableFuture.runAsync(() -> stopServingTakenOverBundle(takenOverBundle, reportedBundle,
+                                sessionLoss, topicName), pulsar.getExecutor());
             } catch (RejectedExecutionException e) {
                 // the broker is shutting down
-                stopServingTakenOverBundle(takenOverBundle, topicName);
+                stopServingTakenOverBundle(takenOverBundle, reportedBundle, sessionLoss, topicName);
                 return CompletableFuture.completedFuture(null);
             }
         });
     }
 
-    private void stopServingTakenOverBundle(NamespaceBundle bundle, TopicName topicName) {
-        if (!pulsar.isMetadataSessionLost()) {
+    private void stopServingTakenOverBundle(NamespaceBundle bundle, OwnedBundle ownedBundle, long sessionLoss,
+                                            TopicName topicName) {
+        if (!pulsar.isMetadataSessionLost() || pulsar.getMetadataSessionLosses() != sessionLoss) {
             return;
         }
-        OwnedBundle ownedBundle = getOwnedBundle(bundle);
-        if (ownedBundle == null) {
-            // another topic of the bundle reported the takeover first
+        if (getOwnedBundle(bundle) != ownedBundle) {
+            // another topic of the bundle reported the takeover first, or the bundle was acquired again since
             return;
         }
         AtomicBoolean invalidated = new AtomicBoolean();

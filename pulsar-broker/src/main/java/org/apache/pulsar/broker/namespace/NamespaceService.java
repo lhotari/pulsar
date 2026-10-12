@@ -529,7 +529,7 @@ public class NamespaceService implements AutoCloseable {
             }).exceptionally(exception -> {
                 if (FutureUtil.unwrapCompletionException(exception) instanceof ServiceUnitNotReadyException) {
                     // such as while the metadata session is lost; the client retries the lookup
-                    log.info().attr("bundle", bundle).exceptionMessage(exception)
+                    log.debug().attr("bundle", bundle).exceptionMessage(exception)
                             .log("Failed to check owner for bundle");
                 } else {
                     log.warn()
