@@ -820,7 +820,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
     }
 
     /**
-     * Reproduces lhotari/pulsar#354: a replay read is in flight with a newer entry of a hash, the consumer that owns
+     * Reproduces #26867: a replay read is in flight with a newer entry of a hash, the consumer that owns
      * the hash is removed, which adds its older pending entry of the same hash to the replay queue, and the queue
      * already holds an even older position of another hash. The in-flight read's newer entry must not be dispatched
      * to the hash's new owner before the older one.
@@ -925,6 +925,9 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         assertThat(receivedByB.stream().filter(position -> position.getEntryId() == 3 || position.getEntryId() == 4))
                 .as("the key's messages in order").containsExactly(PositionFactory.create(1, 3),
                         PositionFactory.create(1, 4));
+        // the record of the replay additions doesn't outlive the reads
+        Awaitility.await().untilAsserted(() -> assertThat(persistentDispatcher.getReplayAdditionsHashCount())
+                .isZero());
         allEntries.forEach(Entry::release);
     }
 
@@ -1170,6 +1173,9 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         assertThat(receivedByB.stream().filter(position -> position.getEntryId() == 3 || position.getEntryId() == 4))
                 .as("the key's messages in order").containsExactly(PositionFactory.create(1, 3),
                         PositionFactory.create(1, 4));
+        // the record of the replay additions doesn't outlive the reads
+        Awaitility.await().untilAsserted(() -> assertThat(persistentDispatcher.getReplayAdditionsHashCount())
+                .isZero());
         allEntries.forEach(Entry::release);
     }
 

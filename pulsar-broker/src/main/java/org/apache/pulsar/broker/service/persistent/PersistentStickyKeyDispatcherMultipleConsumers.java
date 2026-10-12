@@ -26,10 +26,13 @@ import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 import lombok.Getter;
@@ -144,97 +147,114 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         return selector;
     }
 
-    // The positions of each sticky key hash that were added to the replay queue while a read was in flight, such as
-    // the pending entries of a removed consumer, for each type of read, since a normal read and a replay read can be
-    // in flight at the same time. The read's entries of those hashes must not be dispatched before the older ones
-    // that are still in the replay queue. Guarded by the dispatcher's monitor.
-    private static final class ReplayAdditions {
-        Int2ObjectOpenHashMap<List<Position>> positionsByHash = new Int2ObjectOpenHashMap<>();
-        // The reads of this type that started and haven't been dispatched or ended yet: more than one only with
-        // dispatcherDispatchMessagesInSubscriptionThread, where a read can start while the previous one's dispatch is
-        // queued. The additions are recorded from the first of them, so that a queued dispatch keeps what it needs,
-        // and a later read's dispatch gets a superset of its own additions.
-        int readsInFlight;
-
-        void add(long ledgerId, long entryId, int stickyKeyHash) {
-            if (readsInFlight > 0) {
-                positionsByHash.computeIfAbsent(stickyKeyHash, k -> new ArrayList<>(2))
-                        .add(PositionFactory.create(ledgerId, entryId));
-            }
-        }
-
-        void readEnded() {
-            if (readsInFlight > 0) {
-                readsInFlight--;
-            }
-            if (readsInFlight == 0 && !positionsByHash.isEmpty()) {
-                positionsByHash = new Int2ObjectOpenHashMap<>();
-            }
-        }
-    }
-
-    private final ReplayAdditions replayAdditionsDuringNormalRead = new ReplayAdditions();
-    private final ReplayAdditions replayAdditionsDuringReplayRead = new ReplayAdditions();
-
-    private ReplayAdditions replayAdditions(ReadType readType) {
-        return readType == ReadType.Replay ? replayAdditionsDuringReplayRead : replayAdditionsDuringNormalRead;
-    }
+    // The positions of each sticky key hash that were added to the replay queue while a replay read was in flight,
+    // such as the pending entries of a removed consumer. The replay read's entries of those hashes must not be
+    // dispatched before the older ones that are still in the replay queue. A normal read needs no record:
+    // canDispatchEntry blocks its entries of every hash that has entries in the replay queue. Guarded by the
+    // dispatcher's monitor.
+    private Int2ObjectOpenHashMap<NavigableSet<Position>> replayAdditions = new Int2ObjectOpenHashMap<>();
+    // The replay reads that started and haven't been dispatched or ended yet: more than one only with
+    // dispatcherDispatchMessagesInSubscriptionThread, where a replay read can start while the previous one's dispatch
+    // is queued. The additions are recorded from the first of them, so that a queued dispatch keeps what it needs,
+    // and a later read's dispatch gets a superset of its own additions.
+    private int replayReadsInFlight;
+    // The replay reads among them whose dispatch is queued on the subscription's thread
+    private int replayDispatchesQueued;
 
     @Override
     protected synchronized void onReadStarted(ReadType readType) {
-        if (allowOutOfOrderDelivery) {
+        if (allowOutOfOrderDelivery || readType != ReadType.Replay) {
             return;
         }
-        ReplayAdditions additions = replayAdditions(readType);
-        if (!serviceConfig.isDispatcherDispatchMessagesInSubscriptionThread()) {
-            // With the direct dispatch, the previous read of this type has been dispatched or has ended by now,
-            // also if a path that ends it didn't say so
-            additions.readsInFlight = 0;
-            if (!additions.positionsByHash.isEmpty()) {
-                additions.positionsByHash = new Int2ObjectOpenHashMap<>();
-            }
+        if (replayDispatchesQueued == 0) {
+            // no earlier replay read's dispatch waits, so it has been dispatched or has ended by now, also if a path
+            // that ends it didn't say so
+            replayReadsInFlight = 0;
+            clearReplayAdditions();
         }
-        additions.readsInFlight++;
+        replayReadsInFlight++;
+    }
+
+    @Override
+    protected synchronized void onDispatchQueued(ReadType readType) {
+        if (readType == ReadType.Replay && replayReadsInFlight > 0) {
+            replayDispatchesQueued++;
+        }
     }
 
     @Override
     protected synchronized void onReadEnded(ReadType readType) {
-        replayAdditions(readType).readEnded();
+        if (readType == ReadType.Replay) {
+            replayReadEnded();
+        }
+    }
+
+    private void replayReadEnded() {
+        if (replayReadsInFlight > 0) {
+            replayReadsInFlight--;
+        }
+        if (replayReadsInFlight == 0) {
+            clearReplayAdditions();
+        }
+    }
+
+    /** The sticky key hashes with replay additions recorded for the replay reads in flight. */
+    @VisibleForTesting
+    synchronized int getReplayAdditionsHashCount() {
+        return replayAdditions.size();
+    }
+
+    private void clearReplayAdditions() {
+        if (!replayAdditions.isEmpty()) {
+            replayAdditions = new Int2ObjectOpenHashMap<>();
+        }
     }
 
     @Override
     protected synchronized boolean addMessageToReplay(long ledgerId, long entryId, long stickyKeyHash) {
         boolean added = super.addMessageToReplay(ledgerId, entryId, stickyKeyHash);
-        if (added) {
-            replayAdditionsDuringNormalRead.add(ledgerId, entryId, (int) stickyKeyHash);
-            replayAdditionsDuringReplayRead.add(ledgerId, entryId, (int) stickyKeyHash);
+        if (added && replayReadsInFlight > 0) {
+            replayAdditions.computeIfAbsent((int) stickyKeyHash, k -> new TreeSet<>())
+                    .add(PositionFactory.create(ledgerId, entryId));
         }
         return added;
     }
 
-    // The replay additions recorded while the dispatched read was in flight, null when there are none. With a later
-    // read of the same type already in flight, the record is kept for it too, so it gets a superset of its own
-    // additions; an addition that has been dispatched meanwhile no longer blocks anything.
-    private Int2ObjectOpenHashMap<List<Position>> takeReplayAdditionsDuringRead(ReadType readType) {
-        ReplayAdditions additions = replayAdditions(readType);
-        Int2ObjectOpenHashMap<List<Position>> taken = additions.positionsByHash.isEmpty() ? null
-                : additions.positionsByHash;
-        additions.readEnded();
+    // The replay additions recorded while the dispatched replay read was in flight, null for a normal read or when
+    // there are none. With a later replay read already in flight, the record is kept for it too, so that it gets a
+    // superset of its own additions; an addition that has been dispatched meanwhile no longer blocks anything.
+    private Int2ObjectOpenHashMap<NavigableSet<Position>> takeReplayAdditionsDuringRead(ReadType readType) {
+        if (readType != ReadType.Replay) {
+            return null;
+        }
+        if (replayDispatchesQueued > 0) {
+            replayDispatchesQueued--;
+        }
+        Int2ObjectOpenHashMap<NavigableSet<Position>> taken = replayAdditions.isEmpty() ? null : replayAdditions;
+        replayReadEnded();
         return taken;
     }
 
-    // Whether an older position of the hash that was added to the replay queue during the read is still there
-    private boolean olderReplayAdditionPending(Int2ObjectOpenHashMap<List<Position>> replayAdditions,
-                                               int stickyKeyHash, Position position) {
-        List<Position> added = replayAdditions.get(stickyKeyHash);
+    // Whether a position of the hash that was added to the replay queue during the read, older than the entry, is
+    // still there and wasn't dispatched earlier in this read. The positions that aren't in the replay queue any more
+    // are pruned.
+    private boolean olderReplayAdditionPending(Int2ObjectOpenHashMap<NavigableSet<Position>> replayAdditions,
+                                               int stickyKeyHash, Position position,
+                                               Set<Position> dispatchedInThisRead) {
+        NavigableSet<Position> added = replayAdditions.get(stickyKeyHash);
         if (added == null) {
             return false;
         }
-        for (Position older : added) {
-            if (older.compareTo(position) < 0
-                    && redeliveryMessages.getHash(older.getLedgerId(), older.getEntryId()) != null) {
-                return true;
+        for (Iterator<Position> older = added.headSet(position, false).iterator(); older.hasNext(); ) {
+            Position olderPosition = older.next();
+            if (dispatchedInThisRead.contains(olderPosition)) {
+                continue;
             }
+            if (redeliveryMessages.getHash(olderPosition.getLedgerId(), olderPosition.getEntryId()) == null) {
+                older.remove();
+                continue;
+            }
+            return true;
         }
         return false;
     }
@@ -355,7 +375,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
 
     @Override
     protected synchronized boolean trySendMessagesToConsumers(ReadType readType, List<Entry> entries) {
-        Int2ObjectOpenHashMap<List<Position>> replayAdditions = takeReplayAdditionsDuringRead(readType);
+        Int2ObjectOpenHashMap<NavigableSet<Position>> replayAdditions = takeReplayAdditionsDuringRead(readType);
         lastNumberOfEntriesProcessed = 0;
         long totalMessagesSent = 0;
         long totalBytesSent = 0;
@@ -564,10 +584,11 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
     // groups the entries by consumer and filters out the entries that should not be dispatched
     // the entries are handled in the order they are received instead of first grouping them by consumer and
     // then filtering them
-    private Map<Consumer, List<Entry>> filterAndGroupEntriesForDispatching(List<Entry> entries, ReadType readType,
-                                                                           MutableBoolean triggerLookAhead,
-                                                                           Int2ObjectOpenHashMap<List<Position>>
-                                                                                   replayAdditions) {
+    private Map<Consumer, List<Entry>> filterAndGroupEntriesForDispatching(
+            List<Entry> entries, ReadType readType, MutableBoolean triggerLookAhead,
+            Int2ObjectOpenHashMap<NavigableSet<Position>> replayAdditions) {
+        // the recorded replay additions that this read selects for dispatch, before the newer entries of their hashes
+        Set<Position> dispatchedReplayAdditions = replayAdditions != null ? new HashSet<>() : Set.of();
         // entries grouped by consumer
         Map<Consumer, List<Entry>> entriesGroupedByConsumer = new HashMap<>();
         // permits for consumer, permits are for entries/batches
@@ -596,10 +617,11 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             // check if the hash is already blocked
             boolean hashIsAlreadyBlocked = alreadyBlockedHashes.contains(stickyKeyHash);
             if (!hashIsAlreadyBlocked && replayAdditions != null) {
-                // an older entry of the hash was added to the replay queue while this read was in flight and is still
-                // there: block the hash, so that this entry is dispatched after the older one, which a replay read
-                // reads, also when it's in this read too
-                if (olderReplayAdditionPending(replayAdditions, stickyKeyHash, entry.getPosition())) {
+                // an older entry of the hash was added to the replay queue while this read was in flight, is still
+                // there, and isn't dispatched earlier in this read: block the hash, so that this entry is dispatched
+                // after the older one, which a later replay read reads
+                if (olderReplayAdditionPending(replayAdditions, stickyKeyHash, entry.getPosition(),
+                        dispatchedReplayAdditions)) {
                     alreadyBlockedHashes.add(stickyKeyHash);
                     hashIsAlreadyBlocked = true;
                     // a later replay read dispatches this entry after the older one: read again without a backoff
@@ -639,6 +661,10 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
                 }
             }
             if (dispatchEntry) {
+                if (replayAdditions != null && replayAdditions.containsKey(stickyKeyHash)) {
+                    // the consumer gets the entry before this read's newer entries of the hash
+                    dispatchedReplayAdditions.add(entry.getPosition());
+                }
                 // add the entry to consumer's entry list for dispatching
                 List<Entry> consumerEntries =
                         entriesGroupedByConsumer.computeIfAbsent(consumer, k -> new ArrayList<>());

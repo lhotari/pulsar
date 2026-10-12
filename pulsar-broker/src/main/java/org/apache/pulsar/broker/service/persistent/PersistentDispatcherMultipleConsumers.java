@@ -410,7 +410,8 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         .attr("consumerCount", consumerList.size())
                         .log("Schedule replay of messages for consumers");
                 havePendingReplayRead = true;
-                updateMinReplayedPosition(ReadType.Replay);
+                updateMinReplayedPosition();
+                onReadStarted(ReadType.Replay);
                 Set<? extends Position> deletedMessages = topic.isDelayedDeliveryEnabled()
                         ? asyncReplayEntriesInOrder(messagesToReplayNow)
                         : asyncReplayEntries(messagesToReplayNow);
@@ -443,7 +444,8 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                         .attr("consumersCount", consumerList.size())
                         .log("Schedule read of messages");
                 havePendingRead = true;
-                updateMinReplayedPosition(ReadType.Normal);
+                updateMinReplayedPosition();
+                onReadStarted(ReadType.Normal);
 
                 messagesToRead = Math.min(messagesToRead, getMaxEntriesReadLimit());
                 cursor.asyncReadEntriesWithSkipOrWait(messagesToRead, bytesToRead, this, ReadType.Normal,
@@ -506,19 +508,26 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         return true;
     }
 
-    private void updateMinReplayedPosition(ReadType readType) {
+    private void updateMinReplayedPosition() {
         minReplayedPosition = getFirstPositionInReplay().orElse(null);
-        onReadStarted(readType);
     }
 
     /**
      * Called under the dispatcher's monitor when a normal or a replay read starts. A normal read and a replay read
      * can be in flight at the same time. With the default direct dispatch, a read of a type doesn't start before the
      * previous read of the same type was dispatched; with {@code dispatcherDispatchMessagesInSubscriptionThread}, it
-     * can start while the previous one's dispatch is still queued. A read ends with the dispatch of its entries, in
-     * {@link #trySendMessagesToConsumers(ReadType, List)}, or with {@link #onReadEnded(ReadType)}.
+     * can start while the previous one's dispatch is still queued, see {@link #onDispatchQueued(ReadType)}. A read
+     * ends with the dispatch of its entries, in {@link #trySendMessagesToConsumers(ReadType, List)}, or with
+     * {@link #onReadEnded(ReadType)}.
      */
     protected void onReadStarted(ReadType readType) {
+    }
+
+    /**
+     * Called under the dispatcher's monitor when a completed read's dispatch is queued on the subscription's thread,
+     * with {@code dispatcherDispatchMessagesInSubscriptionThread}.
+     */
+    protected void onDispatchQueued(ReadType readType) {
     }
 
     /**
@@ -681,8 +690,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     }
 
     @Override
-    protected void cancelPendingRead() {
-        // the callers hold the dispatcher's monitor
+    protected synchronized void cancelPendingRead() {
         if (havePendingRead && cursor.cancelPendingReadRequest()) {
             havePendingRead = false;
             onReadEnded(ReadType.Normal);
@@ -756,6 +764,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             // setting sendInProgress here, because sendMessagesToConsumers will be executed
             // in a separate thread, and we want to prevent more reads
             acquireSendInProgress();
+            onDispatchQueued(readType);
             dispatchMessagesThread.execute(() -> {
                 handleSendingMessagesAndReadingMore(readType, entries, false, totalBytesSize);
             });
