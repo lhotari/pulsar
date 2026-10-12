@@ -331,9 +331,16 @@ record NetworkSettings(Offloads offloads, List<Impairment> impairments) {
      * {@code remote-broker-N}, {@code remote-bookie-N}, {@code remote-zookeeper} and {@code remote-applications}.
      */
     static List<String> containers(String endpoint, Topology topology) {
-        if (!topology.remote() && (REMOTE_GROUPS.contains(endpoint) || endpoint.startsWith(REMOTE_PREFIX))) {
-            throw new IllegalArgumentException("is an endpoint of the remote cluster, which the scenario hasn't: add"
-                    + " cluster.remote, as network/geo-replication does");
+        if (!topology.remote()) {
+            Matcher indexed = INDEXED.matcher(endpoint);
+            if (endpoint.equals(LOCAL_REGION)) {
+                throw new IllegalArgumentException("is the first cluster's side of a geo-replicated pair, which needs"
+                        + " a remote cluster: add cluster.remote, as network/geo-replication does");
+            }
+            if (REMOTE_GROUPS.contains(endpoint) || indexed.matches() && !indexed.group(1).isEmpty()) {
+                throw new IllegalArgumentException("is an endpoint of the remote cluster, which the scenario hasn't:"
+                        + " add cluster.remote, as network/geo-replication does");
+            }
         }
         return switch (endpoint) {
             case GATEWAYS, APPLICATIONS, ZOOKEEPER, CONFIGURATION_STORE, REMOTE_ZOOKEEPER, REMOTE_APPLICATIONS ->

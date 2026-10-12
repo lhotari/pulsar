@@ -24,7 +24,7 @@
 # configuration, such as configs/iot-telemetry-medium-mem.
 #
 # Look for: the broker's heap, the publish latency of the untouched producers during the limit and the drain, the
-# backlog and how fast it drains, and the redeliveries after a broker restart.
+# backlog and how fast it drains, and the redeliveries if the broker restarts, such as when it runs out of heap.
 
 network:
   impairments:

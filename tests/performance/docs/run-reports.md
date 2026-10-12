@@ -137,6 +137,9 @@ report has these sections:
   the measurement, and where, by whom and from which commit the run was made. The host row names the host's CPU,
   cores, hardware threads, memory and operating system, and the Docker engine row the engine's version, CPUs and
   memory, which on macOS are those of Docker Desktop's virtual machine rather than the host's.
+- **Network conditions**, in a run with a `network` section: each impairment, when it was applied and removed
+  relative to the measurement's start, its queues' packets and drops, and each impaired container's TCP
+  retransmissions, see [Network conditions](network-conditions.md#files).
 - **Correctness**: the unique messages, duplicates, ordering violations and invalid messages of each application.
   In a valid run, every application received every message the gateways sent, warmup included, with no ordering
   violations or invalid messages. Duplicates are valid in Pulsar's at-least-once delivery, and are counted so that
@@ -206,6 +209,9 @@ beside it, rendered with [commonmark-java](https://github.com/commonmark/commonm
 | `applications/<application>/application-state.bin` | The application's next expected sequence number for each device |
 | `applications/<application>/ordering-violations.txt` | Samples of the ordering violations, with the message ID, topic, receiving thread, redelivery count and receipt time, and the receipts of the messages that came late (`recovered=`); empty in a valid run |
 | `applications/<application>/republished-duplicates.txt` | Samples of the republished duplicates, with the device, its sequence number and the second message ID, topic, receiving thread, redelivery count and receipt time, when there were any |
+| `network-summary.json`, `network-events.jsonl` | In a run with a `network` section, each impairment's settings, status and counters, and every event as it happened, see [Network conditions](network-conditions.md#files) |
+| `gateways/pulsar-client.log.txt`, `applications/pulsar-client.log.txt` | The Pulsar client's log in the workloads, at the level of `PULSAR_CLIENT_LOG_LEVEL`, `warn` by default, when it logged anything |
+| `remote-applications/`, `remote-topic-stats.csv`, `replication-stats.csv`, `resolved-config-remote-applications.yaml` | In a run with a remote cluster, the remote applications' outputs, laid out as in `applications/`, the remote topics' stats, the replicators' stats and the remote applications' configuration, see [Geo-replication](network-conditions.md#geo-replication) |
 | `gateways/container.log.txt`, `applications/container.log.txt` | The container's log, named `.txt` so that HTTP servers show it as text |
 | `coordination/` | The markers with which the applications tell the gateways that they received a warmup round, and the gateways' measurement start, from which the applications that join later count their join time |
 

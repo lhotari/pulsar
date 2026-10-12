@@ -320,13 +320,30 @@ final class TcCommands {
         return Integer.parseInt(fields[1].substring(at + 3));
     }
 
-    /** The name of the interface with {@code index} in {@code ip -o link}'s output, without its {@code @} suffix. */
-    static String interfaceWithIndex(String links, int index) {
+    /** The {@code ip -o link} line's own index, such as 2 of {@code 2: eth0@if23076}. */
+    static int linkIndex(String linkLine) {
+        String[] fields = linkLine.split(":\\s+", 3);
+        if (fields.length < 2) {
+            throw new IllegalArgumentException("Not an ip -o link line: " + linkLine);
+        }
+        return Integer.parseInt(fields[0].strip());
+    }
+
+    /**
+     * The name of the interface with {@code index} in {@code ip -o link}'s output, without its {@code @} suffix: the
+     * host's end of a container's veth, which must name the container's end, {@code peerOf}, as its peer, so that the
+     * impairments never land on another interface that happens to have the index.
+     */
+    static String interfaceWithIndex(String links, int index, int peerOf) {
         for (String line : links.lines().toList()) {
             String[] fields = line.split(":\\s+", 3);
             if (fields.length >= 2 && fields[0].strip().equals(Integer.toString(index))) {
-                int at = fields[1].indexOf('@');
-                return at < 0 ? fields[1] : fields[1].substring(0, at);
+                int at = fields[1].indexOf("@if");
+                if (at < 0 || !fields[1].substring(at + 3).equals(Integer.toString(peerOf))) {
+                    throw new IllegalArgumentException("The interface with index " + index + ", " + fields[1]
+                            + ", isn't the peer of the container's interface " + peerOf);
+                }
+                return fields[1].substring(0, at);
             }
         }
         throw new IllegalArgumentException("No interface with index " + index);

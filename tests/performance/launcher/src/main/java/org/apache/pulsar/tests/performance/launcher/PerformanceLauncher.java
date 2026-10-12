@@ -124,11 +124,13 @@ public class PerformanceLauncher implements Callable<Integer> {
     // The applications' outputs: their container's, and a directory per application
     private static final String APPLICATIONS_DIRECTORY = RunReport.APPLICATIONS_DIRECTORY;
     // The remote applications' outputs, as the network impairments name their container
-    static final String REMOTE_APPLICATIONS_DIRECTORY = NetworkSettings.REMOTE_APPLICATIONS;
+    static final String REMOTE_APPLICATIONS_DIRECTORY = RunReport.REMOTE_APPLICATIONS_DIRECTORY;
     // The remote applications' configuration: the resolved one with their service URL and their settings
-    static final String REMOTE_APPLICATIONS_CONFIG = "resolved-config-remote-applications.yaml";
+    static final String REMOTE_APPLICATIONS_CONFIG = RunReport.REMOTE_APPLICATIONS_CONFIG;
     // The remote cluster's topic stats, as topic-stats.csv has the first cluster's
-    static final String REMOTE_TOPIC_STATS = "remote-topic-stats.csv";
+    static final String REMOTE_TOPIC_STATS = RunReport.REMOTE_TOPIC_STATS_FILE;
+    // The topics that a remote cluster gets: those of the namespace whose replication clusters include it
+    private static final Pattern REPLICATED_TOPICS = Pattern.compile("(persistent://)?public/default/.+");
     // Every log goes to this file in the run directory, and the console shows only the launcher's own messages
     static final String LAUNCHER_LOG = "launcher.log";
     private static final String LOG_CONFIGURATION = "performance-launcher-log4j2.xml";
@@ -1169,6 +1171,12 @@ public class PerformanceLauncher implements Callable<Integer> {
      */
     static ObjectNode remoteApplicationsWorkload(ObjectNode workload, ClusterSettings.Remote remote,
                                                  String serviceUrl) {
+        // Initializing the clusters' metadata adds both clusters to the replication clusters of public/default only
+        String prefix = workload.path("topics").path("prefix").asText();
+        if (!REPLICATED_TOPICS.matcher(prefix).matches()) {
+            throw new IllegalArgumentException("cluster.remote replicates the namespace public/default, so the"
+                    + " workload's topics must be persistent topics in it, not " + prefix);
+        }
         ObjectNode remoteWorkload = workload.deepCopy();
         remoteWorkload.put("serviceUrl", serviceUrl);
         ObjectNode applications = (ObjectNode) remoteWorkload.get("applications");

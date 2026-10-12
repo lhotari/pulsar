@@ -43,6 +43,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -378,24 +379,28 @@ final class NetworkImpairments implements AutoCloseable {
      * calls it once the producers have been told to start the measurement.
      */
     synchronized void startMeasurement() {
+        if (closing || closed) {
+            // A measurement gate that outlived the run's shutdown: the timeline has stopped
+            return;
+        }
         measurementStart = Instant.now();
         long anchor = System.nanoTime();
-        for (Activation activation : activations) {
-            Impairment impairment = activation.impairment;
-            if (!impairment.wholeRun() && impairment.anchor() == Anchor.MEASUREMENT) {
-                if (impairment.start().isZero()) {
-                    if (impairment.duration() != null) {
-                        schedule(anchor, impairment.duration(), () -> remove(activation));
+        try {
+            for (Activation activation : activations) {
+                Impairment impairment = activation.impairment;
+                if (!impairment.wholeRun() && impairment.anchor() == Anchor.MEASUREMENT) {
+                    if (impairment.start().isZero()) {
+                        if (impairment.duration() != null) {
+                            schedule(anchor, impairment.duration(), () -> remove(activation));
+                        }
+                    } else {
+                        scheduleTimed(anchor, activation);
                     }
-                } else {
-                    scheduleTimed(anchor, activation);
                 }
             }
+        } catch (RejectedExecutionException e) {
+            // The run is shutting down, and stopped the timeline meanwhile
         }
-    }
-
-    boolean anyMeasurementAnchored() {
-        return settings.anyMeasurementAnchored();
     }
 
     /**
@@ -500,7 +505,16 @@ final class NetworkImpairments implements AutoCloseable {
                             : TcCommands.destinationFilter(placement.device().name(), activation.preference,
                             placement.slot(), address));
                 }
-                exec(placement.device().hostSide ? null : placement.device().owner, String.join("\n", commands));
+                try {
+                    exec(placement.device().hostSide ? null : placement.device().owner,
+                            String.join("\n", commands));
+                } catch (IOException | RuntimeException e) {
+                    // A workload container that exits as it finishes takes its interfaces with it
+                    if (running(placement.device().owner)) {
+                        throw e;
+                    }
+                    skipped.add(placement.device().owner.name());
+                }
             }
             activation.applied = Instant.now();
             if (!skipped.isEmpty() && skipped.size() == activation.placements.size()) {
@@ -613,8 +627,15 @@ final class NetworkImpairments implements AutoCloseable {
                     continue;
                 }
                 if (running(placement.device().owner)) {
-                    exec(placement.device().hostSide ? null : placement.device().owner,
-                            TcCommands.deleteFilters(placement.device().name(), activation.preference));
+                    try {
+                        exec(placement.device().hostSide ? null : placement.device().owner,
+                                TcCommands.deleteFilters(placement.device().name(), activation.preference));
+                    } catch (IOException | RuntimeException e) {
+                        // A container that exited meanwhile has taken its interfaces and their filters with it
+                        if (running(placement.device().owner)) {
+                            throw e;
+                        }
+                    }
                 }
             }
             activation.removed = Instant.now();
@@ -724,6 +745,8 @@ final class NetworkImpairments implements AutoCloseable {
     public void close() throws IOException {
         stopTimeline();
         List<Exception> failures = new ArrayList<>();
+        // Failures to read the final counters, which the summary lacks, but which leave nothing behind
+        List<Exception> observationFailures = new ArrayList<>();
         Map<Activation, ObjectNode> finalStatistics = new LinkedHashMap<>();
         synchronized (this) {
             closed = true;
@@ -735,7 +758,7 @@ final class NetworkImpairments implements AutoCloseable {
                 try {
                     finalStatistics.put(activation, statistics(activation));
                 } catch (IOException | RuntimeException e) {
-                    failures.add(e);
+                    observationFailures.add(e);
                 }
             }
             for (Target target : targets.values()) {
@@ -744,7 +767,7 @@ final class NetworkImpairments implements AutoCloseable {
                         tcpAtEnd.put(target.name(), tcpCounters(target));
                     }
                 } catch (IOException | RuntimeException e) {
-                    failures.add(e);
+                    observationFailures.add(e);
                 }
             }
             for (Device device : devices.values()) {
@@ -770,7 +793,13 @@ final class NetworkImpairments implements AutoCloseable {
             record("cleaned-up", null, node -> {
                 ArrayNode list = node.putArray("failures");
                 failures.forEach(failure -> list.add(String.valueOf(failure.getMessage())));
+                ArrayNode observations = node.putArray("observationFailures");
+                observationFailures.forEach(failure -> observations.add(String.valueOf(failure.getMessage())));
             });
+            if (!observationFailures.isEmpty()) {
+                status.accept("Network: couldn't read the final counters of the impairments: "
+                        + observationFailures.get(0).getMessage());
+            }
             try {
                 writeSummary(finalStatistics);
             } catch (IOException | RuntimeException e) {
@@ -908,8 +937,9 @@ final class NetworkImpairments implements AutoCloseable {
         }
         Target partial = new Target(name, container, pid, ip, null, null);
         String containerInterface = TcCommands.interfaceWithAddress(exec(partial, "ip -o -4 addr show"), ip);
-        int peer = TcCommands.peerIndex(exec(partial, "ip -o link show " + TcCommands.device(containerInterface)));
-        String hostInterface = TcCommands.interfaceWithIndex(exec(null, "ip -o link"), peer);
+        String containerLink = exec(partial, "ip -o link show " + TcCommands.device(containerInterface));
+        String hostInterface = TcCommands.interfaceWithIndex(exec(null, "ip -o link"),
+                TcCommands.peerIndex(containerLink), TcCommands.linkIndex(containerLink));
         return new Target(name, container, pid, ip, containerInterface, hostInterface);
     }
 

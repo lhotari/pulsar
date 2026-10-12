@@ -67,7 +67,7 @@ final class TopicStatsSampler implements AutoCloseable {
     static final String FILE_NAME = RunReport.TOPIC_STATS_FILE;
     static final String HEADER = RunReport.TOPIC_STATS_HEADER;
     private static final long INTERVAL_MILLIS = 1000;
-    static final String REPLICATION_FILE_NAME = "replication-stats.csv";
+    static final String REPLICATION_FILE_NAME = RunReport.REPLICATION_STATS_FILE;
     static final String REPLICATION_HEADER = "epochMs,topic,remoteCluster,replicationBacklog,connected,"
             + "replicationDelaySeconds,msgOutCounter";
 
@@ -111,28 +111,12 @@ final class TopicStatsSampler implements AutoCloseable {
     }
 
     /**
-     * Starts sampling {@code topics} through the brokers' HTTP services into {@code runDirectory}.
+     * Starts sampling {@code topics} through the brokers' HTTP services into the file {@code fileName} of
+     * {@code runDirectory}, such as {@code topic-stats.csv}, and with {@code replicated} the topics' replicators into
+     * {@code replication-stats.csv}.
      *
      * @param brokerHttpUrls each broker's HTTP service on the host, by the broker's name in the cluster's network, the
      *                       first broker first
-     */
-    static TopicStatsSampler start(Map<String, String> brokerHttpUrls, List<String> topics, Path runDirectory)
-            throws IOException {
-        return start(brokerHttpUrls, topics, runDirectory, false);
-    }
-
-    /**
-     * Starts sampling as {@link #start(Map, List, Path)} does, and with {@code replicated} the topics' replicators
-     * too.
-     */
-    static TopicStatsSampler start(Map<String, String> brokerHttpUrls, List<String> topics, Path runDirectory,
-                                   boolean replicated) throws IOException {
-        return start(brokerHttpUrls, topics, runDirectory, replicated, FILE_NAME);
-    }
-
-    /**
-     * Starts sampling as {@link #start(Map, List, Path, boolean)} does, into the file {@code fileName} of
-     * {@code runDirectory}, such as the remote cluster's {@code remote-topic-stats.csv}.
      */
     static TopicStatsSampler start(Map<String, String> brokerHttpUrls, List<String> topics, Path runDirectory,
                                    boolean replicated, String fileName) throws IOException {

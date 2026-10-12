@@ -105,7 +105,12 @@ public class TcCommandsTest {
         assertThat(TcCommands.interfaceWithIndex("""
                 1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN
                 23076: vetha3f2150@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master br-1
-                """, 23076)).isEqualTo("vetha3f2150");
+                """, 23076, 2)).isEqualTo("vetha3f2150");
+        assertThat(TcCommands.linkIndex("2: eth0@if23076: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500")).isEqualTo(2);
+        // The host's interface with the index must name the container's interface as its peer
+        assertThatThrownBy(() -> TcCommands.interfaceWithIndex("""
+                23076: vethb71c9e0@if7: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master br-1
+                """, 23076, 2)).hasMessageContaining("isn't the peer of the container's interface 2");
         assertThat(TcCommands.interfaceWithAddress("""
                 1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever
                 2: eth0    inet 172.19.0.3/16 brd 172.19.255.255 scope global eth0\\       valid_lft forever

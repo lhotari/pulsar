@@ -115,9 +115,15 @@ public final class RunReport {
     public static final String APPLICATIONS_DIRECTORY = "applications";
     /** The remote applications' outputs in a run with a remote cluster, laid out as the applications'. */
     public static final String REMOTE_APPLICATIONS_DIRECTORY = "remote-applications";
+    /** The remote applications' configuration: the resolved one with their service URL and their settings. */
+    public static final String REMOTE_APPLICATIONS_CONFIG = "resolved-config-remote-applications.yaml";
+    /** The remote cluster's topic stats, sampled as {@link #TOPIC_STATS_FILE} has the first cluster's. */
+    public static final String REMOTE_TOPIC_STATS_FILE = "remote-topic-stats.csv";
+    /** The replicators' stats of the first cluster's topics, sampled with a remote cluster. */
+    public static final String REPLICATION_STATS_FILE = "replication-stats.csv";
     // The files of a run with a remote cluster, which the launcher writes
-    private static final List<String> REMOTE_FILES = List.of("resolved-config-remote-applications.yaml",
-            "remote-topic-stats.csv", "replication-stats.csv", REMOTE_APPLICATIONS_DIRECTORY + "/" + CONTAINER_LOG,
+    private static final List<String> REMOTE_FILES = List.of(REMOTE_APPLICATIONS_CONFIG, REMOTE_TOPIC_STATS_FILE,
+            REPLICATION_STATS_FILE, REMOTE_APPLICATIONS_DIRECTORY + "/" + CONTAINER_LOG,
             REMOTE_APPLICATIONS_DIRECTORY + "/" + CLIENT_LOG);
     private static final String MEASUREMENT_RECORDING_SUFFIX = ".measurement.jfr";
     private static final DateTimeFormatter FOOTER_START = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");

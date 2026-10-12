@@ -197,6 +197,10 @@ public class NetworkSettingsTest {
                 .hasMessageContaining("an endpoint of the remote cluster, which the scenario hasn't");
         assertThatThrownBy(() -> NetworkSettings.containers("remote-broker-0", TOPOLOGY))
                 .hasMessageContaining("an endpoint of the remote cluster, which the scenario hasn't");
+        assertThatThrownBy(() -> NetworkSettings.containers("local-region", TOPOLOGY))
+                .hasMessageContaining("the first cluster's side of a geo-replicated pair");
+        assertThatThrownBy(() -> NetworkSettings.containers("remote-brokerz", TOPOLOGY))
+                .hasMessageContaining("isn't an endpoint");
     }
 
     @Test

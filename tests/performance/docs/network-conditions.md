@@ -184,8 +184,11 @@ and the run fails before the cluster starts otherwise.
   with a filter on the senders' IP addresses. The packets have left the sender, so the sender's TCP stack doesn't see
   the queue: its small-queue limits don't apply, as on a real network path.
 - **A rate is the senders' uplink.** Its netem queue is on the sender's own interface, with a filter on the
-  receivers' IP addresses, and it limits what the sender sends to all of them together. Its `queue` is a bounded
-  queue, as a real bottleneck has: what doesn't fit is dropped, and TCP slows down.
+  receivers' IP addresses, and it limits what the sender sends to all of them together. Its `queue` is bounded, as a
+  real bottleneck's is, but it is in the sender's own stack: TCP limits how much of a connection waits in it, and a
+  packet that doesn't fit is refused to the sender's TCP, which slows down and sends it again, rather than lost on
+  the path. So a rate gives the senders backpressure, as a saturated uplink does, and its drops in the report aren't
+  path losses that the receivers would see.
 - **A reset** runs `ss -K` in the senders' network namespaces, which destroys the sockets: the sender gets
   `ECONNABORTED`, and the receiver a TCP reset.
 - **A silent disconnection** lists the senders' established connections to the receivers with `ss`, adds filters
@@ -235,7 +238,8 @@ couldn't be removed at the end.
 A `cluster.remote` section adds a second cluster, the remote one, which shares the configuration store with the first.
 Initializing each cluster's metadata adds the cluster to the replication clusters of the namespace `public/default`,
 so the namespace replicates the workload's topics between the two: the first cluster's brokers replicate every
-message that the gateways publish to the remote cluster. The remote cluster is a copy of the first, its brokers and
+message that the gateways publish to the remote cluster. The workload's topics must be persistent topics of
+`public/default`, which the launcher checks. The remote cluster is a copy of the first, its brokers and
 bookies with the settings of `cluster.brokers` and `cluster.bookies`, and the settings under `remote` replace them;
 an `env` replaces only the variables it sets. It runs the same image, without profiling, heap dumps or metrics
 collection.
@@ -290,7 +294,8 @@ impairments' applications and removals are annotations in Grafana, beside the ru
 `./gradlew :tests:performance:launcher:networkCheck` checks that the impairments do what their settings ask on
 small Alpine containers, with `ping` and `iperf3`: a delay on one destination and none on another, a timed partition,
 the jitter's order, a loss and a rate, a reset, silent disconnections in both directions, a timed silent
-disconnection of a target without connections, and the cleanup. It needs a Docker engine that runs privileged
+disconnection of a target without connections, and the cleanup: no impairment left on the containers' interfaces or
+their host-side veths, and their offloads as they were. It needs a Docker engine that runs privileged
 containers. Run it on a new host, or after changing the impairments.
 
 ## Network scenarios

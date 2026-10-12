@@ -58,6 +58,10 @@ public class NetworkImpairmentsCheck {
     private final ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
     private Network network;
     private final Map<String, GenericContainer<?>> containers = new LinkedHashMap<>();
+    // In the Docker engine host's network, to check the receivers' host-side veths
+    private GenericContainer<?> host;
+    // Each container's offloads before any impairment, which the cleanup restores
+    private final Map<String, String> offloadsAtStart = new LinkedHashMap<>();
     private Path runDirectory;
     private NetworkImpairments impairments;
 
@@ -67,7 +71,7 @@ public class NetworkImpairmentsCheck {
         network = Network.newNetwork();
         ImageFromDockerfile image = new ImageFromDockerfile("pulsar-performance-network-check:alpine-3.20", false)
                 .withDockerfileFromBuilder(builder -> builder.from("alpine:3.20")
-                        .run("apk add --no-cache iperf3 iproute2").build());
+                        .run("apk add --no-cache iperf3 iproute2 ethtool").build());
         for (String name : List.of("gateways", "broker-0", "broker-1")) {
             GenericContainer<?> container = new GenericContainer<>(image)
                     .withNetwork(network)
@@ -76,11 +80,26 @@ public class NetworkImpairmentsCheck {
             container.start();
             containers.put(name, container);
         }
+        host = new GenericContainer<>(image)
+                .withNetworkMode("host")
+                .withPrivilegedMode(true)
+                .withCommand("sleep", "infinity");
+        host.start();
+        for (String name : containers.keySet()) {
+            try {
+                offloadsAtStart.put(name, offloads(name));
+            } catch (Exception e) {
+                throw new IllegalStateException("Reading the offloads of " + name + " failed", e);
+            }
+        }
     }
 
     @AfterClass(alwaysRun = true)
     public void stopContainers() {
         containers.values().forEach(GenericContainer::stop);
+        if (host != null) {
+            host.stop();
+        }
         if (network != null) {
             network.close();
         }
@@ -97,9 +116,15 @@ public class NetworkImpairmentsCheck {
             impairments.close();
             impairments = null;
         }
-        // Everything installed is gone: the receivers' veths and the senders' interfaces are back to noqueue
+        // Everything installed is gone: the receivers' host-side veths and the senders' interfaces are back to
+        // noqueue, and the offloads are as they were
         for (String name : containers.keySet()) {
-            assertThat(exec(name, "tc qdisc show dev eth0 root 2>/dev/null || true")).doesNotContain("prio");
+            assertThat(exec(name, "tc qdisc show dev eth0 root 2>/dev/null || true")).as(name).doesNotContain("prio");
+            String hostVeth = hostExec("ip -o link | awk -F': ' '$1 == " + exec(name, "cat /sys/class/net/eth0/iflink")
+                    .strip() + " {print $2}' | cut -d@ -f1").strip();
+            assertThat(hostVeth).as("the host-side veth of " + name).isNotEmpty();
+            assertThat(hostExec("tc qdisc show dev " + hostVeth + " root")).as(hostVeth).doesNotContain("prio");
+            assertThat(offloads(name)).as("the offloads of " + name).isEqualTo(offloadsAtStart.get(name));
         }
         // A silent disconnection leaves an iperf3 server busy with a connection that is gone
         for (String name : containers.keySet()) {
@@ -368,6 +393,16 @@ public class NetworkImpairmentsCheck {
             case "G" -> value * 1000;
             default -> value;
         };
+    }
+
+    // The segmentation offloads of a container's interface, as ethtool shows them
+    private String offloads(String container) throws Exception {
+        return exec(container, "ethtool -k eth0 | grep -E '^(tcp|generic)-segmentation-offload'");
+    }
+
+    private String hostExec(String command) throws Exception {
+        Container.ExecResult result = host.execInContainer("sh", "-c", command);
+        return result.getStdout() + result.getStderr();
     }
 
     private String exec(String container, String command) throws Exception {
