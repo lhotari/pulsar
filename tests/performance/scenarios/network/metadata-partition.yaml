@@ -16,12 +16,12 @@
 # under the License.
 
 # A broker is cut off from the metadata stores for 10 s of the measurement, in the failover cluster, below the metadata
-# session's 30 s timeout, as a short network blip to ZooKeeper does. The broker keeps serving its clients; on
-# iot-telemetry-small nothing changed. With --set network.impairments.broker-1-metadata-cut-off.duration=45s, the
-# session expired and the broker went on serving its topics without its ownership in the metadata store, and
-# re-acquired it when the store came back; nobody else took the topics, since no client looked them up meanwhile, which
-# metadata-takeover.yaml makes happen. Look for: whether publishing goes on, and the session and lock events in the
-# broker's log.
+# session's 30 s timeout, as a short network blip to ZooKeeper does. The broker should keep serving its clients. With
+# --set network.impairments.broker-1-metadata-cut-off.duration=45s, the session expires; nobody else takes the topics
+# unless a client looks them up meanwhile, which metadata-takeover.yaml makes happen.
+#
+# Look for: whether publishing goes on, and the session and lock events in the broker's log, also when the session
+# expires.
 
 extends: failover-cluster.yaml
 network:

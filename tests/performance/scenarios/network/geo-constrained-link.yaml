@@ -17,12 +17,10 @@
 
 # The link from the first cluster's brokers to the remote brokers drops to 1 Mbit/s, below what the replication sends,
 # for 60 s of the measurement, as a congested link between regions does, with a 100 ms queue at the bottleneck. Set the
-# rate for the base scenario's traffic with --set network.impairments.replication-link.rate=<rate>. Look for: the
-# replication backlog and delay during the limit, how long they take to drain after it, and whether the replicators
-# time out or reconnect.
+# rate for the base scenario's traffic with --set network.impairments.replication-link.rate=<rate>.
 #
-# On iot-telemetry-small, the replication backlog reached about 21,000 messages and the remote applications' latency
-# 48 s, and the backlog drained within about 10 s after the limit, with every message delivered once and in order.
+# Look for: the replication backlog and delay during the limit, how long they take to drain after it, whether the
+# replicators time out or reconnect, and whether the remote applications receive every message once and in order.
 
 extends: geo-replication.yaml
 network:

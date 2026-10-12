@@ -15,13 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# The link between the two regions of a geo-replicated pair is a wide-area network: 40 ms one way, a round trip of
-# 80 ms, varying by up to 4 ms, between every container on each side, for the whole run; the configuration store is on
-# the first cluster's side. Look for: the replication delay and backlog in replication-stats.csv, and the remote
-# applications' publish-to-consume latency, against a run of network/geo-replication.
+# The link between the two regions of a geo-replicated pair is a wide-area network: 40 ms one way, a round trip of 80
+# ms, varying by up to 4 ms, between every container on each side, for the whole run; the configuration store is on the
+# first cluster's side.
 #
-# On iot-telemetry-small, the remote applications' latency was about 250 ms, three round trips, with a steady
-# replication backlog of about 250 messages.
+# Look for: the replication delay and backlog in replication-stats.csv, and the remote applications' publish-to-consume
+# latency, against a run of network/geo-replication: how many round trips the replication takes per message.
 
 extends: geo-replication.yaml
 network:

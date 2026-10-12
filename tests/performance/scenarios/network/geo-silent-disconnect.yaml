@@ -17,12 +17,11 @@
 
 # The replicators' TCP connections disappear without the remote brokers knowing, as when a NAT gateway or a firewall
 # between the regions forgets its connections, 30 s into the measurement: the first cluster's brokers get an error at
-# once and reconnect, on new connections, while the remote brokers keep the old ones, with the replicators' producers
-# on them, until their keep-alive finds them dead, in 30-60 s with the default 30 s interval. Look for: the replicators'
-# reconnections in the brokers' logs, the replication backlog and delay, and the remote applications' duplicates.
+# once and reconnect, on new connections, while the remote brokers keep the old ones, with the replicators' producers on
+# them, until their keep-alive finds them dead, in 30-60 s with the default 30 s interval.
 #
-# On iot-telemetry-small, the replicators reconnected at once, and the remote topics lost 76 messages, on 8 topics, with
-# 56 out of order: every remote application received the same messages, and the run failed.
+# Look for: the replicators' reconnections in the brokers' logs, the replication backlog and delay, and whether the
+# remote applications receive every message once and in order.
 
 extends: geo-replication.yaml
 network:

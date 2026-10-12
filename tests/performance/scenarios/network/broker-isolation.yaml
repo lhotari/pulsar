@@ -17,11 +17,12 @@
 
 # A broker loses its network for 45 s of the measurement, in the failover cluster: no clients, no other broker, no
 # bookies and no metadata store, beyond the metadata session's 30 s timeout, as a broker's host that drops off the
-# network does. On iot-telemetry-small, its session was lost after about 30 s, and the other broker loaded the topics
-# when the clients looked them up again, 4-7 s later; the isolated broker's late writes were fenced by the bookies.
-# Clients notice a silent connection only through their keep-alive, in 30-60 s with the default 30 s interval, which
-# overlaps the 45 s outage: --set network.impairments.broker-1-isolated.duration=90s separates the failover from the
-# recovery. Look for: the topics' transfer, the fencing, the clients' reconnections, ordering and duplicates.
+# network does. Its metadata session is lost, and the other broker can take its topics over when the clients look them
+# up again, while the bookies fence the isolated broker's ledgers. Clients notice a silent connection only through their
+# keep-alive, in 30-60 s with the default 30 s interval, which overlaps the 45 s outage: --set
+# network.impairments.broker-1-isolated.duration=90s separates the failover from the recovery.
+#
+# Look for: when the topics move to the other broker, the fencing, the clients' reconnections, ordering and duplicates.
 
 extends: failover-cluster.yaml
 network:

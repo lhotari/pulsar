@@ -16,17 +16,15 @@
 # under the License.
 
 # The applications' TCP connections are reset once during the warmup and once 30 s into the measurement, as a load
-# balancer or a NAT gateway in front of the consumers that resets its connections does, while the gateways'
-# connections stay up. Every pod's client reconnects after its initial backoff of 100 ms, with only 5 % of jitter, so
-# every consumer resubscribes at once. The first reset warms up the brokers' code for it, so that the second one
-# measures a warm broker. The clients' INFO logs show the reconnections in each workload's pulsar-client.log.txt.
+# balancer or a NAT gateway in front of the consumers that resets its connections does, while the gateways' connections
+# stay up. Every pod's client reconnects after its initial backoff of 100 ms, with only 5 % of jitter, so every consumer
+# resubscribes at once. The first reset warms up the brokers' code for it, so that the second one measures a warm
+# broker. The clients' INFO logs show the reconnections in each workload's pulsar-client.log.txt.
 #
-# On iot-telemetry-small, whose 20 applications of 10 pods have 6,000 Key_Shared consumers on one broker, the second
-# reset raised the publish latency of the untouched producers to about 1 s, and to 2-3 s without the warm-up reset,
-# on the test host. A broker removes a closed connection's consumers on the I/O thread that also serves producers, and
-# each removal and addition rebuilds the Key_Shared subscription's hash ring and diffs its hash range assignments.
-# With 1 pod per application the stall was about 45 ms. Look for: the stall against
-# --set workloads.iotTelemetry.applications.podsPerApplication=1, 5 or 10, and the redelivered duplicates.
+# On iot-telemetry-small, 20 applications of 10 pods have 6,000 Key_Shared consumers on one broker. A broker removes a
+# closed connection's consumers on the I/O thread that also serves producers, and each removal and addition changes the
+# Key_Shared subscription's hash ring. Look for: the publish latency of the untouched producers after each reset,
+# against --set workloads.iotTelemetry.applications.podsPerApplication=1, 5 or 10, and the redelivered duplicates.
 
 network:
   impairments:

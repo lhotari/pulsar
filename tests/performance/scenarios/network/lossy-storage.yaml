@@ -16,11 +16,11 @@
 # under the License.
 
 # The brokers' packets to and from the bookies are lost in bursts, 0.5 % of them, for the whole run, in the failover
-# cluster, as on a congested or faulty storage network. On iot-telemetry-small, the publish p99.9 went from 18 ms to
-# 29-33 ms and the publish max from 46 ms to 180-220 ms, while the median didn't change; the max is probably a lost
-# burst that TCP recovered only with its retransmission timeout, about 200 ms, rather than a fast retransmission. Look
-# for: the publish latency's tail against a run of failover-cluster.yaml alone, and the brokers' TCP retransmissions in
-# the report's Network conditions section.
+# cluster, as on a congested or faulty storage network. TCP recovers most losses with a fast retransmission, but a lost
+# burst can wait for the retransmission timeout, about 200 ms.
+#
+# Look for: the publish latency's tail, p99.9 and max, against a run of failover-cluster.yaml alone, the median, and the
+# brokers' TCP retransmissions in the report's Network conditions section.
 
 extends: failover-cluster.yaml
 network:

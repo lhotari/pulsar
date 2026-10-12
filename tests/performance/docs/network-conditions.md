@@ -300,7 +300,7 @@ models and what to look for. Apply one with `--extends network/<name>` on a base
 The overlays that need a broker or a bookie to fail over to run on
 [`failover-cluster.yaml`](../scenarios/network/failover-cluster.yaml): two brokers, both in the service URL, and four
 bookies with an ensemble, a write quorum and an ack quorum of 3, 3 and 2; the others run on the base scenario's
-cluster. Each file also notes what it showed on `iot-telemetry-small`, at 1,000 messages a second, when it was added.
+cluster. Each file describes what it models and what to look for in its runs.
 
 | Overlay | Models | Use it to |
 |---|---|---|

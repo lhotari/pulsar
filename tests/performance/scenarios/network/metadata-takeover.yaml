@@ -16,17 +16,15 @@
 # under the License.
 
 # A broker loses the metadata stores for 90 s of the measurement, in the failover cluster, while it still reaches its
-# clients and the bookies, and 40 s in, after its metadata session has expired, the applications' connections are
-# reset, so that the consumers look their topics up again. A lookup that reaches the other broker makes it take the
-# topics over and fence the isolated broker's ledgers. The isolated broker keeps serving, as the default
-# zookeeperSessionExpiredPolicy of reconnect intends, and answers lookups for its topics from its own cache, while the
-# gateways' producers stay connected to it. The brokers deduplicate, and the producers have no send timeout.
+# clients and the bookies, and 40 s in, after its metadata session has expired, the applications' connections are reset,
+# so that the consumers look their topics up again. A lookup that reaches the other broker makes it take the topics over
+# and fence the isolated broker's ledgers. The isolated broker keeps serving, as the default
+# zookeeperSessionExpiredPolicy of reconnect intends, while the gateways' producers stay connected to it. The brokers
+# deduplicate, and the producers have no send timeout.
 #
-# On iot-telemetry-small, once its ledgers were fenced, the isolated broker held its producers' sends until the
-# metadata stores came back, 50 s later, since recovering from the fencing needs them; then the sends failed, the
-# producers moved to the other broker, and every device's messages arrived complete and in order: publish latency up
-# to 55 s and thousands of duplicates, redeliveries among those the applications could classify. Look for: how long the isolated broker holds clients after another broker has
-# fenced its ledgers, the fencing in the brokers' logs, and the duplicates' kinds in the Correctness section.
+# Look for: how long the isolated broker holds its producers after another broker has fenced its ledgers, the publish
+# latency until the producers move, the fencing in the brokers' logs, and the duplicates' kinds in the Correctness
+# section.
 
 extends: failover-cluster.yaml
 network:

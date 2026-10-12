@@ -16,11 +16,13 @@
 # under the License.
 
 # One bookie is cut off from the brokers for 30 s of the measurement, in the failover cluster, as a bookie whose host
-# loses its network does. With an ack quorum of 2 of 3, the publish latency didn't change on iot-telemetry-small, for
-# 30 s or 60 s. With --set cluster.brokers.env.managedLedgerDefaultAckQuorum=3, the entries of the ledgers that have the
-# bookie wait for it: their publishes stalled for 30 s, bookkeeperClientTimeoutInSeconds, after which the brokers
-# replaced the bookie in the ensembles, also when the bookie stayed cut off for 60 s. Look for: the stall against the
-# ack quorum and the client timeout, the ensemble changes in the brokers' logs, and correct delivery.
+# loses its network does. With an ack quorum of 2 of 3, the other two bookies acknowledge the entries; with --set
+# cluster.brokers.env.managedLedgerDefaultAckQuorum=3, the entries of the ledgers that have the bookie wait for it until
+# the bookie client's timeout, bookkeeperClientTimeoutInSeconds, after which the brokers replace the bookie in the
+# ensembles.
+#
+# Look for: the publish latency against the ack quorum and the client timeout, also with a longer partition, the
+# ensemble changes in the brokers' logs, and correct delivery.
 
 extends: failover-cluster.yaml
 network:

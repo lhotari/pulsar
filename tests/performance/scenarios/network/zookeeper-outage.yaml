@@ -20,11 +20,11 @@
 # reset, so that they look their topics up while the brokers can't reach ZooKeeper, a few seconds before the brokers
 # declare their sessions lost: the session watcher does that 25 s after it first finds ZooKeeper unreachable, which it
 # checks every 2 s; set reset-applications.start to 65s or later for lookups after that. With the default
-# zookeeperSessionExpiredPolicy=reconnect, the brokers keep serving the topics they own. On iot-telemetry-small, the
-# publish latency max was 3.2-6.4 s, and every message was delivered in order. Look for: the clients' lookups and
-# reconnections in their logs, the brokers' sessions being reestablished and their locks revalidated afterwards
-# ("Revalidating all the existing locks"), and the latency of the reset. The clients log at info level, so that their
-# reconnections show.
+# zookeeperSessionExpiredPolicy=reconnect, the brokers should keep serving the topics they own. The clients log at info
+# level, so that their reconnections show.
+#
+# Look for: the publish latency, the clients' lookups and reconnections in their logs, the brokers' sessions being
+# reestablished and their locks revalidated afterwards ("Revalidating all the existing locks"), and correct delivery.
 
 extends: failover-cluster.yaml
 network:

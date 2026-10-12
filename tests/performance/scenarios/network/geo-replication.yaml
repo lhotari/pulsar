@@ -18,14 +18,13 @@
 # Geo-replication: a second cluster, the remote one, shares the configuration store with the first, so that the
 # namespace public/default replicates the workload's topics to it. The gateways publish to the first cluster, whose
 # applications consume there as without it, and four remote applications, with the pods of the base scenario's, consume
-# the replicated messages in the remote cluster and check their order and that every message arrived. The remote
-# cluster has the brokers and the bookies of the base scenario; cluster.remote.brokers and cluster.remote.bookies change
-# them. The geo overlays extend it, and it composes with the other overlays, which act on the first cluster, such as
-# --extends network/geo-replication --extends network/silent-client-disconnect. Look for: the remote applications' line
-# in the progress, their publish-to-consume latency, which includes the replication, and replication-stats.csv.
+# the replicated messages in the remote cluster and check their order and that every message arrived. The remote cluster
+# has the brokers and the bookies of the base scenario; cluster.remote.brokers and cluster.remote.bookies change them.
+# Both clusters retain the messages for an hour. The geo overlays extend it, and it composes with the other overlays,
+# which act on the first cluster, such as --extends network/geo-replication --extends network/silent-client-disconnect.
 #
-# On iot-telemetry-small, every remote application received every message in order, with a latency about 1 ms above
-# the first cluster's applications'.
+# Look for: the remote applications' line in the progress, their publish-to-consume latency, which includes the
+# replication, against the first cluster's applications', and replication-stats.csv.
 
 cluster:
   # An hour's retention in both clusters, through the namespaces' defaults, which public/default has no policy to

@@ -17,12 +17,13 @@
 
 # The brokers of the two clusters can't reach each other for 60 s of the measurement, as when the link between two
 # regions fails, while each cluster and its clients keep working: the replication stops, and the topics' replication
-# backlog grows by every message published meanwhile. Look for: whether the replicators reconnect after the partition,
-# how long the backlog takes to drain, and whether the remote applications receive every message once and in order.
+# backlog grows by every message published meanwhile. The connections aren't reset: both brokers close them after their
+# keep-alive timeout, and the replicators reconnect and resend their pending messages.
 #
-# On iot-telemetry-small, the replicators reconnected after the partition and the backlog drained in about 10 s, but
-# the remote topics lost about 12,000 of the 140,000 messages, on 21 of the 30 topics, and had others out of order:
-# every remote application received the same messages, and the run failed.
+# Look for: whether the replicators reconnect after the partition, how long the backlog takes to drain, and whether the
+# remote applications receive every message once and in order. When they miss messages, compare the remote topics'
+# published-message counters in remote-topic-stats.csv with the source topics' in topic-stats.csv, and check the remote
+# subscriptions' backlog, to tell messages that the remote topics lack from messages that weren't delivered.
 
 extends: geo-replication.yaml
 network:
