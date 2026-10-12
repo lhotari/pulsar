@@ -103,8 +103,9 @@ outputs are in different directories, pass a common shared coordination director
 process in that run. Reusing the directory is fine; use a new run ID for each invocation of the workload.
 
 Set `gateways.producer.batchingEnabled` in the workload section to compare batched and unbatched keyed messages without
-changing the tool implementation. Batched runs use `BatcherBuilder.KEY_BASED`, which keeps each batch to
-one key as required for Key_Shared delivery.
+changing the tool implementation. With Key_Shared subscriptions, batched runs use `BatcherBuilder.KEY_BASED`, which
+keeps each batch to one key as Key_Shared delivery requires; with Shared and Failover subscriptions, they use the
+default batcher, which batches messages of any device together.
 
 Warmup messages exercise the same producer, client, connection, topic and consumer paths as measured messages. They
 remain in the monotonic device sequences and end-to-end delivery checks, but are excluded from throughput. For a
@@ -283,9 +284,10 @@ application. It must report zero invalid messages and zero ordering violations. 
 for Pulsar's at-least-once delivery model and are counted separately so comparisons can detect changes in their
 frequency. The persisted gateway and application state checks for missing tail messages after all clients stop.
 
-Key_Shared scenarios use the key-based producer batcher, and the other subscription types the default one. It keeps every batch to one key so the broker can
-route all messages for a device through the same Key_Shared hash range. Changing the batcher changes the
-ordering contract exercised by the scenario and should not be mixed into a performance comparison.
+Key_Shared scenarios use the key-based producer batcher, which keeps every batch to one key so the broker can route
+all messages for a device through the same Key_Shared hash range; the other subscription types use the default
+batcher. Comparing subscription types with batching on therefore also changes the batches, and changing the batcher
+changes the ordering contract exercised by the scenario, so neither should be mixed into a performance comparison.
 
 The full topology opens 100 gateway clients and 2,000 application clients, all in the applications' container. Across
 30 topics and 20 applications, this creates 60,000 internal topic consumers. The medium-memory configuration gives the

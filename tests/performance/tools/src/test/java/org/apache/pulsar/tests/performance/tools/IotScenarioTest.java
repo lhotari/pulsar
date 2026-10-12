@@ -152,6 +152,11 @@ public class IotScenarioTest {
         assertThatThrownBy(() -> scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
                 null, null, null, "Exclusive")))
                 .hasMessageContaining("applications.subscriptionType must be one of [Key_Shared, Shared, Failover]");
+        // a scenario file without the setting keeps Key_Shared
+        IotScenario.Applications fromYaml = new YamlScenarioLoader().mapper().convertValue(Map.of("count", 2,
+                "podsPerApplication", 2, "subscriptionPrefix", "app-", "client",
+                Map.of("ioThreads", 2, "listenerThreads", 2)), IotScenario.Applications.class);
+        assertThat(scenario(fromYaml).subscriptionType()).isEqualTo(SubscriptionType.Key_Shared);
     }
 
     @Test

@@ -31,4 +31,9 @@ workloads:
     applications:
       count: 10
       podsPerApplication: 4
+      # Each of a multi-topic consumer's 1,000 internal consumers keeps a copy of the consumer's configuration with
+      # every topic's name: 40 million names across the 40,000 consumers, about 1.5 GB, beyond the high-memory
+      # configuration's application heap
+      env:
+        PULSAR_MEM: -Xms4g -Xmx4g -XX:MaxDirectMemorySize=256m -XX:+UseTransparentHugePages -XX:+AlwaysPreTouch
     timeoutSeconds: 360
