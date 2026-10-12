@@ -18,7 +18,10 @@
 # outage. The publishes wait for the bookies, and the producers' sends queue up to their limit of outstanding messages.
 # On iot-telemetry-small, publishing resumed about 7 s after the bookies came back, a 27 s stall for a 20 s outage,
 # probably because the brokers' TCP connections to the bookies retransmit with exponential backoff while the packets
-# are dropped, so that the first retransmission after the outage comes seconds after it ends. Look for: the stall against the outage, the
+# are dropped, so that the first retransmission after the outage comes seconds after it ends. With
+# --set network.impairments.storage-outage.duration=45s, past the bookie client's 30 s timeout, publishing resumed
+# about 12 s after the bookies came back, a 57 s stall, and every message was still delivered once and in order.
+# Look for: the stall against the outage, the
 # bookie client's timeout (bookkeeperClientTimeoutInSeconds, 30 s) for a longer outage, and correct delivery.
 
 extends: failover-cluster.yaml
