@@ -329,13 +329,19 @@ OPTS="-XX:+ExitOnOutOfMemoryError -Dpulsar.allocator.exit_on_oom=true $OPTS"
 # Thus, increasing io.netty.allocator.maxOrder to 10 to ensure that a single message is larger
 # than chunk size (8MB) and can reuse Netty's memory pool.
 #
-# Netty's object recycler (io.netty.recycler.maxCapacityPerThread) is disabled: the broker allocates its short-lived
-# objects, such as the entries that it dispatches, instead of recycling them through per-thread pools. Many of them are
-# released on another thread than the one that took them from its pool, and returning such an object and taking it
-# again cost more, in cache misses and cross-thread queue operations, than allocating with the JVM's garbage collectors.
-# Set -Dio.netty.recycler.maxCapacityPerThread=4096 in PULSAR_EXTRA_OPTS, which comes later on the command line, to
-# recycle them again.
-OPTS="-Dio.netty.recycler.maxCapacityPerThread=0 -Dio.netty.allocator.maxOrder=10 $OPTS"
+# Netty's object recycler (io.netty.recycler.maxCapacityPerThread) is disabled for every command but the bookie's: the
+# broker allocates short-lived Java objects, such as the entries that it dispatches, instead of recycling them through
+# Netty's per-thread Recycler pools. Many of them are released on another thread than the one that took them from its
+# pool, and returning such an object and taking it again cost more, in cache misses and cross-thread queue operations,
+# than allocating them with generational ZGC, the default collector in conf/pulsar_env.sh. This doesn't change the
+# pooling of buffers. Set -Dio.netty.recycler.maxCapacityPerThread=4096 in PULSAR_EXTRA_OPTS, which comes later on the
+# command line, to recycle the objects again.
+if [ "$COMMAND" == "bookie" ] || [ "$COMMAND" == "autorecovery" ]; then
+  NETTY_RECYCLER_MAX_CAPACITY_PER_THREAD=4096
+else
+  NETTY_RECYCLER_MAX_CAPACITY_PER_THREAD=0
+fi
+OPTS="-Dio.netty.recycler.maxCapacityPerThread=$NETTY_RECYCLER_MAX_CAPACITY_PER_THREAD -Dio.netty.allocator.maxOrder=10 $OPTS"
 
 OPTS="-cp $PULSAR_CLASSPATH $OPTS"
 
