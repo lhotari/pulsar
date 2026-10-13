@@ -20,6 +20,9 @@ package org.apache.bookkeeper.mledger.offload.jcloud.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.testng.annotations.Test;
 
 public class EntryOffsetIndexTest {
@@ -54,6 +57,45 @@ public class EntryOffsetIndexTest {
         // the same object's offsets for another read handle
         assertThat(index.offsets("bucket", "object")).isSameAs(offsets);
         assertThat(index.offsets("bucket", "other").floor(19)).isNull();
+    }
+
+    @Test
+    public void recordsTheWeightAfterTheLastChangeOfConcurrentReads() throws Exception {
+        // The index weighs the offsets before it records the weight: the first read pauses in between
+        CountDownLatch weighed = new CountDownLatch(1);
+        CountDownLatch proceed = new CountDownLatch(1);
+        AtomicReference<Thread> pausing = new AtomicReference<>();
+        EntryOffsetIndex index = new EntryOffsetIndex(1 << 20, 60, offsets -> {
+            int weight = offsets.weight();
+            if (Thread.currentThread() == pausing.get()) {
+                weighed.countDown();
+                try {
+                    proceed.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return weight;
+        });
+        EntryOffsetIndex.ObjectOffsets offsets = index.offsets("bucket", "object");
+        Thread first = new Thread(() -> add(offsets, 0, 10));
+        pausing.set(first);
+        first.start();
+        assertThat(weighed.await(10, TimeUnit.SECONDS)).isTrue();
+
+        // the second read grows the offsets while the first one's stale weight hasn't been recorded
+        Thread second = new Thread(() -> add(offsets, 100, 50));
+        second.start();
+        // it waits for the first read's reweigh, or, if it didn't, has recorded its weight
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (second.getState() != Thread.State.BLOCKED && second.isAlive() && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+        }
+        proceed.countDown();
+        first.join();
+        second.join();
+
+        assertThat(index.recordedWeight()).isEqualTo(index.weight());
     }
 
     @Test

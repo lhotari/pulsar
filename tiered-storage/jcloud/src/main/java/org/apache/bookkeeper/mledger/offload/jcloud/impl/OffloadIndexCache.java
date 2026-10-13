@@ -23,13 +23,18 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.annotations.VisibleForTesting;
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.LongAdder;
 import org.apache.bookkeeper.client.BKException;
+import org.apache.bookkeeper.client.api.LedgerMetadata;
 import org.apache.bookkeeper.mledger.OffloadedReadCacheConfig;
 import org.apache.bookkeeper.mledger.offload.jcloud.OffloadIndexBlock;
+import org.apache.bookkeeper.net.BookieId;
 
 /**
  * The parsed indexes of offloaded ledgers, shared by every read handle of the offloader factory, so that reopening the
@@ -53,10 +58,19 @@ public class OffloadIndexCache {
         OffloadIndexBlock load() throws IOException, BKException;
     }
 
-    // The estimated memory of a parsed index: the object and the ledger's metadata, and each entry of the index with
-    // its node in the index's map
+    // The estimated memory of a parsed index: the objects of the index and of the ledger's metadata, each entry of the
+    // index with its node in the index's map, and the variable parts of the metadata: each custom metadata value, with
+    // its key's characters, and each ensemble, with its bookies' ids
     private static final int INDEX_BYTES = 2048;
     private static final int INDEX_ENTRY_BYTES = 128;
+    private static final int MAP_ENTRY_BYTES = 64;
+    private static final int BOOKIE_ID_BYTES = 96;
+    /**
+     * How long an open waits for another open's read of the same index, after which it reads the index itself: a read
+     * that never completes, which the cache keeps since it neither weighs nor expires a read in progress, would
+     * otherwise keep every later open of the ledger waiting.
+     */
+    static final long DEFAULT_LOAD_WAIT_MILLIS = TimeUnit.MINUTES.toMillis(1);
 
     // The reads in progress are in the cache too, as futures that later opens wait for, which weigh nothing until
     // they complete; a read that fails is removed, so that the next open reads the index again
@@ -64,6 +78,8 @@ public class OffloadIndexCache {
     private final LongAdder hits = new LongAdder();
     private final LongAdder joinedLoads = new LongAdder();
     private final LongAdder loads = new LongAdder();
+    private final LongAdder abandonedLoads = new LongAdder();
+    private final long loadWaitMillis;
 
     public OffloadIndexCache(OffloadedReadCacheConfig config) {
         this(config.indexCacheSizeBytes(), config.indexCacheExpirySeconds());
@@ -71,6 +87,12 @@ public class OffloadIndexCache {
 
     @VisibleForTesting
     OffloadIndexCache(long maxSizeBytes, int ttlSeconds) {
+        this(maxSizeBytes, ttlSeconds, DEFAULT_LOAD_WAIT_MILLIS);
+    }
+
+    @VisibleForTesting
+    OffloadIndexCache(long maxSizeBytes, int ttlSeconds, long loadWaitMillis) {
+        this.loadWaitMillis = loadWaitMillis;
         this.indexes = Caffeine.newBuilder()
                 // With 0, an index is dropped once its read completes, after the opens that waited for it got it
                 .maximumWeight(Math.max(0, maxSizeBytes))
@@ -82,7 +104,24 @@ public class OffloadIndexCache {
     }
 
     static int estimatedSize(OffloadIndexBlock index) {
-        return (int) Math.min(Integer.MAX_VALUE, INDEX_BYTES + (long) index.getEntryCount() * INDEX_ENTRY_BYTES);
+        long size = INDEX_BYTES + (long) index.getEntryCount() * INDEX_ENTRY_BYTES;
+        LedgerMetadata metadata = index.getLedgerMetadata();
+        if (metadata != null) {
+            Map<String, byte[]> customMetadata = metadata.getCustomMetadata();
+            if (customMetadata != null) {
+                for (Map.Entry<String, byte[]> entry : customMetadata.entrySet()) {
+                    size += MAP_ENTRY_BYTES + 2L * entry.getKey().length()
+                            + (entry.getValue() != null ? entry.getValue().length : 0);
+                }
+            }
+            Map<Long, ? extends List<BookieId>> ensembles = metadata.getAllEnsembles();
+            if (ensembles != null) {
+                for (List<BookieId> ensemble : ensembles.values()) {
+                    size += MAP_ENTRY_BYTES + (long) ensemble.size() * BOOKIE_ID_BYTES;
+                }
+            }
+        }
+        return (int) Math.min(Integer.MAX_VALUE, size);
     }
 
     /**
@@ -118,14 +157,22 @@ public class OffloadIndexCache {
             } else {
                 joinedLoads.increment();
             }
-            return await(existing);
+            OffloadIndexBlock index = await(existing);
+            if (index != null) {
+                return index;
+            }
+            // The read didn't complete in time: drop it, unless another open already has, and read the index again
+            abandonedLoads.increment();
+            indexes.asMap().remove(key, existing);
         }
     }
 
-    private static OffloadIndexBlock await(CompletableFuture<OffloadIndexBlock> pending)
-            throws IOException, BKException {
+    // The index that the read completes with, or null when it doesn't complete within the wait
+    private OffloadIndexBlock await(CompletableFuture<OffloadIndexBlock> pending) throws IOException, BKException {
         try {
-            return pending.get();
+            return pending.get(loadWaitMillis, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            return null;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             InterruptedIOException interrupted = new InterruptedIOException("Interrupted while waiting for the read"
@@ -160,6 +207,12 @@ public class OffloadIndexCache {
     @VisibleForTesting
     long joinedLoads() {
         return joinedLoads.sum();
+    }
+
+    /** The reads of other opens that an open stopped waiting for, since they didn't complete in time. */
+    @VisibleForTesting
+    long abandonedLoads() {
+        return abandonedLoads.sum();
     }
 
     /** The reads of index objects from the blob store. */

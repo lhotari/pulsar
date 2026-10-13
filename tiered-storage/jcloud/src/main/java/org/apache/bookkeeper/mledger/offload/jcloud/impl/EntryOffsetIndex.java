@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.ToIntFunction;
 
 /**
  * The offsets of the entries of offloaded data objects that reads have passed, shared by every read handle of the
@@ -57,12 +58,18 @@ public class EntryOffsetIndex {
     private final long maxObjectRunsBytes;
 
     public EntryOffsetIndex(long maxSizeBytes, int expirySeconds) {
+        this(maxSizeBytes, expirySeconds, ObjectOffsets::weight);
+    }
+
+    /** With {@code weigher}, which weighs the offsets of an object as the index records them. */
+    @VisibleForTesting
+    EntryOffsetIndex(long maxSizeBytes, int expirySeconds, ToIntFunction<ObjectOffsets> weigher) {
         long maxSize = Math.max(0, maxSizeBytes);
         // At most 1 GiB, which keeps an object's weight within an int
         this.maxObjectRunsBytes = Math.min(maxSize / 8, 1L << 30);
         this.objects = maxSize == 0 ? null : Caffeine.newBuilder()
                 .maximumWeight(maxSize)
-                .<String, ObjectOffsets>weigher((key, offsets) -> offsets.weight())
+                .<String, ObjectOffsets>weigher((key, offsets) -> weigher.applyAsInt(offsets))
                 .expireAfterAccess(Math.max(1, expirySeconds), TimeUnit.SECONDS)
                 // The index's maintenance runs on the threads that use it
                 .executor(Runnable::run)
@@ -81,15 +88,27 @@ public class EntryOffsetIndex {
         return objects.get(objectKey, k -> new ObjectOffsets(this, objectKey, maxObjectRunsBytes));
     }
 
-    // Weighs the object's offsets again after they have changed, unless they have been dropped
+    // Weighs the object's offsets again after they have changed, unless they have been dropped. The cache weighs
+    // the offsets before it replaces them, so the reweighs of an object run one at a time: otherwise one that weighed
+    // the offsets before another's change could replace the weight that the other one recorded after it, and the
+    // last reweigh, which follows the last change, records the offsets' current weight
     private void reweigh(ObjectOffsets offsets) {
-        objects.asMap().replace(offsets.objectKey, offsets, offsets);
+        synchronized (offsets.reweighLock) {
+            objects.asMap().replace(offsets.objectKey, offsets, offsets);
+        }
     }
 
     public void clear() {
         if (objects != null) {
             objects.invalidateAll();
         }
+    }
+
+    /** The weight that the index has recorded for the offsets, which its budget bounds. */
+    @VisibleForTesting
+    long recordedWeight() {
+        return objects == null ? 0 : objects.policy().eviction().map(eviction -> eviction.weightedSize().orElse(0))
+                .orElse(0L);
     }
 
     @VisibleForTesting
@@ -112,6 +131,8 @@ public class EntryOffsetIndex {
         private final TreeMap<Long, Long> anchors = new TreeMap<>();
         // Guarded by this
         private long runsWeight;
+        // Serializes the index's reweighs of the offsets, apart from this, which their changes hold
+        private final Object reweighLock = new Object();
 
         // The most entries that the runs' arrays can hold within the share, with the end offset of a run
         private final int maxRunEntries;
@@ -123,7 +144,7 @@ public class EntryOffsetIndex {
             this.maxRunEntries = (int) Math.max(0, (maxRunsBytes - RUN_OVERHEAD_BYTES) / 4 - 1);
         }
 
-        private synchronized int weight() {
+        synchronized int weight() {
             return (int) Math.min(Integer.MAX_VALUE, runsWeight + (long) anchors.size() * ANCHOR_BYTES);
         }
 

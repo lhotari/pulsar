@@ -23,11 +23,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.bookkeeper.client.BKException;
+import org.apache.bookkeeper.client.api.LedgerMetadata;
 import org.apache.bookkeeper.mledger.offload.jcloud.OffloadIndexBlock;
 import org.testng.annotations.Test;
 
@@ -124,6 +127,117 @@ public class OffloadIndexCacheTest {
         OffloadIndexBlock index = index(10);
         assertThat(cache.get("bucket", "index", () -> index)).isSameAs(index);
         assertThat(cache.loads()).isEqualTo(3);
+    }
+
+    // A read that waits until it's released, and then returns the index or fails
+    private static final class BlockingLoader implements OffloadIndexCache.Loader {
+        final CountDownLatch reading = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        final OffloadIndexBlock index;
+        final IOException failure;
+
+        BlockingLoader(OffloadIndexBlock index, IOException failure) {
+            this.index = index;
+            this.failure = failure;
+        }
+
+        @Override
+        public OffloadIndexBlock load() throws IOException {
+            reading.countDown();
+            try {
+                release.await();
+            } catch (InterruptedException e) {
+                throw new IOException(e);
+            }
+            if (failure != null) {
+                throw failure;
+            }
+            return index;
+        }
+    }
+
+    @Test
+    public void opensThatWaitForAFailedReadFailWithIt() throws Exception {
+        OffloadIndexCache cache = new OffloadIndexCache(1 << 20, 60);
+        BlockingLoader failing = new BlockingLoader(null, new IOException("unavailable"));
+        CompletableFuture<OffloadIndexBlock> first = CompletableFuture.supplyAsync(() -> get(cache, failing));
+        assertThat(failing.reading.await(10, TimeUnit.SECONDS)).isTrue();
+        CompletableFuture<OffloadIndexBlock> second = CompletableFuture.supplyAsync(() -> get(cache, () -> {
+            throw new AssertionError("joins the read in progress");
+        }));
+        assertThatWaits(cache);
+        failing.release.countDown();
+
+        assertThatThrownBy(() -> first.get(10, TimeUnit.SECONDS)).hasRootCauseMessage("unavailable");
+        assertThatThrownBy(() -> second.get(10, TimeUnit.SECONDS)).hasRootCauseMessage("unavailable");
+        // the next open reads the index again
+        OffloadIndexBlock index = index(10);
+        assertThat(cache.get("bucket", "index", () -> index)).isSameAs(index);
+        assertThat(cache.loads()).isEqualTo(2);
+    }
+
+    @Test
+    public void anOpenStopsWaitingForAReadThatDoesntComplete() throws Exception {
+        OffloadIndexCache cache = new OffloadIndexCache(1 << 20, 60, 200);
+        BlockingLoader stalled = new BlockingLoader(index(10), null);
+        CompletableFuture<OffloadIndexBlock> first = CompletableFuture.supplyAsync(() -> get(cache, stalled));
+        assertThat(stalled.reading.await(10, TimeUnit.SECONDS)).isTrue();
+
+        // reads the index itself, after waiting for the stalled read
+        OffloadIndexBlock index = index(10);
+        assertThat(cache.get("bucket", "index", () -> index)).isSameAs(index);
+        assertThat(cache.abandonedLoads()).isEqualTo(1);
+        assertThat(cache.get("bucket", "index", () -> {
+            throw new AssertionError("cached");
+        })).isSameAs(index);
+
+        // the stalled read completes for its own open, without replacing the cached index
+        stalled.release.countDown();
+        assertThat(first.get(10, TimeUnit.SECONDS)).isSameAs(stalled.index);
+        assertThat(cache.get("bucket", "index", () -> {
+            throw new AssertionError("cached");
+        })).isSameAs(index);
+    }
+
+    @Test
+    public void anInterruptedOpenStopsWaitingAndTheReadGoesOn() throws Exception {
+        OffloadIndexCache cache = new OffloadIndexCache(1 << 20, 60);
+        BlockingLoader loader = new BlockingLoader(index(10), null);
+        CompletableFuture<OffloadIndexBlock> first = CompletableFuture.supplyAsync(() -> get(cache, loader));
+        assertThat(loader.reading.await(10, TimeUnit.SECONDS)).isTrue();
+        CompletableFuture<Throwable> interrupted = new CompletableFuture<>();
+        Thread waiter = new Thread(() -> {
+            try {
+                cache.get("bucket", "index", () -> {
+                    throw new AssertionError("joins the read in progress");
+                });
+                interrupted.complete(null);
+            } catch (Throwable t) {
+                boolean wasInterrupted = Thread.currentThread().isInterrupted();
+                interrupted.complete(wasInterrupted ? t : new AssertionError("not interrupted"));
+            }
+        });
+        waiter.start();
+        assertThatWaits(cache);
+        waiter.interrupt();
+        assertThat(interrupted.get(10, TimeUnit.SECONDS)).isInstanceOf(InterruptedIOException.class);
+
+        loader.release.countDown();
+        assertThat(first.get(10, TimeUnit.SECONDS)).isSameAs(loader.index);
+        assertThat(cache.get("bucket", "index", () -> {
+            throw new AssertionError("cached");
+        })).isSameAs(loader.index);
+    }
+
+    @Test
+    public void weighsTheLedgersMetadata() {
+        OffloadIndexBlock small = index(1);
+        OffloadIndexBlock withMetadata = index(1);
+        LedgerMetadata metadata = mock(LedgerMetadata.class);
+        when(metadata.getCustomMetadata()).thenReturn(Map.of("key", new byte[64 * 1024]));
+        when(withMetadata.getLedgerMetadata()).thenReturn(metadata);
+        assertThat(OffloadIndexCache.estimatedSize(withMetadata))
+                .isGreaterThan(OffloadIndexCache.estimatedSize(small) + 64 * 1024);
     }
 
     @Test

@@ -143,6 +143,31 @@ public class BlobStoreBackedReadHandleChunkCacheTest extends BlobStoreManagedLed
     }
 
     @Test
+    public void readHandlesKeepReadingWithAnIndexThatTheCacheDropped() throws Exception {
+        @Cleanup
+        OffloadedDataChunkCache cache = new OffloadedDataChunkCache(1 << 20, 60, 0, 1);
+        // without a budget, an index is dropped once read
+        OffloadIndexCache indexCache = new OffloadIndexCache(0, 60);
+        @Cleanup
+        ReadHandle toWrite = buildReadHandle(BLOCK_SIZE, 3);
+        @Cleanup
+        BlobStoreManagedLedgerOffloader offloader = offloader(cache, indexCache);
+        UUID uuid = UUID.randomUUID();
+        offloader.offload(toWrite, uuid, new HashMap<>()).get();
+        long lastEntry = toWrite.getLastAddConfirmed();
+
+        @Cleanup
+        ReadHandle first = offloader.readOffloaded(toWrite.getId(), uuid, Collections.emptyMap()).get();
+        @Cleanup
+        ReadHandle second = offloader.readOffloaded(toWrite.getId(), uuid, Collections.emptyMap()).get();
+        assertThat(indexCache.loads()).isEqualTo(2);
+        assertThat(indexCache.size()).isZero();
+        assertSameEntries(toWrite, first, 0, lastEntry);
+        second.closeAsync().get();
+        assertSameEntries(toWrite, first, lastEntry / 2, lastEntry);
+    }
+
+    @Test
     public void readHandlesShareTheChunksAndReleaseThemWhenClosed() throws Exception {
         @Cleanup
         OffloadedDataChunkCache cache = new OffloadedDataChunkCache(1 << 20, 60, 0, 1);
