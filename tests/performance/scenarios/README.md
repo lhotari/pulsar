@@ -35,8 +35,8 @@ guide](../README.md) walks through running a scenario and reading its report.
 
 ## Scenarios for the standalone launcher
 
-These scenarios run the IoT telemetry workload: keyed telemetry messages from gateways to Key_Shared applications,
-with delivery and ordering checks. [The IoT telemetry scenario](docs/iot-telemetry.md) describes the workload in
+These scenarios run the IoT telemetry workload: keyed telemetry messages from gateways to applications, with delivery
+and ordering checks; the applications use Key_Shared subscriptions, and the alert scenarios Shared ones. [The IoT telemetry scenario](docs/iot-telemetry.md) describes the workload in
 detail.
 
 | Scenario | What it runs | Memory configuration |
@@ -49,6 +49,9 @@ detail.
 | [`iot-telemetry-high-rate.yaml`](iot-telemetry-high-rate.yaml) | A high rate: five million messages at 30,000 messages per second, from 500 preconnected producers to one topic, consumed by 5 applications with 10 pods each | high, about 14 GB |
 | [`iot-telemetry-catch-up.yaml`](iot-telemetry-catch-up.yaml) | Consumers joining a live stream: the high-rate scenario's 30,000 messages per second for 180 s, with 4 of its 5 applications joining 20, 22, 24 and 60 s after the measurement starts and reading their backlogs | high, about 14 GB |
 | [`iot-telemetry-max-rate.yaml`](iot-telemetry-max-rate.yaml) | The maximum rate: the 500 gateways of the high-rate scenario publish four million unbatched messages to one topic without a rate limit, consumed by one application with 20 pods, on single-copy ledgers | high, about 14 GB |
+| [`iot-alerts-fanout.yaml`](iot-alerts-fanout.yaml) | Alert fan-out with Shared subscriptions and broker deduplication: 20 gateways publish 5,000 alerts per second to one topic, consumed by 50 applications, each a Shared subscription with 4 worker pods: 250,000 messages per second of dispatch | high, about 14 GB |
+| [`iot-alerts-fanout-max-rate.yaml`](iot-alerts-fanout-max-rate.yaml) | The alert fan-out at the maximum rate: two million unbatched alerts as fast as the cluster takes them | high, about 14 GB |
+| [`iot-alerts-sites.yaml`](iot-alerts-sites.yaml) | The alert fan-out across 1,000 per-site topics: 5 gateways, 10 applications with 4 pods each, 5,000 producers, 10,000 Shared subscriptions and 40,000 consumers at 5,000 alerts per second in all | high, with a 4 GB application heap, about 17 GB |
 
 ## Configurations
 

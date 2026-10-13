@@ -47,17 +47,18 @@ import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientSharedResources;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionInitialPosition;
-import org.apache.pulsar.client.api.SubscriptionType;
 import picocli.CommandLine.Command;
 
 /**
- * Runs every application of the scenario in this JVM, as the gateways run in one. An application is a Key_Shared
- * subscription of its own on every topic, consumed through its pods, each a Pulsar client with a consumer of the
- * subscription; the applications differ only in their subscription. Every pod's client shares one set of client
- * resources, the event loop and the thread pools, sized by {@code applications.client}.
+ * Runs every application of the scenario in this JVM, as the gateways run in one. An application is a subscription
+ * of its own on every topic, of the type {@code applications.subscriptionType}, consumed through its pods, each a
+ * Pulsar client with a consumer of the subscription; the applications differ only in their subscription. Every pod's
+ * client shares one set of client resources, the event loop and the thread pools, sized by
+ * {@code applications.client}.
  *
- * <p>Each application checks its own delivery and ordering, and writes its outputs into a directory named after its
- * subscription in {@code --output}, as the run report names it. The progress stream sums the applications' counts.
+ * <p>Each application checks its own delivery and, unless its subscription is Shared, ordering, and writes its outputs
+ * into a directory named after its subscription in {@code --output}, as the run report names it. The progress stream
+ * sums the applications' counts.
  *
  * <p>An application with {@code applications.joinSeconds} after the measurement's start creates its subscription at
  * startup, so that the backlog builds up from the start, and opens its pods when it joins. It records when it joined
@@ -276,7 +277,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             this.scenario = scenario;
             this.index = index;
             this.output = output;
-            tracker = new DeviceSequenceTracker(scenario.deviceCount());
+            tracker = new DeviceSequenceTracker(scenario.deviceCount(), scenario.keepsDeviceOrder());
             catchUp = new CatchUpTracker(scenario.topicCount(), scenario.applications().caughtUpLatencyMillis());
             pods = new ArrayList<>(scenario.podsPerApplication());
             receiveLatency = new HdrLatencyRecorder(output.resolve("application-latency.hdr"),
@@ -303,7 +304,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                 client.newConsumer(Schema.BYTES)
                         .topics(scenario.topicNames())
                         .subscriptionName(scenario.subscriptionName(index))
-                        .subscriptionType(SubscriptionType.Key_Shared)
+                        .subscriptionType(scenario.subscriptionType())
                         .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
                         .subscribe()
                         .close();
@@ -494,7 +495,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                         .topics(scenario.topicNames())
                         .subscriptionName(scenario.subscriptionName(index))
                         .consumerName("iot-application-" + index + "-pod-" + podIndex)
-                        .subscriptionType(SubscriptionType.Key_Shared)
+                        .subscriptionType(scenario.subscriptionType())
                         .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
                         .messageListener((currentConsumer, message) -> {
                             long receivedEpochMs = System.currentTimeMillis();

@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.tests.performance.common.YamlScenarioLoader;
 import org.testng.annotations.Test;
 import picocli.CommandLine;
@@ -134,6 +135,28 @@ public class IotScenarioTest {
         IotScenario atStart = scenario(new IotScenario.Applications(3, 2, "app-", new IotScenario.Client(2, 2), null));
         assertThat(atStart.joinSeconds(2)).isZero();
         assertThat(atStart.hasLateApplications()).isFalse();
+    }
+
+    @Test
+    public void choosesTheSubscriptionType() {
+        IotScenario keyShared = scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
+                null));
+        assertThat(keyShared.subscriptionType()).isEqualTo(SubscriptionType.Key_Shared);
+        assertThat(keyShared.keepsDeviceOrder()).isTrue();
+        IotScenario shared = scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null,
+                null, null, "Shared"));
+        assertThat(shared.subscriptionType()).isEqualTo(SubscriptionType.Shared);
+        assertThat(shared.keepsDeviceOrder()).isFalse();
+        assertThat(scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null, null,
+                null, "Failover")).keepsDeviceOrder()).isTrue();
+        assertThatThrownBy(() -> scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
+                null, null, null, "Exclusive")))
+                .hasMessageContaining("applications.subscriptionType must be one of [Key_Shared, Shared, Failover]");
+        // a scenario file without the setting keeps Key_Shared
+        IotScenario.Applications fromYaml = new YamlScenarioLoader().mapper().convertValue(Map.of("count", 2,
+                "podsPerApplication", 2, "subscriptionPrefix", "app-", "client",
+                Map.of("ioThreads", 2, "listenerThreads", 2)), IotScenario.Applications.class);
+        assertThat(scenario(fromYaml).subscriptionType()).isEqualTo(SubscriptionType.Key_Shared);
     }
 
     @Test
