@@ -18,31 +18,104 @@
  */
 package org.apache.pulsar.broker.service;
 
+import com.google.common.annotations.VisibleForTesting;
+import java.util.ArrayList;
 import java.util.Arrays;
 
 /**
  * The pending acks of one ledger: a map from entry ID to a packed {@link PendingAckValues} value, in the order of the
  * entry IDs. Not thread-safe; {@link PendingAcksMap} guards it with its lock.
  *
- * <p>The entry IDs are kept in sorted arrays: a consumer is sent a ledger's entries mostly in increasing order, so that
- * adding one appends it, and the acks remove them mostly in the same order, from the start. A removed entry leaves a
- * tombstone, a value of {@link PendingAckValues#PACKED_NOT_FOUND}, so that the arrays stay sorted; the live entries are
- * between {@code head} and {@code tail}, and the tombstones are compacted away when they outnumber the live entries.
- * Lookups are binary searches over consecutive memory, without the pointer chasing of a tree.
+ * <p>The entries are kept in a list of blocks, each a sorted array of up to {@value #BLOCK_CAPACITY} entries, in the
+ * order of their entry IDs, with each block's entries in a window of its arrays. A consumer is sent a ledger's entries
+ * mostly in increasing order and acks them mostly in the same order, so that adding an entry appends it to the last
+ * block and removing one advances the first block's window; a lookup is a binary search over the blocks and over one
+ * block's consecutive memory, without the pointer chasing of a tree. An entry added out of order, as a redelivery adds
+ * it, shifts the entries of one block at most, which splits when it is full. Empty blocks are dropped and a block that
+ * becomes sparse merges with its neighbor, so that the memory follows the number of entries.
  */
 final class PendingAcksLedgerMap {
-    private static final int INITIAL_CAPACITY = 16;
-    private long[] entryIds = new long[INITIAL_CAPACITY];
-    private long[] values = new long[INITIAL_CAPACITY];
-    // the slots in use are [head, tail); head is a live entry unless the map is empty
-    private int head;
-    private int tail;
-    private int size;
+    static final int BLOCK_CAPACITY = 128;
+    // A block with fewer entries than this merges with a neighbor when they fit in one block together
+    private static final int MERGE_THRESHOLD = BLOCK_CAPACITY / 4;
+
+    private static final class Block {
+        final long[] entryIds = new long[BLOCK_CAPACITY];
+        final long[] values = new long[BLOCK_CAPACITY];
+        // the entries are in [start, end)
+        int start;
+        int end;
+
+        int size() {
+            return end - start;
+        }
+
+        long firstEntryId() {
+            return entryIds[start];
+        }
+
+        long lastEntryId() {
+            return entryIds[end - 1];
+        }
+
+        int indexOf(long entryId) {
+            return Arrays.binarySearch(entryIds, start, end, entryId);
+        }
+
+        /** Inserts at the insertion point, which keeps the order; the block mustn't be full. */
+        void insertAt(int insertionPoint, long entryId, long value) {
+            boolean roomBefore = start > 0;
+            boolean roomAfter = end < BLOCK_CAPACITY;
+            if (roomBefore && (!roomAfter || insertionPoint - start < end - insertionPoint)) {
+                // shift the entries before the insertion point to the left
+                System.arraycopy(entryIds, start, entryIds, start - 1, insertionPoint - start);
+                System.arraycopy(values, start, values, start - 1, insertionPoint - start);
+                start--;
+                entryIds[insertionPoint - 1] = entryId;
+                values[insertionPoint - 1] = value;
+            } else {
+                System.arraycopy(entryIds, insertionPoint, entryIds, insertionPoint + 1, end - insertionPoint);
+                System.arraycopy(values, insertionPoint, values, insertionPoint + 1, end - insertionPoint);
+                end++;
+                entryIds[insertionPoint] = entryId;
+                values[insertionPoint] = value;
+            }
+        }
+
+        void removeAt(int index) {
+            if (index - start < end - 1 - index) {
+                System.arraycopy(entryIds, start, entryIds, start + 1, index - start);
+                System.arraycopy(values, start, values, start + 1, index - start);
+                start++;
+            } else {
+                System.arraycopy(entryIds, index + 1, entryIds, index, end - 1 - index);
+                System.arraycopy(values, index + 1, values, index, end - 1 - index);
+                end--;
+            }
+            if (start == end) {
+                start = 0;
+                end = 0;
+            }
+        }
+
+        /** Moves the entries to the start of the arrays. */
+        void compact() {
+            if (start > 0) {
+                System.arraycopy(entryIds, start, entryIds, 0, size());
+                System.arraycopy(values, start, values, 0, size());
+                end -= start;
+                start = 0;
+            }
+        }
+    }
 
     /** A callback for each entry, in the order of the entry IDs. */
     interface EntryConsumer {
         void accept(long entryId, long value);
     }
+
+    private final ArrayList<Block> blocks = new ArrayList<>(1);
+    private int size;
 
     int size() {
         return size;
@@ -52,14 +125,24 @@ final class PendingAcksLedgerMap {
         return size == 0;
     }
 
+    @VisibleForTesting
+    int blockCount() {
+        return blocks.size();
+    }
+
     /** The entry's value, or {@link PendingAckValues#PACKED_NOT_FOUND}. */
     long get(long entryId) {
-        int index = indexOf(entryId);
-        return index >= 0 ? values[index] : PendingAckValues.PACKED_NOT_FOUND;
+        int blockIndex = blockIndexFor(entryId);
+        if (blockIndex < 0) {
+            return PendingAckValues.PACKED_NOT_FOUND;
+        }
+        Block block = blocks.get(blockIndex);
+        int index = block.indexOf(entryId);
+        return index >= 0 ? block.values[index] : PendingAckValues.PACKED_NOT_FOUND;
     }
 
     boolean containsKey(long entryId) {
-        return indexOf(entryId) >= 0;
+        return !PendingAckValues.isNotFound(get(entryId));
     }
 
     /**
@@ -68,45 +151,40 @@ final class PendingAcksLedgerMap {
      * @return the previous value, or {@link PendingAckValues#PACKED_NOT_FOUND}
      */
     long put(long entryId, long value) {
-        if (tail == head || entryId > entryIds[tail - 1]) {
-            if (tail == head) {
-                // the map is empty: reuse the arrays from the start
-                head = 0;
-                tail = 0;
+        Block last = blocks.isEmpty() ? null : blocks.get(blocks.size() - 1);
+        if (last == null || entryId > last.lastEntryId()) {
+            // the common case: an entry after the others
+            if (last == null || last.end == BLOCK_CAPACITY) {
+                if (last != null && last.size() < BLOCK_CAPACITY) {
+                    last.compact();
+                } else {
+                    last = new Block();
+                    blocks.add(last);
+                }
             }
-            ensureCapacityAtTail();
-            entryIds[tail] = entryId;
-            values[tail] = value;
-            tail++;
+            last.entryIds[last.end] = entryId;
+            last.values[last.end] = value;
+            last.end++;
             size++;
             return PendingAckValues.PACKED_NOT_FOUND;
         }
-        int index = Arrays.binarySearch(entryIds, head, tail, entryId);
+        // the first block whose entries reach the entry ID
+        int blockIndex = Math.max(blockIndexFor(entryId), 0);
+        Block block = blocks.get(blockIndex);
+        int index = block.indexOf(entryId);
         if (index >= 0) {
-            // the entry, or a tombstone that it left
-            long previous = values[index];
-            values[index] = value;
-            if (PendingAckValues.isNotFound(previous)) {
-                size++;
-            }
+            long previous = block.values[index];
+            block.values[index] = value;
             return previous;
         }
-        int insertionPoint = -index - 1;
-        if (insertionPoint == head && head > 0) {
-            // before the first entry, where removed entries left room
-            head--;
-            entryIds[head] = entryId;
-            values[head] = value;
-        } else {
-            ensureCapacityAtTail();
-            // making room may have moved the entries
-            insertionPoint = -Arrays.binarySearch(entryIds, head, tail, entryId) - 1;
-            System.arraycopy(entryIds, insertionPoint, entryIds, insertionPoint + 1, tail - insertionPoint);
-            System.arraycopy(values, insertionPoint, values, insertionPoint + 1, tail - insertionPoint);
-            entryIds[insertionPoint] = entryId;
-            values[insertionPoint] = value;
-            tail++;
+        if (block.size() == BLOCK_CAPACITY) {
+            Block upper = split(blockIndex);
+            if (entryId > block.lastEntryId()) {
+                block = upper;
+            }
+            index = block.indexOf(entryId);
         }
+        block.insertAt(-index - 1, entryId, value);
         size++;
         return PendingAckValues.PACKED_NOT_FOUND;
     }
@@ -117,106 +195,110 @@ final class PendingAcksLedgerMap {
      * @return its value, or {@link PendingAckValues#PACKED_NOT_FOUND} if it wasn't in the map
      */
     long remove(long entryId) {
-        int index = indexOf(entryId);
+        int blockIndex = blockIndexFor(entryId);
+        if (blockIndex < 0) {
+            return PendingAckValues.PACKED_NOT_FOUND;
+        }
+        Block block = blocks.get(blockIndex);
+        int index = block.indexOf(entryId);
         if (index < 0) {
             return PendingAckValues.PACKED_NOT_FOUND;
         }
-        long previous = values[index];
-        removeAt(index);
+        long previous = block.values[index];
+        removeAt(blockIndex, block, index);
         return previous;
     }
 
-    /** Calls the consumer for each entry, in the order of the entry IDs. */
-    void forEach(EntryConsumer consumer) {
-        for (int i = head; i < tail; i++) {
-            long value = values[i];
-            if (!PendingAckValues.isNotFound(value)) {
-                consumer.accept(entryIds[i], value);
-            }
-        }
+    /** The first entry's ID; the map mustn't be empty. */
+    long firstEntryId() {
+        return blocks.get(0).firstEntryId();
+    }
+
+    /** The first entry's value; the map mustn't be empty. */
+    long firstValue() {
+        Block first = blocks.get(0);
+        return first.values[first.start];
+    }
+
+    /** Removes the first entry; the map mustn't be empty. */
+    void removeFirst() {
+        Block first = blocks.get(0);
+        removeAt(0, first, first.start);
     }
 
     /** Whether the map has an entry with an ID up to {@code maxEntryId}, inclusive. */
     boolean hasEntriesUpTo(long maxEntryId) {
-        return size > 0 && entryIds[head] <= maxEntryId;
+        return size > 0 && firstEntryId() <= maxEntryId;
     }
 
-    /**
-     * Removes the entries with IDs up to {@code maxEntryId}, inclusive, and calls the consumer for each of them before
-     * it is removed, in the order of the entry IDs.
-     *
-     * @return the number of entries removed
-     */
-    int removeUpTo(long maxEntryId, EntryConsumer removedEntryConsumer) {
-        int removed = 0;
-        while (size > 0 && entryIds[head] <= maxEntryId) {
-            if (removedEntryConsumer != null) {
-                removedEntryConsumer.accept(entryIds[head], values[head]);
+    /** Calls the consumer for each entry, in the order of the entry IDs. */
+    void forEach(EntryConsumer consumer) {
+        for (int b = 0; b < blocks.size(); b++) {
+            Block block = blocks.get(b);
+            for (int i = block.start; i < block.end; i++) {
+                consumer.accept(block.entryIds[i], block.values[i]);
             }
-            removeAt(head);
-            removed++;
         }
-        return removed;
     }
 
-    private int indexOf(long entryId) {
-        if (size == 0 || entryId < entryIds[head] || entryId > entryIds[tail - 1]) {
-            return -1;
+    /** The index of the last block whose first entry ID is at most the entry ID, or -1. */
+    private int blockIndexFor(long entryId) {
+        int low = 0;
+        int high = blocks.size() - 1;
+        int found = -1;
+        while (low <= high) {
+            int mid = (low + high) >>> 1;
+            if (blocks.get(mid).firstEntryId() <= entryId) {
+                found = mid;
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
         }
-        int index = Arrays.binarySearch(entryIds, head, tail, entryId);
-        return index >= 0 && !PendingAckValues.isNotFound(values[index]) ? index : -1;
+        return found;
     }
 
-    private void removeAt(int index) {
-        values[index] = PendingAckValues.PACKED_NOT_FOUND;
+    /** Splits a full block in two halves; returns the new upper half, which follows it in the list. */
+    private Block split(int blockIndex) {
+        Block block = blocks.get(blockIndex);
+        Block upper = new Block();
+        int half = block.size() / 2;
+        int from = block.start + half;
+        int count = block.end - from;
+        System.arraycopy(block.entryIds, from, upper.entryIds, 0, count);
+        System.arraycopy(block.values, from, upper.values, 0, count);
+        upper.end = count;
+        block.end = from;
+        blocks.add(blockIndex + 1, upper);
+        return upper;
+    }
+
+    private void removeAt(int blockIndex, Block block, int index) {
+        block.removeAt(index);
         size--;
-        if (size == 0) {
-            head = 0;
-            tail = 0;
-            return;
-        }
-        // keep head and tail on live entries
-        while (PendingAckValues.isNotFound(values[head])) {
-            head++;
-        }
-        while (PendingAckValues.isNotFound(values[tail - 1])) {
-            tail--;
-        }
-        if (tail - head > 2 * size + INITIAL_CAPACITY) {
-            compact();
+        if (block.size() == 0) {
+            blocks.remove(blockIndex);
+        } else if (block.size() < MERGE_THRESHOLD) {
+            mergeWithNeighbor(blockIndex, block);
         }
     }
 
-    private void ensureCapacityAtTail() {
-        if (tail < entryIds.length) {
-            return;
-        }
-        if (tail - head > 2 * size) {
-            // tombstones take room: compacting frees it
-            compact();
-        }
-        if (head > 0 && tail - head < entryIds.length / 2) {
-            // slide the live window to the start of the arrays
-            compact();
-        }
-        if (tail == entryIds.length) {
-            int newCapacity = entryIds.length * 2;
-            entryIds = Arrays.copyOf(entryIds, newCapacity);
-            values = Arrays.copyOf(values, newCapacity);
+    /** Merges a sparse block with the next or the previous one, when they fit in one block together. */
+    private void mergeWithNeighbor(int blockIndex, Block block) {
+        if (blockIndex + 1 < blocks.size() && block.size() + blocks.get(blockIndex + 1).size() <= BLOCK_CAPACITY / 2) {
+            moveInto(block, blocks.get(blockIndex + 1));
+            blocks.remove(blockIndex + 1);
+        } else if (blockIndex > 0 && block.size() + blocks.get(blockIndex - 1).size() <= BLOCK_CAPACITY / 2) {
+            moveInto(blocks.get(blockIndex - 1), block);
+            blocks.remove(blockIndex);
         }
     }
 
-    /** Moves the live entries to the start of the arrays, without tombstones. */
-    private void compact() {
-        int target = 0;
-        for (int i = head; i < tail; i++) {
-            if (!PendingAckValues.isNotFound(values[i])) {
-                entryIds[target] = entryIds[i];
-                values[target] = values[i];
-                target++;
-            }
-        }
-        head = 0;
-        tail = target;
+    /** Appends the entries of the following block to the target block. */
+    private static void moveInto(Block target, Block following) {
+        target.compact();
+        System.arraycopy(following.entryIds, following.start, target.entryIds, target.end, following.size());
+        System.arraycopy(following.values, following.start, target.values, target.end, following.size());
+        target.end += following.size();
     }
 }

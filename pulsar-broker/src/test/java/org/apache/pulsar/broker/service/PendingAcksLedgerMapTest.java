@@ -51,7 +51,10 @@ public class PendingAcksLedgerMapTest {
         List<Long> removed = new ArrayList<>();
         assertThat(map.hasEntriesUpTo(0)).isFalse();
         assertThat(map.hasEntriesUpTo(6)).isTrue();
-        assertThat(map.removeUpTo(6, (entryId, v) -> removed.add(entryId))).isEqualTo(3);
+        while (map.hasEntriesUpTo(6)) {
+            removed.add(map.firstEntryId());
+            map.removeFirst();
+        }
         assertThat(removed).containsExactly(1L, 5L, 6L);
         assertThat(entries(map)).containsExactly(7L);
         assertThat(map.size()).isEqualTo(1);
@@ -91,10 +94,11 @@ public class PendingAcksLedgerMapTest {
                     List<Long> removedIds = new ArrayList<>();
                     List<Long> removedValues = new ArrayList<>();
                     assertThat(map.hasEntriesUpTo(upTo)).isEqualTo(!head.isEmpty());
-                    assertThat(map.removeUpTo(upTo, (entryId, v) -> {
-                        removedIds.add(entryId);
-                        removedValues.add(v);
-                    })).isEqualTo(head.size());
+                    while (map.hasEntriesUpTo(upTo)) {
+                        removedIds.add(map.firstEntryId());
+                        removedValues.add(map.firstValue());
+                        map.removeFirst();
+                    }
                     assertThat(removedIds).containsExactlyElementsOf(head.keySet());
                     assertThat(removedValues).containsExactlyElementsOf(head.values());
                     reference.headMap(upTo, true).clear();
@@ -106,6 +110,9 @@ public class PendingAcksLedgerMapTest {
                     assertThat(map.containsKey(entryId)).isEqualTo(expected != null);
                 }
                 assertThat(map.size()).isEqualTo(reference.size());
+                if (step % 97 == 0) {
+                    assertThat(contents(map)).isEqualTo(reference);
+                }
             }
             List<Long> ids = new ArrayList<>();
             List<Long> values = new ArrayList<>();
@@ -116,6 +123,78 @@ public class PendingAcksLedgerMapTest {
             assertThat(ids).containsExactlyElementsOf(reference.keySet());
             assertThat(values).containsExactlyElementsOf(reference.values());
         }
+    }
+
+    @Test(timeOut = 30_000)
+    public void reinsertsARemovedPrefixInAscendingOrderWithoutCopyingTheRest() {
+        // explicit redelivery removes a consumer's pending acks and dispatches them again, in the order of their
+        // positions: re-adding them mustn't shift every following entry each time
+        PendingAcksLedgerMap map = new PendingAcksLedgerMap();
+        int count = 200_000;
+        for (int entryId = 0; entryId < count; entryId++) {
+            map.put(entryId, value(1));
+        }
+        for (int entryId = 0; entryId < count / 2; entryId++) {
+            assertThat(map.remove(entryId)).isEqualTo(value(1));
+        }
+        for (int entryId = 0; entryId < count / 2; entryId++) {
+            assertThat(map.put(entryId, value(2))).isEqualTo(PendingAckValues.PACKED_NOT_FOUND);
+        }
+        assertThat(map.size()).isEqualTo(count);
+        long[] expected = {0};
+        map.forEach((entryId, v) -> {
+            assertThat(entryId).isEqualTo(expected[0]++);
+            assertThat(v).isEqualTo(entryId < count / 2 ? value(2) : value(1));
+        });
+    }
+
+    @Test
+    public void releasesTheMemoryOfRemovedEntries() {
+        PendingAcksLedgerMap map = new PendingAcksLedgerMap();
+        int count = 64 * PendingAcksLedgerMap.BLOCK_CAPACITY;
+        for (int entryId = 0; entryId < count; entryId++) {
+            map.put(entryId, value(1));
+        }
+        assertThat(map.blockCount()).isEqualTo(64);
+        // keep every 64th entry: the sparse blocks merge with their neighbors
+        for (int entryId = 0; entryId < count; entryId++) {
+            if (entryId % 64 != 0) {
+                map.remove(entryId);
+            }
+        }
+        // 128 entries, in blocks of at most half a block after the merges
+        assertThat(map.size()).isEqualTo(128);
+        assertThat(map.blockCount()).isLessThanOrEqualTo(4);
+        for (int entryId = 0; entryId < count; entryId += 64) {
+            assertThat(map.get(entryId)).isEqualTo(value(1));
+        }
+        while (!map.isEmpty()) {
+            map.removeFirst();
+        }
+        assertThat(map.blockCount()).isZero();
+    }
+
+    @Test
+    public void splitsAFullBlockForAnEntryInsertedInIt() {
+        PendingAcksLedgerMap map = new PendingAcksLedgerMap();
+        for (int entryId = 0; entryId < PendingAcksLedgerMap.BLOCK_CAPACITY; entryId++) {
+            map.put(entryId * 2L, value(1));
+        }
+        assertThat(map.blockCount()).isEqualTo(1);
+        map.put(1, value(2));
+        map.put(2L * PendingAcksLedgerMap.BLOCK_CAPACITY - 3, value(3));
+        assertThat(map.blockCount()).isEqualTo(2);
+        assertThat(map.get(1)).isEqualTo(value(2));
+        assertThat(map.get(2L * PendingAcksLedgerMap.BLOCK_CAPACITY - 3)).isEqualTo(value(3));
+        assertThat(map.size()).isEqualTo(PendingAcksLedgerMap.BLOCK_CAPACITY + 2);
+        List<Long> ids = entries(map);
+        assertThat(ids).isSorted().doesNotHaveDuplicates();
+    }
+
+    private static TreeMap<Long, Long> contents(PendingAcksLedgerMap map) {
+        TreeMap<Long, Long> contents = new TreeMap<>();
+        map.forEach(contents::put);
+        return contents;
     }
 
     private static long value(int remainingUnacked) {

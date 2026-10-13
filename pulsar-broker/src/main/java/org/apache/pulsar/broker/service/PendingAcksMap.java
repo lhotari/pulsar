@@ -458,20 +458,26 @@ public class PendingAcksMap {
                     }
                     continue;
                 }
-                if (pendingAcksRemoveHandler != null && !batchStarted && ledgerMap.hasEntriesUpTo(maxEntryId)) {
-                    pendingAcksRemoveHandler.startBatch();
-                    batchStarted = true;
-                }
-                size -= ledgerMap.removeUpTo(maxEntryId, (entryId, packedValue) -> {
+                // one entry at a time, the callbacks before its removal, as an iterator would
+                while (ledgerMap.hasEntriesUpTo(maxEntryId)) {
+                    long entryId = ledgerMap.firstEntryId();
+                    long packedValue = ledgerMap.firstValue();
                     int batchSize = PendingAckValues.remainingUnacked(packedValue);
                     int stickyKeyHash = PendingAckValues.stickyKeyHash(packedValue);
                     if (pendingAcksRemoveHandler != null) {
+                        if (!batchStarted) {
+                            pendingAcksRemoveHandler.startBatch();
+                            batchStarted = true;
+                        }
                         pendingAcksRemoveHandler.handleRemoving(consumer, ledgerId, entryId, stickyKeyHash, closed);
                     }
                     if (removedEntryCallback != null) {
                         removedEntryCallback.accept(ledgerId, entryId, batchSize, stickyKeyHash);
                     }
-                });
+                    if (ledgerMap.remove(entryId) != PendingAckValues.PACKED_NOT_FOUND) {
+                        size--;
+                    }
+                }
                 if (ledgerMap.isEmpty()) {
                     ledgerMapIterator.remove();
                 }
