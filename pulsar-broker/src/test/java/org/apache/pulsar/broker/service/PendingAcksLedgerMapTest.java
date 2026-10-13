@@ -191,6 +191,20 @@ public class PendingAcksLedgerMapTest {
         assertThat(ids).isSorted().doesNotHaveDuplicates();
     }
 
+    @Test
+    public void insertsIntoTheUpperHalfOfAFullBlock() {
+        PendingAcksLedgerMap map = new PendingAcksLedgerMap();
+        for (int entryId = 0; entryId < PendingAcksLedgerMap.BLOCK_CAPACITY; entryId++) {
+            map.put(entryId * 2L, value(1));
+        }
+        // after the first block's middle, so that it goes into the new upper block of the split
+        long entryId = 2L * PendingAcksLedgerMap.BLOCK_CAPACITY - 5;
+        map.put(entryId, value(2));
+        assertThat(map.blockCount()).isEqualTo(2);
+        assertThat(map.get(entryId)).isEqualTo(value(2));
+        assertThat(entries(map)).isSorted().doesNotHaveDuplicates().hasSize(PendingAcksLedgerMap.BLOCK_CAPACITY + 1);
+    }
+
     private static TreeMap<Long, Long> contents(PendingAcksLedgerMap map) {
         TreeMap<Long, Long> contents = new TreeMap<>();
         map.forEach(contents::put);

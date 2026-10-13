@@ -115,6 +115,8 @@ final class PendingAcksLedgerMap {
     }
 
     private final ArrayList<Block> blocks = new ArrayList<>(1);
+    // the most blocks since the list's capacity was last trimmed, to release the capacity after the map shrinks
+    private int peakBlocks;
     private int size;
 
     int size() {
@@ -160,6 +162,7 @@ final class PendingAcksLedgerMap {
                 } else {
                     last = new Block();
                     blocks.add(last);
+                    peakBlocks = Math.max(peakBlocks, blocks.size());
                 }
             }
             last.entryIds[last.end] = entryId;
@@ -270,6 +273,7 @@ final class PendingAcksLedgerMap {
         upper.end = count;
         block.end = from;
         blocks.add(blockIndex + 1, upper);
+        peakBlocks = Math.max(peakBlocks, blocks.size());
         return upper;
     }
 
@@ -277,9 +281,16 @@ final class PendingAcksLedgerMap {
         block.removeAt(index);
         size--;
         if (block.size() == 0) {
+            // Removing the first block shifts the references to the others: draining N entries in order moves about
+            // (N / BLOCK_CAPACITY)^2 / 2 references in all, a small fraction of the entries' own handling
             blocks.remove(blockIndex);
         } else if (block.size() < MERGE_THRESHOLD) {
             mergeWithNeighbor(blockIndex, block);
+        }
+        if (blocks.size() * 4 < peakBlocks) {
+            // the list keeps the capacity of its largest size: release it once a quarter of it is in use
+            blocks.trimToSize();
+            peakBlocks = blocks.size();
         }
     }
 
