@@ -2457,6 +2457,21 @@ public class Commands {
         }
     }
 
+    /**
+     * Writes a message command and a copy of its metadata and payload into {@code out}, in the wire format of
+     * {@link #serializeCommandMessageWithSize(BaseCommand, ByteBuf)}. The reader index of {@code metadataAndPayload}
+     * is left unchanged, and its reference count too, since its bytes are copied.
+     */
+    public static void serializeCommandMessageWithSize(BaseCommand cmd, ByteBuf metadataAndPayload, ByteBuf out) {
+        int cmdSize = cmd.getSerializedSize();
+        int payloadSize = metadataAndPayload.readableBytes();
+        out.ensureWritable(4 + 4 + cmdSize + payloadSize);
+        out.writeInt(4 + cmdSize + payloadSize); // External frame
+        out.writeInt(cmdSize);
+        cmd.writeTo(out);
+        out.writeBytes(metadataAndPayload, metadataAndPayload.readerIndex(), payloadSize);
+    }
+
     public static MessageMetadata peekMessageMetadata(ByteBuf metadataAndPayload, String subscription,
             long consumerId) {
         // save the reader index and restore after parsing
