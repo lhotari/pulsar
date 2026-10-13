@@ -28,4 +28,11 @@ public abstract class BackedInputStream extends InputStream {
     public abstract void seek(long position);
     public abstract void seekForward(long position) throws IOException;
     public abstract long getCurrentPosition();
+
+    /**
+     * Whether reading on from the position is sequential, so that the data after it is worth fetching ahead; a stream
+     * that doesn't fetch ahead ignores it.
+     */
+    public void setPrefetch(boolean prefetch) {
+    }
 }

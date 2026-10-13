@@ -60,6 +60,8 @@ public class BlobStoreBackedInputStreamImpl extends BackedInputStream {
     private long chunkStart = -1;
     private int chunkLength;
     private boolean closed;
+    // Whether moving on to the next chunk fetches the ones after it, see setPrefetch
+    private boolean prefetch = true;
 
     public BlobStoreBackedInputStreamImpl(BlobStore blobStore, String bucket, String key,
                                           VersionCheck versionCheck,
@@ -120,7 +122,7 @@ public class BlobStoreBackedInputStreamImpl extends BackedInputStream {
         OffloadedDataChunkCache.Key chunkKey = new OffloadedDataChunkCache.Key(bucket, key, start, length);
         if (chunkCache != null) {
             chunk = chunkCache.acquire(chunkKey, this::fetch);
-            if (sequential) {
+            if (sequential && prefetch) {
                 prefetchAfter(start + length);
             }
         } else {
@@ -264,6 +266,11 @@ public class BlobStoreBackedInputStreamImpl extends BackedInputStream {
 
     public long getCurrentPosition() {
         return position;
+    }
+
+    @Override
+    public void setPrefetch(boolean prefetch) {
+        this.prefetch = prefetch;
     }
 
     @Override

@@ -27,8 +27,8 @@ import org.apache.bookkeeper.mledger.LedgerOffloaderStats;
 import org.apache.bookkeeper.mledger.LedgerOffloaderStatsDisable;
 import org.apache.bookkeeper.mledger.OffloadedReadCacheConfig;
 import org.apache.bookkeeper.mledger.offload.jcloud.impl.BlobStoreManagedLedgerOffloader;
+import org.apache.bookkeeper.mledger.offload.jcloud.impl.EntryOffsetIndex;
 import org.apache.bookkeeper.mledger.offload.jcloud.impl.OffloadedDataChunkCache;
-import org.apache.bookkeeper.mledger.offload.jcloud.impl.OffsetsCache;
 import org.apache.bookkeeper.mledger.offload.jcloud.provider.JCloudBlobStoreProvider;
 import org.apache.bookkeeper.mledger.offload.jcloud.provider.TieredStorageConfiguration;
 import org.apache.pulsar.common.policies.data.OffloadPoliciesImpl;
@@ -39,10 +39,10 @@ import org.apache.pulsar.common.protocol.schema.SchemaStorage;
  */
 @CustomLog
 public class JCloudLedgerOffloaderFactory implements LedgerOffloaderFactory<BlobStoreManagedLedgerOffloader> {
-    private final OffsetsCache entryOffsetsCache = new OffsetsCache();
     // Shared by the offloaders, created with the broker's settings of the first offloader; guarded by this
     private OffloadedDataChunkCache dataChunkCache;
-    private OffloadedReadCacheConfig dataChunkCacheConfig;
+    private EntryOffsetIndex entryOffsetIndex;
+    private OffloadedReadCacheConfig readCacheConfig;
     private boolean closed;
 
     @Override
@@ -93,30 +93,34 @@ public class JCloudLedgerOffloaderFactory implements LedgerOffloaderFactory<Blob
                                                   OffloadedReadCacheConfig readCacheConfig) throws IOException {
         TieredStorageConfiguration config =
                 TieredStorageConfiguration.create(offloadPolicies.toProperties());
-        return BlobStoreManagedLedgerOffloader.create(config, userMetadata, scheduler, readExecutor, offloaderStats,
-                entryOffsetsCache, dataChunkCache(readCacheConfig));
+        synchronized (this) {
+            createReadCaches(readCacheConfig);
+            return BlobStoreManagedLedgerOffloader.create(config, userMetadata, scheduler, readExecutor,
+                    offloaderStats, entryOffsetIndex, dataChunkCache);
+        }
     }
 
-    private synchronized OffloadedDataChunkCache dataChunkCache(OffloadedReadCacheConfig readCacheConfig)
-            throws IOException {
+    // Guarded by this
+    private void createReadCaches(OffloadedReadCacheConfig requestedConfig) throws IOException {
         if (closed) {
             throw new IOException("The offloader factory is closed");
         }
-        if (dataChunkCache == null) {
-            dataChunkCache = new OffloadedDataChunkCache(readCacheConfig);
-            dataChunkCacheConfig = readCacheConfig;
-            log.debug().attr("config", readCacheConfig).log("Created the cache of offloaded data");
-        } else if (!dataChunkCacheConfig.equals(readCacheConfig)) {
+        if (readCacheConfig == null) {
+            dataChunkCache = new OffloadedDataChunkCache(requestedConfig);
+            entryOffsetIndex = new EntryOffsetIndex(requestedConfig.entryOffsetsSizeBytes(),
+                    requestedConfig.entryOffsetsExpirySeconds());
+            readCacheConfig = requestedConfig;
+            log.debug().attr("config", requestedConfig).log("Created the caches of offloaded data and entry offsets");
+        } else if (!readCacheConfig.equals(requestedConfig)) {
             // The broker passes its settings to every offloader, so they only differ for another caller
-            log.warn().attr("config", dataChunkCacheConfig).attr("requestedConfig", readCacheConfig)
-                    .log("The cache of offloaded data keeps the settings that it was created with");
+            log.warn().attr("config", readCacheConfig).attr("requestedConfig", requestedConfig)
+                    .log("The caches of offloaded data and entry offsets keep the settings that they were created"
+                            + " with");
         }
-        return dataChunkCache;
     }
 
     @Override
     public void close() throws Exception {
-        entryOffsetsCache.close();
         synchronized (this) {
             closed = true;
             if (dataChunkCache != null) {

@@ -103,7 +103,7 @@ public class OffloadedLedgerFindPositionTest extends BlobStoreManagedLedgerOfflo
         // Offload and read back from the same in-memory blob store
         doReturn(blobStore).when(offloaderConfig).getBlobStore();
         offloader = BlobStoreManagedLedgerOffloader.create(offloaderConfig,
-                Map.of(), scheduler, scheduler, offloaderStats, entryOffsetsCache);
+                Map.of(), scheduler, scheduler, offloaderStats, entryOffsetIndex);
 
         metadataStore = MetadataStoreExtended.create("memory:local",
                 MetadataStoreConfig.builder().metadataStoreName("find-position").build());
@@ -166,7 +166,7 @@ public class OffloadedLedgerFindPositionTest extends BlobStoreManagedLedgerOfflo
 
             // Cold: the offloaded ledgers are opened again and no entry offset is cached
             ledger.close();
-            entryOffsetsCache.clear();
+            entryOffsetIndex.clear();
             ledger = factory.open(ledgerName, ledgerConfig);
             long gets = offloaderStats.gets.get();
             long bytes = offloaderStats.bytes.get();

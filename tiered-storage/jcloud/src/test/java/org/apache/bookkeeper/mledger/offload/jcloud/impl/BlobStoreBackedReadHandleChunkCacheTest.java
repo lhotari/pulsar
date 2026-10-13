@@ -57,7 +57,7 @@ public class BlobStoreBackedReadHandleChunkCacheTest extends BlobStoreManagedLed
                 Integer.toString(READ_BUFFER_SIZE));
         TieredStorageConfiguration configuration = getConfiguration(BUCKET, settings);
         return BlobStoreManagedLedgerOffloader.create(configuration, new HashMap<>(), scheduler, scheduler,
-                LedgerOffloaderStatsDisable.INSTANCE, entryOffsetsCache, cache);
+                LedgerOffloaderStatsDisable.INSTANCE, entryOffsetIndex, cache);
     }
 
     private static void assertSameEntries(ReadHandle expected, ReadHandle actual, long first, long last)
@@ -146,7 +146,7 @@ public class BlobStoreBackedReadHandleChunkCacheTest extends BlobStoreManagedLed
         properties.putAll(getConfiguration(BUCKET).getConfigProperties());
         OffloadPoliciesImpl policies = OffloadPoliciesImpl.create(properties);
         LedgerOffloaderStats stats = LedgerOffloaderStatsDisable.INSTANCE;
-        OffloadedReadCacheConfig config = new OffloadedReadCacheConfig(1 << 20, 60, 1, 1);
+        OffloadedReadCacheConfig config = new OffloadedReadCacheConfig(1 << 20, 60, 1, 1, 1 << 20, 300);
         assertThat(factory.create(policies, new HashMap<>(), null, scheduler, scheduler, stats, config)).isNotNull();
         // another caller's settings don't replace the cache's
         assertThat(factory.create(policies, new HashMap<>(), scheduler, stats)).isNotNull();

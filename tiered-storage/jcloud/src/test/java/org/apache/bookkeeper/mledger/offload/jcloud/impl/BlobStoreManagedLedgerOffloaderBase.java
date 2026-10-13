@@ -49,7 +49,7 @@ public abstract class BlobStoreManagedLedgerOffloaderBase {
     protected final JCloudBlobStoreProvider provider;
     protected TieredStorageConfiguration config;
     protected BlobStore blobStore = null;
-    protected final OffsetsCache entryOffsetsCache = new OffsetsCache();
+    protected final EntryOffsetIndex entryOffsetIndex = new EntryOffsetIndex(16L * 1024 * 1024, 3600);
 
     protected BlobStoreManagedLedgerOffloaderBase() throws Exception {
         scheduler = OrderedScheduler.newSchedulerBuilder().numThreads(5).name("offloader").build();
@@ -62,12 +62,11 @@ public abstract class BlobStoreManagedLedgerOffloaderBase {
     @AfterMethod(alwaysRun = true)
     public void cleanupMockBookKeeper() {
         bk.getLedgerMap().clear();
-        entryOffsetsCache.clear();
+        entryOffsetIndex.clear();
     }
 
     @AfterClass(alwaysRun = true)
     public void cleanup() throws Exception {
-        entryOffsetsCache.close();
         scheduler.shutdownNow();
         bkExecutor.shutdownNow();
     }

@@ -32,12 +32,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
-import java.util.stream.LongStream;
 import org.apache.bookkeeper.client.LedgerMetadataBuilder;
 import org.apache.bookkeeper.client.api.DigestType;
 import org.apache.bookkeeper.client.api.LedgerEntries;
@@ -53,7 +50,7 @@ import org.testng.annotations.Test;
 
 public class BlobStoreBackedReadHandleImplTest {
 
-    private OffsetsCache offsetsCache = new OffsetsCache();
+    private final EntryOffsetIndex entryOffsetIndex = new EntryOffsetIndex(16L * 1024 * 1024, 3600);
 
     private ScheduledExecutorService executor = Executors.newScheduledThreadPool(2);
 
@@ -63,14 +60,11 @@ public class BlobStoreBackedReadHandleImplTest {
             executor.shutdown();
             executor.awaitTermination(5, TimeUnit.SECONDS);
         }
-        if (offsetsCache != null) {
-            offsetsCache.close();
-        }
     }
 
     @AfterClass
     public void clearCache() throws Exception {
-        offsetsCache.clear();
+        entryOffsetIndex.clear();
     }
 
     private String getExpectedEntryContent(int entryId) {
@@ -91,7 +85,6 @@ public class BlobStoreBackedReadHandleImplTest {
                 data.writeBytes("dirty data".getBytes(UTF_8));
             }
             offsets.add(Pair.of(i, data.writerIndex()));
-            offsetsCache.put(ledgerId, i, data.writerIndex());
             byte[] entryContent = getExpectedEntryContent(i).getBytes(UTF_8);
             totalLen += entryContent.length;
             data.writeInt(entryContent.length);
@@ -112,7 +105,7 @@ public class BlobStoreBackedReadHandleImplTest {
                 .newEnsembleEntry(0L, Arrays.asList(BookieId.parse("127.0.0.1:3181")))
                 .build();
         BackedInputStreamImpl inputStream = new BackedInputStreamImpl(data);
-        // Since we have written data to "offsetsCache", the index will never be used.
+        // An index with every entry's offset, so that reads seek over the dirty data
         OffloadIndexBlock mockIndex = mock(OffloadIndexBlock.class);
         when(mockIndex.getLedgerMetadata()).thenReturn(metadata);
         for (Pair<Integer, Integer> pair : offsets) {
@@ -120,8 +113,8 @@ public class BlobStoreBackedReadHandleImplTest {
                     OffloadIndexEntryImpl.of(pair.getLeft(), 0, pair.getRight(), 0));
         }
         // Build obj.
-        return Pair.of(new BlobStoreBackedReadHandleImpl(ledgerId, mockIndex, inputStream, executor, offsetsCache),
-                data);
+        return Pair.of(new BlobStoreBackedReadHandleImpl(ledgerId, mockIndex, inputStream, executor,
+                () -> entryOffsetIndex.offsets("bucket", "ledger-" + ledgerId)), data);
     }
 
     private static class BackedInputStreamImpl extends BackedInputStream {
@@ -244,7 +237,7 @@ public class BlobStoreBackedReadHandleImplTest {
         });
         ByteBuf data = ByteBufAllocator.DEFAULT.heapBuffer(0);
         BlobStoreBackedReadHandleImpl ledger = new BlobStoreBackedReadHandleImpl(3, mockIndex,
-                new BackedInputStreamImpl(data), executor, offsetsCache);
+                new BackedInputStreamImpl(data), executor, () -> entryOffsetIndex.offsets("bucket", "ledger-3"));
         try {
             assertThat(ledger.getIndexedEntryIdFloor(0)).isEqualTo(0);
             assertThat(ledger.getIndexedEntryIdFloor(2000)).as("floor in the first block").isEqualTo(0);
@@ -262,24 +255,35 @@ public class BlobStoreBackedReadHandleImplTest {
 
     private static final int ENTRY_SIZE = 20;
     private static final int HEADER_SIZE = 128;
+    // The padding at the end of each data block but the last, which reads as a negative entry length
+    private static final int PADDING_SIZE = 16;
 
     /**
      * A read handle over entries of {@link #ENTRY_SIZE} bytes, with 12 bytes of entry header, whose sparse index only
      * knows the offsets of the first entries of its data blocks, like the index of an offloaded ledger.
      */
     private final class SparselyIndexedLedger implements AutoCloseable {
-        // A dedicated offsets cache whose offsets do not expire during the test: the TTL of the tests of this module
-        // is 1 second, and the assertions count exact bytes depending on the cached offsets
-        private final OffsetsCache offsetsCache = new OffsetsCache(3600, 1_000_000);
+        // An index of its own, whose offsets do not expire during the test
+        private final EntryOffsetIndex entryOffsetIndex = new EntryOffsetIndex(16L * 1024 * 1024, 3600);
         private final ByteBuf data;
+        private final long[] offsets;
         private final BackedInputStreamImpl inputStream;
         private final BlobStoreBackedReadHandleImpl handle;
 
-        SparselyIndexedLedger(long ledgerId, int entryCount, long[] blockFirstEntryIds, long learnedOffsetIntervalBytes)
+        SparselyIndexedLedger(long ledgerId, int entryCount, long[] blockFirstEntryIds, boolean padded)
                 throws Exception {
-            data = ByteBufAllocator.DEFAULT.heapBuffer(HEADER_SIZE + entryCount * ENTRY_SIZE);
+            data = ByteBufAllocator.DEFAULT.heapBuffer(HEADER_SIZE + entryCount * ENTRY_SIZE
+                    + blockFirstEntryIds.length * PADDING_SIZE);
             data.writerIndex(HEADER_SIZE);
+            offsets = new long[entryCount];
             for (int i = 0; i < entryCount; i++) {
+                long entryId = i;
+                if (padded && i > 0 && Arrays.stream(blockFirstEntryIds).anyMatch(first -> first == entryId)) {
+                    for (int j = 0; j < PADDING_SIZE; j++) {
+                        data.writeByte(0xFF);
+                    }
+                }
+                offsets[i] = data.writerIndex();
                 data.writeInt(ENTRY_SIZE - 12);
                 data.writeLong(i);
                 data.writeZero(ENTRY_SIZE - 12);
@@ -309,12 +313,18 @@ public class BlobStoreBackedReadHandleImplTest {
                 return OffloadIndexEntryImpl.of(floor, 0, offsetOf(floor), 0);
             });
             inputStream = new BackedInputStreamImpl(data);
-            handle = new BlobStoreBackedReadHandleImpl(ledgerId, mockIndex, inputStream, executor, offsetsCache,
-                    learnedOffsetIntervalBytes);
+            handle = new BlobStoreBackedReadHandleImpl(ledgerId, mockIndex, inputStream, executor,
+                    () -> entryOffsetIndex.offsets("bucket", "ledger-" + ledgerId));
         }
 
         long offsetOf(long entryId) {
-            return HEADER_SIZE + entryId * ENTRY_SIZE;
+            return offsets[(int) entryId];
+        }
+
+        /** The runs of entries with known offsets, as {first, last} pairs. */
+        List<List<Long>> knownRuns() {
+            return entryOffsetIndex.offsets("bucket", "ledger-" + handle.getId()).runs().stream()
+                    .map(run -> List.of(run[0], run[1])).toList();
         }
 
         /**
@@ -336,113 +346,80 @@ public class BlobStoreBackedReadHandleImplTest {
         public void close() throws Exception {
             handle.close();
             data.release();
-            offsetsCache.close();
         }
     }
 
-    /**
-     * The learned entry ids from {@code first} to {@code last}, {@code step} apart.
-     */
-    private static Set<Long> entryIds(long first, long last, long step) {
-        return LongStream.iterate(first, id -> id <= last, id -> id + step).boxed().collect(Collectors.toSet());
-    }
-
     @Test
-    public void testReadScansFromLearnedOffset() throws Exception {
-        // A single data block: only the first entry has an indexed offset. With 20 byte entries, learned offsets
-        // at least 4096 bytes apart are 205 entries apart.
-        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(2, 5000, new long[] {0}, 4096)) {
-            // The first read scans the block from its start, and learns offsets along the way
-            assertThat(ledger.read(2000, 2000)).as("bytes scanned by the first read").isEqualTo(2001L * ENTRY_SIZE);
-            assertThat(ledger.handle.getLearnedEntryIds()).isEqualTo(entryIds(0, 1845, 205));
+    public void testReadWalksFromTheNearestKnownOffset() throws Exception {
+        // A single data block: only the first entry has an indexed offset
+        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(2, 5000, new long[] {0}, false)) {
+            // The first read walks the block from its start, and records the offsets that it passes
+            assertThat(ledger.read(2000, 2000)).as("bytes read by the first read").isEqualTo(2001L * ENTRY_SIZE);
+            assertThat(ledger.knownRuns()).containsExactly(List.of(0L, 2000L));
 
-            // A read further than the probe window of the offsets cache resumes from the nearest learned offset
-            // instead of scanning the block from its start again
-            assertThat(ledger.read(4999, 4999)).as("bytes scanned by the second read")
-                    .isEqualTo((4999L - 1845 + 1) * ENTRY_SIZE);
+            // A read further on walks from where the known offsets end, not from the start of the block
+            assertThat(ledger.read(4999, 4999)).as("bytes read by the second read")
+                    .isEqualTo((4999L - 2001 + 1) * ENTRY_SIZE);
+            // A read of an entry whose offset is known reads only the entry
+            assertThat(ledger.read(1000, 1000)).as("bytes read for a known entry").isEqualTo(ENTRY_SIZE);
+            assertThat(ledger.knownRuns()).containsExactly(List.of(0L, 4999L));
 
-            // Learned offsets are not reported as indexed entries, so that searches do not depend on previous reads
+            // Known offsets are not reported as indexed entries, so that searches do not depend on previous reads
             assertThat(ledger.handle.getIndexedEntryIdFloor(4999)).isEqualTo(0);
         }
     }
 
     @Test
-    public void testReadUsesCachedOffsetsCloserThanLearnedOffsets() throws Exception {
-        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(5, 5000, new long[] {0}, 4096)) {
-            // Learns the offsets of entries 0, 205, ..., 1845, and caches the offsets of entries 0 to 2000
+    public void testReadWalksFromTheStartOfItsBlockWhenThatIsNearer() throws Exception {
+        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(4, 5000, new long[] {0, 2500}, false)) {
             ledger.read(2000, 2000);
-
-            // A cached offset between the nearest learned offset and the entry is closer, so it is used
-            assertThat(ledger.read(2100, 2100)).as("bytes scanned from the cached offset of entry 2000")
-                    .isEqualTo((2100L - 2000 + 1) * ENTRY_SIZE);
-
-            // A cached offset before the nearest learned offset is farther, so the learned offset is used
-            ledger.offsetsCache.clear();
-            ledger.offsetsCache.put(5, 1800, ledger.offsetOf(1800));
-            assertThat(ledger.read(1900, 1900)).as("bytes scanned from the learned offset of entry 1845")
-                    .isEqualTo((1900L - 1845 + 1) * ENTRY_SIZE);
-        }
-    }
-
-    @Test
-    public void testLearnedOffsetsOfAnotherBlockAreNotUsed() throws Exception {
-        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(4, 5000, new long[] {0, 2500}, 4096)) {
-            // Learns the offsets of entries 0, 205, ..., 1845 in the first block
-            ledger.read(2000, 2000);
-
-            // Without the offsets cache, a learned entry is read directly
-            ledger.offsetsCache.clear();
-            assertThat(ledger.read(1845, 1845)).as("bytes read for a learned entry").isEqualTo(ENTRY_SIZE);
-
-            // An entry of the second block is scanned from the start of that block, not from an offset learned in
-            // the first block
-            assertThat(ledger.read(3000, 3000)).as("bytes scanned in the second block")
+            // An entry of the second block is walked to from the start of that block, which is nearer than the
+            // offsets known in the first block
+            assertThat(ledger.read(3000, 3000)).as("bytes read in the second block")
                     .isEqualTo((3000L - 2500 + 1) * ENTRY_SIZE);
+            // An entry after the known offsets of the first block is walked to from them
+            assertThat(ledger.read(2400, 2400)).as("bytes read after the known offsets")
+                    .isEqualTo((2400L - 2001 + 1) * ENTRY_SIZE);
+            assertThat(ledger.knownRuns()).containsExactly(List.of(0L, 2400L), List.of(2500L, 3000L));
         }
     }
 
     @Test
-    public void testLearnedOffsetsStayApartFromTheNextOne() throws Exception {
-        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(6, 5000, new long[] {0, 2500}, 4096)) {
-            // Learns the offsets of entries 2500, 2705 and 2910 in the second block
-            ledger.read(3000, 3000);
-            // Then scans the first block up to its end: entry 2460 is 205 entries after entry 2255 but less than the
-            // interval before the learned entry 2500, so it is not learned
+    public void testReadsAroundThePaddingAtTheEndOfABlock() throws Exception {
+        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(6, 5000, new long[] {0, 2500}, true)) {
+            // Up to the last entry of the first block, whose known offsets end at the padding
             ledger.read(2499, 2499);
-
-            Set<Long> expected = entryIds(0, 2255, 205);
-            expected.addAll(entryIds(2500, 2910, 205));
-            assertThat(ledger.handle.getLearnedEntryIds()).isEqualTo(expected);
+            // An entry of the second block is walked to from the start of that block, not across the padding
+            assertThat(ledger.read(2600, 2600)).as("bytes read in the second block")
+                    .isEqualTo((2600L - 2500 + 1) * ENTRY_SIZE);
+            // The offsets on both sides of the padding stay apart
+            assertThat(ledger.knownRuns()).containsExactly(List.of(0L, 2499L), List.of(2500L, 2600L));
+            // A read across the end of the block reads its entries on both sides of the padding, which reads as a
+            // negative entry length
+            assertThat(ledger.read(2490, 2510)).as("bytes read across the padding")
+                    .isEqualTo(4 + 21L * ENTRY_SIZE);
+            // The entry after the padding is read from the index's offset, not from where the known offsets end
+            assertThat(ledger.read(2500, 2500)).isEqualTo(ENTRY_SIZE);
         }
     }
 
     @Test
-    public void testSequentialReadsDoNotLearnOffsets() throws Exception {
-        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(7, 5000, new long[] {0}, 4096)) {
-            // Each read after the first one only skips the last entry of the previous read, whose offset is cached
+    public void testSequentialReadsReadOnlyTheirEntries() throws Exception {
+        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(7, 5000, new long[] {0}, false)) {
             for (long firstEntry = 0; firstEntry < 5000; firstEntry += 100) {
-                ledger.read(firstEntry, firstEntry + 99);
+                assertThat(ledger.read(firstEntry, firstEntry + 99)).as("bytes read from entry %d", firstEntry)
+                        .isEqualTo(100L * ENTRY_SIZE);
             }
-            assertThat(ledger.handle.getLearnedEntryIds()).isEmpty();
+            // The reads' offsets join into one run
+            assertThat(ledger.knownRuns()).containsExactly(List.of(0L, 4999L));
         }
     }
 
     @Test
-    public void testLearnedOffsetIntervalBytes() {
-        assertThat(BlobStoreBackedReadHandleImpl.learnedOffsetIntervalBytes(0)).as("disabled").isZero();
-        assertThat(BlobStoreBackedReadHandleImpl.learnedOffsetIntervalBytes(-1)).as("disabled").isZero();
-        assertThat(BlobStoreBackedReadHandleImpl.learnedOffsetIntervalBytes(1)).as("minimum")
-                .isEqualTo(64 * 1024);
-        assertThat(BlobStoreBackedReadHandleImpl.learnedOffsetIntervalBytes(2 * 1024 * 1024))
-                .isEqualTo(2 * 1024 * 1024);
-    }
-
-    @Test
-    public void testDisabledLearnedOffsets() throws Exception {
-        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(8, 5000, new long[] {0}, 0)) {
+    public void testReadWalksFromTheBlockStartWithoutKnownOffsets() throws Exception {
+        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(8, 5000, new long[] {0}, false)) {
             ledger.read(2000, 2000);
-            assertThat(ledger.handle.getLearnedEntryIds()).isEmpty();
-            // Without learned offsets, the read scans the block from its start again
+            ledger.entryOffsetIndex.clear();
             assertThat(ledger.read(4999, 4999)).isEqualTo(5000L * ENTRY_SIZE);
         }
     }

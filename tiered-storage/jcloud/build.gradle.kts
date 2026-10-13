@@ -69,9 +69,3 @@ configurations.testRuntimeClasspath {
         force("jakarta.annotation:jakarta.annotation-api:3.0.0")
     }
 }
-
-tasks.test {
-    // Set TTL for OffsetsCache before class loading so OffsetsCacheTest's TTL test works
-    // even when other tests load the OffsetsCache class first in the same JVM fork
-    jvmArgs("-Dpulsar.jclouds.readhandleimpl.offsetsscache.ttl.seconds=1")
-}

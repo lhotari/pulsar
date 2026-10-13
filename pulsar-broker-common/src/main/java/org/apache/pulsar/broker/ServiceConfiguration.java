@@ -4179,6 +4179,25 @@ public class ServiceConfiguration implements PulsarConfiguration {
     private int managedLedgerOffloadReadPrefetchThreads = 4;
 
     @FieldContext(
+            category = CATEGORY_STORAGE_OFFLOADING,
+            doc = "The most memory, in MB, for the offsets of offloaded entries that reads have passed, 4 bytes for"
+                    + " each entry. A read of an offloaded entry walks the entry headers from the nearest known offset"
+                    + " instead of from the start of the entry's data block, which reads less of the offloaded data",
+            minValue = 0,
+            // 1 TiB, which keeps the size in bytes within a long
+            maxValue = 1024 * 1024
+    )
+    private long managedLedgerOffloadReadEntryOffsetsSizeInMB = 16;
+
+    @FieldContext(
+            category = CATEGORY_STORAGE_OFFLOADING,
+            doc = "How long, in seconds, the offsets of an offloaded ledger's entries are kept when no read has used"
+                    + " them",
+            minValue = 1
+    )
+    private int managedLedgerOffloadReadEntryOffsetsExpirySeconds = 300;
+
+    @FieldContext(
         category = CATEGORY_STORAGE_OFFLOADING,
         doc = "The directory where nar Extraction of offloaders happens"
     )
