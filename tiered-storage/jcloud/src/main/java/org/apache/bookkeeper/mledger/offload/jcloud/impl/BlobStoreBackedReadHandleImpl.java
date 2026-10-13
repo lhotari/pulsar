@@ -184,11 +184,13 @@ public class BlobStoreBackedReadHandleImpl implements ReadHandle, OffloadedLedge
     }
 
     /**
-     * The offsets of consecutive entries that a read passes, which it adds to the entry offsets at once: a run ends
+     * The offsets of consecutive entries that a read passes, which it adds to the entry offsets in batches: a run ends
      * where the read seeks, or crosses the padding at the end of a data block.
      */
     private final class PassedOffsets {
-        private long[] offsets = new long[64];
+        // At most this many offsets wait to be added, which a long walk adds batch by batch
+        private static final int MAX_BATCH = 4096;
+        private final long[] offsets = new long[MAX_BATCH];
         private int count;
         private long firstEntryId = -1;
         private long endOffset = -1;
@@ -203,11 +205,11 @@ public class BlobStoreBackedReadHandleImpl implements ReadHandle, OffloadedLedge
             if (count == 0) {
                 firstEntryId = entryId;
             }
-            if (count == offsets.length) {
-                offsets = Arrays.copyOf(offsets, count * 2);
-            }
             offsets[count++] = offset;
             endOffset = end;
+            if (count == MAX_BATCH) {
+                flush();
+            }
         }
 
         void flush() {

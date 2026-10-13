@@ -83,20 +83,63 @@ public class EntryOffsetIndexTest {
     }
 
     @Test
+    public void addingKnownOffsetsChangesNothingAndSequentialOffsetsExtendTheRun() {
+        EntryOffsetIndex index = new EntryOffsetIndex(1 << 20, 60);
+        EntryOffsetIndex.ObjectOffsets offsets = index.offsets("bucket", "object");
+        for (long first = 0; first < 1000; first += 100) {
+            add(offsets, first, 100);
+        }
+        assertThat(runs(offsets)).containsExactly(List.of(0L, 999L));
+        long weight = index.weight();
+        // a read of entries whose offsets are known, such as a search's
+        add(offsets, 500, 1);
+        add(offsets, 990, 10);
+        assertThat(index.weight()).isEqualTo(weight);
+        assertThat(runs(offsets)).containsExactly(List.of(0L, 999L));
+    }
+
+    @Test
+    public void keepsTheEndOfALongRunAndAnchorsBeyondTheObjectsShare() {
+        // a share of 128 KiB per object, room for about 32,000 entries' offsets
+        EntryOffsetIndex index = new EntryOffsetIndex(1 << 20, 60);
+        EntryOffsetIndex.ObjectOffsets offsets = index.offsets("bucket", "object");
+        // 300,000 entries of 100 bytes, walked in batches as a read does
+        for (long first = 0; first < 300_000; first += 4096) {
+            add(offsets, first, (int) Math.min(4096, 300_000 - first));
+        }
+        List<List<Long>> runs = runs(offsets);
+        assertThat(runs).hasSize(1);
+        assertThat(runs.get(0).get(1)).isEqualTo(299_999L);
+        assertThat(runs.get(0).get(0)).isGreaterThan(260_000L);
+        assertThat(index.weight()).isLessThanOrEqualTo(1 << 20);
+        // the anchors are about 1 MiB of data, 10,486 entries, apart over the whole object
+        assertThat(offsets.anchorEntryIds()).hasSizeGreaterThan(25).contains(0L);
+        EntryOffsetIndex.Position nearest = offsets.floor(150_000);
+        assertThat(150_000 - nearest.entryId()).isLessThanOrEqualTo(EntryOffsetIndex.ANCHOR_INTERVAL_BYTES / 100);
+        assertThat(nearest.offset()).isEqualTo(128 + nearest.entryId() * 100);
+    }
+
+    @Test
+    public void withoutABudgetKeepsNoOffsets() {
+        EntryOffsetIndex index = new EntryOffsetIndex(0, 60);
+        EntryOffsetIndex.ObjectOffsets offsets = index.offsets("bucket", "object");
+        add(offsets, 0, 100);
+        assertThat(offsets.floor(50)).isNull();
+        assertThat(index.weight()).isZero();
+    }
+
+    @Test
     public void dropsTheLeastRecentlyUsedObjectsBeyondItsBudget() {
-        // room for the offsets of about 2,000 entries
+        // 8 KiB, and a share of 1 KiB per object
         EntryOffsetIndex index = new EntryOffsetIndex(8 * 1024, 60);
-        EntryOffsetIndex.ObjectOffsets first = index.offsets("bucket", "first");
+        EntryOffsetIndex.ObjectOffsets first = index.offsets("bucket", "object-0");
         add(first, 0, 1000);
-        EntryOffsetIndex.ObjectOffsets second = index.offsets("bucket", "second");
-        add(second, 0, 1000);
-        assertThat(index.weight()).isLessThanOrEqualTo(8 * 1024);
-        index.offsets("bucket", "second");
-        EntryOffsetIndex.ObjectOffsets third = index.offsets("bucket", "third");
-        add(third, 0, 1000);
-        assertThat(index.weight()).isLessThanOrEqualTo(8 * 1024);
+        for (int i = 1; i < 10; i++) {
+            add(index.offsets("bucket", "object-" + i), 0, 1000);
+            assertThat(index.weight()).isLessThanOrEqualTo(8 * 1024);
+        }
         // the first object, used least recently, is dropped, and starts again empty
-        assertThat(index.offsets("bucket", "first")).isNotSameAs(first);
-        assertThat(index.offsets("bucket", "first").floor(10)).isNull();
+        assertThat(index.offsets("bucket", "object-0")).isNotSameAs(first);
+        assertThat(index.offsets("bucket", "object-0").floor(10)).isNull();
     }
 }

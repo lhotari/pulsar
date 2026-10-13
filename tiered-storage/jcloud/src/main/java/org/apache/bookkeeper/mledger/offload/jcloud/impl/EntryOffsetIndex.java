@@ -32,32 +32,52 @@ import java.util.concurrent.TimeUnit;
 /**
  * The offsets of the entries of offloaded data objects that reads have passed, shared by every read handle of the
  * offloader factory. The index of a data object only has the offset of the first entry of each data block; the
- * offset of any other entry is found by walking the entry headers from a known offset. Each object's known offsets are
- * runs of consecutive entries, each run its first entry's offset and its entries' offsets relative to it, 4 bytes per
- * entry, kept within a size budget and dropped when no read has used them for a while. A lookup finds the known offset
- * nearest to an entry: the entry's own, or where the entry after the run before it starts.
+ * offset of any other entry is found by walking the entry headers from a known offset. For each data object it keeps:
+ * <ul>
+ *   <li>runs of consecutive entries, each run its first entry's offset and its entries' offsets relative to it, 4
+ *   bytes per entry, at most an eighth of the size budget per object: when an object's runs exceed it, the runs
+ *   farthest from the latest read are dropped, and of a longer run than that, its end;</li>
+ *   <li>anchors: an entry's offset about every {@link #ANCHOR_INTERVAL_BYTES} of the walked data, which are kept when
+ *   the runs around them are dropped, so that a read walks at most about that much from one.</li>
+ * </ul>
+ * The objects are kept within the size budget and dropped when no read has used them for a while. A lookup finds the
+ * known offset nearest to an entry: the entry's own, an anchor's, or where the entry after the run before it starts.
  */
 public class EntryOffsetIndex {
+    /** About how much data apart the anchors are. */
+    static final long ANCHOR_INTERVAL_BYTES = 1024 * 1024;
     // A run's own fields, beyond the 4 bytes of each entry's relative offset
     private static final int RUN_OVERHEAD_BYTES = 64;
+    // An anchor in a TreeMap with its boxed key and value
+    private static final int ANCHOR_BYTES = 80;
+    private static final ObjectOffsets NONE = new ObjectOffsets(null, null, 0);
 
     private final Cache<String, ObjectOffsets> objects;
+    private final long maxObjectRunsBytes;
 
     public EntryOffsetIndex(long maxSizeBytes, int expirySeconds) {
-        this.objects = CacheBuilder.newBuilder()
+        long maxSize = Math.max(0, maxSizeBytes);
+        this.maxObjectRunsBytes = maxSize / 8;
+        this.objects = maxSize == 0 ? null : CacheBuilder.newBuilder()
                 // One segment, so that the budget and the least recently used order are the index's
                 .concurrencyLevel(1)
-                .maximumWeight(Math.max(0, maxSizeBytes))
+                .maximumWeight(maxSize)
                 .<String, ObjectOffsets>weigher((key, offsets) -> offsets.weight())
                 .expireAfterAccess(Math.max(1, expirySeconds), TimeUnit.SECONDS)
                 .build();
     }
 
-    /** The known offsets of the data object, which a read handle updates as it reads. */
+    /**
+     * The known offsets of the data object, which a read handle updates as it reads; without a budget, none, and
+     * nothing is recorded.
+     */
     ObjectOffsets offsets(String bucket, String key) {
+        if (objects == null) {
+            return NONE;
+        }
         String objectKey = bucket + "/" + key;
         try {
-            return objects.get(objectKey, () -> new ObjectOffsets(this, objectKey));
+            return objects.get(objectKey, () -> new ObjectOffsets(this, objectKey, maxObjectRunsBytes));
         } catch (ExecutionException e) {
             throw new IllegalStateException(e.getCause());
         }
@@ -69,12 +89,14 @@ public class EntryOffsetIndex {
     }
 
     public void clear() {
-        objects.invalidateAll();
+        if (objects != null) {
+            objects.invalidateAll();
+        }
     }
 
     @VisibleForTesting
     long weight() {
-        return objects.asMap().values().stream().mapToLong(ObjectOffsets::weight).sum();
+        return objects == null ? 0 : objects.asMap().values().stream().mapToLong(ObjectOffsets::weight).sum();
     }
 
     /** An entry's offset in the data object. */
@@ -85,33 +107,43 @@ public class EntryOffsetIndex {
     static final class ObjectOffsets {
         private final EntryOffsetIndex index;
         private final String objectKey;
+        private final long maxRunsBytes;
         // By first entry id; guarded by this
         private final TreeMap<Long, Run> runs = new TreeMap<>();
+        // Entry id to offset; guarded by this
+        private final TreeMap<Long, Long> anchors = new TreeMap<>();
         // Guarded by this
-        private int weight;
+        private long runsWeight;
 
-        private ObjectOffsets(EntryOffsetIndex index, String objectKey) {
+        private ObjectOffsets(EntryOffsetIndex index, String objectKey, long maxRunsBytes) {
             this.index = index;
             this.objectKey = objectKey;
+            this.maxRunsBytes = maxRunsBytes;
         }
 
         private synchronized int weight() {
-            return weight;
+            return (int) Math.min(Integer.MAX_VALUE, runsWeight + (long) anchors.size() * ANCHOR_BYTES);
         }
 
         /**
-         * The known offset nearest to the entry, at or before it: the entry's own, or where the entry after the run
-         * that ends before it starts, which may also be the padding at the end of a data block; null when none.
+         * The known offset nearest to the entry, at or before it: the entry's own, an anchor's, or where the entry
+         * after the run that ends before it starts, which may also be the padding at the end of a data block; null
+         * when none.
          */
         synchronized Position floor(long entryId) {
+            Position nearest = null;
             Map.Entry<Long, Run> floor = runs.floorEntry(entryId);
-            if (floor == null) {
-                return null;
+            if (floor != null) {
+                Run run = floor.getValue();
+                long last = run.lastEntryId();
+                nearest = entryId <= last ? new Position(entryId, run.offsetOf(entryId))
+                        : new Position(last + 1, run.endOffset());
             }
-            Run run = floor.getValue();
-            long last = run.lastEntryId();
-            return entryId <= last ? new Position(entryId, run.offsetOf(entryId))
-                    : new Position(last + 1, run.endOffset());
+            Map.Entry<Long, Long> anchor = anchors.floorEntry(entryId);
+            if (anchor != null && (nearest == null || anchor.getKey() > nearest.entryId())) {
+                nearest = new Position(anchor.getKey(), anchor.getValue());
+            }
+            return nearest;
         }
 
         /**
@@ -119,34 +151,115 @@ public class EntryOffsetIndex {
          * ending at {@code endOffset}, joining the runs that they overlap or continue.
          */
         void add(long firstEntryId, long[] offsets, int count, long endOffset) {
-            if (count == 0) {
+            if (count == 0 || index == null) {
                 return;
             }
+            boolean changed;
             synchronized (this) {
-                Run added = Run.of(firstEntryId, offsets, count, endOffset);
-                // The runs that the new one overlaps, or continues byte for byte, become one
-                List<Run> joined = new ArrayList<>();
-                joined.add(added);
-                Map.Entry<Long, Run> before = runs.floorEntry(firstEntryId);
-                if (before != null && before.getValue().joins(added)) {
-                    joined.add(before.getValue());
+                changed = addAnchors(firstEntryId, offsets, count);
+                changed |= addRun(firstEntryId, offsets, count, endOffset);
+                if (changed) {
+                    trimRuns(firstEntryId, firstEntryId + count - 1);
                 }
-                for (Run after : runs.subMap(firstEntryId, false, added.lastEntryId() + 1, true).values()) {
-                    if (after.joins(added)) {
-                        joined.add(after);
-                    }
-                }
-                for (Run run : joined) {
-                    if (run != added) {
-                        runs.remove(run.firstEntryId);
-                        weight -= run.weight();
-                    }
-                }
-                Run merged = joined.size() == 1 ? added : Run.merge(joined);
-                runs.put(merged.firstEntryId, merged);
-                weight += merged.weight();
             }
-            index.reweigh(this);
+            if (changed) {
+                index.reweigh(this);
+            }
+        }
+
+        // Guarded by this
+        private boolean addAnchors(long firstEntryId, long[] offsets, int count) {
+            boolean added = false;
+            Map.Entry<Long, Long> floor = anchors.floorEntry(firstEntryId);
+            long previous = floor != null ? floor.getValue() : Long.MIN_VALUE / 2;
+            Map.Entry<Long, Long> next = anchors.higherEntry(firstEntryId);
+            for (int i = 0; i < count; i++) {
+                long entryId = firstEntryId + i;
+                while (next != null && next.getKey() <= entryId) {
+                    previous = next.getValue();
+                    next = anchors.higherEntry(next.getKey());
+                }
+                if (offsets[i] - previous >= ANCHOR_INTERVAL_BYTES
+                        && (next == null || next.getValue() - offsets[i] >= ANCHOR_INTERVAL_BYTES)) {
+                    anchors.put(entryId, offsets[i]);
+                    previous = offsets[i];
+                    added = true;
+                }
+            }
+            return added;
+        }
+
+        // Guarded by this
+        private boolean addRun(long firstEntryId, long[] offsets, int count, long endOffset) {
+            long lastEntryId = firstEntryId + count - 1;
+            Map.Entry<Long, Run> floor = runs.floorEntry(firstEntryId);
+            Run before = floor != null ? floor.getValue() : null;
+            if (before != null && before.covers(firstEntryId, lastEntryId, offsets[0], endOffset)) {
+                // Known already, such as a read of entries whose offsets were known
+                return false;
+            }
+            Map.Entry<Long, Run> after = runs.higherEntry(firstEntryId);
+            boolean overlapsAfter = after != null && after.getKey() <= lastEntryId + 1;
+            if (before != null && !overlapsAfter && before.lastEntryId() + 1 == firstEntryId
+                    && before.endOffset() == offsets[0] && before.canAppend(endOffset)) {
+                // Continues the run, as sequential reads do
+                runsWeight -= before.weight();
+                before.append(offsets, count, endOffset);
+                runsWeight += before.weight();
+                return true;
+            }
+            Run added = Run.of(firstEntryId, offsets, count, endOffset);
+            // The runs that the new one overlaps, or continues byte for byte, become one
+            List<Run> joined = new ArrayList<>();
+            joined.add(added);
+            if (before != null && before.joins(added)) {
+                joined.add(before);
+            }
+            for (Run run : runs.subMap(firstEntryId, false, lastEntryId + 1, true).values()) {
+                if (run.joins(added)) {
+                    joined.add(run);
+                }
+            }
+            for (Run run : joined) {
+                if (run != added) {
+                    runs.remove(run.firstEntryId);
+                    runsWeight -= run.weight();
+                }
+            }
+            Run merged = joined.size() == 1 ? added : Run.merge(joined);
+            runs.put(merged.firstEntryId, merged);
+            runsWeight += merged.weight();
+            return true;
+        }
+
+        /**
+         * Keeps the runs within the object's share of the budget: drops the runs farthest from the latest read, and
+         * of a run longer than the share, keeps its end, where the read was.
+         */
+        // Guarded by this
+        private void trimRuns(long readFirstEntryId, long readLastEntryId) {
+            while (runsWeight > maxRunsBytes && runs.size() > 1) {
+                Run farthest = null;
+                long farthestDistance = -1;
+                for (Run run : runs.values()) {
+                    long distance = run.lastEntryId() < readFirstEntryId ? readFirstEntryId - run.lastEntryId()
+                            : run.firstEntryId > readLastEntryId ? run.firstEntryId - readLastEntryId : 0;
+                    if (distance > farthestDistance) {
+                        farthest = run;
+                        farthestDistance = distance;
+                    }
+                }
+                runs.remove(farthest.firstEntryId);
+                runsWeight -= farthest.weight();
+            }
+            if (runsWeight > maxRunsBytes && runs.size() == 1) {
+                Run run = runs.firstEntry().getValue();
+                int keep = (int) Math.max(1, (maxRunsBytes - RUN_OVERHEAD_BYTES) / 4 - 1);
+                runs.clear();
+                Run end = run.end(keep);
+                runs.put(end.firstEntryId, end);
+                runsWeight = end.weight();
+            }
         }
 
         @VisibleForTesting
@@ -155,28 +268,42 @@ public class EntryOffsetIndex {
             runs.values().forEach(run -> result.add(new long[] {run.firstEntryId, run.lastEntryId()}));
             return result;
         }
+
+        @VisibleForTesting
+        synchronized List<Long> anchorEntryIds() {
+            return new ArrayList<>(anchors.keySet());
+        }
     }
 
     /**
      * Consecutive entries from {@code firstEntryId}, the first at {@code firstOffset}, entry i at {@code firstOffset +
-     * relativeOffsets[i]}, and where the last one ends at {@code firstOffset + relativeOffsets[count]}.
+     * relativeOffsets[i]}, and where the last one ends at {@code firstOffset + relativeOffsets[count]}; the array may
+     * have room for more. Guarded by its object's offsets.
      */
-    private record Run(long firstEntryId, long firstOffset, int[] relativeOffsets) {
+    private static final class Run {
+        private final long firstEntryId;
+        private final long firstOffset;
+        private int[] relativeOffsets;
+        private int count;
+
+        private Run(long firstEntryId, long firstOffset, int[] relativeOffsets, int count) {
+            this.firstEntryId = firstEntryId;
+            this.firstOffset = firstOffset;
+            this.relativeOffsets = relativeOffsets;
+            this.count = count;
+        }
+
         static Run of(long firstEntryId, long[] offsets, int count, long endOffset) {
             int[] relative = new int[count + 1];
             for (int i = 0; i < count; i++) {
                 relative[i] = Math.toIntExact(offsets[i] - offsets[0]);
             }
             relative[count] = Math.toIntExact(endOffset - offsets[0]);
-            return new Run(firstEntryId, offsets[0], relative);
-        }
-
-        int count() {
-            return relativeOffsets.length - 1;
+            return new Run(firstEntryId, offsets[0], relative, count);
         }
 
         long lastEntryId() {
-            return firstEntryId + count() - 1;
+            return firstEntryId + count - 1;
         }
 
         long offsetOf(long entryId) {
@@ -184,11 +311,51 @@ public class EntryOffsetIndex {
         }
 
         long endOffset() {
-            return firstOffset + relativeOffsets[count()];
+            return firstOffset + relativeOffsets[count];
         }
 
         int weight() {
             return RUN_OVERHEAD_BYTES + 4 * relativeOffsets.length;
+        }
+
+        /** Whether the run has the entries, at the same offsets. */
+        boolean covers(long first, long last, long firstOffset, long endOffset) {
+            if (first < firstEntryId || last > lastEntryId() || offsetOf(first) != firstOffset) {
+                return false;
+            }
+            return last == lastEntryId() ? endOffset() == endOffset
+                    : offsetOf(last + 1) == endOffset;
+        }
+
+        boolean canAppend(long endOffset) {
+            return endOffset - firstOffset <= Integer.MAX_VALUE;
+        }
+
+        /** Appends entries that continue the run byte for byte. */
+        void append(long[] offsets, int added, long endOffset) {
+            int needed = count + added + 1;
+            if (needed > relativeOffsets.length) {
+                relativeOffsets = Arrays.copyOf(relativeOffsets, Math.max(needed, relativeOffsets.length * 2));
+            }
+            for (int i = 0; i < added; i++) {
+                relativeOffsets[count + i] = (int) (offsets[i] - firstOffset);
+            }
+            count += added;
+            relativeOffsets[count] = (int) (endOffset - firstOffset);
+        }
+
+        /** A run of the last {@code keep} entries of this one. */
+        Run end(int keep) {
+            if (keep >= count) {
+                return this;
+            }
+            int from = count - keep;
+            long base = firstOffset + relativeOffsets[from];
+            int[] relative = new int[keep + 1];
+            for (int i = 0; i <= keep; i++) {
+                relative[i] = relativeOffsets[from + i] - relativeOffsets[from];
+            }
+            return new Run(firstEntryId + from, base, relative, keep);
         }
 
         /**
@@ -196,6 +363,12 @@ public class EntryOffsetIndex {
          * aren't across the padding at the end of a data block from it.
          */
         boolean joins(Run other) {
+            long first = Math.min(firstOffset, other.firstOffset);
+            long end = Math.max(endOffset(), other.endOffset());
+            if (end - first > Integer.MAX_VALUE) {
+                // A run's relative offsets are ints
+                return false;
+            }
             if (other.firstEntryId <= lastEntryId() + 1 && firstEntryId <= other.lastEntryId() + 1) {
                 if (other.firstEntryId == lastEntryId() + 1) {
                     return other.firstOffset == endOffset();
@@ -222,7 +395,6 @@ public class EntryOffsetIndex {
             }
             int count = Math.toIntExact(last - first + 1);
             long[] offsets = new long[count];
-            Arrays.fill(offsets, -1);
             for (Run run : runs) {
                 for (long entryId = run.firstEntryId; entryId <= run.lastEntryId(); entryId++) {
                     offsets[(int) (entryId - first)] = run.offsetOf(entryId);

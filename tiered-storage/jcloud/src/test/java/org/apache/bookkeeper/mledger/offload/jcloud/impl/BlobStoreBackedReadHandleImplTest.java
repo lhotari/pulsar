@@ -264,7 +264,7 @@ public class BlobStoreBackedReadHandleImplTest {
      */
     private final class SparselyIndexedLedger implements AutoCloseable {
         // An index of its own, whose offsets do not expire during the test
-        private final EntryOffsetIndex entryOffsetIndex = new EntryOffsetIndex(16L * 1024 * 1024, 3600);
+        private final EntryOffsetIndex entryOffsetIndex;
         private final ByteBuf data;
         private final long[] offsets;
         private final BackedInputStreamImpl inputStream;
@@ -272,6 +272,12 @@ public class BlobStoreBackedReadHandleImplTest {
 
         SparselyIndexedLedger(long ledgerId, int entryCount, long[] blockFirstEntryIds, boolean padded)
                 throws Exception {
+            this(ledgerId, entryCount, blockFirstEntryIds, padded, new EntryOffsetIndex(16L * 1024 * 1024, 3600));
+        }
+
+        SparselyIndexedLedger(long ledgerId, int entryCount, long[] blockFirstEntryIds, boolean padded,
+                              EntryOffsetIndex entryOffsetIndex) throws Exception {
+            this.entryOffsetIndex = entryOffsetIndex;
             data = ByteBufAllocator.DEFAULT.heapBuffer(HEADER_SIZE + entryCount * ENTRY_SIZE
                     + blockFirstEntryIds.length * PADDING_SIZE);
             data.writerIndex(HEADER_SIZE);
@@ -412,6 +418,27 @@ public class BlobStoreBackedReadHandleImplTest {
             }
             // The reads' offsets join into one run
             assertThat(ledger.knownRuns()).containsExactly(List.of(0L, 4999L));
+        }
+    }
+
+    @Test
+    public void testSearchProbesWalkLittleInAnObjectLargerThanTheBudget() throws Exception {
+        // 300,000 entries of 20 bytes in one block, about 6 MiB, with a budget of 1 MiB: an object's share of 128 KiB
+        // keeps the offsets of about 32,000 entries
+        try (SparselyIndexedLedger ledger = new SparselyIndexedLedger(9, 300_000, new long[] {0}, false,
+                new EntryOffsetIndex(1024 * 1024, 3600))) {
+            assertThat(ledger.read(299_999, 299_999)).isEqualTo(300_000L * ENTRY_SIZE);
+            // probes of decreasing entries, as a search by timestamp makes, walk from the anchors, about 1 MiB of
+            // data apart, or read known entries, instead of walking from the start of the block again
+            long[] probes = {299_998, 150_000, 75_000, 225_000, 37_500, 299_000};
+            for (long probe : probes) {
+                assertThat(ledger.read(probe, probe)).as("bytes read for entry %d", probe)
+                        .isLessThanOrEqualTo(EntryOffsetIndex.ANCHOR_INTERVAL_BYTES + ENTRY_SIZE);
+            }
+            // the runs of the latest probes have replaced the one around entry 299,998, which is walked to from the
+            // nearest one that is left
+            assertThat(ledger.read(299_998, 299_998)).isLessThanOrEqualTo(EntryOffsetIndex.ANCHOR_INTERVAL_BYTES);
+            assertThat(ledger.read(299_998, 299_998)).as("a known entry").isEqualTo(ENTRY_SIZE);
         }
     }
 
