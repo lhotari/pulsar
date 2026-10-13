@@ -92,7 +92,7 @@ class RangeCacheRemovalQueue {
             if (c.removedSize >= sizeToFree) {
                 return EvictionResult.STOP;
             }
-            if (c.evaluatedEntries++ < firstCycleEntries && shouldRequeue(e)) {
+            if (c.evaluatedEntries <= firstCycleEntries && shouldRequeue(e)) {
                 return EvictionResult.REQUEUE;
             }
             // remove by default since there's a need to free up more memory
@@ -193,6 +193,8 @@ class RangeCacheRemovalQueue {
     private static EvictionResult evaluateEvictionPredicate(EvictionPredicate evictionPredicate,
                                                             RangeCacheRemovalCounters counters,
                                                             RangeCacheEntryWrapper entry) {
+        // every examined slot of the queue counts, also an entry that was already removed from the cache
+        counters.evaluatedEntries++;
         if (entry.key == null) {
             // entry has been removed by another thread
             return EvictionResult.MISSING;

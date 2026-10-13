@@ -2695,8 +2695,8 @@ public class ServiceConfiguration implements PulsarConfiguration {
             + "- Consumers temporarily falling behind the tail\n"
             + "Entries with remaining expected reads will have their TTL extended up to this many times\n"
             + "before being eligible for eviction. The TTL will be extended by\n"
-            + "managedLedgerCacheEvictionTimeThresholdMillis each time. Size-based eviction keeps the cache\n"
-            + "within managedLedgerCacheSizeMB regardless: it requeues an entry at most once per eviction pass.\n"
+            + "managedLedgerCacheEvictionTimeThresholdMillis each time. When the cache needs memory, size-based\n"
+            + "eviction overrides this protection after requeuing an entry at most once per eviction pass.\n"
             + "Default is 60.")
     private int managedLedgerCacheEvictionExtendTTLOfEntriesWithRemainingExpectedReadsMaxTimes = 60;
 

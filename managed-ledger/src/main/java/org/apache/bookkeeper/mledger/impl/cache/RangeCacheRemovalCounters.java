@@ -34,7 +34,7 @@ class RangeCacheRemovalCounters {
     };
     int removedEntries;
     long removedSize;
-    // the entries that an eviction pass has evaluated, to tell the queue's first cycle from the next ones
+    // the queue slots that an eviction pass has examined, to tell the queue's first cycle from the next ones
     int evaluatedEntries;
 
     private RangeCacheRemovalCounters(Recycler.Handle<RangeCacheRemovalCounters> recyclerHandle) {
