@@ -216,7 +216,7 @@ Run directory: .../build/performance/2026-09-26/master/iot-telemetry/09-26-12-00
     brokers:
       replicas: 1
       ...
-12:00:00 Starting the Pulsar cluster: 1 broker(s), 2 bookie(s)
+12:00:00 Starting the Pulsar cluster: 1 broker(s), 2 bookie(s), 1 proxy
 12:00:23 Started the Pulsar cluster in 23 s
 12:00:23 Metrics: starting the metrics stack for this run, since it doesn't run
 12:00:34 Metrics: VictoriaMetrics scrapes the brokers, the bookies and ZooKeeper every 5 s, as the cluster 2026-09-26/master/iot-telemetry/09-26-12-00-00
@@ -479,6 +479,8 @@ charts that it writes, in one diagram and in separate panels.
 - [Network conditions and network faults](docs/network-conditions.md): delay, jitter, packet loss and limited
   bandwidth between the containers, partitions, connection resets and silent disconnections, applied with Linux
   traffic control, and the network scenarios.
+- [Offloading to tiered storage](docs/offloading.md): offloading the topics' ledgers to an S3-compatible SeaweedFS as
+  they roll over, and late applications that read their backlog from it from staggered positions.
 - [The performance testing environment setup](environment/README.md): configuring a Linux host for consistent
   results, taking the disk out of the way of large-message runs, and freeing Docker disk space.
 - [The legacy TestNG profiling runner](docs/legacy-testng-runner/README.md): the deprecated `pulsar-perf` based runner
