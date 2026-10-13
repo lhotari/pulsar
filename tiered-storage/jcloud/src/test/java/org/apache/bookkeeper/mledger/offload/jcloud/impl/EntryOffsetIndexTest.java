@@ -138,6 +138,22 @@ public class EntryOffsetIndexTest {
     }
 
     @Test
+    public void thinsTheAnchorsBeyondTheObjectsShare() {
+        // a share of 1 KiB per object, room for 12 anchors
+        EntryOffsetIndex index = new EntryOffsetIndex(8 * 1024, 60);
+        EntryOffsetIndex.ObjectOffsets offsets = index.offsets("bucket", "object");
+        // entries of 1 MiB, each one an anchor's worth of data apart
+        long[] offset = new long[1];
+        for (long entryId = 0; entryId < 100; entryId++) {
+            offset[0] = entryId * EntryOffsetIndex.ANCHOR_INTERVAL_BYTES;
+            offsets.add(entryId, offset, 1, offset[0] + EntryOffsetIndex.ANCHOR_INTERVAL_BYTES);
+        }
+        assertThat(offsets.anchorEntryIds().size() * 80).isLessThanOrEqualTo(1024);
+        assertThat(offsets.anchorEntryIds()).contains(0L);
+        assertThat(index.weight()).isLessThanOrEqualTo(8 * 1024);
+    }
+
+    @Test
     public void withoutABudgetKeepsNoOffsets() {
         EntryOffsetIndex index = new EntryOffsetIndex(0, 60);
         EntryOffsetIndex.ObjectOffsets offsets = index.offsets("bucket", "object");

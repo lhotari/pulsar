@@ -23,6 +23,7 @@ import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -38,7 +39,8 @@ import java.util.concurrent.TimeUnit;
  *   bytes per entry, at most an eighth of the size budget per object: when an object's runs exceed it, the runs
  *   farthest from the latest read are dropped, and of a longer run than that, its end;</li>
  *   <li>anchors: an entry's offset about every {@link #ANCHOR_INTERVAL_BYTES} of the walked data, which are kept when
- *   the runs around them are dropped, so that a read walks at most about that much from one.</li>
+ *   the runs around them are dropped, so that a read walks at most about that much from one; when they exceed the
+ *   object's share too, every other one is dropped.</li>
  * </ul>
  * The objects are kept within the size budget and dropped when no read has used them for a while. A lookup finds the
  * known offset nearest to an entry: the entry's own, an anchor's, or where the entry after the run before it starts.
@@ -189,6 +191,18 @@ public class EntryOffsetIndex {
                     anchors.put(entryId, offsets[i]);
                     previous = offsets[i];
                     added = true;
+                }
+            }
+            if ((long) anchors.size() * ANCHOR_BYTES > maxRunsBytes) {
+                // Twice as far apart, within the share, which also keeps the object's weight within an int
+                Iterator<Long> entryIds = anchors.keySet().iterator();
+                boolean drop = false;
+                while (entryIds.hasNext()) {
+                    entryIds.next();
+                    if (drop) {
+                        entryIds.remove();
+                    }
+                    drop = !drop;
                 }
             }
             return added;
