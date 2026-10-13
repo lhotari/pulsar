@@ -68,7 +68,7 @@ public class ManagedLedgerFactoryConfig {
      * before being eligible for eviction. The TTL will be extended by
      * managedLedgerCacheEvictionTimeThresholdMillis each time.
      */
-    private int cacheEvictionExtendTTLOfEntriesWithRemainingExpectedReadsMaxTimes = 5;
+    private int cacheEvictionExtendTTLOfEntriesWithRemainingExpectedReadsMaxTimes = 60;
 
     /**
      * Controls whether recently accessed entries in the managed ledger cache should have their
