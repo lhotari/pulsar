@@ -106,6 +106,29 @@ public class InflightReadsLimiterTest {
     }
 
     @Test
+    public void tryAcquireTakesOnlyPermitsThatAreAvailableAndNotAwaited() throws Exception {
+        InflightReadsLimiter limiter =
+                new InflightReadsLimiter(100, ACQUIRE_QUEUE_SIZE, ACQUIRE_TIMEOUT_MILLIS,
+                        mock(ScheduledExecutorService.class), OpenTelemetry.noop());
+        Optional<InflightReadsLimiter.Handle> first = limiter.tryAcquire(60);
+        assertThat(first).isPresent();
+        assertThat(first.get().success()).isTrue();
+        assertThat(limiter.getRemainingBytes()).isEqualTo(40);
+        // not enough: nothing is acquired or queued, unlike acquire, which allows oversized reads too
+        assertThat(limiter.tryAcquire(50)).isEmpty();
+        assertThat(limiter.getRemainingBytes()).isEqualTo(40);
+        // a read waiting for permits keeps them for itself
+        AtomicReference<InflightReadsLimiter.Handle> queued = new AtomicReference<>();
+        assertThat(limiter.acquire(50, queued::set)).isEmpty();
+        assertThat(limiter.tryAcquire(10)).isEmpty();
+        limiter.release(first.get());
+        assertThat(queued.get()).isNotNull();
+        assertThat(queued.get().success()).isTrue();
+        assertThat(limiter.getRemainingBytes()).isEqualTo(50);
+        assertThat(limiter.tryAcquire(10)).isPresent();
+    }
+
+    @Test
     public void testNotEnoughPermits() throws Exception {
         InflightReadsLimiter limiter =
                 new InflightReadsLimiter(100, ACQUIRE_QUEUE_SIZE, ACQUIRE_TIMEOUT_MILLIS,

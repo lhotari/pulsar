@@ -4318,6 +4318,25 @@ public class ManagedCursorImpl implements ManagedCursor {
      *
      * @return the number of cursors at the same position or before
      */
+    // The cursor's read ahead in progress, if any, which only the read ahead that set it clears when it completes
+    private final AtomicReference<Object> readAheadInProgress = new AtomicReference<>();
+
+    /** Claims the cursor's read ahead, of which it has at most one in progress; null when one is in progress. */
+    Object tryStartReadAhead() {
+        Object readAhead = new Object();
+        return readAheadInProgress.compareAndSet(null, readAhead) ? readAhead : null;
+    }
+
+    @VisibleForTesting
+    boolean isReadAheadInProgress() {
+        return readAheadInProgress.get() != null;
+    }
+
+    /** Ends the read ahead that {@link #tryStartReadAhead()} returned. */
+    void readAheadCompleted(Object readAhead) {
+        readAheadInProgress.compareAndSet(readAhead, null);
+    }
+
     public int getNumberOfCursorsAtSamePositionOrBefore() {
         if (ledger.getConfig().isCacheEvictionByExpectedReadCount()) {
             return ledger.getNumberOfCursorsAtSamePositionOrBefore(this);
