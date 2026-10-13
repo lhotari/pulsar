@@ -4198,6 +4198,25 @@ public class ServiceConfiguration implements PulsarConfiguration {
     private int managedLedgerOffloadReadEntryOffsetsExpirySeconds = 300;
 
     @FieldContext(
+            category = CATEGORY_STORAGE_OFFLOADING,
+            doc = "The most memory, in MB, for the parsed indexes of offloaded ledgers, so that reopening the read"
+                    + " handle of an offloaded ledger doesn't read its index object from the tiered storage again."
+                    + " 0 keeps none: only opens of the same ledger at the same time share the read of its index",
+            minValue = 0,
+            // 1 TiB, which keeps the size in bytes within a long
+            maxValue = 1024 * 1024
+    )
+    private long managedLedgerOffloadReadIndexCacheSizeInMB = 16;
+
+    @FieldContext(
+            category = CATEGORY_STORAGE_OFFLOADING,
+            doc = "How long, in seconds, the parsed index of an offloaded ledger is kept when no read handle has been"
+                    + " opened with it",
+            minValue = 1
+    )
+    private int managedLedgerOffloadReadIndexCacheExpirySeconds = 300;
+
+    @FieldContext(
         category = CATEGORY_STORAGE_OFFLOADING,
         doc = "The directory where nar Extraction of offloaders happens"
     )

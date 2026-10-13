@@ -18,16 +18,15 @@
  */
 package org.apache.bookkeeper.mledger.offload.jcloud.impl;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -61,12 +60,12 @@ public class EntryOffsetIndex {
         long maxSize = Math.max(0, maxSizeBytes);
         // At most 1 GiB, which keeps an object's weight within an int
         this.maxObjectRunsBytes = Math.min(maxSize / 8, 1L << 30);
-        this.objects = maxSize == 0 ? null : CacheBuilder.newBuilder()
-                // One segment, so that the budget and the least recently used order are the index's
-                .concurrencyLevel(1)
+        this.objects = maxSize == 0 ? null : Caffeine.newBuilder()
                 .maximumWeight(maxSize)
                 .<String, ObjectOffsets>weigher((key, offsets) -> offsets.weight())
                 .expireAfterAccess(Math.max(1, expirySeconds), TimeUnit.SECONDS)
+                // The index's maintenance runs on the threads that use it
+                .executor(Runnable::run)
                 .build();
     }
 
@@ -79,11 +78,7 @@ public class EntryOffsetIndex {
             return NONE;
         }
         String objectKey = bucket + "/" + key;
-        try {
-            return objects.get(objectKey, () -> new ObjectOffsets(this, objectKey, maxObjectRunsBytes));
-        } catch (ExecutionException e) {
-            throw new IllegalStateException(e.getCause());
-        }
+        return objects.get(objectKey, k -> new ObjectOffsets(this, objectKey, maxObjectRunsBytes));
     }
 
     // Weighs the object's offsets again after they have changed, unless they have been dropped

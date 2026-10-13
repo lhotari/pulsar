@@ -18,10 +18,10 @@
  */
 package org.apache.bookkeeper.mledger.offload.jcloud.impl;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.RemovalCause;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.RemovalListener;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import io.netty.buffer.ByteBuf;
 import java.io.IOException;
@@ -164,14 +164,17 @@ public class OffloadedDataChunkCache implements AutoCloseable {
         this.maxSizeBytes = Math.max(0, maxSizeBytes);
         // Prefetched chunks are only kept by the cache
         this.prefetchChunks = this.maxSizeBytes > 0 ? Math.max(0, prefetchChunks) : 0;
-        this.chunks = CacheBuilder.newBuilder()
-                // One segment, so that the budget and the least recently used order are the cache's, not each
-                // segment's; the cache is used once per chunk read, which keeps contention low
-                .concurrencyLevel(1)
+        this.chunks = Caffeine.newBuilder()
                 .maximumWeight(this.maxSizeBytes)
                 .<Key, Chunk>weigher((key, chunk) -> key.length())
                 .expireAfterAccess(Math.max(1, ttlSeconds), TimeUnit.SECONDS)
-                .removalListener((RemovalListener<Key, Chunk>) notification -> notification.getValue().release())
+                .removalListener((Key key, Chunk chunk, RemovalCause cause) -> {
+                    if (chunk != null) {
+                        chunk.release();
+                    }
+                })
+                // The cache's maintenance, and the release of the removed chunks, run on the threads that use it
+                .executor(Runnable::run)
                 .build();
         this.prefetchThreads = Math.max(1, prefetchThreads);
         this.prefetchExecutor = Executors.newFixedThreadPool(this.prefetchThreads,

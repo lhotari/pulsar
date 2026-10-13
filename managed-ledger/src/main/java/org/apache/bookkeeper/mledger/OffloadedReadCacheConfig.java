@@ -38,23 +38,32 @@ import org.apache.bookkeeper.common.annotation.InterfaceStability.Evolving;
  *                              each entry
  * @param entryOffsetsExpirySeconds how long the offsets of an offloaded ledger's entries are kept when no read has used
  *                                  them
+ * @param indexCacheSizeBytes the most bytes, estimated, of the parsed indexes of offloaded ledgers that are kept, so
+ *                            that reopening a ledger's read handle doesn't read its index object again; 0 keeps none,
+ *                            and only opens of the same ledger at the same time share the read of its index
+ * @param indexCacheExpirySeconds how long a parsed index is kept when no read handle has been opened with it
  */
 @LimitedPrivate
 @Evolving
 public record OffloadedReadCacheConfig(long cacheSizeBytes, int cacheExpirySeconds, int prefetchChunks,
                                        int prefetchThreads, long entryOffsetsSizeBytes,
-                                       int entryOffsetsExpirySeconds) {
+                                       int entryOffsetsExpirySeconds, long indexCacheSizeBytes,
+                                       int indexCacheExpirySeconds) {
     /** The defaults, for an offloader created without the broker's settings. */
     public static final OffloadedReadCacheConfig DEFAULT =
-            new OffloadedReadCacheConfig(64L * 1024 * 1024, 60, 1, 4, 16L * 1024 * 1024, 300);
+            new OffloadedReadCacheConfig(64L * 1024 * 1024, 60, 1, 4, 16L * 1024 * 1024, 300,
+                    16L * 1024 * 1024, 300);
 
     public OffloadedReadCacheConfig {
         if (cacheSizeBytes < 0 || cacheExpirySeconds < 1 || prefetchChunks < 0 || prefetchThreads < 1
-                || entryOffsetsSizeBytes < 0 || entryOffsetsExpirySeconds < 1) {
+                || entryOffsetsSizeBytes < 0 || entryOffsetsExpirySeconds < 1 || indexCacheSizeBytes < 0
+                || indexCacheExpirySeconds < 1) {
             throw new IllegalArgumentException("Invalid offloaded read cache settings: cacheSizeBytes="
                     + cacheSizeBytes + " cacheExpirySeconds=" + cacheExpirySeconds + " prefetchChunks="
                     + prefetchChunks + " prefetchThreads=" + prefetchThreads + " entryOffsetsSizeBytes="
-                    + entryOffsetsSizeBytes + " entryOffsetsExpirySeconds=" + entryOffsetsExpirySeconds);
+                    + entryOffsetsSizeBytes + " entryOffsetsExpirySeconds=" + entryOffsetsExpirySeconds
+                    + " indexCacheSizeBytes=" + indexCacheSizeBytes + " indexCacheExpirySeconds="
+                    + indexCacheExpirySeconds);
         }
     }
 }

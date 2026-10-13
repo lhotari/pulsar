@@ -26,6 +26,8 @@ dependencies {
     compileOnly(project(":managed-ledger"))
     compileOnly(libs.bookkeeper.server)
     compileOnly(libs.netty.buffer)
+    // The broker provides it, as it does Guava
+    compileOnly(libs.caffeine)
     implementation(project(":jclouds-shaded")) {
         // Shadow jar contains all needed classes — prevent unshaded jclouds/guava from leaking
         isTransitive = false
@@ -43,6 +45,7 @@ dependencies {
     testImplementation(project(":managed-ledger"))
     testImplementation(project(":testmocks"))
     testImplementation(libs.guava)
+    testImplementation(libs.caffeine)
     testImplementation(libs.netty.buffer)
     testCompileOnly(libs.jclouds.blobstore)
     testCompileOnly(libs.jclouds.allblobstore)

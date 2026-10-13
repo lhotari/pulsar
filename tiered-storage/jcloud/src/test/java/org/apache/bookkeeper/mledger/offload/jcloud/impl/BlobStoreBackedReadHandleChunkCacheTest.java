@@ -50,6 +50,11 @@ public class BlobStoreBackedReadHandleChunkCacheTest extends BlobStoreManagedLed
     }
 
     private BlobStoreManagedLedgerOffloader offloader(OffloadedDataChunkCache cache) throws IOException {
+        return offloader(cache, null);
+    }
+
+    private BlobStoreManagedLedgerOffloader offloader(OffloadedDataChunkCache cache, OffloadIndexCache indexCache)
+            throws IOException {
         Map<String, String> settings = new HashMap<>();
         settings.put(TieredStorageConfiguration.OFFLOADER_PROPERTY_PREFIX + "MaxBlockSizeInBytes",
                 Integer.toString(BLOCK_SIZE));
@@ -57,7 +62,7 @@ public class BlobStoreBackedReadHandleChunkCacheTest extends BlobStoreManagedLed
                 Integer.toString(READ_BUFFER_SIZE));
         TieredStorageConfiguration configuration = getConfiguration(BUCKET, settings);
         return BlobStoreManagedLedgerOffloader.create(configuration, new HashMap<>(), scheduler, scheduler,
-                LedgerOffloaderStatsDisable.INSTANCE, entryOffsetIndex, cache);
+                LedgerOffloaderStatsDisable.INSTANCE, entryOffsetIndex, cache, indexCache);
     }
 
     private static void assertSameEntries(ReadHandle expected, ReadHandle actual, long first, long last)
@@ -112,6 +117,32 @@ public class BlobStoreBackedReadHandleChunkCacheTest extends BlobStoreManagedLed
     }
 
     @Test
+    public void reopenedReadHandlesShareTheParsedIndex() throws Exception {
+        @Cleanup
+        OffloadedDataChunkCache cache = new OffloadedDataChunkCache(1 << 20, 60, 0, 1);
+        OffloadIndexCache indexCache = new OffloadIndexCache(1 << 20, 60);
+        @Cleanup
+        ReadHandle toWrite = buildReadHandle(BLOCK_SIZE, 3);
+        @Cleanup
+        BlobStoreManagedLedgerOffloader offloader = offloader(cache, indexCache);
+        UUID uuid = UUID.randomUUID();
+        offloader.offload(toWrite, uuid, new HashMap<>()).get();
+        long lastEntry = toWrite.getLastAddConfirmed();
+
+        ReadHandle first = offloader.readOffloaded(toWrite.getId(), uuid, Collections.emptyMap()).get();
+        assertSameEntries(toWrite, first, 0, lastEntry);
+        // closing a handle doesn't recycle the shared index, which the next handle of the ledger is opened with
+        first.closeAsync().get();
+        @Cleanup
+        ReadHandle second = offloader.readOffloaded(toWrite.getId(), uuid, Collections.emptyMap()).get();
+        assertThat(second.getLastAddConfirmed()).isEqualTo(lastEntry);
+        assertThat(first.getLastAddConfirmed()).isEqualTo(lastEntry);
+        assertSameEntries(toWrite, second, 0, lastEntry);
+        assertThat(indexCache.loads()).isEqualTo(1);
+        assertThat(indexCache.hits()).isEqualTo(1);
+    }
+
+    @Test
     public void readHandlesShareTheChunksAndReleaseThemWhenClosed() throws Exception {
         @Cleanup
         OffloadedDataChunkCache cache = new OffloadedDataChunkCache(1 << 20, 60, 0, 1);
@@ -146,7 +177,7 @@ public class BlobStoreBackedReadHandleChunkCacheTest extends BlobStoreManagedLed
         properties.putAll(getConfiguration(BUCKET).getConfigProperties());
         OffloadPoliciesImpl policies = OffloadPoliciesImpl.create(properties);
         LedgerOffloaderStats stats = LedgerOffloaderStatsDisable.INSTANCE;
-        OffloadedReadCacheConfig config = new OffloadedReadCacheConfig(1 << 20, 60, 1, 1, 1 << 20, 300);
+        OffloadedReadCacheConfig config = new OffloadedReadCacheConfig(1 << 20, 60, 1, 1, 1 << 20, 300, 1 << 20, 300);
         assertThat(factory.create(policies, new HashMap<>(), null, scheduler, scheduler, stats, config)).isNotNull();
         // another caller's settings don't replace the cache's
         assertThat(factory.create(policies, new HashMap<>(), scheduler, stats)).isNotNull();
