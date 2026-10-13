@@ -67,6 +67,9 @@ public class BlobStoreBackedReadHandleImpl implements ReadHandle, OffloadedLedge
 
     private final long ledgerId;
     private final OffloadIndexBlock index;
+    // Whether the handle closes the index when it's closed, which recycles it: not one that the offloader's index
+    // cache shares with other read handles
+    private final boolean closeIndex;
     // Copied at open time since the index is recycled on close, while the managed ledger may still use the handle,
     // which it closes when it no longer reads the ledger
     private final LedgerMetadata ledgerMetadata;
@@ -98,8 +101,15 @@ public class BlobStoreBackedReadHandleImpl implements ReadHandle, OffloadedLedge
     BlobStoreBackedReadHandleImpl(long ledgerId, OffloadIndexBlock index,
                                   BackedInputStream inputStream, ExecutorService executor,
                                   Supplier<EntryOffsetIndex.ObjectOffsets> entryOffsets) {
+        this(ledgerId, index, true, inputStream, executor, entryOffsets);
+    }
+
+    private BlobStoreBackedReadHandleImpl(long ledgerId, OffloadIndexBlock index, boolean closeIndex,
+                                          BackedInputStream inputStream, ExecutorService executor,
+                                          Supplier<EntryOffsetIndex.ObjectOffsets> entryOffsets) {
         this.ledgerId = ledgerId;
         this.index = index;
+        this.closeIndex = closeIndex;
         this.ledgerMetadata = index.getLedgerMetadata();
         this.inputStream = inputStream;
         this.dataStream = new DataInputStream(inputStream);
@@ -176,7 +186,9 @@ public class BlobStoreBackedReadHandleImpl implements ReadHandle, OffloadedLedge
         CompletableFuture<Void> promise = closeFuture.get();
         executor.execute(() -> {
             try {
-                index.close();
+                if (closeIndex) {
+                    index.close();
+                }
                 inputStream.close();
                 state = State.Closed;
                 promise.complete(null);
@@ -484,6 +496,50 @@ public class BlobStoreBackedReadHandleImpl implements ReadHandle, OffloadedLedge
                                   LedgerOffloaderStats offloaderStats, String managedLedgerName,
                                   EntryOffsetIndex entryOffsetIndex, OffloadedDataChunkCache dataChunkCache)
             throws IOException, BKException.BKNoSuchLedgerExistsException {
+        return open(executor, blobStore, bucket, key, indexKey, versionCheck, ledgerId, readBufferSize,
+                offloaderStats, managedLedgerName, entryOffsetIndex, dataChunkCache, null);
+    }
+
+    /**
+     * Opens a read handle of an offloaded ledger, with the ledger's parsed index from {@code indexCache}, which reads
+     * the index object only when it has no read of it, or none in progress; without a cache, the handle reads the
+     * index object itself.
+     */
+    public static ReadHandle open(ScheduledExecutorService executor,
+                                  BlobStore blobStore, String bucket, String key, String indexKey,
+                                  VersionCheck versionCheck,
+                                  long ledgerId, int readBufferSize,
+                                  LedgerOffloaderStats offloaderStats, String managedLedgerName,
+                                  EntryOffsetIndex entryOffsetIndex, OffloadedDataChunkCache dataChunkCache,
+                                  OffloadIndexCache indexCache)
+            throws IOException, BKException.BKNoSuchLedgerExistsException {
+        OffloadIndexBlock index;
+        if (indexCache != null) {
+            try {
+                index = indexCache.get(bucket, indexKey, () -> readIndex(blobStore, bucket, indexKey, versionCheck,
+                        offloaderStats, managedLedgerName));
+            } catch (BKException.BKNoSuchLedgerExistsException | IOException e) {
+                throw e;
+            } catch (BKException e) {
+                throw new IOException(e);
+            }
+        } else {
+            index = readIndex(blobStore, bucket, indexKey, versionCheck, offloaderStats, managedLedgerName);
+        }
+
+        BackedInputStream inputStream = new BlobStoreBackedInputStreamImpl(blobStore, bucket, key,
+                versionCheck, index.getDataObjectLength(), readBufferSize, offloaderStats, managedLedgerName,
+                dataChunkCache);
+
+        return new BlobStoreBackedReadHandleImpl(ledgerId, index, indexCache == null, inputStream, executor,
+                () -> entryOffsetIndex.offsets(bucket, key));
+    }
+
+    // Reads and parses the index object of an offloaded ledger
+    private static OffloadIndexBlock readIndex(BlobStore blobStore, String bucket, String indexKey,
+                                               VersionCheck versionCheck, LedgerOffloaderStats offloaderStats,
+                                               String managedLedgerName)
+            throws IOException, BKException.BKNoSuchLedgerExistsException {
         int retryCount = 3;
         OffloadIndexBlock index = null;
         IOException lastException = null;
@@ -520,13 +576,7 @@ public class BlobStoreBackedReadHandleImpl implements ReadHandle, OffloadedLedge
         if (lastException != null) {
             throw lastException;
         }
-
-        BackedInputStream inputStream = new BlobStoreBackedInputStreamImpl(blobStore, bucket, key,
-                versionCheck, index.getDataObjectLength(), readBufferSize, offloaderStats, managedLedgerName,
-                dataChunkCache);
-
-        return new BlobStoreBackedReadHandleImpl(ledgerId, index, inputStream, executor,
-                () -> entryOffsetIndex.offsets(bucket, key));
+        return index;
     }
 
     // for testing

@@ -28,6 +28,7 @@ import org.apache.bookkeeper.mledger.LedgerOffloaderStatsDisable;
 import org.apache.bookkeeper.mledger.OffloadedReadCacheConfig;
 import org.apache.bookkeeper.mledger.offload.jcloud.impl.BlobStoreManagedLedgerOffloader;
 import org.apache.bookkeeper.mledger.offload.jcloud.impl.EntryOffsetIndex;
+import org.apache.bookkeeper.mledger.offload.jcloud.impl.OffloadIndexCache;
 import org.apache.bookkeeper.mledger.offload.jcloud.impl.OffloadedDataChunkCache;
 import org.apache.bookkeeper.mledger.offload.jcloud.provider.JCloudBlobStoreProvider;
 import org.apache.bookkeeper.mledger.offload.jcloud.provider.TieredStorageConfiguration;
@@ -42,6 +43,7 @@ public class JCloudLedgerOffloaderFactory implements LedgerOffloaderFactory<Blob
     // Shared by the offloaders, created with the broker's settings of the first offloader; guarded by this
     private OffloadedDataChunkCache dataChunkCache;
     private EntryOffsetIndex entryOffsetIndex;
+    private OffloadIndexCache indexCache;
     private OffloadedReadCacheConfig readCacheConfig;
     private boolean closed;
 
@@ -96,7 +98,7 @@ public class JCloudLedgerOffloaderFactory implements LedgerOffloaderFactory<Blob
         synchronized (this) {
             createReadCaches(readCacheConfig);
             return BlobStoreManagedLedgerOffloader.create(config, userMetadata, scheduler, readExecutor,
-                    offloaderStats, entryOffsetIndex, dataChunkCache);
+                    offloaderStats, entryOffsetIndex, dataChunkCache, indexCache);
         }
     }
 
@@ -109,6 +111,7 @@ public class JCloudLedgerOffloaderFactory implements LedgerOffloaderFactory<Blob
             dataChunkCache = new OffloadedDataChunkCache(requestedConfig);
             entryOffsetIndex = new EntryOffsetIndex(requestedConfig.entryOffsetsSizeBytes(),
                     requestedConfig.entryOffsetsExpirySeconds());
+            indexCache = new OffloadIndexCache(requestedConfig);
             readCacheConfig = requestedConfig;
             log.debug().attr("config", requestedConfig).log("Created the caches of offloaded data and entry offsets");
         } else if (!readCacheConfig.equals(requestedConfig)) {

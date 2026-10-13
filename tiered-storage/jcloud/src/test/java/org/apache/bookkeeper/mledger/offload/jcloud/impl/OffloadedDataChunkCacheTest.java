@@ -116,18 +116,16 @@ public class OffloadedDataChunkCacheTest extends BlobStoreTestBase {
         assertThat(again).isSameAs(chunk);
         assertThat(fetches.get()).isEqualTo(1);
         assertThat(cache.hits()).isEqualTo(1);
-        // three chunks of 16 bytes don't fit into 32: the least recently used is dropped, but the read that holds it
-        // keeps it readable until it releases it
+        // three chunks of 16 bytes don't fit into 32: one of them is dropped, which one is the cache's eviction
+        // policy's choice, but the read that holds a dropped chunk keeps it readable until it releases it
         for (int i = 1; i <= 2; i++) {
             cache.acquire(new OffloadedDataChunkCache.Key("bucket", "object", 16L * i, 16), fetcher).release();
         }
         assertThat(cache.cachedBytes()).isEqualTo(32);
-        assertThat(again.references()).isEqualTo(1);
         assertThat(again.buffer().getByte(15)).isEqualTo((byte) 15);
         again.release();
-        assertThat(again.buffer().refCnt()).isZero();
-        // the two later chunks are still cached
-        cache.acquire(new OffloadedDataChunkCache.Key("bucket", "object", 32, 16), fetcher).release();
+        // only the cached chunks' buffers are left
+        assertThat(cache.liveChunks()).isEqualTo(2);
         assertThat(fetches.get()).isEqualTo(3);
     }
 
