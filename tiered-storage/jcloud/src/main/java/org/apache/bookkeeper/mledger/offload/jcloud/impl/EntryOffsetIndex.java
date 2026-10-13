@@ -57,7 +57,8 @@ public class EntryOffsetIndex {
 
     public EntryOffsetIndex(long maxSizeBytes, int expirySeconds) {
         long maxSize = Math.max(0, maxSizeBytes);
-        this.maxObjectRunsBytes = maxSize / 8;
+        // At most 1 GiB, which keeps an object's weight within an int
+        this.maxObjectRunsBytes = Math.min(maxSize / 8, 1L << 30);
         this.objects = maxSize == 0 ? null : CacheBuilder.newBuilder()
                 // One segment, so that the budget and the least recently used order are the index's
                 .concurrencyLevel(1)
@@ -115,10 +116,14 @@ public class EntryOffsetIndex {
         // Guarded by this
         private long runsWeight;
 
+        // The most entries that the runs' arrays can hold within the share, with the end offset of a run
+        private final int maxRunEntries;
+
         private ObjectOffsets(EntryOffsetIndex index, String objectKey, long maxRunsBytes) {
             this.index = index;
             this.objectKey = objectKey;
             this.maxRunsBytes = maxRunsBytes;
+            this.maxRunEntries = (int) Math.max(0, (maxRunsBytes - RUN_OVERHEAD_BYTES) / 4 - 1);
         }
 
         private synchronized int weight() {
@@ -201,10 +206,11 @@ public class EntryOffsetIndex {
             Map.Entry<Long, Run> after = runs.higherEntry(firstEntryId);
             boolean overlapsAfter = after != null && after.getKey() <= lastEntryId + 1;
             if (before != null && !overlapsAfter && before.lastEntryId() + 1 == firstEntryId
-                    && before.endOffset() == offsets[0] && before.canAppend(endOffset)) {
+                    && before.endOffset() == offsets[0] && before.canAppend(endOffset)
+                    && before.count + count <= maxRunEntries) {
                 // Continues the run, as sequential reads do
                 runsWeight -= before.weight();
-                before.append(offsets, count, endOffset);
+                before.append(offsets, count, endOffset, maxRunEntries + 1);
                 runsWeight += before.weight();
                 return true;
             }
@@ -254,11 +260,15 @@ public class EntryOffsetIndex {
             }
             if (runsWeight > maxRunsBytes && runs.size() == 1) {
                 Run run = runs.firstEntry().getValue();
-                int keep = (int) Math.max(1, (maxRunsBytes - RUN_OVERHEAD_BYTES) / 4 - 1);
                 runs.clear();
-                Run end = run.end(keep);
-                runs.put(end.firstEntryId, end);
-                runsWeight = end.weight();
+                runsWeight = 0;
+                if (maxRunEntries > 0) {
+                    // Half of the share, in an array of the whole share, so that the run can grow by the other half
+                    // before it is trimmed again
+                    Run end = run.end(Math.max(1, maxRunEntries / 2), maxRunEntries + 1);
+                    runs.put(end.firstEntryId, end);
+                    runsWeight = end.weight();
+                }
             }
         }
 
@@ -331,11 +341,12 @@ public class EntryOffsetIndex {
             return endOffset - firstOffset <= Integer.MAX_VALUE;
         }
 
-        /** Appends entries that continue the run byte for byte. */
-        void append(long[] offsets, int added, long endOffset) {
+        /** Appends entries that continue the run byte for byte, in an array of at most {@code maxLength}. */
+        void append(long[] offsets, int added, long endOffset, int maxLength) {
             int needed = count + added + 1;
             if (needed > relativeOffsets.length) {
-                relativeOffsets = Arrays.copyOf(relativeOffsets, Math.max(needed, relativeOffsets.length * 2));
+                relativeOffsets = Arrays.copyOf(relativeOffsets,
+                        Math.max(needed, Math.min(relativeOffsets.length * 2, maxLength)));
             }
             for (int i = 0; i < added; i++) {
                 relativeOffsets[count + i] = (int) (offsets[i] - firstOffset);
@@ -344,14 +355,12 @@ public class EntryOffsetIndex {
             relativeOffsets[count] = (int) (endOffset - firstOffset);
         }
 
-        /** A run of the last {@code keep} entries of this one. */
-        Run end(int keep) {
-            if (keep >= count) {
-                return this;
-            }
+        /** A run of the last {@code keep} entries of this one, in an array of {@code length} or as many as needed. */
+        Run end(int keep, int length) {
+            keep = Math.min(keep, count);
             int from = count - keep;
             long base = firstOffset + relativeOffsets[from];
-            int[] relative = new int[keep + 1];
+            int[] relative = new int[Math.max(keep + 1, length)];
             for (int i = 0; i <= keep; i++) {
                 relative[i] = relativeOffsets[from + i] - relativeOffsets[from];
             }

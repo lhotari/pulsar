@@ -120,6 +120,24 @@ public class EntryOffsetIndexTest {
     }
 
     @Test
+    public void keepsLongSequentialRunsWithinTheObjectsShare() {
+        // a share of 384 KiB per object, room for about 98,000 entries' offsets
+        EntryOffsetIndex index = new EntryOffsetIndex(3 * 1024 * 1024, 60);
+        EntryOffsetIndex.ObjectOffsets offsets = index.offsets("bucket", "object");
+        int share = 3 * 1024 * 1024 / 8;
+        for (long first = 0; first < 1_000_000; first += 4096) {
+            add(offsets, first, 4096);
+            // the runs' arrays, spare room included, and the anchors
+            assertThat(index.weight()).isLessThanOrEqualTo(share + offsets.anchorEntryIds().size() * 80);
+        }
+        // the end of the run, at least half of the share, is kept
+        List<List<Long>> runs = runs(offsets);
+        assertThat(runs).hasSize(1);
+        assertThat(runs.get(0).get(1) - runs.get(0).get(0)).isGreaterThan(40_000L);
+        assertThat(runs.get(0).get(1)).isEqualTo(1_003_519L);
+    }
+
+    @Test
     public void withoutABudgetKeepsNoOffsets() {
         EntryOffsetIndex index = new EntryOffsetIndex(0, 60);
         EntryOffsetIndex.ObjectOffsets offsets = index.offsets("bucket", "object");
