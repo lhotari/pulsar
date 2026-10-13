@@ -126,6 +126,12 @@ public class InflightReadsLimiterTest {
         assertThat(queued.get().success()).isTrue();
         assertThat(limiter.getRemainingBytes()).isEqualTo(50);
         assertThat(limiter.tryAcquire(10)).isPresent();
+        // more than the limit, which acquire allows when nothing is in flight, is never acquired
+        InflightReadsLimiter empty =
+                new InflightReadsLimiter(100, ACQUIRE_QUEUE_SIZE, ACQUIRE_TIMEOUT_MILLIS,
+                        mock(ScheduledExecutorService.class), OpenTelemetry.noop());
+        assertThat(empty.tryAcquire(101)).isEmpty();
+        assertThat(empty.getRemainingBytes()).isEqualTo(100);
     }
 
     @Test

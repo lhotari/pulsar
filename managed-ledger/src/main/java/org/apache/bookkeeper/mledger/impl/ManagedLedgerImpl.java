@@ -2687,10 +2687,10 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
      * entries as the read, within the ledger and the entries that the read may see, see
      * {@link ManagedLedgerConfig#isReadAheadEnabled()}.
      */
-    private void readAhead(ReadHandle ledger, long firstEntry, long lastEntry, OpReadEntry opReadEntry) {
+    private Runnable readAhead(ReadHandle ledger, long firstEntry, long lastEntry, OpReadEntry opReadEntry) {
         ManagedCursorImpl cursor = opReadEntry.cursor;
         if (cursor == null) {
-            return;
+            return null;
         }
         long lastVisibleEntry;
         Position lastPosition = lastConfirmedEntry;
@@ -2702,7 +2702,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         Position maxPosition = opReadEntry.maxPosition;
         if (maxPosition != null) {
             if (maxPosition.getLedgerId() < ledger.getId()) {
-                return;
+                return null;
             }
             if (maxPosition.getLedgerId() == ledger.getId()) {
                 lastVisibleEntry = min(lastVisibleEntry, maxPosition.getEntryId());
@@ -2710,27 +2710,33 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         }
         long nextEntry = lastEntry + 1;
         if (nextEntry > lastVisibleEntry) {
-            return;
+            return null;
         }
         long nextLastEntry = min(nextEntry + (lastEntry - firstEntry), lastVisibleEntry);
-        IntSupplier expectedReadCount = cursor::getNumberOfCursorsAtSamePositionOrBefore;
-        // The cache wouldn't keep the entries
-        if (expectedReadCount.getAsInt() <= 0) {
-            return;
-        }
-        Object readAhead = cursor.tryStartReadAhead();
-        if (readAhead == null) {
-            return;
-        }
-        boolean started = false;
-        try {
-            started = entryCache.readAhead(ledger, nextEntry, nextLastEntry, opReadEntry.maxSizeBytes,
-                    expectedReadCount, () -> cursor.readAheadCompleted(readAhead));
-        } finally {
-            if (!started) {
-                cursor.readAheadCompleted(readAhead);
+        long maxSizeBytes = opReadEntry.maxSizeBytes;
+        return () -> {
+            IntSupplier expectedReadCount = cursor::getNumberOfCursorsAtSamePositionOrBefore;
+            // The cache wouldn't keep the entries
+            if (expectedReadCount.getAsInt() <= 0) {
+                return;
             }
-        }
+            Object readAhead = cursor.tryStartReadAhead();
+            if (readAhead == null) {
+                return;
+            }
+            boolean started = false;
+            try {
+                started = entryCache.readAhead(ledger, nextEntry, nextLastEntry, maxSizeBytes, expectedReadCount,
+                        () -> cursor.readAheadCompleted(readAhead));
+            } catch (Throwable t) {
+                // A read ahead is best effort
+                log.debug().attr("ledgerId", ledger.getId()).exceptionMessage(t).log("Couldn't read ahead");
+            } finally {
+                if (!started) {
+                    cursor.readAheadCompleted(readAhead);
+                }
+            }
+        };
     }
 
     protected void asyncReadEntry(ReadHandle ledger, Position position, ReadEntryCallback callback, Object ctx) {
@@ -2749,10 +2755,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     protected void asyncReadEntry(ReadHandle ledger, long firstEntry, long lastEntry, OpReadEntry opReadEntry,
             Object ctx) {
-        if (config.isReadAheadEnabled()) {
-            // Before the read, which may complete on this thread and recycle the operation
-            readAhead(ledger, firstEntry, lastEntry, opReadEntry);
-        }
+        // Captured before the read, which may complete on this thread and recycle the operation; started after it, so
+        // that the read takes its in-flight-read permits before the read ahead
+        Runnable readAhead = config.isReadAheadEnabled() ? readAhead(ledger, firstEntry, lastEntry, opReadEntry) : null;
         IntSupplier expectedReadCount = opReadEntry.cursor::getNumberOfCursorsAtSamePositionOrBefore;
         if (config.getReadEntryTimeoutSeconds() > 0) {
             ReadEntryCallbackWrapper readCallback = ReadEntryCallbackWrapper.create(this, ledger.getId(), firstEntry,
@@ -2765,6 +2770,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         } else {
             entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, opReadEntry.maxSizeBytes, expectedReadCount,
                     opReadEntry, ctx);
+        }
+        if (readAhead != null) {
+            readAhead.run();
         }
     }
 
