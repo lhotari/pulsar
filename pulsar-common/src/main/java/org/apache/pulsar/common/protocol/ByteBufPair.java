@@ -38,6 +38,8 @@ public final class ByteBufPair extends AbstractReferenceCounted {
 
     private ByteBuf b1;
     private ByteBuf b2;
+    // whether the pair's creator owns its buffer objects exclusively, see markBuffersExclusive
+    private boolean buffersExclusive;
     private final Handle<ByteBufPair> recyclerHandle;
 
     private static final Recycler<ByteBufPair> RECYCLER = new Recycler<ByteBufPair>() {
@@ -66,7 +68,21 @@ public final class ByteBufPair extends AbstractReferenceCounted {
         buf.setRefCnt(1);
         buf.b1 = b1;
         buf.b2 = b2;
+        buf.buffersExclusive = false;
         return buf;
+    }
+
+    /**
+     * Marks that nothing but this pair uses its buffer objects, so that when the pair's only reference is written,
+     * {@link Encoder} hands the buffers themselves to the write instead of retained duplicates, and the write advances
+     * their reader indexes. Only the creator of the pair can tell: by default, a pair's buffers may be shared, such as
+     * one payload in several pairs.
+     *
+     * @return this pair
+     */
+    public ByteBufPair markBuffersExclusive() {
+        buffersExclusive = true;
+        return this;
     }
 
     public ByteBuf getFirst() {
@@ -102,9 +118,15 @@ public final class ByteBufPair extends AbstractReferenceCounted {
 
     @Override
     protected void deallocate() {
-        b1.release();
-        b2.release();
+        // the buffers are null when a write took over their references, see Encoder
+        if (b1 != null) {
+            b1.release();
+        }
+        if (b2 != null) {
+            b2.release();
+        }
         b1 = b2 = null;
+        buffersExclusive = false;
         recyclerHandle.recycle(this);
     }
 
@@ -155,6 +177,25 @@ public final class ByteBufPair extends AbstractReferenceCounted {
         public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
             if (msg instanceof ByteBufPair) {
                 ByteBufPair b = (ByteBufPair) msg;
+
+                if (b.buffersExclusive && b.refCnt() == 1) {
+                    // The write holds the pair's only reference, and nothing else uses its buffers: the writes take
+                    // over the pair's references to them instead of retaining duplicates that the pair then releases.
+                    // That saves retaining and releasing each buffer, which for a message dispatched to a consumer
+                    // shares its reference count with the other readers of the entry.
+                    ByteBuf first = b.b1;
+                    ByteBuf second = b.b2;
+                    b.b1 = b.b2 = null;
+                    b.release();
+                    try {
+                        ctx.write(first, ctx.voidPromise());
+                    } catch (Throwable t) {
+                        second.release();
+                        throw t;
+                    }
+                    ctx.write(second, promise);
+                    return;
+                }
 
                 // Write each buffer individually on the socket. The retain() here is needed to preserve the fact that
                 // ByteBuf are automatically released after a write. If the ByteBufPair ref count is increased and it

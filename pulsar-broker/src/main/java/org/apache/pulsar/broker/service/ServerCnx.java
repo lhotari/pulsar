@@ -4789,6 +4789,11 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         BaseCommand command = Commands.newMessageCommand(consumerId, ledgerId, entryId, partition, redeliveryCount,
                 ackSet, epoch);
         ByteBufPair res = Commands.serializeCommandMessageWithSize(command, metadataAndPayload);
+        if (brokerInterceptor == null) {
+            // The dispatcher passes the entry's own buffer object, which nothing reads after the write; an
+            // interceptor gets it too, see messageDispatched, and might keep it.
+            res.markBuffersExclusive();
+        }
         interceptMessage(command, consumerId, ledgerId, entryId, metadataAndPayload);
         return res;
     }
