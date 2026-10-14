@@ -54,9 +54,10 @@ import org.apache.pulsar.tests.performance.report.RunReport;
  * estimated backlog (the default, not the precise backlog that scans the ledger), without the stats of the topic's
  * publishers and consumers, so once per second has no measurable cost next to a workload of about 100,000 messages
  * per second with a few topics. Each call costs the broker an HTTP request and a topic ownership check, though: at
- * 1,000 topics, sampling every second took 16 % of the broker's CPU. So the sampler makes at most
- * {@value #MAX_REQUESTS_PER_SECOND} calls per second, sampling every {@code topics / MAX_REQUESTS_PER_SECOND}
- * seconds, rounded up, with more topics. A failed sample is reported and skipped; sampling never fails the run.
+ * 1,000 topics, sampling every second took 16 % of the broker's CPU. So with more topics than
+ * {@value #MAX_REQUESTS_PER_SECOND}, the sampler samples every {@code topics / MAX_REQUESTS_PER_SECOND} seconds,
+ * rounded up, {@value #MAX_REQUESTS_PER_SECOND} calls per second on average, and a round makes at most
+ * {@value #MAX_IN_FLIGHT} calls at a time. A round's samples have the time of its end, which follows all of them. A failed sample is reported and skipped; sampling never fails the run.
  *
  * <p>A broker redirects the stats request of a topic that another broker owns to that broker's name in the cluster's
  * network, which the launcher's host can't resolve. So the sampler asks each broker through its port on the host: for
@@ -74,7 +75,7 @@ final class TopicStatsSampler implements AutoCloseable {
     private static final long INTERVAL_MILLIS = 1000;
     static final int MAX_REQUESTS_PER_SECOND = 100;
     // The most requests of a round in flight at a time
-    private static final int MAX_IN_FLIGHT = 16;
+    static final int MAX_IN_FLIGHT = 16;
     static final String REPLICATION_FILE_NAME = RunReport.REPLICATION_STATS_FILE;
     static final String REPLICATION_HEADER = "epochMs,topic,remoteCluster,replicationBacklog,connected,"
             + "replicationDelaySeconds,msgOutCounter";
@@ -98,9 +99,13 @@ final class TopicStatsSampler implements AutoCloseable {
      * summed over the topics, which is the application that is furthest behind; and the replication backlog summed
      * over the topics and remote clusters, or -1 without a remote cluster.
      */
-    record Backlog(long epochMs, long total, long maxSubscription, long replication) {
+    record Backlog(long epochMs, long total, long maxSubscription, long replication, long intervalMillis) {
         Backlog(long epochMs, long total, long maxSubscription) {
             this(epochMs, total, maxSubscription, -1);
+        }
+
+        Backlog(long epochMs, long total, long maxSubscription, long replication) {
+            this(epochMs, total, maxSubscription, replication, INTERVAL_MILLIS);
         }
     }
 
@@ -163,7 +168,7 @@ final class TopicStatsSampler implements AutoCloseable {
         long intervalMillis = intervalMillis(topics.size());
         if (intervalMillis > INTERVAL_MILLIS) {
             System.out.println("Sampling the stats of the " + topics.size() + " topics every "
-                    + intervalMillis / 1000 + " s, at most " + MAX_REQUESTS_PER_SECOND + " requests per second");
+                    + intervalMillis / 1000 + " s, " + MAX_REQUESTS_PER_SECOND + " requests per second on average");
         }
         sampler.executor.scheduleWithFixedDelay(sampler::sample, 0, intervalMillis, TimeUnit.MILLISECONDS);
         return sampler;
@@ -174,43 +179,45 @@ final class TopicStatsSampler implements AutoCloseable {
     }
 
     private void sample() {
-        // One timestamp per round, so that the topics of a round line up in the report.
-        long now = System.currentTimeMillis();
+        // One timestamp per round, so that the topics of a round line up in the report: its end, which follows every
+        // observation of the round, so that none appears to precede an event that happened during the round
+        StringBuilder rows = new StringBuilder();
+        StringBuilder replicationRows = new StringBuilder();
         Map<String, Long> backlogs = new HashMap<>();
         long replicationBacklog = 0;
         boolean complete = true;
         // In parallel, so that a round takes as long as the slowest topics rather than all of them together, but at
         // most MAX_IN_FLIGHT at a time, so that many topics' requests don't reach the broker in one burst
         List<CompletableFuture<TopicStats>> requests = new ArrayList<>(Collections.nCopies(topics.size(), null));
-        for (int i = 0; i < Math.min(MAX_IN_FLIGHT, topics.size()); i++) {
+        for (int i = 0; i < Math.min(MAX_IN_FLIGHT - 1, topics.size()); i++) {
             requests.set(i, requestStats(topics.get(i)));
         }
         for (int i = 0; i < topics.size(); i++) {
             String topic = topics.get(i);
-            if (i + MAX_IN_FLIGHT < topics.size()) {
-                requests.set(i + MAX_IN_FLIGHT, requestStats(topics.get(i + MAX_IN_FLIGHT)));
+            // With the one awaited next, MAX_IN_FLIGHT at most
+            if (i + MAX_IN_FLIGHT - 1 < topics.size()) {
+                requests.set(i + MAX_IN_FLIGHT - 1, requestStats(topics.get(i + MAX_IN_FLIGHT - 1)));
             }
             try {
                 TopicStats stats = unwrap(requests.get(i));
                 for (Map.Entry<String, ? extends SubscriptionStats> subscription : stats.getSubscriptions()
                         .entrySet()) {
                     backlogs.merge(subscription.getKey(), subscription.getValue().getMsgBacklog(), Long::sum);
-                    writer.write(now + "," + topic + "," + subscription.getKey() + ","
-                            + subscription.getValue().getMsgBacklog() + "," + stats.getMsgInCounter() + ","
-                            + subscription.getValue().getMsgOutCounter());
-                    writer.newLine();
+                    rows.append(',').append(topic).append(',').append(subscription.getKey()).append(',')
+                            .append(subscription.getValue().getMsgBacklog()).append(',')
+                            .append(stats.getMsgInCounter()).append(',')
+                            .append(subscription.getValue().getMsgOutCounter()).append('\n');
                 }
-                writer.flush();
                 if (replicationWriter != null) {
                     for (Map.Entry<String, ? extends ReplicatorStats> replicator : stats.getReplication().entrySet()) {
                         ReplicatorStats replication = replicator.getValue();
                         replicationBacklog += replication.getReplicationBacklog();
-                        replicationWriter.write(now + "," + topic + "," + replicator.getKey() + ","
-                                + replication.getReplicationBacklog() + "," + replication.isConnected() + ","
-                                + replication.getReplicationDelayInSeconds() + "," + replication.getMsgOutCount());
-                        replicationWriter.newLine();
+                        replicationRows.append(',').append(topic).append(',').append(replicator.getKey()).append(',')
+                                .append(replication.getReplicationBacklog()).append(',')
+                                .append(replication.isConnected()).append(',')
+                                .append(replication.getReplicationDelayInSeconds()).append(',')
+                                .append(replication.getMsgOutCount()).append('\n');
                     }
-                    replicationWriter.flush();
                 }
             } catch (PulsarAdminException.NotFoundException e) {
                 // The producer creates the topic with its first message to it
@@ -232,11 +239,34 @@ final class TopicStatsSampler implements AutoCloseable {
                 }
             }
         }
-        if (complete) {
-            latestBacklog = new Backlog(now, backlogs.values().stream().mapToLong(Long::longValue).sum(),
-                    backlogs.values().stream().mapToLong(Long::longValue).max().orElse(0),
-                    replicationWriter != null ? replicationBacklog : -1);
+        long end = System.currentTimeMillis();
+        try {
+            writeRows(writer, end, rows);
+            if (replicationWriter != null) {
+                writeRows(replicationWriter, end, replicationRows);
+            }
+        } catch (IOException e) {
+            complete = false;
+            System.out.println("Couldn't write a topic stats sample: " + e);
         }
+        if (complete) {
+            latestBacklog = new Backlog(end, backlogs.values().stream().mapToLong(Long::longValue).sum(),
+                    backlogs.values().stream().mapToLong(Long::longValue).max().orElse(0),
+                    replicationWriter != null ? replicationBacklog : -1, intervalMillis(topics.size()));
+        }
+    }
+
+    // Writes a round's rows, each with the round's timestamp before it
+    private static void writeRows(BufferedWriter writer, long epochMs, StringBuilder rows) throws IOException {
+        int start = 0;
+        while (start < rows.length()) {
+            int end = rows.indexOf("\n", start);
+            writer.write(Long.toString(epochMs));
+            writer.append(rows, start, end);
+            writer.newLine();
+            start = end + 1;
+        }
+        writer.flush();
     }
 
     /**
