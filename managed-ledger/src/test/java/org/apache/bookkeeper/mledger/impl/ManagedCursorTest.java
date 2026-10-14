@@ -6767,6 +6767,11 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         cursor.delete(positions.get(2));
         assertEquals(cursor.getMessagesConsumedCounter(), consumedBeforeDeletingAgain);
         assertTrue(cursor.getIndividuallyDeletedMessagesSet().isEmpty());
+
+        // In one call: an entry twice and one before the mark-delete position count once
+        cursor.delete(List.of(positions.get(3), positions.get(3), positions.get(1)));
+        assertEquals(cursor.getMessagesConsumedCounter(), consumedBeforeDeletingAgain + 1);
+        assertEquals(cursor.getMarkDeletedPosition(), positions.get(3));
         ml.delete();
     }
 
