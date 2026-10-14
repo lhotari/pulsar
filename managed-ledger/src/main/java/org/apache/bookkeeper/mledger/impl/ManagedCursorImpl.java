@@ -2638,6 +2638,23 @@ public class ManagedCursorImpl implements ManagedCursor {
                     return;
                 }
 
+                long[] ackSet = AckSetStateUtil.getAckSetArrayOrNull(position);
+                if ((ackSet == null || ackSet.length == 0) && position.getEntryId() >= 0
+                        && position.compareTo(markDeletePosition) > 0) {
+                    // The common case of an entry acknowledged as a whole: check that it wasn't deleted and delete it
+                    // in one lookup of the individually deleted messages
+                    if (batchDeletedIndexes != null) {
+                        batchDeletedIndexes.remove(position);
+                    }
+                    if (individualDeletedMessages.addIfAbsent(position.getLedgerId(), position.getEntryId())) {
+                        MSG_CONSUMED_COUNTER_UPDATER.incrementAndGet(this);
+                        log.debug().attr("deletedMessages", individualDeletedMessages)
+                                .log("Individually deleted messages");
+                    } else {
+                        log.debug().attr("position", position).log("Position was already deleted");
+                    }
+                    continue;
+                }
                 if (internalIsMessageDeleted(position)) {
                     if (batchDeletedIndexes != null) {
                         batchDeletedIndexes.remove(position);
@@ -2645,7 +2662,6 @@ public class ManagedCursorImpl implements ManagedCursor {
                     log.debug().attr("position", position).log("Position was already deleted");
                     continue;
                 }
-                long[] ackSet = AckSetStateUtil.getAckSetArrayOrNull(position);
                 if (ackSet == null || ackSet.length == 0) {
                     if (batchDeletedIndexes != null) {
                         batchDeletedIndexes.remove(position);

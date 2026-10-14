@@ -84,6 +84,36 @@ public class PositionRangeSetTest {
     }
 
     @Test
+    public void addIfAbsentMatchesContainsThenAddOpenClosed() {
+        java.util.Random random = new java.util.Random(1);
+        PositionRangeSet expected = newSet();
+        PositionRangeSet actual = newSet();
+        for (int i = 0; i < 5_000; i++) {
+            long ledgerId = 1 + random.nextInt(4);
+            long entryId = random.nextInt(300);
+            boolean wasAbsent = !expected.contains(ledgerId, entryId);
+            if (wasAbsent) {
+                expected.addOpenClosed(ledgerId, entryId - 1, ledgerId, entryId);
+            }
+            assertEquals(actual.addIfAbsent(ledgerId, entryId), wasAbsent);
+            if (i % 500 == 0) {
+                // ranges acknowledged at once and removed up to a mark-delete position, as the cursor does
+                long ledger = 1 + random.nextInt(4);
+                expected.addOpenClosed(ledger, 10, ledger, 40);
+                actual.addOpenClosed(ledger, 10, ledger, 40);
+                long removeUpTo = random.nextInt(200);
+                expected.removeAtMost(1, removeUpTo);
+                actual.removeAtMost(1, removeUpTo);
+            }
+        }
+        assertEquals(actual.asRanges(), expected.asRanges());
+        assertEquals(actual.size(), expected.size());
+        for (long ledgerId = 0; ledgerId <= 5; ledgerId++) {
+            assertEquals(actual.isDirtyLedgers(ledgerId), expected.isDirtyLedgers(ledgerId));
+        }
+    }
+
+    @Test
     public void testDirtyLedgerDisabledWhenMultiEntryOff() {
         PositionRangeSet rangeSet = new PositionRangeSet(CONSUMER, false);
         rangeSet.addOpenClosed(10, 0, 20, 0);
