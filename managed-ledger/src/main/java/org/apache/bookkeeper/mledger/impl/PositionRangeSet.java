@@ -129,7 +129,8 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
 
     /**
      * Adds the entry unless it's present, in one lookup: the same as {@link #contains(long, long)} followed, when it
-     * returns false, by {@code addOpenClosed(ledgerId, entryId - 1, ledgerId, entryId)}.
+     * returns false, by {@code addOpenClosed(ledgerId, entryId - 1, ledgerId, entryId)}, for an entry id from 0 to
+     * {@link Integer#MAX_VALUE}, the entry ids of the bitmaps.
      *
      * @return whether the entry was added, false when it was present
      */

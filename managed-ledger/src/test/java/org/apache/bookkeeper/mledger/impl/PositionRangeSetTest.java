@@ -85,17 +85,30 @@ public class PositionRangeSetTest {
 
     @Test
     public void addIfAbsentMatchesContainsThenAddOpenClosed() {
-        java.util.Random random = new java.util.Random(1);
+        Random random = new Random(1);
         PositionRangeSet expected = newSet();
         PositionRangeSet actual = newSet();
+        // dirty ledgers from a range across ledgers, which adding single entries keeps
+        expected.addOpenClosed(1, 5, 3, 7);
+        actual.addOpenClosed(1, 5, 3, 7);
+        long[] boundaryEntryIds = {0, 1, Integer.MAX_VALUE - 1, Integer.MAX_VALUE};
         for (int i = 0; i < 5_000; i++) {
             long ledgerId = 1 + random.nextInt(4);
-            long entryId = random.nextInt(300);
+            long entryId = i % 50 == 0 ? boundaryEntryIds[(i / 50) % boundaryEntryIds.length] : random.nextInt(300);
             boolean wasAbsent = !expected.contains(ledgerId, entryId);
             if (wasAbsent) {
                 expected.addOpenClosed(ledgerId, entryId - 1, ledgerId, entryId);
             }
+            // the cached size and string are recomputed after an added entry, and kept for a present one
+            int sizeBefore = actual.size();
+            String stringBefore = actual.toString();
             assertEquals(actual.addIfAbsent(ledgerId, entryId), wasAbsent);
+            assertEquals(actual.size(), expected.size());
+            assertEquals(actual.toString(), expected.toString());
+            if (!wasAbsent) {
+                assertEquals(actual.size(), sizeBefore);
+                assertEquals(actual.toString(), stringBefore);
+            }
             if (i % 500 == 0) {
                 // ranges acknowledged at once and removed up to a mark-delete position, as the cursor does
                 long ledger = 1 + random.nextInt(4);

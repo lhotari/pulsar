@@ -2640,7 +2640,7 @@ public class ManagedCursorImpl implements ManagedCursor {
 
                 long[] ackSet = AckSetStateUtil.getAckSetArrayOrNull(position);
                 if ((ackSet == null || ackSet.length == 0) && position.getEntryId() >= 0
-                        && position.compareTo(markDeletePosition) > 0) {
+                        && position.getEntryId() <= Integer.MAX_VALUE && position.compareTo(markDeletePosition) > 0) {
                     // The common case of an entry acknowledged as a whole: check that it wasn't deleted and delete it
                     // in one lookup of the individually deleted messages
                     if (batchDeletedIndexes != null) {
