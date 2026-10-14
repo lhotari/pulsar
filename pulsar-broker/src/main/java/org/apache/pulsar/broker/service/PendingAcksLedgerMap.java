@@ -260,19 +260,9 @@ final class PendingAcksLedgerMap {
 
     /** The index of the last block whose first entry ID is at most the entry ID, or -1. */
     private int blockIndexFor(long entryId) {
-        if (blocks.isEmpty()) {
-            return -1;
-        }
-        Block first = blocks.get(0);
-        if (entryId <= first.lastEntryId()) {
-            // the entries that are acked are mostly in the first block, also those acked before them whose removal
-            // waits for the ack to be persisted
-            return entryId >= first.firstEntryId() ? 0 : -1;
-        }
-        // the first block's entries start before the entry ID; a later block's may too
-        int low = 1;
+        int low = 0;
         int high = blocks.size() - 1;
-        int found = 0;
+        int found = -1;
         while (low <= high) {
             int mid = (low + high) >>> 1;
             if (blocks.get(mid).firstEntryId() <= entryId) {
