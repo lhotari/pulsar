@@ -22,7 +22,9 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -42,7 +44,8 @@ import org.apache.pulsar.common.policies.data.TopicStats;
 import org.apache.pulsar.tests.performance.report.RunReport;
 
 /**
- * Samples the workload topics' stats once per second into {@code topic-stats.csv}: each subscription's backlog, the
+ * Samples the workload topics' stats once per second, or less often with many topics, into {@code topic-stats.csv}:
+ * each subscription's backlog, the
  * topic's published-message counter and the subscription's dispatched-message counter. The report derives
  * per-second publish and dispatch rates from the counter deltas, because the broker's own rates refresh only once
  * per stats interval, and the sampled maximum backlog, which is not the exact peak between samples.
@@ -50,8 +53,10 @@ import org.apache.pulsar.tests.performance.report.RunReport;
  * <p>One sample is one REST call per topic, all topics in parallel, that reads the broker's in-memory counters and its
  * estimated backlog (the default, not the precise backlog that scans the ledger), without the stats of the topic's
  * publishers and consumers, so once per second has no measurable cost next to a workload of about 100,000 messages
- * per second. A failed sample is reported and skipped; sampling never fails the
- * run.
+ * per second with a few topics. Each call costs the broker an HTTP request and a topic ownership check, though: at
+ * 1,000 topics, sampling every second took 16 % of the broker's CPU. So the sampler makes at most
+ * {@value #MAX_REQUESTS_PER_SECOND} calls per second, sampling every {@code topics / MAX_REQUESTS_PER_SECOND}
+ * seconds, rounded up, with more topics. A failed sample is reported and skipped; sampling never fails the run.
  *
  * <p>A broker redirects the stats request of a topic that another broker owns to that broker's name in the cluster's
  * network, which the launcher's host can't resolve. So the sampler asks each broker through its port on the host: for
@@ -67,6 +72,9 @@ final class TopicStatsSampler implements AutoCloseable {
     static final String FILE_NAME = RunReport.TOPIC_STATS_FILE;
     static final String HEADER = RunReport.TOPIC_STATS_HEADER;
     private static final long INTERVAL_MILLIS = 1000;
+    static final int MAX_REQUESTS_PER_SECOND = 100;
+    // The most requests of a round in flight at a time
+    private static final int MAX_IN_FLIGHT = 16;
     static final String REPLICATION_FILE_NAME = RunReport.REPLICATION_STATS_FILE;
     static final String REPLICATION_HEADER = "epochMs,topic,remoteCluster,replicationBacklog,connected,"
             + "replicationDelaySeconds,msgOutCounter";
@@ -110,6 +118,12 @@ final class TopicStatsSampler implements AutoCloseable {
         });
     }
 
+    /** Every second, or with more topics than {@link #MAX_REQUESTS_PER_SECOND}, every so many seconds. */
+    static long intervalMillis(int topicCount) {
+        long seconds = Math.max(1, (topicCount + MAX_REQUESTS_PER_SECOND - 1) / MAX_REQUESTS_PER_SECOND);
+        return TimeUnit.SECONDS.toMillis(seconds);
+    }
+
     /**
      * Starts sampling {@code topics} through the brokers' HTTP services into the file {@code fileName} of
      * {@code runDirectory}, such as {@code topic-stats.csv}, and with {@code replicated} the topics' replicators into
@@ -146,8 +160,17 @@ final class TopicStatsSampler implements AutoCloseable {
         }
         TopicStatsSampler sampler = new TopicStatsSampler(brokerAdmins, topics, writer, replicationWriter);
         // Fixed delay on one thread: a slow call delays the next sample instead of piling up requests.
-        sampler.executor.scheduleWithFixedDelay(sampler::sample, 0, INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
+        long intervalMillis = intervalMillis(topics.size());
+        if (intervalMillis > INTERVAL_MILLIS) {
+            System.out.println("Sampling the stats of the " + topics.size() + " topics every "
+                    + intervalMillis / 1000 + " s, at most " + MAX_REQUESTS_PER_SECOND + " requests per second");
+        }
+        sampler.executor.scheduleWithFixedDelay(sampler::sample, 0, intervalMillis, TimeUnit.MILLISECONDS);
         return sampler;
+    }
+
+    private CompletableFuture<TopicStats> requestStats(String topic) {
+        return owners.getOrDefault(topic, admin).topics().getStatsAsync(topic, STATS_OPTIONS);
     }
 
     private void sample() {
@@ -156,12 +179,17 @@ final class TopicStatsSampler implements AutoCloseable {
         Map<String, Long> backlogs = new HashMap<>();
         long replicationBacklog = 0;
         boolean complete = true;
-        // In parallel, so that a round takes as long as the slowest topic rather than all of them together
-        List<CompletableFuture<TopicStats>> requests = topics.stream()
-                .map(topic -> owners.getOrDefault(topic, admin).topics().getStatsAsync(topic, STATS_OPTIONS))
-                .toList();
+        // In parallel, so that a round takes as long as the slowest topics rather than all of them together, but at
+        // most MAX_IN_FLIGHT at a time, so that many topics' requests don't reach the broker in one burst
+        List<CompletableFuture<TopicStats>> requests = new ArrayList<>(Collections.nCopies(topics.size(), null));
+        for (int i = 0; i < Math.min(MAX_IN_FLIGHT, topics.size()); i++) {
+            requests.set(i, requestStats(topics.get(i)));
+        }
         for (int i = 0; i < topics.size(); i++) {
             String topic = topics.get(i);
+            if (i + MAX_IN_FLIGHT < topics.size()) {
+                requests.set(i + MAX_IN_FLIGHT, requestStats(topics.get(i + MAX_IN_FLIGHT)));
+            }
             try {
                 TopicStats stats = unwrap(requests.get(i));
                 for (Map.Entry<String, ? extends SubscriptionStats> subscription : stats.getSubscriptions()
