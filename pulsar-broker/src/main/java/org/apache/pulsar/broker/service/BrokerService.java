@@ -2603,6 +2603,7 @@ public class BrokerService implements Closeable {
             managedLedgerConfig.setInactiveOffloadedLedgerEvictionTime(
                     serviceConfig.getManagedLedgerInactiveOffloadedLedgerEvictionTimeSeconds(),
                     TimeUnit.SECONDS);
+            managedLedgerConfig.setReadAheadEnabled(serviceConfig.isManagedLedgerReadAheadEnabled());
             if (serviceConfig.isCacheEvictionByExpectedReadCount()) {
                 managedLedgerConfig.setCacheEvictionByMarkDeletedPosition(false);
                 managedLedgerConfig.setCacheEvictionByExpectedReadCount(true);

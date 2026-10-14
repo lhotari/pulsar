@@ -109,6 +109,19 @@ public interface EntryCache {
     void asyncReadEntry(ReadHandle lh, Position position, ReadEntryCallback callback, Object ctx);
 
     /**
+     * Reads a range of entries ahead of a cursor into the cache, unless the range's first entry is cached, the cache
+     * is close to full, or the permits of the reads in flight aren't available right away. The entries that the read
+     * returns are released without counting as reads of the cached entries.
+     *
+     * @param onComplete run once when the read ahead completes or fails, if it was started
+     * @return whether the read ahead was started
+     */
+    default boolean readAhead(ReadHandle lh, long firstEntry, long lastEntry, long maxSizeBytes,
+                              IntSupplier expectedReadCount, Runnable onComplete) {
+        return false;
+    }
+
+    /**
      * Get the total size in bytes of all the entries stored in this cache.
      *
      * @return the size of the entry cache

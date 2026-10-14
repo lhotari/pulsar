@@ -2130,6 +2130,43 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
     }
 
     @Test
+    public void readsAheadTheRangeAfterACursorsReadIntoTheCache() throws Exception {
+        ManagedLedgerConfig config = defaultConfig();
+        initManagedLedgerConfig(config);
+        config.setCacheEvictionByExpectedReadCount(true);
+        config.setReadAheadEnabled(true);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("readsAheadTheRangeAfterACursorsRead", config);
+        ManagedCursor cursor = ledger.openCursor("c1");
+        for (int i = 0; i < 20; i++) {
+            ledger.addEntry(("entry-" + i).getBytes());
+        }
+        // a cursor that is behind: its entries are no longer cached
+        ledger.entryCache.clear();
+        ManagedLedgerFactoryMBeanImpl stats = (ManagedLedgerFactoryMBeanImpl) factory.getCacheStats();
+
+        List<Entry> first = cursor.readEntries(5);
+        assertThat(first).hasSize(5);
+        first.forEach(Entry::release);
+        // the next 5 entries are read ahead into the cache
+        Awaitility.await().until(() -> !((ManagedCursorImpl) cursor).isReadAheadInProgress());
+        long hits = stats.getCacheHitsTotal();
+        List<Entry> next = cursor.readEntries(5);
+        try {
+            assertThat(next).hasSize(5);
+            assertThat(next.get(0).getEntryId()).isEqualTo(5);
+            // read from the cache, where the read ahead put them for this cursor
+            assertThat(stats.getCacheHitsTotal() - hits).isEqualTo(5);
+            // the cursor's own read is still expected: releasing the read ahead's copies didn't count as one
+            for (Entry entry : next) {
+                assertThat(((EntryImpl) entry).getReadCountHandler().getExpectedReadCount()).isEqualTo(1);
+            }
+        } finally {
+            next.forEach(Entry::release);
+        }
+        ledger.close();
+    }
+
+    @Test
     public void testContinueCachingAddedEntriesWithoutActiveCursors() throws Exception {
         ManagedLedgerConfig config = defaultConfig();
         initManagedLedgerConfig(config);
