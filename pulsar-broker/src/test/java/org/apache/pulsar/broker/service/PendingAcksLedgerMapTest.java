@@ -64,6 +64,27 @@ public class PendingAcksLedgerMapTest {
     }
 
     @Test
+    public void findsAndRemovesEntriesAckedInOrder() {
+        PendingAcksLedgerMap map = new PendingAcksLedgerMap();
+        int count = PendingAcksLedgerMap.BLOCK_CAPACITY * 3 + 5;
+        for (int i = 0; i < count; i++) {
+            map.put(i * 2, value(i));
+        }
+        // acked in the order they were sent: each is the first entry, across the blocks
+        for (int i = 0; i < count; i++) {
+            assertThat(map.get(i * 2)).isEqualTo(value(i));
+            // not an entry, just after the first
+            assertThat(map.get(i * 2 + 1)).isEqualTo(PendingAckValues.PACKED_NOT_FOUND);
+            assertThat(map.remove(i * 2)).isEqualTo(value(i));
+            assertThat(map.get(i * 2)).isEqualTo(PendingAckValues.PACKED_NOT_FOUND);
+            assertThat(map.size()).isEqualTo(count - i - 1);
+        }
+        assertThat(map.isEmpty()).isTrue();
+        assertThat(map.remove(0)).isEqualTo(PendingAckValues.PACKED_NOT_FOUND);
+        assertThat(map.get(0)).isEqualTo(PendingAckValues.PACKED_NOT_FOUND);
+    }
+
+    @Test
     public void behavesAsASortedMap() {
         // random operations in the patterns of dispatch and acks: mostly increasing entry IDs, some redeliveries,
         // removals near the start and range removals up to a mark-delete position
