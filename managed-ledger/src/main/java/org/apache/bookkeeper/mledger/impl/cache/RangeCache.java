@@ -25,8 +25,8 @@ import java.util.List;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import lombok.CustomLog;
@@ -62,7 +62,9 @@ class RangeCache {
 
     private final ConcurrentNavigableMap<PageKey, Page> pages;
     private final RangeCacheRemovalQueue removalQueue;
-    private final AtomicLong size; // Total size of values stored in cache
+    // Total size of values stored in cache. The thread that inserts the entries and the thread that evicts them both
+    // update it for every entry, and it's read rarely, so its updates are striped instead of contending on one value
+    private final LongAdder size;
 
     /**
      * Construct a new RangeCache.
@@ -70,7 +72,7 @@ class RangeCache {
     public RangeCache(RangeCacheRemovalQueue removalQueue) {
         this.removalQueue = removalQueue;
         this.pages = new ConcurrentSkipListMap<>();
-        this.size = new AtomicLong(0);
+        this.size = new LongAdder();
     }
 
     /**
@@ -168,7 +170,7 @@ class RangeCache {
         @Override
         public Boolean apply(RangeCacheEntryWrapper newWrapper) {
             if (addToPage(newWrapper) && removalQueue.addEntry(newWrapper)) {
-                size.addAndGet(newWrapper.size);
+                size.add(newWrapper.size);
                 return true;
             } else {
                 // recycle the new wrapper as it was not used
@@ -457,7 +459,7 @@ class RangeCache {
             if (removedSize > -1) {
                 counters.entryRemoved(removedSize);
                 if (updateSize) {
-                    size.addAndGet(-removedSize);
+                    size.add(-removedSize);
                 }
                 if (value.refCnt() > 1) {
                     // remove the cache reference
@@ -485,7 +487,7 @@ class RangeCache {
     }
 
     private Pair<Integer, Long> handleRemovalResult(RangeCacheRemovalCounters counters) {
-        size.addAndGet(-counters.removedSize);
+        size.add(-counters.removedSize);
         Pair<Integer, Long> result = Pair.of(counters.removedEntries, counters.removedSize);
         counters.recycle();
         return result;
@@ -510,7 +512,7 @@ class RangeCache {
     }
 
     public long getSize() {
-        return size.get();
+        return size.sum();
     }
 
     /**
@@ -519,7 +521,7 @@ class RangeCache {
      * @return size of removed entries
      */
     public Pair<Integer, Long> clear() {
-        log.debug().attr("numPages", () -> pages.size()).attr("size", size.get()).log("Clearing the cache");
+        log.debug().attr("numPages", () -> pages.size()).attr("size", size.sum()).log("Clearing the cache");
         RangeCacheRemovalCounters counters = RangeCacheRemovalCounters.create();
         // Passes over the pages until one finds no entry, so that an entry that a concurrent insert added to a page
         // that an earlier pass had visited is removed too
