@@ -346,6 +346,25 @@ class RangeCache {
         });
     }
 
+    /**
+     * Visits matching entries in order, each with a reference that the visitor takes over: unlike
+     * {@link #forEachInRange}, the visitor releases it, or keeps it with what it creates from the entry. A visitor that
+     * throws hasn't taken the reference, which is released.
+     */
+    public void forEachRetainedInRange(Position first, Position last, Consumer<ReferenceCountedEntry> owner) {
+        forEachWrapperInRange(first, last, true, (wrapper, ledgerId, entryId) -> {
+            ReferenceCountedEntry value = getRetainedValueAt(wrapper, ledgerId, entryId);
+            if (value != null) {
+                try {
+                    owner.accept(value);
+                } catch (Throwable t) {
+                    value.release();
+                    throw t;
+                }
+            }
+        });
+    }
+
     private interface WrapperVisitor {
         void visit(RangeCacheEntryWrapper wrapper, long ledgerId, long entryId);
     }

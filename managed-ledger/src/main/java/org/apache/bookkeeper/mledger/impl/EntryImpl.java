@@ -20,6 +20,7 @@ package org.apache.bookkeeper.mledger.impl;
 
 import com.google.common.annotations.VisibleForTesting;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.DuplicatedByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.util.Recycler;
 import io.netty.util.Recycler.Handle;
@@ -75,6 +76,8 @@ public final class EntryImpl extends AbstractCASReferenceCounted
     private boolean messageMetadataInitializationFailed;
 
     private Runnable onDeallocate;
+    // a cached entry whose reference this copy holds, instead of a reference to the buffer, see createSharing
+    private EntryImpl sharedEntry;
 
     public static EntryImpl create(LedgerEntry ledgerEntry, int expectedReadCount) {
         EntryImpl entry = RECYCLER.get();
@@ -199,6 +202,31 @@ public final class EntryImpl extends AbstractCASReferenceCounted
         return entry;
     }
 
+    /**
+     * Creates a copy of a cached entry that takes over a reference that the caller holds on the cached entry. The copy
+     * shares the cached entry's buffer through a duplicate, without retaining the buffer: the reference on the cached
+     * entry keeps the buffer, and releasing the copy releases that reference. Compared with {@link #create(EntryImpl)}
+     * of a retained entry followed by its release, the copy saves retaining and releasing the buffer.
+     *
+     * @param retained a cached entry with a reference that the copy takes over
+     */
+    @SuppressWarnings("deprecation")
+    public static EntryImpl createSharing(EntryImpl retained) {
+        EntryImpl entry = RECYCLER.get();
+        entry.position = retained.position != null ? PositionFactory.create(retained.position) : null;
+        entry.ledgerId = retained.ledgerId;
+        entry.entryId = retained.entryId;
+        // Not retained.data.duplicate(): for a pooled derived buffer, such as the cache's retained duplicates, Netty
+        // returns a duplicate whose retainedSlice() covers its capacity instead of its readable bytes. A
+        // DuplicatedByteBuf shares the root buffer's reference count, which the cached entry's buffer holds.
+        entry.data = new DuplicatedByteBuf(retained.data);
+        entry.sharedEntry = retained;
+        entry.readCountHandler = retained.getReadCountHandler();
+        entry.messageMetadata = retained.messageMetadata;
+        entry.setRefCnt(1);
+        return entry;
+    }
+
     public static EntryImpl create(Entry other) {
         EntryImpl entry = RECYCLER.get();
         entry.position = PositionFactory.create(other.getPosition());
@@ -306,7 +334,14 @@ public final class EntryImpl extends AbstractCASReferenceCounted
                 onDeallocate = null;
             }
         }
-        data.release();
+        if (sharedEntry != null) {
+            // the shared entry's reference keeps the buffer that the duplicate shares
+            EntryImpl shared = sharedEntry;
+            sharedEntry = null;
+            shared.release();
+        } else {
+            data.release();
+        }
         data = null;
         ledgerId = -1;
         entryId = -1;
