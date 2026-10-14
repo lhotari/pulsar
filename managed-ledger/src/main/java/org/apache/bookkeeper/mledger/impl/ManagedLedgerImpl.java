@@ -334,6 +334,8 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     @Getter
     private final OrderedScheduler scheduledExecutor;
+    // The cursors' checks for new entries after newEntriesCheckDelayInMillis, one scheduled task for those due together
+    private final CoalescingDelayedTasks newEntriesChecks;
 
     @Getter
     protected final ThreadBoundExecutor executor;
@@ -414,6 +416,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         this.ledgerMetadata = LedgerMetadataUtils.buildBaseManagedLedgerMetadata(name);
         this.digestType = BookKeeper.DigestType.fromApiDigestType(config.getDigestType());
         this.scheduledExecutor = scheduledExecutor;
+        this.newEntriesChecks = new CoalescingDelayedTasks(scheduledExecutor.chooseThread(name));
         // The main worker pool is an OrderedExecutor whose threads implement ThreadBoundExecutor (the BookKeeper client
         // relies on the same cast for its ledger handles). The ledger callbacks are pinned to this thread through
         // withOrderingKey, so their processing can run inline with executeOrRun() instead of re-queueing.
@@ -2991,6 +2994,14 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         }
 
         return position;
+    }
+
+    /**
+     * Runs a cursor's check for new entries after {@code delayMillis}, in one scheduled task with the other cursors'
+     * checks that fall due at the same time.
+     */
+    void scheduleNewEntriesCheck(Runnable check, long delayMillis) {
+        newEntriesChecks.schedule(check, delayMillis);
     }
 
     void notifyCursors() {
