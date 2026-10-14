@@ -129,7 +129,8 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
 
     /**
      * Adds the entry unless it's present, in one lookup: the same as {@link #contains(long, long)} followed, when it
-     * returns false, by {@code addOpenClosed(ledgerId, entryId - 1, ledgerId, entryId)}, for an entry id from 0 to
+     * returns false, by {@code addOpenClosed(ledgerId, entryId - 1, ledgerId, entryId)}, which marks no ledger dirty
+     * since the range is within one ledger. The caller checks that the entry id is from 0 to
      * {@link Integer#MAX_VALUE}, the entry ids of the bitmaps.
      *
      * @return whether the entry was added, false when it was present
@@ -138,9 +139,6 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
         LongBitmap rangeBitmap = rangeBitmapMap.computeIfAbsent(ledgerId, k -> LongBitmaps.create());
         if (!rangeBitmap.checkedAdd(getSafeEntry(entryId))) {
             return false;
-        }
-        if (enableMultiEntry) {
-            markDirty(ledgerId, ledgerId);
         }
         invalidateCaches();
         return true;

@@ -2639,14 +2639,11 @@ public class ManagedCursorImpl implements ManagedCursor {
                 }
 
                 long[] ackSet = AckSetStateUtil.getAckSetArrayOrNull(position);
-                if ((ackSet == null || ackSet.length == 0) && position.getEntryId() >= 0
-                        && position.getEntryId() <= Integer.MAX_VALUE && position.compareTo(markDeletePosition) > 0) {
-                    // The common case of an entry acknowledged as a whole: check that it wasn't deleted and delete it
-                    // in one lookup of the individually deleted messages
+                if (ackSet == null || ackSet.length == 0) {
                     if (batchDeletedIndexes != null) {
                         batchDeletedIndexes.remove(position);
                     }
-                    if (individualDeletedMessages.addIfAbsent(position.getLedgerId(), position.getEntryId())) {
+                    if (deleteWholeEntry(position)) {
                         MSG_CONSUMED_COUNTER_UPDATER.incrementAndGet(this);
                         log.debug().attr("deletedMessages", individualDeletedMessages)
                                 .log("Individually deleted messages");
@@ -2662,28 +2659,7 @@ public class ManagedCursorImpl implements ManagedCursor {
                     log.debug().attr("position", position).log("Position was already deleted");
                     continue;
                 }
-                if (ackSet == null || ackSet.length == 0) {
-                    if (batchDeletedIndexes != null) {
-                        batchDeletedIndexes.remove(position);
-                    }
-                    // Add a range (prev, pos] to the set. Adding the previous entry as an open limit to the range will
-                    // make the RangeSet recognize the "continuity" between adjacent Positions.
-                    // Before https://github.com/apache/pulsar/pull/21105 is merged, the range does not support crossing
-                    // multi ledgers, so the first position's entryId maybe "-1".
-                    long ledgerId = position.getLedgerId();
-                    long entryId = position.getEntryId();
-                    if (entryId >= 0) {
-                        // For entry zero, keep the lower bound in this ledger, as before.
-                        individualDeletedMessages.addOpenClosed(ledgerId, entryId - 1, ledgerId, entryId);
-                    } else {
-                        Position previousPosition = ledger.getPreviousPosition(position);
-                        individualDeletedMessages.addOpenClosed(previousPosition.getLedgerId(),
-                                previousPosition.getEntryId(), ledgerId, entryId);
-                    }
-                    MSG_CONSUMED_COUNTER_UPDATER.incrementAndGet(this);
-
-                    log.debug().attr("deletedMessages", individualDeletedMessages).log("Individually deleted messages");
-                } else if (batchDeletedIndexes != null) {
+                if (batchDeletedIndexes != null) {
                     final var givenBitSet = BitSet.valueOf(ackSet);
                     final var bitSet = batchDeletedIndexes.computeIfAbsent(position, __ -> givenBitSet);
                     if (givenBitSet != bitSet) {
@@ -4004,6 +3980,37 @@ public class ManagedCursorImpl implements ManagedCursor {
         } finally {
             lock.readLock().unlock();
         }
+    }
+
+    /**
+     * Adds an entry acknowledged as a whole to the individually deleted messages, unless it was deleted. Called with
+     * the write lock held.
+     *
+     * @return whether the entry was added, false when it was already deleted
+     */
+    private boolean deleteWholeEntry(Position position) {
+        long ledgerId = position.getLedgerId();
+        long entryId = position.getEntryId();
+        if (entryId >= 0 && entryId <= Integer.MAX_VALUE && position.compareTo(markDeletePosition) > 0) {
+            // The common case: check that it wasn't deleted and delete it in one lookup
+            return individualDeletedMessages.addIfAbsent(ledgerId, entryId);
+        }
+        if (internalIsMessageDeleted(position)) {
+            return false;
+        }
+        // Add a range (prev, pos] to the set. Adding the previous entry as an open limit to the range will
+        // make the RangeSet recognize the "continuity" between adjacent Positions.
+        // Before https://github.com/apache/pulsar/pull/21105 is merged, the range does not support crossing
+        // multi ledgers, so the first position's entryId maybe "-1".
+        if (entryId >= 0) {
+            // For entry zero, keep the lower bound in this ledger, as before.
+            individualDeletedMessages.addOpenClosed(ledgerId, entryId - 1, ledgerId, entryId);
+        } else {
+            Position previousPosition = ledger.getPreviousPosition(position);
+            individualDeletedMessages.addOpenClosed(previousPosition.getLedgerId(),
+                    previousPosition.getEntryId(), ledgerId, entryId);
+        }
+        return true;
     }
 
     // When this method is called while the external has already acquired a write lock or a read lock,

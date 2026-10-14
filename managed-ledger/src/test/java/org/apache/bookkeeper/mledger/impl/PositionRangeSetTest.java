@@ -37,6 +37,7 @@ import org.apache.commons.lang3.mutable.MutableInt;
 import org.apache.pulsar.common.util.collections.LongPairRangeSet.LongPairConsumer;
 import org.apache.pulsar.common.util.collections.OpenLongPairRangeSet;
 import org.roaringbitmap.RoaringBitSet;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 /**
@@ -83,12 +84,18 @@ public class PositionRangeSetTest {
         }
     }
 
-    @Test
-    public void addIfAbsentMatchesContainsThenAddOpenClosed() {
+    @DataProvider
+    public static Object[][] multiEntry() {
+        return new Object[][] {{true}, {false}};
+    }
+
+    @Test(dataProvider = "multiEntry")
+    public void addIfAbsentMatchesContainsThenAddOpenClosed(boolean enableMultiEntry) {
         Random random = new Random(1);
-        PositionRangeSet expected = newSet();
-        PositionRangeSet actual = newSet();
-        // dirty ledgers from a range across ledgers, which adding single entries keeps
+        PositionRangeSet expected = new PositionRangeSet(CONSUMER, enableMultiEntry);
+        PositionRangeSet actual = new PositionRangeSet(CONSUMER, enableMultiEntry);
+        // dirty ledgers from a range across ledgers, which adding single entries keeps: a range within one ledger
+        // marks no ledger dirty
         expected.addOpenClosed(1, 5, 3, 7);
         actual.addOpenClosed(1, 5, 3, 7);
         long[] boundaryEntryIds = {0, 1, Integer.MAX_VALUE - 1, Integer.MAX_VALUE};
