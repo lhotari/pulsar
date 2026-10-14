@@ -57,7 +57,8 @@ import org.apache.pulsar.tests.performance.report.RunReport;
  * 1,000 topics, sampling every second took 16 % of the broker's CPU. So with more topics than
  * {@value #MAX_REQUESTS_PER_SECOND}, the sampler samples every {@code topics / MAX_REQUESTS_PER_SECOND} seconds,
  * rounded up, {@value #MAX_REQUESTS_PER_SECOND} calls per second on average, and a round makes at most
- * {@value #MAX_IN_FLIGHT} calls at a time. A round's samples have the time of its end, which follows all of them. A failed sample is reported and skipped; sampling never fails the run.
+ * {@value #MAX_IN_FLIGHT} calls at a time. A round's samples have the time of its end, which follows all of them. A
+ * failed sample is reported and skipped; sampling never fails the run.
  *
  * <p>A broker redirects the stats request of a topic that another broker owns to that broker's name in the cluster's
  * network, which the launcher's host can't resolve. So the sampler asks each broker through its port on the host: for
