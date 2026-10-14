@@ -134,6 +134,9 @@ final class PendingAcksLedgerMap {
 
     /** The entry's value, or {@link PendingAckValues#PACKED_NOT_FOUND}. */
     long get(long entryId) {
+        if (isFirst(entryId)) {
+            return firstValue();
+        }
         int blockIndex = blockIndexFor(entryId);
         if (blockIndex < 0) {
             return PendingAckValues.PACKED_NOT_FOUND;
@@ -141,6 +144,12 @@ final class PendingAcksLedgerMap {
         Block block = blocks.get(blockIndex);
         int index = block.indexOf(entryId);
         return index >= 0 ? block.values[index] : PendingAckValues.PACKED_NOT_FOUND;
+    }
+
+    // Whether the entry is the first one: acks mostly come in the order of the entries, and both the ack's lookup and
+    // its removal then find it without a search
+    private boolean isFirst(long entryId) {
+        return size > 0 && firstEntryId() == entryId;
     }
 
     boolean containsKey(long entryId) {
@@ -198,6 +207,11 @@ final class PendingAcksLedgerMap {
      * @return its value, or {@link PendingAckValues#PACKED_NOT_FOUND} if it wasn't in the map
      */
     long remove(long entryId) {
+        if (isFirst(entryId)) {
+            long previous = firstValue();
+            removeFirst();
+            return previous;
+        }
         int blockIndex = blockIndexFor(entryId);
         if (blockIndex < 0) {
             return PendingAckValues.PACKED_NOT_FOUND;
