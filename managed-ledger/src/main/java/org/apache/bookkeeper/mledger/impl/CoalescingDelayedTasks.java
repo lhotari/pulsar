@@ -34,21 +34,26 @@ import lombok.CustomLog;
  * <p>A managed ledger's cursors that wait for new entries check again after the same delay, and the subscriptions of a
  * topic usually reach its end at about the same time, after the dispatch of the same entry. Scheduling each check on
  * its own costs a scheduled task, a sift of the scheduler's queue and a wake-up of a scheduler thread for every check.
- * Here the tasks are queued, and one scheduled drain runs every queued task that is due, or due within
- * {@link #TOLERANCE_NANOS}, and then schedules itself for the next one.
+ * Here the tasks are queued, and one scheduled drain runs the queued tasks that are due, or due within
+ * {@link #TOLERANCE_NANOS}, and then schedules the next drain for the earliest queued task.
  *
- * <p>Tasks are expected to be added with the same delay, so that the queue's order is the order of their deadlines. A
- * task added with a shorter delay than the tasks before it runs when they are due, which delays it by at most the
- * difference; this only happens when the delay is changed.
+ * <p>Tasks are expected to be added with the same delay, so that the queue's order is about the order of their
+ * deadlines: tasks added concurrently can be queued in another order than their deadlines', by the time between taking
+ * the time and queueing, and a task added with a shorter delay than the tasks before it, after a change of the delay,
+ * runs when they are due.
  *
- * <p>The tasks run on the scheduler's thread, one after the other. A task that throws is logged, and the others still
- * run.
+ * <p>The tasks run on the scheduler's thread, one after the other, at most {@link #MAX_TASKS_PER_DRAIN} in a drain,
+ * so that other work on the scheduler's thread doesn't wait for a long drain; a drain that leaves due tasks schedules
+ * the next one without a delay. A task that throws is logged, and the others still run. When the scheduler rejects a
+ * drain, such as after its shutdown, the queued tasks run at once on the thread that scheduled it, as they would
+ * without a delay.
  */
 @CustomLog
 class CoalescingDelayedTasks {
     // A task due within this time of the drain's run runs in that drain, so that the tasks added within a short time of
     // each other share one drain instead of a drain each
     static final long TOLERANCE_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
+    static final int MAX_TASKS_PER_DRAIN = 256;
 
     private record DelayedTask(long deadlineNanos, Runnable task) {
     }
@@ -56,7 +61,7 @@ class CoalescingDelayedTasks {
     private final ScheduledExecutorService scheduler;
     private final LongSupplier nanoTime;
     private final ConcurrentLinkedQueue<DelayedTask> queue = new ConcurrentLinkedQueue<>();
-    // Whether a drain is scheduled, or running and yet to check the queue for the next one
+    // Whether a drain is scheduled, or a thread is about to schedule one or to find the queue empty
     private final AtomicBoolean drainScheduled = new AtomicBoolean();
 
     CoalescingDelayedTasks(ScheduledExecutorService scheduler) {
@@ -69,50 +74,63 @@ class CoalescingDelayedTasks {
         this.nanoTime = nanoTime;
     }
 
-    /**
-     * Runs {@code task} after {@code delayMillis}.
-     *
-     * @throws RejectedExecutionException when the scheduler rejects the drain, such as after its shutdown
-     */
+    /** Runs {@code task} after {@code delayMillis}. */
     void schedule(Runnable task, long delayMillis) {
-        long delayNanos = TimeUnit.MILLISECONDS.toNanos(delayMillis);
-        queue.offer(new DelayedTask(nanoTime.getAsLong() + delayNanos, task));
+        queue.offer(new DelayedTask(nanoTime.getAsLong() + TimeUnit.MILLISECONDS.toNanos(delayMillis), task));
         if (drainScheduled.compareAndSet(false, true)) {
-            scheduleDrain(delayNanos);
+            scheduleDrain();
         }
     }
 
-    private void scheduleDrain(long delayNanos) {
-        try {
-            scheduler.schedule(this::drain, delayNanos, TimeUnit.NANOSECONDS);
-        } catch (RejectedExecutionException e) {
-            // A later task schedules a drain again
+    /**
+     * Schedules a drain for the earliest queued task. Called by the thread that set {@link #drainScheduled}, which
+     * keeps it set while a drain is scheduled and clears it when it finds the queue empty.
+     */
+    private void scheduleDrain() {
+        while (true) {
+            DelayedTask next = queue.peek();
+            if (next != null) {
+                try {
+                    // The earliest task's deadline, not the delay of the task that is added, which can be later
+                    scheduler.schedule(this::drain, Math.max(0, next.deadlineNanos() - nanoTime.getAsLong()),
+                            TimeUnit.NANOSECONDS);
+                    return;
+                } catch (RejectedExecutionException e) {
+                    log.debug().exception(e).log("The scheduler rejected the delayed tasks' drain, running them now");
+                    runQueued(false);
+                }
+            }
+            // A task added before this finds the drain scheduled and relies on the check below; one added after it
+            // schedules a drain itself
             drainScheduled.set(false);
-            throw e;
+            if (queue.isEmpty() || !drainScheduled.compareAndSet(false, true)) {
+                return;
+            }
         }
     }
 
     @VisibleForTesting
     void drain() {
+        runQueued(true);
+        drainScheduled.set(false);
+        if (!queue.isEmpty() && drainScheduled.compareAndSet(false, true)) {
+            scheduleDrain();
+        }
+    }
+
+    // Runs the due queued tasks, at most MAX_TASKS_PER_DRAIN, or with dueOnly false every queued task
+    private void runQueued(boolean dueOnly) {
         long now = nanoTime.getAsLong();
         DelayedTask next;
-        while ((next = queue.peek()) != null && next.deadlineNanos() - now <= TOLERANCE_NANOS) {
+        for (int ran = 0; (next = queue.peek()) != null; ran++) {
+            if (dueOnly && (ran == MAX_TASKS_PER_DRAIN || next.deadlineNanos() - now > TOLERANCE_NANOS)) {
+                return;
+            }
             queue.poll();
             try {
                 next.task().run();
             } catch (Throwable t) {
                 log.warn().exception(t).log("A delayed task failed");
-            }
-        }
-        // A task added before this finds the drain scheduled and relies on this check; one added after it schedules
-        // a drain itself
-        drainScheduled.set(false);
-        next = queue.peek();
-        if (next != null && drainScheduled.compareAndSet(false, true)) {
-            try {
-                scheduleDrain(Math.max(0, next.deadlineNanos() - nanoTime.getAsLong()));
-            } catch (RejectedExecutionException e) {
-                log.debug().exception(e).log("Couldn't schedule the delayed tasks' next drain");
             }
         }
     }
