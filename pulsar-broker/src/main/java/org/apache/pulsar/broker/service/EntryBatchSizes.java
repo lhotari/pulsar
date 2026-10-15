@@ -21,7 +21,10 @@ package org.apache.pulsar.broker.service;
 import io.netty.util.Recycler;
 
 public class EntryBatchSizes {
-    private int[] sizes = new int[100];
+    private static final int[] EMPTY = new int[0];
+
+    // sized for the entries of a dispatch, which are often a few: without the recycler, a dispatch allocates them
+    private int[] sizes = EMPTY;
 
     public int getBatchSize(int entryIdx) {
         return sizes[entryIdx];
