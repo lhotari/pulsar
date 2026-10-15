@@ -84,6 +84,10 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
 
     // the periodic flush, shared with the other consumers' trackers of the event loop; null without grouping
     private final AcknowledgmentsGroupingFlushes.Registration periodicFlush;
+    // Set after an ack is added to the pending acks and cleared by a flush before it takes them, so that the periodic
+    // flush skips a tracker without new acks without touching its consumer, connection and pending acks. An ack
+    // added while a flush takes the acks sets it again, and the next flush sends what this one didn't
+    private volatile boolean acksPending;
     private final boolean batchIndexAckEnabled;
     private final boolean ackReceiptEnabled;
 
@@ -101,7 +105,7 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
 
         if (acknowledgementGroupTimeMicros > 0) {
             periodicFlush = AcknowledgmentsGroupingFlushes.register(eventLoopGroup.next(),
-                    acknowledgementGroupTimeMicros, catchingAndLoggingThrowables(this::flush));
+                    acknowledgementGroupTimeMicros, catchingAndLoggingThrowables(this::periodicFlush));
         } else {
             periodicFlush = null;
         }
@@ -277,6 +281,7 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
     private CompletableFuture<Void> doIndividualAckAsync(MessageIdAdv messageId) {
         pendingIndividualAcks.add(messageId);
         pendingIndividualBatchIndexAcks.remove(messageId);
+        acksPending = true;
         return CompletableFuture.completedFuture(null);
     }
 
@@ -354,12 +359,14 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
                     return value;
                 });
         bitSet.clear(msgId.getBatchIndex());
+        acksPending = true;
         return CompletableFuture.completedFuture(null);
     }
 
     private void doCumulativeAckAsync(MessageIdAdv msgId, BitSetRecyclable bitSet) {
         // Handle concurrent updates from different threads
         lastCumulativeAck.update(msgId, bitSet);
+        acksPending = true;
     }
 
     private CompletableFuture<Void> doCumulativeBatchIndexAck(MessageIdAdv batchMessageId,
@@ -416,6 +423,13 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
         return completableFuture;
     }
 
+    // The periodic flush, which skips the tracker when no acks were added since the last flush
+    private void periodicFlush() {
+        if (acksPending) {
+            flush();
+        }
+    }
+
     /**
      * Flush all the pending acks and send them to the broker.
      */
@@ -438,6 +452,8 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
     }
 
     private void flushAsync(ClientCnx cnx) {
+        // cleared before the acks are taken: an ack added from here on sets it again for the next flush
+        acksPending = false;
         final LastCumulativeAck lastCumulativeAckToFlush = lastCumulativeAck.flush();
         if (lastCumulativeAckToFlush == null && pendingIndividualAcks.isEmpty()
                 && pendingIndividualBatchIndexAcks.isEmpty()) {
@@ -660,6 +676,7 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
     private void restoreIndividualAck(MessageIdAdv messageId, @Nullable MessageIdImpl[] chunkMsgIds) {
         pendingIndividualAcks.add(messageId);
         restoreChunkedMessageIds(messageId, chunkMsgIds);
+        acksPending = true;
     }
 
     private void restoreIndividualAndBatchIndexAcks(List<MessageIdAdv> messageIds,
@@ -672,6 +689,7 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
                     currentValue.and(valueToRestore);
                     return currentValue;
                 }));
+        acksPending = true;
     }
 
     private void restoreChunkedMessageIds(MessageIdAdv messageId, @Nullable MessageIdImpl[] chunkMsgIds) {
