@@ -106,7 +106,6 @@ import org.apache.bookkeeper.mledger.proto.PositionInfo;
 import org.apache.bookkeeper.mledger.proto.StringProperty;
 import org.apache.bookkeeper.mledger.util.ManagedLedgerUtils;
 import org.apache.commons.lang3.mutable.MutableBoolean;
-import org.apache.commons.lang3.mutable.MutableInt;
 import org.apache.commons.lang3.mutable.MutableLong;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.common.policies.data.ManagedLedgerInternalStats;
@@ -740,25 +739,22 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
     }
 
-    private List<LongListMap> buildLongPropertiesMap(Map<Long, long[]> properties) {
-        if (properties.isEmpty()) {
-            return Collections.emptyList();
-        }
-        List<LongListMap> longListMap = new ArrayList<>();
-        MutableInt serializedSize = new MutableInt();
-        properties.forEach((id, ranges) -> {
+    // Adds the ranges to the position info's range messages, which the reused position info keeps with their arrays,
+    // instead of building new messages and copying them in
+    private void addIndividualDeletedMessageRanges(PositionInfo pi, Map<Long, long[]> properties) {
+        int serializedSize = 0;
+        for (Map.Entry<Long, long[]> entry : properties.entrySet()) {
+            long[] ranges = entry.getValue();
             if (ranges == null || ranges.length <= 0) {
-                return;
+                continue;
             }
-            LongListMap lm = new LongListMap().setKey(id);
+            LongListMap lm = pi.addIndividualDeletedMessageRange().setKey(entry.getKey());
             for (long range : ranges) {
                 lm.addValue(range);
             }
-            longListMap.add(lm);
-            serializedSize.add(lm.getSerializedSize());
-        });
-        individualDeletedMessagesSerializedSize = serializedSize.toInteger();
-        return longListMap;
+            serializedSize += lm.getSerializedSize();
+        }
+        individualDeletedMessagesSerializedSize = serializedSize;
     }
 
     private static Map<String, Long> recoverProperties(int count, IntFunction<LongProperty> accessor) {
@@ -3592,7 +3588,7 @@ public class ManagedCursorImpl implements ManagedCursor {
             }
         }
         if (internalRanges != null && !internalRanges.isEmpty()) {
-            pi.addAllIndividualDeletedMessageRanges(buildLongPropertiesMap(internalRanges));
+            addIndividualDeletedMessageRanges(pi, internalRanges);
         } else {
             pi.addAllIndividualDeletedMessages(buildIndividualDeletedMessageRanges());
         }
