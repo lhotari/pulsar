@@ -433,11 +433,14 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
     // The periodic flush, requested by the acks added since the last flush
     private void periodicFlush() {
         if (acksPending) {
-            flush();
-            if (acksPending) {
-                // not sent without a connection: retried by the next periodic flush. An ack added while the flush
-                // ran requested it already
-                periodicFlush.requestFlush();
+            try {
+                flush();
+            } finally {
+                if (acksPending) {
+                    // not sent, without a connection or when the flush failed: retried by the next periodic flush.
+                    // An ack added while the flush ran requested it already
+                    periodicFlush.requestFlush();
+                }
             }
         }
     }

@@ -66,8 +66,9 @@ final class AcknowledgmentsGroupingFlushes {
         private final AtomicBoolean closed = new AtomicBoolean();
         // whether the flush is in the shared flush's queue; cleared by the run that takes it, before it runs it
         private final AtomicBoolean queued = new AtomicBoolean();
-        // set in the map's compute, before the registration is returned
-        private SharedFlush shared;
+        // set in the map's compute, before the registration is returned; cleared by close(), so that a closed
+        // registration doesn't keep the shared flush and the other registrations
+        private volatile SharedFlush shared;
 
         private Registration(Key key, Runnable flush) {
             this.key = key;
@@ -79,8 +80,9 @@ final class AcknowledgmentsGroupingFlushes {
          * once; one requested while it runs, or by itself, runs again in a later run.
          */
         void requestFlush() {
-            if (!queued.get() && queued.compareAndSet(false, true)) {
-                shared.requested.add(this);
+            SharedFlush current = shared;
+            if (current != null && !queued.get() && queued.compareAndSet(false, true)) {
+                current.requested.add(this);
             }
         }
 
@@ -90,13 +92,20 @@ final class AcknowledgmentsGroupingFlushes {
             if (!closed.compareAndSet(false, true)) {
                 return;
             }
-            SHARED_FLUSHES.computeIfPresent(key, (k, shared) -> {
-                shared.registrations.remove(this);
-                if (shared.registrations.isEmpty()) {
-                    shared.retire();
+            SharedFlush current = shared;
+            shared = null;
+            if (current == null) {
+                return;
+            }
+            // a queued request isn't run; removed so that it doesn't wait for a run that may never come
+            current.requested.remove(this);
+            current.registrations.remove(this);
+            SHARED_FLUSHES.computeIfPresent(key, (k, mapped) -> {
+                if (mapped == current && current.registrations.isEmpty()) {
+                    current.retire();
                     return null;
                 }
-                return shared;
+                return mapped;
             });
         }
     }
@@ -119,6 +128,13 @@ final class AcknowledgmentsGroupingFlushes {
             if (termination != null) {
                 termination.removeListener(terminationListener);
             }
+        }
+
+        // The executor terminated: no run takes the requests any more. Drops the references to the registrations,
+        // which aren't flushed any more, so that a registration that is never closed doesn't keep the others
+        void terminated() {
+            registrations.clear();
+            requested.clear();
         }
 
         @Override
@@ -169,7 +185,10 @@ final class AcknowledgmentsGroupingFlushes {
                 // executor in tests has neither a task nor a termination future
                 created.termination = executor.terminationFuture();
                 if (created.termination != null) {
-                    created.terminationListener = future -> SHARED_FLUSHES.remove(k, created);
+                    created.terminationListener = future -> {
+                        SHARED_FLUSHES.remove(k, created);
+                        created.terminated();
+                    };
                     created.termination.addListener(created.terminationListener);
                 }
             }
