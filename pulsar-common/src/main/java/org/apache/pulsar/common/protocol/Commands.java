@@ -2469,7 +2469,11 @@ public class Commands {
         out.writeInt(4 + cmdSize + payloadSize); // External frame
         out.writeInt(cmdSize);
         cmd.writeTo(out);
-        out.writeBytes(metadataAndPayload, metadataAndPayload.readerIndex(), payloadSize);
+        // Copied by the source into the target rather than the other way: Netty's adaptive buffers copy from a buffer
+        // of another kind, such as a slice of a cached entry, through NIO buffer views that they allocate for each
+        // copy, while a direct buffer copies into a buffer with a memory address without allocating
+        metadataAndPayload.getBytes(metadataAndPayload.readerIndex(), out, out.writerIndex(), payloadSize);
+        out.writerIndex(out.writerIndex() + payloadSize);
     }
 
     public static MessageMetadata peekMessageMetadata(ByteBuf metadataAndPayload, String subscription,
