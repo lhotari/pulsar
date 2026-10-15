@@ -20,9 +20,9 @@ package org.apache.pulsar.client.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import java.util.concurrent.Executors;
+import io.netty.util.concurrent.DefaultEventExecutor;
+import io.netty.util.concurrent.EventExecutor;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.awaitility.Awaitility;
@@ -33,16 +33,16 @@ import org.testng.annotations.Test;
 public class AcknowledgmentsGroupingFlushesTest {
     private static final long GROUP_TIME_MICROS = TimeUnit.MILLISECONDS.toMicros(10);
 
-    private ScheduledExecutorService executor;
+    private EventExecutor executor;
 
     @BeforeMethod
     public void setUp() {
-        executor = Executors.newSingleThreadScheduledExecutor();
+        executor = new DefaultEventExecutor();
     }
 
     @AfterMethod(alwaysRun = true)
     public void tearDown() {
-        executor.shutdownNow();
+        executor.shutdownGracefully(0, 0, TimeUnit.MILLISECONDS).syncUninterruptibly();
     }
 
     @Test
@@ -109,10 +109,21 @@ public class AcknowledgmentsGroupingFlushesTest {
 
     @Test
     public void aRejectingExecutorFailsTheRegistration() {
-        executor.shutdown();
+        executor.shutdownGracefully(0, 0, TimeUnit.MILLISECONDS).syncUninterruptibly();
         assertThatThrownBy(() -> AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, () -> { }))
                 .isInstanceOf(RejectedExecutionException.class);
         assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isZero();
+    }
+
+    @Test
+    public void theExecutorsTerminationRemovesItsTasks() {
+        AtomicInteger flushes = new AtomicInteger();
+        // a consumer that is never closed, as when a client shuts down without closing its consumers
+        AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, flushes::incrementAndGet);
+        assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isEqualTo(1);
+        executor.shutdownGracefully(0, 0, TimeUnit.MILLISECONDS).syncUninterruptibly();
+        Awaitility.await().untilAsserted(
+                () -> assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isZero());
     }
 
     // Waits until the counter has advanced twice more

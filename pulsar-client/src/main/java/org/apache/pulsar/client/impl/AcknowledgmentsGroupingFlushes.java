@@ -19,9 +19,10 @@
 package org.apache.pulsar.client.impl;
 
 import com.google.common.annotations.VisibleForTesting;
+import io.netty.util.concurrent.EventExecutor;
+import io.netty.util.concurrent.Future;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -38,11 +39,12 @@ import lombok.CustomLog;
  * run of the task, as with a task of its own.
  *
  * <p>The shared tasks are kept in a map for the life of their registrations: the last registration to close cancels
- * its task and removes it, so a map entry doesn't outlive the consumers that use its executor.
+ * its task and removes it, and an executor's termination removes its tasks, so that a map entry doesn't outlive the
+ * consumers that use its executor, nor the executor when a client shuts down without closing its consumers.
  */
 @CustomLog
 final class AcknowledgmentsGroupingFlushes {
-    private record Key(ScheduledExecutorService executor, long groupTimeMicros) {
+    private record Key(EventExecutor executor, long groupTimeMicros) {
     }
 
     private static final ConcurrentHashMap<Key, SharedFlush> SHARED_FLUSHES = new ConcurrentHashMap<>();
@@ -70,7 +72,9 @@ final class AcknowledgmentsGroupingFlushes {
             SHARED_FLUSHES.computeIfPresent(key, (k, shared) -> {
                 shared.registrations.remove(this);
                 if (shared.registrations.isEmpty()) {
-                    shared.task.cancel(false);
+                    if (shared.task != null) {
+                        shared.task.cancel(false);
+                    }
                     return null;
                 }
                 return shared;
@@ -102,7 +106,7 @@ final class AcknowledgmentsGroupingFlushes {
      * @throws java.util.concurrent.RejectedExecutionException when the executor rejects the shared task, such as
      *                                                          after its shutdown
      */
-    static Registration register(ScheduledExecutorService executor, long groupTimeMicros, Runnable flush) {
+    static Registration register(EventExecutor executor, long groupTimeMicros, Runnable flush) {
         Key key = new Key(executor, groupTimeMicros);
         Registration registration = new Registration(key, flush);
         SHARED_FLUSHES.compute(key, (k, shared) -> {
@@ -110,6 +114,13 @@ final class AcknowledgmentsGroupingFlushes {
                 shared = new SharedFlush();
                 shared.task = executor.scheduleWithFixedDelay(shared, groupTimeMicros, groupTimeMicros,
                         TimeUnit.MICROSECONDS);
+                SharedFlush created = shared;
+                // the executor's termination drops its tasks; their registrations may never be closed. A mocked
+                // executor in tests has neither a task nor a termination future
+                Future<?> termination = executor.terminationFuture();
+                if (termination != null) {
+                    termination.addListener(future -> SHARED_FLUSHES.remove(k, created));
+                }
             }
             shared.registrations.add(registration);
             return shared;
@@ -119,7 +130,7 @@ final class AcknowledgmentsGroupingFlushes {
 
     /** The number of shared tasks of the executor, one for each group time with a registration. */
     @VisibleForTesting
-    static long sharedTaskCount(ScheduledExecutorService executor) {
+    static long sharedTaskCount(EventExecutor executor) {
         return SHARED_FLUSHES.keySet().stream().filter(key -> key.executor() == executor).count();
     }
 }
