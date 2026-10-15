@@ -441,6 +441,12 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
 
     private void flushAsync(ClientCnx cnx) {
         final LastCumulativeAck lastCumulativeAckToFlush = lastCumulativeAck.flush();
+        if (lastCumulativeAckToFlush == null && pendingIndividualAcks.isEmpty()
+                && pendingIndividualBatchIndexAcks.isEmpty()) {
+            // Nothing to send, the common case of the periodic flush of a consumer without new acks. An ack added
+            // after these checks waits for the next flush, as one added after the acks are taken below does
+            return;
+        }
         boolean shouldFlush = false;
         if (lastCumulativeAckToFlush != null) {
             shouldFlush = true;

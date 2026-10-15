@@ -19,10 +19,14 @@
 package org.apache.pulsar.client.impl;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
@@ -151,6 +155,42 @@ public class AcknowledgementsGroupingTrackerTest {
         assertFalse(tracker.isDuplicate(msg6));
 
         tracker.close();
+    }
+
+    @Test(dataProvider = "isNeedReceipt")
+    public void testFlushWithoutPendingAcksWritesNothing(boolean isNeedReceipt) throws Exception {
+        ConsumerConfigurationData<?> conf = new ConsumerConfigurationData<>();
+        conf.setAcknowledgementsGroupTimeMicros(TimeUnit.SECONDS.toMicros(10));
+        conf.setAckReceiptEnabled(isNeedReceipt);
+        PersistentAcknowledgmentsGroupingTracker tracker =
+                new PersistentAcknowledgmentsGroupingTracker(consumer, conf, eventLoopGroup);
+        try {
+            clearInvocations(successCtx);
+            tracker.flush();
+            verify(successCtx, never()).write(any(), any());
+            verify(successCtx, never()).writeAndFlush(any(), any());
+            verify(successCtx, never()).flush();
+
+            // a cumulative ack, flushed once, and not again by the next flush
+            MessageIdImpl msg1 = new MessageIdImpl(5, 1, 0);
+            tracker.addAcknowledgment(msg1, AckType.Cumulative, Collections.emptyMap());
+            tracker.flush();
+            verify(successCtx, times(1)).flush();
+            clearInvocations(successCtx);
+            tracker.flush();
+            verify(successCtx, never()).flush();
+            // the cumulative ack still counts for the duplicate check
+            assertTrue(tracker.isDuplicate(msg1));
+
+            // an individual ack after an empty flush is sent by the next one
+            MessageIdImpl msg2 = new MessageIdImpl(5, 2, 0);
+            tracker.addAcknowledgment(msg2, AckType.Individual, Collections.emptyMap());
+            tracker.flush();
+            verify(successCtx, times(1)).flush();
+            assertFalse(tracker.isDuplicate(msg2));
+        } finally {
+            tracker.close();
+        }
     }
 
     @Test(dataProvider = "isNeedReceipt")
