@@ -21,6 +21,7 @@ package org.apache.pulsar.client.impl;
 import com.google.common.annotations.VisibleForTesting;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.Future;
+import io.netty.util.concurrent.GenericFutureListener;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
@@ -35,8 +36,8 @@ import lombok.CustomLog;
  * <p>A tracker flushes its grouped acks every {@code acknowledgementsGroupTime}. With a task of its own, a process with
  * thousands of consumers keeps thousands of periodic tasks in its event loops' scheduled task queues, and each run is
  * a removal from the queue and an insertion back into it. Here the flushes registered for an executor and a group time
- * share one fixed-delay task, which runs them one after the other, each at most one group time after the previous
- * run of the task, as with a task of its own.
+ * share one fixed-delay task, which runs them one after the other. As with a task of its own, a flush runs one group
+ * time after the end of the task's previous run, besides the executor's delays; the run includes the other flushes.
  *
  * <p>The shared tasks are kept in a map for the life of their registrations: the last registration to close cancels
  * its task and removes it, and an executor's termination removes its tasks, so that a map entry doesn't outlive the
@@ -72,9 +73,7 @@ final class AcknowledgmentsGroupingFlushes {
             SHARED_FLUSHES.computeIfPresent(key, (k, shared) -> {
                 shared.registrations.remove(this);
                 if (shared.registrations.isEmpty()) {
-                    if (shared.task != null) {
-                        shared.task.cancel(false);
-                    }
+                    shared.retire();
                     return null;
                 }
                 return shared;
@@ -84,12 +83,28 @@ final class AcknowledgmentsGroupingFlushes {
 
     private static final class SharedFlush implements Runnable {
         private final Set<Registration> registrations = ConcurrentHashMap.newKeySet();
-        // set in the map's compute, before the map publishes the shared flush
+        // set in the map's compute, before the map publishes the shared flush; null with a mocked executor in tests
         private ScheduledFuture<?> task;
+        private Future<?> termination;
+        private GenericFutureListener<Future<Object>> terminationListener;
+
+        // Cancels the task, and stops listening to the executor's termination, which would keep this otherwise
+        void retire() {
+            if (task != null) {
+                task.cancel(false);
+            }
+            if (termination != null) {
+                termination.removeListener(terminationListener);
+            }
+        }
 
         @Override
         public void run() {
             for (Registration registration : registrations) {
+                // the iterator can return a registration that was closed after it was read
+                if (registration.closed.get()) {
+                    continue;
+                }
                 try {
                     registration.flush.run();
                 } catch (Throwable t) {
@@ -117,9 +132,10 @@ final class AcknowledgmentsGroupingFlushes {
                 SharedFlush created = shared;
                 // the executor's termination drops its tasks; their registrations may never be closed. A mocked
                 // executor in tests has neither a task nor a termination future
-                Future<?> termination = executor.terminationFuture();
-                if (termination != null) {
-                    termination.addListener(future -> SHARED_FLUSHES.remove(k, created));
+                created.termination = executor.terminationFuture();
+                if (created.termination != null) {
+                    created.terminationListener = future -> SHARED_FLUSHES.remove(k, created);
+                    created.termination.addListener(created.terminationListener);
                 }
             }
             shared.registrations.add(registration);

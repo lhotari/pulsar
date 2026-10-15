@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.netty.util.concurrent.DefaultEventExecutor;
 import io.netty.util.concurrent.EventExecutor;
+import java.util.Arrays;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -82,6 +83,60 @@ public class AcknowledgmentsGroupingFlushesTest {
         int otherAfterClose = otherGroupTime.get();
         sleepGroupTimes(5);
         assertThat(otherGroupTime.get()).isLessThanOrEqualTo(otherAfterClose + 1);
+    }
+
+    @Test
+    public void aRegistrationClosedDuringARunIsntFlushedByIt() {
+        // whichever runs first closes the others, which the run's iterator may already have read
+        int count = 3;
+        AtomicInteger[] flushes = new AtomicInteger[count];
+        AcknowledgmentsGroupingFlushes.Registration[] registrations =
+                new AcknowledgmentsGroupingFlushes.Registration[count];
+        for (int i = 0; i < count; i++) {
+            int index = i;
+            flushes[i] = new AtomicInteger();
+            registrations[i] = AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, () -> {
+                flushes[index].incrementAndGet();
+                for (int other = 0; other < count; other++) {
+                    if (other != index) {
+                        registrations[other].close();
+                    }
+                }
+            });
+        }
+        try {
+            Awaitility.await().untilAsserted(() -> assertThat(
+                    Arrays.stream(flushes).mapToInt(AtomicInteger::get).max().getAsInt())
+                    .isGreaterThan(2));
+            // only the first one ran, in every run
+            assertThat(Arrays.stream(flushes).filter(flushCount -> flushCount.get() > 0).count())
+                    .isEqualTo(1);
+        } finally {
+            for (AcknowledgmentsGroupingFlushes.Registration registration : registrations) {
+                registration.close();
+            }
+        }
+        assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isZero();
+    }
+
+    @Test
+    public void tasksAreCreatedAgainAfterTheLastRegistrationCloses() {
+        for (int i = 0; i < 100; i++) {
+            AtomicInteger flushes = new AtomicInteger();
+            AcknowledgmentsGroupingFlushes.Registration registration =
+                    AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, flushes::incrementAndGet);
+            assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isEqualTo(1);
+            registration.close();
+            assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isZero();
+        }
+        AtomicInteger flushes = new AtomicInteger();
+        AcknowledgmentsGroupingFlushes.Registration registration =
+                AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, flushes::incrementAndGet);
+        try {
+            Awaitility.await().untilAsserted(() -> assertThat(flushes.get()).isGreaterThan(2));
+        } finally {
+            registration.close();
+        }
     }
 
     @Test
