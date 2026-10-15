@@ -29,6 +29,7 @@ import lombok.Cleanup;
 import org.apache.pulsar.broker.service.SharedPulsarBaseTest;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.Producer;
+import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.common.naming.TopicName;
 import org.awaitility.Awaitility;
@@ -44,9 +45,12 @@ public class MultiTopicsConsumerInternalExecutorTest extends SharedPulsarBaseTes
         String addedTopic = newTopicName();
         admin.topics().createPartitionedTopic(partitionedTopic, 2);
         Map<String, List<String>> receivedByTopic = new ConcurrentHashMap<>();
+        // two internal executors, so that consumers that pick their own don't all share the parent's
+        @Cleanup
+        PulsarClient client = PulsarClient.builder().serviceUrl(getBrokerServiceUrl()).ioThreads(2).build();
 
         @Cleanup
-        Consumer<String> consumer = pulsarClient.newConsumer(Schema.STRING)
+        Consumer<String> consumer = client.newConsumer(Schema.STRING)
                 .topics(List.of(topic, partitionedTopic))
                 .subscriptionName("sub")
                 .messageListener((c, msg) -> {
@@ -73,7 +77,7 @@ public class MultiTopicsConsumerInternalExecutorTest extends SharedPulsarBaseTes
         }
         for (String t : List.of(topic, partitionedTopic, addedTopic)) {
             @Cleanup
-            Producer<String> producer = pulsarClient.newProducer(Schema.STRING).topic(t)
+            Producer<String> producer = client.newProducer(Schema.STRING).topic(t)
                     .enableBatching(false).create();
             for (String value : expected) {
                 producer.send(value);
