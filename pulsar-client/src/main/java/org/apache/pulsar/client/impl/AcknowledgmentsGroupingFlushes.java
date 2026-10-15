@@ -22,8 +22,12 @@ import com.google.common.annotations.VisibleForTesting;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GenericFutureListener;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -36,8 +40,10 @@ import lombok.CustomLog;
  * <p>A tracker flushes its grouped acks every {@code acknowledgementsGroupTime}. With a task of its own, a process with
  * thousands of consumers keeps thousands of periodic tasks in its event loops' scheduled task queues, and each run is
  * a removal from the queue and an insertion back into it. Here the flushes registered for an executor and a group time
- * share one fixed-delay task, which runs them one after the other. As with a task of its own, a flush runs one group
- * time after the end of the task's previous run, besides the executor's delays; the run includes the other flushes.
+ * share one fixed-delay task. A tracker requests its flush with {@link Registration#requestFlush()} when it has acks
+ * to send, and each run of the task runs the flushes requested before it, one after the other, so that the trackers
+ * without acks to send cost nothing. A flush runs at most one group time after its request, besides the executor's
+ * delays and the other flushes of the run.
  *
  * <p>The shared tasks are kept in a map for the life of their registrations: the last registration to close cancels
  * its task and removes it, and an executor's termination removes its tasks, so that a map entry doesn't outlive the
@@ -58,10 +64,24 @@ final class AcknowledgmentsGroupingFlushes {
         private final Key key;
         private final Runnable flush;
         private final AtomicBoolean closed = new AtomicBoolean();
+        // whether the flush is in the shared flush's queue; cleared by the run that takes it, before it runs it
+        private final AtomicBoolean queued = new AtomicBoolean();
+        // set in the map's compute, before the registration is returned
+        private SharedFlush shared;
 
         private Registration(Key key, Runnable flush) {
             this.key = key;
             this.flush = flush;
+        }
+
+        /**
+         * Requests the flush, which the next run of the shared task runs. A flush requested while it is queued runs
+         * once; one requested while it runs, or by itself, runs again in a later run.
+         */
+        void requestFlush() {
+            if (!queued.get() && queued.compareAndSet(false, true)) {
+                shared.requested.add(this);
+            }
         }
 
         /** Stops the periodic flush; a flush that is running may complete. Closing again does nothing. */
@@ -83,6 +103,9 @@ final class AcknowledgmentsGroupingFlushes {
 
     private static final class SharedFlush implements Runnable {
         private final Set<Registration> registrations = ConcurrentHashMap.newKeySet();
+        private final Queue<Registration> requested = new ConcurrentLinkedQueue<>();
+        // the flushes taken by a run, reused by the runs, which the executor runs one at a time
+        private final List<Registration> running = new ArrayList<>();
         // set in the map's compute, before the map publishes the shared flush; null with a mocked executor in tests
         private ScheduledFuture<?> task;
         private Future<?> termination;
@@ -100,23 +123,35 @@ final class AcknowledgmentsGroupingFlushes {
 
         @Override
         public void run() {
-            for (Registration registration : registrations) {
-                // the iterator can return a registration that was closed after it was read
-                if (registration.closed.get()) {
-                    continue;
+            // takes the requested flushes first, so that the flushes requested while they run wait for the next run
+            Registration registration;
+            while ((registration = requested.poll()) != null) {
+                running.add(registration);
+            }
+            try {
+                for (int i = 0; i < running.size(); i++) {
+                    registration = running.get(i);
+                    registration.queued.set(false);
+                    // a registration closed after its request isn't flushed
+                    if (registration.closed.get()) {
+                        continue;
+                    }
+                    try {
+                        registration.flush.run();
+                    } catch (Throwable t) {
+                        log.warn().exception(t).log("Flushing grouped acknowledgments failed");
+                    }
                 }
-                try {
-                    registration.flush.run();
-                } catch (Throwable t) {
-                    log.warn().exception(t).log("Flushing grouped acknowledgments failed");
-                }
+            } finally {
+                running.clear();
             }
         }
     }
 
     /**
-     * Runs {@code flush} every {@code groupTimeMicros} on {@code executor}, with the other flushes of the same
-     * executor and group time, until the returned registration is closed.
+     * Registers {@code flush}, which runs on {@code executor} at most {@code groupTimeMicros} after each
+     * {@link Registration#requestFlush() request}, with the other flushes of the same executor and group time, until
+     * the returned registration is closed.
      *
      * @throws java.util.concurrent.RejectedExecutionException when the executor rejects the shared task, such as
      *                                                          after its shutdown
@@ -139,6 +174,7 @@ final class AcknowledgmentsGroupingFlushes {
                 }
             }
             shared.registrations.add(registration);
+            registration.shared = shared;
             return shared;
         });
         return registration;

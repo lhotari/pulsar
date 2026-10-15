@@ -52,6 +52,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.conf.ConsumerConfigurationData;
 import org.apache.pulsar.client.impl.metrics.InstrumentProvider;
@@ -173,10 +174,17 @@ public class AcknowledgementsGroupingTrackerTest {
         conf.setAcknowledgementsGroupTimeMicros(TimeUnit.MILLISECONDS.toMicros(10));
         PersistentAcknowledgmentsGroupingTracker tracker =
                 new PersistentAcknowledgmentsGroupingTracker(periodicConsumer, conf, eventLoopGroup);
-        // runs in the tracker's shared periodic flush task (the group has one event loop), to count its runs
+        // runs in the tracker's shared periodic flush task (the group has one event loop), requesting itself again,
+        // to count its runs
         AtomicInteger periodicRuns = new AtomicInteger();
+        AtomicReference<AcknowledgmentsGroupingFlushes.Registration> probeRef = new AtomicReference<>();
         AcknowledgmentsGroupingFlushes.Registration probe = AcknowledgmentsGroupingFlushes.register(
-                eventLoopGroup.next(), conf.getAcknowledgementsGroupTimeMicros(), periodicRuns::incrementAndGet);
+                eventLoopGroup.next(), conf.getAcknowledgementsGroupTimeMicros(), () -> {
+                    periodicRuns.incrementAndGet();
+                    probeRef.get().requestFlush();
+                });
+        probeRef.set(probe);
+        probe.requestFlush();
         try {
             // without acks, the periodic flushes don't look up the connection
             waitForPeriodicRuns(periodicRuns, 3);
