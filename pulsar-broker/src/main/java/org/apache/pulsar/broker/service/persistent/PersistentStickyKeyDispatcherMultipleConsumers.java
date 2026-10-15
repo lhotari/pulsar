@@ -596,8 +596,9 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         boolean lookAheadAllowed = isReplayQueueSizeBelowLimit();
         // in normal read mode, keep track of consumers that are blocked by hash, to check if look-ahead could be useful
         Set<Consumer> blockedByHashConsumers = lookAheadAllowed && readType == ReadType.Normal ? new HashSet<>() : null;
-        // in replay read mode, keep track of consumers for entries, used for look-ahead check
-        Set<Consumer> consumersForEntriesForLookaheadCheck = lookAheadAllowed ? new HashSet<>() : null;
+        // the consumers of the hashes blocked by an older replay addition, used for the look-ahead check with the
+        // consumers in permitsForConsumer, which has every consumer selected for an entry; created when needed
+        Set<Consumer> replayAdditionOwners = null;
         // track already blocked hashes to block any further messages with the same hash
         IntOpenHashSet alreadyBlockedHashes = new IntOpenHashSet();
 
@@ -631,7 +632,10 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
                         // this isn't a reason for a look-ahead read
                         Consumer owner = selector.select(stickyKeyHash);
                         if (owner != null) {
-                            consumersForEntriesForLookaheadCheck.add(owner);
+                            if (replayAdditionOwners == null) {
+                                replayAdditionOwners = new HashSet<>();
+                            }
+                            replayAdditionOwners.add(owner);
                         }
                     }
                 }
@@ -639,9 +643,6 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             if (!hashIsAlreadyBlocked) {
                 consumer = selector.select(stickyKeyHash);
                 if (consumer != null) {
-                    if (lookAheadAllowed) {
-                        consumersForEntriesForLookaheadCheck.add(consumer);
-                    }
                     final var canUpdateBlockedByHash = lookAheadAllowed && readType == ReadType.Normal;
                     MutableInt permits =
                             permitsForConsumer.computeIfAbsent(consumer,
@@ -712,7 +713,8 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             if (!triggerLookAhead.booleanValue()) {
                 for (Consumer consumer : getConsumers()) {
                     // filter out the consumers that are already checked when the entries were processed for entries
-                    if (!consumersForEntriesForLookaheadCheck.contains(consumer)) {
+                    if (!permitsForConsumer.containsKey(consumer)
+                            && (replayAdditionOwners == null || !replayAdditionOwners.contains(consumer))) {
                         // if another consumer has available permits, then look-ahead could be useful
                         if (getAvailablePermits(consumer) > 0) {
                             triggerLookAhead.setTrue();
