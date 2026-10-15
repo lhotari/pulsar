@@ -194,9 +194,11 @@ public class AcknowledgmentsGroupingFlushesTest {
             requested.requestFlush();
             Awaitility.await().untilAsserted(() -> assertThat(requestedFlushes.get()).isEqualTo(2));
 
-            // a request of a closed registration isn't flushed
-            requested.requestFlush();
-            requested.close();
+            // a request of a registration closed before the next run isn't flushed
+            executor.submit(() -> {
+                requested.requestFlush();
+                requested.close();
+            }).get();
             waitForTheNextRuns(runs);
             assertThat(requestedFlushes.get()).isEqualTo(2);
             assertThat(idleFlushes.get()).isZero();

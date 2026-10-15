@@ -214,6 +214,34 @@ public class AcknowledgementsGroupingTrackerTest {
         Awaitility.await().until(() -> periodicRuns.get() >= start + runs);
     }
 
+    @Test
+    public void testPeriodicFlushRetriesAfterAFailure() throws Exception {
+        ConsumerImpl<?> failingConsumer = mock(ConsumerImpl.class);
+        failingConsumer.unAckedChunkedMessageIdSequenceMap = new ConcurrentHashMap<>();
+        doReturn(new ConsumerStatsRecorderImpl()).when(failingConsumer).getStats();
+        doReturn(UnAckedMessageTracker.UNACKED_MESSAGE_TRACKER_DISABLED)
+                .when(failingConsumer).getUnAckedMessageTracker();
+        AtomicInteger lookups = new AtomicInteger();
+        doAnswer(invocation -> {
+            if (lookups.incrementAndGet() == 1) {
+                throw new IllegalStateException("failing connection lookup");
+            }
+            return cnx;
+        }).when(failingConsumer).getClientCnx();
+        ConsumerConfigurationData<?> conf = new ConsumerConfigurationData<>();
+        conf.setAcknowledgementsGroupTimeMicros(TimeUnit.MILLISECONDS.toMicros(10));
+        PersistentAcknowledgmentsGroupingTracker tracker =
+                new PersistentAcknowledgmentsGroupingTracker(failingConsumer, conf, eventLoopGroup);
+        try {
+            // the first periodic flush fails, and a later one sends the ack without another ack being added
+            tracker.addAcknowledgment(new MessageIdImpl(5, 1, 0), AckType.Individual, Collections.emptyMap());
+            Awaitility.await().until(() -> tracker.getPendingIndividualAcksSize() == 0);
+            assertTrue(lookups.get() >= 2);
+        } finally {
+            tracker.close();
+        }
+    }
+
     @Test(dataProvider = "isNeedReceipt")
     public void testFlushWithoutPendingAcksWritesNothing(boolean isNeedReceipt) throws Exception {
         ConsumerConfigurationData<?> conf = new ConsumerConfigurationData<>();
