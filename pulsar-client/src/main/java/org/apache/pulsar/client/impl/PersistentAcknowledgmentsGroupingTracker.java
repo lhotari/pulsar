@@ -35,8 +35,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import lombok.CustomLog;
@@ -84,7 +82,8 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
     @VisibleForTesting
     final ConcurrentSkipListMap<MessageIdAdv, ConcurrentBitSet> pendingIndividualBatchIndexAcks;
 
-    private final ScheduledFuture<?> scheduledTask;
+    // the periodic flush, shared with the other consumers' trackers of the event loop; null without grouping
+    private final AcknowledgmentsGroupingFlushes.Registration periodicFlush;
     private final boolean batchIndexAckEnabled;
     private final boolean ackReceiptEnabled;
 
@@ -101,11 +100,10 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
         this.currentCumulativeAckFuture = new TimedCompletableFuture<>();
 
         if (acknowledgementGroupTimeMicros > 0) {
-            scheduledTask = eventLoopGroup.next().scheduleWithFixedDelay(catchingAndLoggingThrowables(this::flush),
-                    acknowledgementGroupTimeMicros,
-                    acknowledgementGroupTimeMicros, TimeUnit.MICROSECONDS);
+            periodicFlush = AcknowledgmentsGroupingFlushes.register(eventLoopGroup.next(),
+                    acknowledgementGroupTimeMicros, catchingAndLoggingThrowables(this::flush));
         } else {
-            scheduledTask = null;
+            periodicFlush = null;
         }
     }
 
@@ -546,8 +544,8 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
     @Override
     public void close() {
         flush();
-        if (scheduledTask != null && !scheduledTask.isCancelled()) {
-            scheduledTask.cancel(true);
+        if (periodicFlush != null) {
+            periodicFlush.close();
         }
     }
 
