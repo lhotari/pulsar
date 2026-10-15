@@ -3566,37 +3566,43 @@ public class ManagedCursorImpl implements ManagedCursor {
         }
     }
 
+    // Builds and serializes the position info with the reused instance. A cursor's close persists its position
+    // concurrently with a mark-delete on another thread, so the instance is used under its monitor
+    private byte[] serializePositionInfo(Position position, Map<String, Long> properties) {
+        PositionInfo pi = reusablePositionInfo;
+        synchronized (pi) {
+            pi.clear();
+            pi.setLedgerId(position.getLedgerId())
+                    .setEntryId(position.getEntryId())
+                    .addAllBatchedEntryDeletionIndexInfos(buildBatchEntryDeletionIndexInfoList())
+                    .addAllProperties(buildPropertiesMap(properties));
+
+            Map<Long, long[]> internalRanges = null;
+            if (getConfig().isPersistIndividualAckAsLongArray()) {
+                lock.readLock().lock();
+                try {
+                    internalRanges = individualDeletedMessages.toRanges(getConfig().getMaxUnackedRangesToPersist());
+                } catch (Exception e) {
+                    log.warn().exception(e).log("Failed to serialize individualDeletedMessages");
+                } finally {
+                    lock.readLock().unlock();
+                }
+            }
+            if (internalRanges != null && !internalRanges.isEmpty()) {
+                addIndividualDeletedMessageRanges(pi, internalRanges);
+            } else {
+                pi.addAllIndividualDeletedMessages(buildIndividualDeletedMessageRanges());
+            }
+            return pi.toByteArray();
+        }
+    }
+
     void persistPositionToLedger(final LedgerHandle lh, MarkDeleteEntry mdEntry, final VoidCallback callback,
                                  boolean ignoreClosedStateAfterFailure) {
         Position position = mdEntry.newPosition;
-        PositionInfo pi = reusablePositionInfo;
-        pi.clear();
-        pi.setLedgerId(position.getLedgerId())
-                .setEntryId(position.getEntryId())
-                .addAllBatchedEntryDeletionIndexInfos(buildBatchEntryDeletionIndexInfoList())
-                .addAllProperties(buildPropertiesMap(mdEntry.properties));
-
-        Map<Long, long[]> internalRanges = null;
-        if (getConfig().isPersistIndividualAckAsLongArray()) {
-            lock.readLock().lock();
-            try {
-                internalRanges = individualDeletedMessages.toRanges(getConfig().getMaxUnackedRangesToPersist());
-            } catch (Exception e) {
-                log.warn().exception(e).log("Failed to serialize individualDeletedMessages");
-            } finally {
-                lock.readLock().unlock();
-            }
-        }
-        if (internalRanges != null && !internalRanges.isEmpty()) {
-            addIndividualDeletedMessageRanges(pi, internalRanges);
-        } else {
-            pi.addAllIndividualDeletedMessages(buildIndividualDeletedMessageRanges());
-        }
-
-        log.debug().attr("ledgerId", lh.getId()).attr("position", position).log("Appending to cursor ledger");
-
         requireNonNull(lh);
-        byte[] data = pi.toByteArray();
+        byte[] data = serializePositionInfo(position, mdEntry.properties);
+        log.debug().attr("ledgerId", lh.getId()).attr("position", position).log("Appending to cursor ledger");
         lh.asyncAddEntry(data, (rc, lh1, entryId, ctx) -> {
             if (rc == BKException.Code.OK) {
                 log.debug()
