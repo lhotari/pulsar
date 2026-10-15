@@ -364,7 +364,7 @@ commit segment can be absent). Use the exact recording names linked from the pro
 | `gateways/container.log.txt`, `applications/container.log.txt` | The workload containers' logs | Read |
 | `gateways/gateways-latency.hgrm`, `applications/<application>/application-latency.hgrm` | The publish and end-to-end latency percentile distributions, in milliseconds, as text | Read |
 | `gateways/gateways-latency.hdr`, `applications/<application>/application-latency.hdr` | The latency interval logs | `renderHdrHistograms`, HistogramLogAnalyzer |
-| `topic-stats.csv` | The broker's topic stats, sampled once per second: backlog and message counters per subscription | DuckDB, or any CSV reader |
+| `topic-stats.csv` | The broker's topic stats, sampled once per second, or every topics / 100 seconds with more than 100 topics: backlog and message counters per subscription | DuckDB, or any CSV reader |
 | `host-stats.csv` | The launcher's host's CPU temperature, frequency and throttle counters, sampled once per second; on Linux only | DuckDB, or any CSV reader |
 | `host-io.csv` | The Docker engine host's CPU busy and I/O-wait share and each disk's read/write MB/s and busy share, sampled once per second; on macOS, the Docker VM's, read through the perf stat sidecar. CPUs near 100 % busy delay every thread; a disk near 100 % busy limits the bookies | DuckDB, or any CSV reader |
 | `container-summary.json` | **Start here for CPU use per component.** The measurement's averages: the host's CPU busy and I/O-wait share and disk MB/s, and for each container and all of them the CPUs, CPU seconds per million messages, voluntary and involuntary context switches, CPU migrations and page faults per second, the clock rate, IPC, and last-level cache, L1 data cache and branch misses per thousand instructions | `jq` |
@@ -375,7 +375,7 @@ commit segment can be absent). Use the exact recording names linked from the pro
 | `network-events.jsonl`, `network-summary.json` | With a `network` section: every impairment's application, removal and queue counters as they happened, and each impaired container's TCP segments sent and retransmitted, see [Network conditions](docs/network-conditions.md#files) | `jq` |
 | `gateways/pulsar-client.log.txt`, `applications/pulsar-client.log.txt` | The workloads' Pulsar client logs, at the level of `PULSAR_CLIENT_LOG_LEVEL` in a workload's `env`, `warn` by default | `rg` |
 | `applications/<application>/republished-duplicates.txt` | Samples of the duplicates that the broker persisted twice, when there were any | Read |
-| `remote-applications/`, `remote-topic-stats.csv`, `replication-stats.csv`, `resolved-config-remote-applications.yaml` | With a remote cluster: the remote applications' outputs, laid out as in `applications/`, the remote topics' stats and each topic's replicators once a second, and the remote applications' configuration, see [Geo-replication](docs/network-conditions.md#geo-replication) | As their `applications/` counterparts; DuckDB for the CSV |
+| `remote-applications/`, `remote-topic-stats.csv`, `replication-stats.csv`, `resolved-config-remote-applications.yaml` | With a remote cluster: the remote applications' outputs, laid out as in `applications/`, the remote topics' stats and each topic's replicators as often as the topic stats, and the remote applications' configuration, see [Geo-replication](docs/network-conditions.md#geo-replication) | As their `applications/` counterparts; DuckDB for the CSV |
 
 ### Profiles
 

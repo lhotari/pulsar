@@ -334,6 +334,8 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     @Getter
     private final OrderedScheduler scheduledExecutor;
+    // The cursors' checks for new entries after newEntriesCheckDelayInMillis, one scheduled task for those due together
+    private final CoalescingDelayedTasks newEntriesChecks;
 
     @Getter
     protected final ThreadBoundExecutor executor;
@@ -414,6 +416,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         this.ledgerMetadata = LedgerMetadataUtils.buildBaseManagedLedgerMetadata(name);
         this.digestType = BookKeeper.DigestType.fromApiDigestType(config.getDigestType());
         this.scheduledExecutor = scheduledExecutor;
+        this.newEntriesChecks = new CoalescingDelayedTasks(scheduledExecutor.chooseThread(name));
         // The main worker pool is an OrderedExecutor whose threads implement ThreadBoundExecutor (the BookKeeper client
         // relies on the same cast for its ledger handles). The ledger callbacks are pinned to this thread through
         // withOrderingKey, so their processing can run inline with executeOrRun() instead of re-queueing.
@@ -2682,6 +2685,63 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         asyncReadEntry(ledger, firstEntry, lastEntry, opReadEntry, opReadEntry.ctx);
     }
 
+    /**
+     * Reads the range after a cursor's read of {@code [firstEntry, lastEntry]} ahead into the entry cache, as many
+     * entries as the read, within the ledger and the entries that the read may see, see
+     * {@link ManagedLedgerConfig#isReadAheadEnabled()}.
+     */
+    private Runnable readAhead(ReadHandle ledger, long firstEntry, long lastEntry, OpReadEntry opReadEntry) {
+        ManagedCursorImpl cursor = opReadEntry.cursor;
+        if (cursor == null) {
+            return null;
+        }
+        long lastVisibleEntry;
+        Position lastPosition = lastConfirmedEntry;
+        if (ledger.getId() == lastPosition.getLedgerId()) {
+            lastVisibleEntry = lastPosition.getEntryId();
+        } else {
+            lastVisibleEntry = ledger.getLastAddConfirmed();
+        }
+        Position maxPosition = opReadEntry.maxPosition;
+        if (maxPosition != null) {
+            if (maxPosition.getLedgerId() < ledger.getId()) {
+                return null;
+            }
+            if (maxPosition.getLedgerId() == ledger.getId()) {
+                lastVisibleEntry = min(lastVisibleEntry, maxPosition.getEntryId());
+            }
+        }
+        long nextEntry = lastEntry + 1;
+        if (nextEntry > lastVisibleEntry) {
+            return null;
+        }
+        long nextLastEntry = min(nextEntry + (lastEntry - firstEntry), lastVisibleEntry);
+        long maxSizeBytes = opReadEntry.maxSizeBytes;
+        return () -> {
+            IntSupplier expectedReadCount = cursor::getNumberOfCursorsAtSamePositionOrBefore;
+            // The cache wouldn't keep the entries
+            if (expectedReadCount.getAsInt() <= 0) {
+                return;
+            }
+            Object readAhead = cursor.tryStartReadAhead();
+            if (readAhead == null) {
+                return;
+            }
+            boolean started = false;
+            try {
+                started = entryCache.readAhead(ledger, nextEntry, nextLastEntry, maxSizeBytes, expectedReadCount,
+                        () -> cursor.readAheadCompleted(readAhead));
+            } catch (Throwable t) {
+                // A read ahead is best effort
+                log.debug().attr("ledgerId", ledger.getId()).exceptionMessage(t).log("Couldn't read ahead");
+            } finally {
+                if (!started) {
+                    cursor.readAheadCompleted(readAhead);
+                }
+            }
+        };
+    }
+
     protected void asyncReadEntry(ReadHandle ledger, Position position, ReadEntryCallback callback, Object ctx) {
         mbean.addEntriesRead(1);
         if (config.getReadEntryTimeoutSeconds() > 0) {
@@ -2698,6 +2758,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     protected void asyncReadEntry(ReadHandle ledger, long firstEntry, long lastEntry, OpReadEntry opReadEntry,
             Object ctx) {
+        // Captured before the read, which may complete on this thread and recycle the operation; started after it, so
+        // that the read takes its in-flight-read permits before the read ahead
+        Runnable readAhead = config.isReadAheadEnabled() ? readAhead(ledger, firstEntry, lastEntry, opReadEntry) : null;
         IntSupplier expectedReadCount = opReadEntry.cursor::getNumberOfCursorsAtSamePositionOrBefore;
         if (config.getReadEntryTimeoutSeconds() > 0) {
             ReadEntryCallbackWrapper readCallback = ReadEntryCallbackWrapper.create(this, ledger.getId(), firstEntry,
@@ -2710,6 +2773,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         } else {
             entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, opReadEntry.maxSizeBytes, expectedReadCount,
                     opReadEntry, ctx);
+        }
+        if (readAhead != null) {
+            readAhead.run();
         }
     }
 
@@ -2844,7 +2910,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     // slowest reader position is earliest mark delete position when cacheEvictionByMarkDeletedPosition=true
     // it is the earliest read position when cacheEvictionByMarkDeletedPosition=false
     private void invalidateEntriesUpToSlowestReaderPosition() {
-        if (entryCache.getSize() <= 0 || config.isCacheEvictionByExpectedReadCount()) {
+        // Not skipped for an empty cache: its size is a sum of striped counts, which can read 0 while entries are
+        // added and evicted concurrently
+        if (config.isCacheEvictionByExpectedReadCount()) {
             return;
         }
         Position slowestReaderPosition = activeCursors.getSlowestCursorPosition();
@@ -2928,6 +2996,14 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         }
 
         return position;
+    }
+
+    /**
+     * Runs a cursor's check for new entries after {@code delayMillis}, in one scheduled task with the other cursors'
+     * checks that fall due at the same time.
+     */
+    void scheduleNewEntriesCheck(Runnable check, long delayMillis) {
+        newEntriesChecks.schedule(check, delayMillis);
     }
 
     void notifyCursors() {

@@ -132,6 +132,46 @@ public class PendingAcksMapTest {
     }
 
     @Test
+    public void removeAllUpTo_KeepsTheSizeWhenTheCallbackThrows() {
+        Consumer consumer = createMockConsumer("consumer1");
+        PendingAcksMap pendingAcksMap = new PendingAcksMap(consumer, () -> null, () -> null);
+        pendingAcksMap.addPendingAckIfAllowed(1L, 1L, 1, 123);
+        pendingAcksMap.addPendingAckIfAllowed(1L, 2L, 1, 124);
+
+        try {
+            pendingAcksMap.removeAllUpTo(1L, 2L, (ledgerId, entryId, batchSize, stickyKeyHash) -> {
+                if (entryId == 2L) {
+                    throw new IllegalStateException("failing callback");
+                }
+            });
+        } catch (IllegalStateException expected) {
+            // the entries before the failing one were removed, the failing one wasn't
+        }
+
+        assertFalse(pendingAcksMap.contains(1L, 1L));
+        assertTrue(pendingAcksMap.contains(1L, 2L));
+        assertEquals(pendingAcksMap.size(), 1);
+        assertTrue(pendingAcksMap.remove(1L, 2L));
+        assertEquals(pendingAcksMap.size(), 0);
+    }
+
+    @Test
+    public void removeAllUpTo_KeepsTheSizeWhenTheCallbackAddsAnEntry() {
+        Consumer consumer = createMockConsumer("consumer1");
+        PendingAcksMap pendingAcksMap = new PendingAcksMap(consumer, () -> null, () -> null);
+        pendingAcksMap.addPendingAckIfAllowed(1L, 1L, 1, 123);
+        pendingAcksMap.addPendingAckIfAllowed(1L, 2L, 1, 124);
+
+        pendingAcksMap.removeAllUpTo(1L, 1L, (ledgerId, entryId, batchSize, stickyKeyHash) ->
+                pendingAcksMap.addPendingAckIfAllowed(1L, 3L, 1, 125));
+
+        assertFalse(pendingAcksMap.contains(1L, 1L));
+        assertTrue(pendingAcksMap.contains(1L, 2L));
+        assertTrue(pendingAcksMap.contains(1L, 3L));
+        assertEquals(pendingAcksMap.size(), 2);
+    }
+
+    @Test
     public void removeAllUpTo_RemovesAllPendingAcksUpToSpecifiedEntryAcrossMultipleLedgers() {
         Consumer consumer = createMockConsumer("consumer1");
         PendingAcksMap pendingAcksMap = new PendingAcksMap(consumer, () -> null, () -> null);

@@ -19,6 +19,8 @@
 package org.apache.pulsar.broker.service;
 
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertSame;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.common.util.collections.BitSetRecyclable;
 import org.testng.annotations.Test;
@@ -50,4 +52,44 @@ public class EntryBatchIndexesAcksTest {
         assertEquals(acks.getTotalAckedIndexCount(), 0);
     }
 
+
+    @Test
+    void hasNoAckSetsUntilOneIsSet() {
+        EntryBatchIndexesAcks acks = EntryBatchIndexesAcks.get(3);
+        assertNull(acks.getAckSet(0));
+        assertNull(acks.getAckSet(2));
+        assertEquals(acks.getTotalAckedIndexCount(), 0);
+        long[] ackSet = {0b111L};
+        acks.setIndexesAcks(1, Pair.of(5, ackSet));
+        assertNull(acks.getAckSet(0));
+        assertSame(acks.getAckSet(1), ackSet);
+        // 5 messages, of which 3 aren't acked
+        assertEquals(acks.getTotalAckedIndexCount(), 2);
+        acks.recycle();
+    }
+
+    @Test
+    void holdsAckSetsForALargerDispatchAfterBeingReused() {
+        EntryBatchIndexesAcks acks = EntryBatchIndexesAcks.get(2);
+        acks.setIndexesAcks(1, Pair.of(4, new long[] {0b1L}));
+        acks.recycle();
+        acks = EntryBatchIndexesAcks.get(200);
+        assertNull(acks.getAckSet(1));
+        long[] ackSet = {0b11L};
+        acks.setIndexesAcks(199, Pair.of(4, ackSet));
+        assertSame(acks.getAckSet(199), ackSet);
+        assertEquals(acks.getTotalAckedIndexCount(), 2);
+        acks.recycle();
+    }
+
+    @Test
+    void batchSizesHoldTheSizesOfALargerDispatchAfterBeingReused() {
+        EntryBatchSizes sizes = EntryBatchSizes.get(1);
+        sizes.setBatchSize(0, 3);
+        sizes.recyle();
+        sizes = EntryBatchSizes.get(150);
+        sizes.setBatchSize(149, 7);
+        assertEquals(sizes.getBatchSize(149), 7);
+        sizes.recyle();
+    }
 }

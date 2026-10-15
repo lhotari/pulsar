@@ -181,6 +181,28 @@ public class InflightReadsLimiter implements AutoCloseable {
         return internalAcquire(permits, callback);
     }
 
+    /**
+     * Acquires permits only if they are available right away and no acquire is waiting for permits, for reads that
+     * may be skipped, such as a read ahead, so that they never delay or queue ahead of the reads that wait. Returns
+     * an empty optional when the permits weren't acquired; nothing is queued then.
+     */
+    public Optional<Handle> tryAcquire(long permits) {
+        if (isDisabled()) {
+            return DISABLED_OPTIONAL;
+        }
+        return internalTryAcquire(permits);
+    }
+
+    private synchronized Optional<Handle> internalTryAcquire(long permits) {
+        if (!queuedHandles.isEmpty() || remainingBytes < permits) {
+            return Optional.empty();
+        }
+        remainingBytes -= permits;
+        inflightReadsAcquireCountCounter.add(1);
+        updateMetrics();
+        return Optional.of(new Handle(permits, System.currentTimeMillis(), true));
+    }
+
     private synchronized Optional<Handle> internalAcquire(long permits, Consumer<Handle> callback) {
         Handle handle = new Handle(permits, System.currentTimeMillis(), true);
         if (remainingBytes >= permits) {

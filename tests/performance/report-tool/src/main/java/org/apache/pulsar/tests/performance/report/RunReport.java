@@ -398,7 +398,7 @@ public final class RunReport {
                         + workload.path("topics").path("count").asInt() + " topic(s)"))
                 .append(row("Applications", workload.path("applications").path("count").asInt() + " × "
                         + workload.path("applications").path("podsPerApplication").asInt()
-                        + " pods, Key_Shared"))
+                        + " pods, " + workload.path("applications").path("subscriptionType").asText("Key_Shared")))
                 .append(row("Messages", String.format(Locale.ROOT, "%,d measured, %,d warmup",
                         messageCount(producer, "measurementMessages",
                                 workload.path("measurement").path("messages").asLong()),
@@ -868,9 +868,10 @@ public final class RunReport {
                 totalDispatched[round] += rates[round];
             }
         }
-        report.append("\n## Backlog and rates\n\nSampled once per second from the broker's topic stats; the rates are"
-                + " per-second deltas of its message counters, and a sampled maximum is not the exact peak"
-                + " between samples. The rates are those of the whole seconds within the measurement (0 to ")
+        report.append("\n## Backlog and rates\n\nSampled from the broker's topic stats once per second, or every"
+                + " topics / 100 seconds with more than 100 topics; the rates are the deltas of its message counters"
+                + " per second between samples, and a sampled maximum is not the exact peak between samples."
+                + " The rates are those of the whole seconds within the measurement (0 to ")
                 .append(String.format(Locale.ROOT, "%.1f", finished))
                 .append(" s), leaving out its first and last second, where the gateways start and finish. The")
                 .append(" [sampled topic stats](").append(TOPIC_STATS_FILE).append(") are a CSV file.\n\n")

@@ -111,7 +111,8 @@ public class RangeCacheReadBenchmark {
         }
         RangeEntryCacheImpl.CachedEntries result = new RangeEntryCacheImpl.CachedEntries(0, batchSize, null);
         if (visit) {
-            cache.forEachInRange(firstPositions[currentRange], lastPositions[currentRange], result);
+            cache.forEachRetainedInRange(firstPositions[currentRange], lastPositions[currentRange],
+                    result::acceptRetained);
         } else {
             Collection<ReferenceCountedEntry> entries =
                     cache.getRange(firstPositions[currentRange], lastPositions[currentRange]);

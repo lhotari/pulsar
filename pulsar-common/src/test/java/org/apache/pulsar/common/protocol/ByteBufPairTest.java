@@ -22,10 +22,14 @@ import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNotSame;
+import static org.testng.Assert.assertSame;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
+import java.util.ArrayList;
+import java.util.List;
 import org.apache.pulsar.common.allocator.PulsarByteBufAllocator;
 import org.testng.annotations.Test;
 
@@ -52,6 +56,68 @@ public class ByteBufPairTest {
         assertEquals(buf.refCnt(), 0);
         assertEquals(b1.refCnt(), 0);
         assertEquals(b2.refCnt(), 0);
+    }
+
+    @SuppressWarnings("deprecation")
+    @Test
+    public void testEncoderHandsOverTheExclusiveBuffersOfAPairWithOneReference() throws Exception {
+        ByteBuf b1 = Unpooled.wrappedBuffer("hello".getBytes());
+        ByteBuf b2 = Unpooled.wrappedBuffer("world".getBytes());
+        ByteBufPair pair = ByteBufPair.get(b1, b2).markBuffersExclusive();
+        List<ByteBuf> written = new ArrayList<>();
+        ChannelHandlerContext ctx = writingContext(written, false);
+
+        ByteBufPair.ENCODER.write(ctx, pair, null);
+
+        // the writes got the pair's buffers themselves, without retaining them, and the pair was recycled
+        assertSame(written.get(0), b1);
+        assertSame(written.get(1), b2);
+        assertEquals(pair.refCnt(), 0);
+        assertEquals(b1.refCnt(), 1);
+        assertEquals(b2.refCnt(), 1);
+        b1.release();
+        b2.release();
+    }
+
+    @SuppressWarnings("deprecation")
+    @Test
+    public void testEncoderWritesDuplicatesOfBuffersThatMayBeShared() throws Exception {
+        ByteBuf b1 = Unpooled.wrappedBuffer("hello".getBytes());
+        ByteBuf b2 = Unpooled.wrappedBuffer("world".getBytes());
+        // a pair whose buffers aren't marked exclusive, with one reference, and one that a client keeps to resend
+        ByteBufPair notExclusive = ByteBufPair.get(b1.retain(), b2.retain());
+        ByteBufPair kept = ByteBufPair.get(b1, b2).markBuffersExclusive();
+        kept.retain();
+        for (ByteBufPair pair : List.of(notExclusive, kept)) {
+            List<ByteBuf> written = new ArrayList<>();
+            ByteBufPair.ENCODER.write(writingContext(written, true), pair, null);
+            // the writes consumed duplicates, which left the buffers' reader indexes as they were
+            assertNotSame(written.get(0), b1);
+            assertNotSame(written.get(1), b2);
+            assertEquals(b1.readerIndex(), 0);
+            assertEquals(b2.readerIndex(), 0);
+        }
+        assertEquals(notExclusive.refCnt(), 0);
+        assertEquals(kept.refCnt(), 1);
+        assertEquals(b1.refCnt(), 1);
+        kept.release();
+        assertEquals(b1.refCnt(), 0);
+        assertEquals(b2.refCnt(), 0);
+    }
+
+    /** A context whose writes record the buffers, and when {@code consume} is set, read and release them. */
+    private static ChannelHandlerContext writingContext(List<ByteBuf> written, boolean consume) {
+        ChannelHandlerContext ctx = mock(ChannelHandlerContext.class);
+        when(ctx.write(any(), any())).then(invocation -> {
+            ByteBuf buf = (ByteBuf) invocation.getArguments()[0];
+            written.add(buf);
+            if (consume) {
+                buf.skipBytes(buf.readableBytes());
+                buf.release();
+            }
+            return null;
+        });
+        return ctx;
     }
 
     @SuppressWarnings("deprecation")

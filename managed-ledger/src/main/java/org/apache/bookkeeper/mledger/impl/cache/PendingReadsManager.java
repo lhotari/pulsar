@@ -145,7 +145,23 @@ public class PendingReadsManager {
 
     private FindPendingReadOutcome findPendingRead(PendingReadKey key, ConcurrentMap<PendingReadKey,
             PendingRead> ledgerCache, AtomicBoolean created) {
+        return findPendingRead(key, ledgerCache, created, false);
+    }
+
+    /**
+     * @param createOnly create the pending read only if no pending read includes or overlaps the key; returns null
+     *                   without counting a match otherwise
+     */
+    private FindPendingReadOutcome findPendingRead(PendingReadKey key, ConcurrentMap<PendingReadKey,
+            PendingRead> ledgerCache, AtomicBoolean created, boolean createOnly) {
         synchronized (ledgerCache) {
+            if (createOnly) {
+                for (PendingReadKey entryKey : ledgerCache.keySet()) {
+                    if (entryKey.equals(key) || entryKey.includes(key) || entryKey.overlaps(key)) {
+                        return null;
+                    }
+                }
+            }
             PendingRead existing = ledgerCache.get(key);
             if (existing != null) {
                 COUNT_PENDING_READS_MATCHED.inc(key.size());
@@ -332,6 +348,30 @@ public class PendingReadsManager {
         }
     }
 
+
+    /**
+     * Reads the entries from storage, as a pending read that later reads of overlapping ranges join, only if no read
+     * of an overlapping range is pending: the callback then gets the storage read's own entries. Returns whether the
+     * read was started.
+     */
+    boolean readEntriesIfNotPending(ReadHandle lh, long firstEntry, long lastEntry, long maxSizeBytes,
+                                    IntSupplier expectedReadCount,
+                                    final AsyncCallbacks.ReadEntriesCallback callback, Object ctx) {
+        final PendingReadKey key = new PendingReadKey(firstEntry, lastEntry);
+        ConcurrentMap<PendingReadKey, PendingRead> pendingReadsForLedger =
+                cachedPendingReads.computeIfAbsent(lh.getId(), (l) -> new ConcurrentHashMap<>());
+        AtomicBoolean createdByThisThread = new AtomicBoolean();
+        FindPendingReadOutcome outcome = findPendingRead(key, pendingReadsForLedger, createdByThisThread, true);
+        if (outcome == null || !createdByThisThread.get()) {
+            return false;
+        }
+        PendingRead pendingRead = outcome.pendingRead;
+        // A new pending read accepts listeners until its result is attached
+        boolean listenerAdded = pendingRead.addListener(callback, ctx, firstEntry, lastEntry);
+        pendingRead.attach(rangeEntryCache.readFromStorage(lh, firstEntry, lastEntry, maxSizeBytes,
+                expectedReadCount));
+        return listenerAdded;
+    }
 
     void readEntries(ReadHandle lh, long firstEntry, long lastEntry, long maxSizeBytes,
                      IntSupplier expectedReadCount, final AsyncCallbacks.ReadEntriesCallback callback, Object ctx) {

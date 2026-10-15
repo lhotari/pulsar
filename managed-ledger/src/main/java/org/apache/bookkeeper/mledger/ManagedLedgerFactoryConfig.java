@@ -66,9 +66,10 @@ public class ManagedLedgerFactoryConfig {
      * - Consumers temporarily falling behind the tail
      * Entries with remaining expected reads will have their TTL extended up to this many times
      * before being eligible for eviction. The TTL will be extended by
-     * managedLedgerCacheEvictionTimeThresholdMillis each time.
+     * managedLedgerCacheEvictionTimeThresholdMillis each time. When the cache needs memory, size-based eviction
+     * overrides this protection after requeuing an entry at most once per eviction pass.
      */
-    private int cacheEvictionExtendTTLOfEntriesWithRemainingExpectedReadsMaxTimes = 5;
+    private int cacheEvictionExtendTTLOfEntriesWithRemainingExpectedReadsMaxTimes = 60;
 
     /**
      * Controls whether recently accessed entries in the managed ledger cache should have their

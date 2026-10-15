@@ -29,6 +29,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -443,13 +444,14 @@ public class RangeEntryCacheImpl implements EntryCache {
             ReferenceCountedEntry cachedEntry = entries.get(firstPosition);
             if (cachedEntry != null) {
                 try {
-                    cachedEntries.accept(cachedEntry);
-                } finally {
+                    cachedEntries.acceptRetained(cachedEntry);
+                } catch (Throwable t) {
                     cachedEntry.release();
+                    throw t;
                 }
             }
         } else {
-            entries.forEachInRange(firstPosition, lastPosition, cachedEntries);
+            entries.forEachRetainedInRange(firstPosition, lastPosition, cachedEntries::acceptRetained);
         }
 
         if (cachedEntries.count > 0) {
@@ -555,22 +557,114 @@ public class RangeEntryCacheImpl implements EntryCache {
 
         @Override
         public void accept(ReferenceCountedEntry entry) {
+            initializeMessageMetadata(entry);
+            add(entry, EntryImpl.create(entry));
+        }
+
+        /**
+         * Adds a copy of a cached entry that takes over the reference that the caller holds on it, see
+         * {@link EntryImpl#createSharing}.
+         */
+        void acceptRetained(ReferenceCountedEntry entry) {
+            // the cache holds EntryImpl values, see RangeEntryCacheImpl.insert
+            EntryImpl cached = (EntryImpl) entry;
+            initializeMessageMetadata(cached);
+            // nothing may throw after the copy takes over the reference, which the caller releases on a failure
+            int index = indexOf(cached);
+            entries.set(index, EntryImpl.createSharing(cached));
+            added(cached);
+        }
+
+        private void initializeMessageMetadata(ReferenceCountedEntry entry) {
+            // Initialize on the shared cached entry before copying, so fanout readers reuse one instance, which is
+            // decoded when it's parsed.
+            if (managedLedgerName != null && entry.getMessageMetadata() == null) {
+                ((EntryImpl) entry).initializeMessageMetadataIfNeeded(managedLedgerName);
+            }
+        }
+
+        private void add(ReferenceCountedEntry entry, Entry copy) {
+            int index = indexOf(entry);
+            entries.set(index, copy);
+            added(entry);
+        }
+
+        /** The entry's index in the result, which it creates when it's the first entry. */
+        private int indexOf(ReferenceCountedEntry entry) {
             if (entries == null) {
                 entries = new ArrayList<>(numberOfEntries);
                 for (int i = 0; i < numberOfEntries; i++) {
                     entries.add(null);
                 }
             }
-            // The visitor retains the cached entry while parsing. Initialize on the shared cached entry
-            // before copying, so fanout readers reuse one instance, which is decoded when it's parsed.
-            if (managedLedgerName != null && entry.getMessageMetadata() == null) {
-                ((EntryImpl) entry).initializeMessageMetadataIfNeeded(managedLedgerName);
-            }
-            int index = (int) (entry.getPosition().getEntryId() - firstEntryId);
-            entries.set(index, EntryImpl.create(entry));
+            int index = (int) (entry.getEntryId() - firstEntryId);
+            Objects.checkIndex(index, numberOfEntries);
+            return index;
+        }
+
+        private void added(ReferenceCountedEntry entry) {
             count++;
             totalSize += entry.getLength();
         }
+    }
+
+    @Override
+    public boolean readAhead(ReadHandle lh, long firstEntry, long lastEntry, long maxSizeBytes,
+                             IntSupplier expectedReadCount, Runnable onComplete) {
+        if (entries.exists(PositionFactory.create(lh.getId(), firstEntry)) || manager.isAtEvictionWatermark()) {
+            return false;
+        }
+        InflightReadsLimiter pendingReadsLimiter = getPendingReadsLimiter();
+        long estimatedEntrySize = Math.max(1, getEstimatedEntrySize(lh));
+        // At most maxSizeBytes in all, by the estimated entry size: the storage read bounds each request, not the sum;
+        // without a size limit, the range as it is
+        long readAheadLastEntry = maxSizeBytes > 0
+                ? Math.min(lastEntry, firstEntry + Math.max(1, maxSizeBytes / estimatedEntrySize) - 1) : lastEntry;
+        long estimatedReadSize = (readAheadLastEntry - firstEntry + 1) * estimatedEntrySize;
+        Optional<InflightReadsLimiter.Handle> handle = pendingReadsLimiter.tryAcquire(estimatedReadSize);
+        if (handle.isEmpty()) {
+            return false;
+        }
+        boolean started = false;
+        try {
+            // Only as the owner of its storage read: joining another read could release the read ahead's entries
+            // in that read's failure handling, which counts them as reads of the cached entries
+            started = pendingReadsManager.readEntriesIfNotPending(lh, firstEntry, readAheadLastEntry, maxSizeBytes,
+                    expectedReadCount, new ReadEntriesCallback() {
+                    @Override
+                    public void readEntriesComplete(List<Entry> readEntries, Object ctx) {
+                        try {
+                            // The cache keeps the entries for the cursors that will read them; releasing the
+                            // read ahead's own copies doesn't count as a read of them
+                            for (Entry entry : readEntries) {
+                                if (entry != null) {
+                                    ((EntryImpl) entry).setDecreaseReadCountOnRelease(false);
+                                    entry.release();
+                                }
+                            }
+                        } finally {
+                            pendingReadsLimiter.release(handle.get());
+                            onComplete.run();
+                        }
+                    }
+
+                    @Override
+                    public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                        log.debug().attr("ledgerId", lh.getId()).attr("firstEntry", firstEntry)
+                                .attr("lastEntry", readAheadLastEntry).exceptionMessage(exception)
+                                .log("Read ahead failed");
+                        pendingReadsLimiter.release(handle.get());
+                        onComplete.run();
+                    }
+                }, null);
+        } catch (Throwable t) {
+            log.debug().attr("ledgerId", lh.getId()).exceptionMessage(t).log("Couldn't start a read ahead");
+        } finally {
+            if (!started) {
+                pendingReadsLimiter.release(handle.get());
+            }
+        }
+        return started;
     }
 
     private CompletableFuture<List<Entry>> readMissingEntriesAsync(ReadHandle lh,

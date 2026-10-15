@@ -1433,7 +1433,9 @@ public class PersistentSubscription extends AbstractSubscription {
 
         Dispatcher dispatcher = this.dispatcher;
         if (dispatcher != null) {
-            Map<Consumer, List<Range>> consumerKeyHashRanges = getType() == SubType.Key_Shared
+            // Only the consumers' stats show the key hash ranges, which take a pass over the selector's hash ring
+            Map<Consumer, List<Range>> consumerKeyHashRanges =
+                    getType() == SubType.Key_Shared && !getStatsOptions.isExcludeConsumers()
                     ? ((StickyKeyDispatcher) dispatcher).getConsumerKeyHashRanges() : null;
             dispatcher.getConsumers().forEach(consumer -> {
                 ConsumerStatsImpl consumerStats = consumer.getStats();
