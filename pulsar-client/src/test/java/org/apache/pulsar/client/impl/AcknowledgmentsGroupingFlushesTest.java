@@ -25,7 +25,9 @@ import io.netty.util.concurrent.EventExecutor;
 import java.util.Arrays;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.awaitility.Awaitility;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -52,12 +54,12 @@ public class AcknowledgmentsGroupingFlushesTest {
         AtomicInteger second = new AtomicInteger();
         AtomicInteger otherGroupTime = new AtomicInteger();
         AcknowledgmentsGroupingFlushes.Registration firstRegistration =
-                AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, first::incrementAndGet);
+                registerRepeating(executor, GROUP_TIME_MICROS, first::incrementAndGet);
         AcknowledgmentsGroupingFlushes.Registration secondRegistration =
-                AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, second::incrementAndGet);
+                registerRepeating(executor, GROUP_TIME_MICROS, second::incrementAndGet);
         assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isEqualTo(1);
-        AcknowledgmentsGroupingFlushes.Registration otherRegistration = AcknowledgmentsGroupingFlushes.register(
-                executor, 2 * GROUP_TIME_MICROS, otherGroupTime::incrementAndGet);
+        AcknowledgmentsGroupingFlushes.Registration otherRegistration =
+                registerRepeating(executor, 2 * GROUP_TIME_MICROS, otherGroupTime::incrementAndGet);
         assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isEqualTo(2);
 
         Awaitility.await().untilAsserted(() -> {
@@ -95,7 +97,7 @@ public class AcknowledgmentsGroupingFlushesTest {
         for (int i = 0; i < count; i++) {
             int index = i;
             flushes[i] = new AtomicInteger();
-            registrations[i] = AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, () -> {
+            registrations[i] = registerRepeating(executor, GROUP_TIME_MICROS, () -> {
                 flushes[index].incrementAndGet();
                 for (int other = 0; other < count; other++) {
                     if (other != index) {
@@ -124,14 +126,14 @@ public class AcknowledgmentsGroupingFlushesTest {
         for (int i = 0; i < 100; i++) {
             AtomicInteger flushes = new AtomicInteger();
             AcknowledgmentsGroupingFlushes.Registration registration =
-                    AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, flushes::incrementAndGet);
+                    registerRepeating(executor, GROUP_TIME_MICROS, flushes::incrementAndGet);
             assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isEqualTo(1);
             registration.close();
             assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isZero();
         }
         AtomicInteger flushes = new AtomicInteger();
         AcknowledgmentsGroupingFlushes.Registration registration =
-                AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, flushes::incrementAndGet);
+                registerRepeating(executor, GROUP_TIME_MICROS, flushes::incrementAndGet);
         try {
             Awaitility.await().untilAsserted(() -> assertThat(flushes.get()).isGreaterThan(2));
         } finally {
@@ -144,12 +146,12 @@ public class AcknowledgmentsGroupingFlushesTest {
         AtomicInteger failing = new AtomicInteger();
         AtomicInteger other = new AtomicInteger();
         AcknowledgmentsGroupingFlushes.Registration failingRegistration =
-                AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, () -> {
+                registerRepeating(executor, GROUP_TIME_MICROS, () -> {
                     failing.incrementAndGet();
                     throw new IllegalStateException("failing flush");
                 });
         AcknowledgmentsGroupingFlushes.Registration otherRegistration =
-                AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, other::incrementAndGet);
+                registerRepeating(executor, GROUP_TIME_MICROS, other::incrementAndGet);
         try {
             Awaitility.await().untilAsserted(() -> {
                 assertThat(failing.get()).isGreaterThan(2);
@@ -160,6 +162,79 @@ public class AcknowledgmentsGroupingFlushesTest {
             otherRegistration.close();
         }
         assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isZero();
+    }
+
+    @Test
+    public void onlyRequestedFlushesRun() throws Exception {
+        AtomicInteger requestedFlushes = new AtomicInteger();
+        AtomicInteger idleFlushes = new AtomicInteger();
+        // counts the shared task's runs
+        AtomicInteger runs = new AtomicInteger();
+        AcknowledgmentsGroupingFlushes.Registration probe =
+                registerRepeating(executor, GROUP_TIME_MICROS, runs::incrementAndGet);
+        AcknowledgmentsGroupingFlushes.Registration requested =
+                AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, requestedFlushes::incrementAndGet);
+        AcknowledgmentsGroupingFlushes.Registration idle =
+                AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, idleFlushes::incrementAndGet);
+        try {
+            // requests before a run are flushed once
+            executor.submit(() -> {
+                requested.requestFlush();
+                requested.requestFlush();
+            }).get();
+            waitForTheNextRuns(runs);
+            assertThat(requestedFlushes.get()).isEqualTo(1);
+            assertThat(idleFlushes.get()).isZero();
+
+            // without a request, a flush doesn't run again
+            waitForTheNextRuns(runs);
+            assertThat(requestedFlushes.get()).isEqualTo(1);
+
+            // a request from another thread is flushed by a later run
+            requested.requestFlush();
+            Awaitility.await().untilAsserted(() -> assertThat(requestedFlushes.get()).isEqualTo(2));
+
+            // a request of a closed registration isn't flushed
+            requested.requestFlush();
+            requested.close();
+            waitForTheNextRuns(runs);
+            assertThat(requestedFlushes.get()).isEqualTo(2);
+            assertThat(idleFlushes.get()).isZero();
+        } finally {
+            probe.close();
+            requested.close();
+            idle.close();
+        }
+    }
+
+    @Test
+    public void aFlushRequestedWhileItRunsRunsInTheNextRun() {
+        AtomicInteger runs = new AtomicInteger();
+        AcknowledgmentsGroupingFlushes.Registration probe =
+                registerRepeating(executor, GROUP_TIME_MICROS, runs::incrementAndGet);
+        AtomicInteger flushes = new AtomicInteger();
+        AtomicInteger runsAtFlushes = new AtomicInteger(-1);
+        AtomicBoolean repeatsInSameRun = new AtomicBoolean();
+        AtomicReference<AcknowledgmentsGroupingFlushes.Registration> self = new AtomicReference<>();
+        self.set(AcknowledgmentsGroupingFlushes.register(executor, GROUP_TIME_MICROS, () -> {
+            // the probe runs in the same runs, so a flush in the same run sees the same run count
+            if (runsAtFlushes.getAndSet(runs.get()) == runs.get()) {
+                repeatsInSameRun.set(true);
+            }
+            if (flushes.incrementAndGet() < 3) {
+                self.get().requestFlush();
+            }
+        }));
+        try {
+            self.get().requestFlush();
+            Awaitility.await().untilAsserted(() -> assertThat(flushes.get()).isEqualTo(3));
+            assertThat(repeatsInSameRun.get()).isFalse();
+            waitForTheNextRuns(runs);
+            assertThat(flushes.get()).isEqualTo(3);
+        } finally {
+            probe.close();
+            self.get().close();
+        }
     }
 
     @Test
@@ -179,6 +254,23 @@ public class AcknowledgmentsGroupingFlushesTest {
         executor.shutdownGracefully(0, 0, TimeUnit.MILLISECONDS).syncUninterruptibly();
         Awaitility.await().untilAsserted(
                 () -> assertThat(AcknowledgmentsGroupingFlushes.sharedTaskCount(executor)).isZero());
+    }
+
+    // Registers a flush that requests itself again when it runs, as a tracker that has acks to send in every period
+    private static AcknowledgmentsGroupingFlushes.Registration registerRepeating(EventExecutor executor,
+                                                                               long groupTimeMicros, Runnable flush) {
+        AtomicReference<AcknowledgmentsGroupingFlushes.Registration> self = new AtomicReference<>();
+        AcknowledgmentsGroupingFlushes.Registration registration =
+                AcknowledgmentsGroupingFlushes.register(executor, groupTimeMicros, () -> {
+                    try {
+                        flush.run();
+                    } finally {
+                        self.get().requestFlush();
+                    }
+                });
+        self.set(registration);
+        registration.requestFlush();
+        return registration;
     }
 
     // Waits until the counter has advanced twice more
