@@ -543,9 +543,12 @@ public class PersistentAcknowledgmentsGroupingTracker implements Acknowledgments
 
     @Override
     public void close() {
-        flush();
-        if (periodicFlush != null) {
-            periodicFlush.close();
+        try {
+            flush();
+        } finally {
+            if (periodicFlush != null) {
+                periodicFlush.close();
+            }
         }
     }
 
