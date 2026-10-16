@@ -71,8 +71,10 @@ public class WebExecutorAsyncResponseFeature implements Feature {
 
         @Override
         public Function<ContainerRequest, ?> getValueProvider(Parameter parameter) {
+            // Jersey's provider also supplies subtypes of AsyncResponse, such as its AsyncContext, which the
+            // wrapper doesn't implement, so leave those parameters to it
             if (parameter.getSource() != Parameter.Source.SUSPENDED
-                    || !AsyncResponse.class.isAssignableFrom(parameter.getRawType())) {
+                    || !parameter.getRawType().isAssignableFrom(WebExecutorAsyncResponse.class)) {
                 return null;
             }
             // Delegate to the provider that would be used without this one, which is Jersey's own provider

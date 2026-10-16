@@ -28,6 +28,7 @@ import org.eclipse.jetty.util.BlockingArrayQueue;
 import org.eclipse.jetty.util.MathUtils;
 import org.eclipse.jetty.util.ProcessorUtils;
 import org.eclipse.jetty.util.thread.ExecutorThreadPool;
+import org.eclipse.jetty.util.thread.ThreadPoolBudget;
 
 /**
  * The thread pool of the Jetty web servers.
@@ -59,8 +60,8 @@ public class WebExecutorThreadPool extends ExecutorThreadPool {
 
     /**
      * @param numThreads the number of threads that the pool keeps
-     * @param maxThreads the maximum number of threads; a value smaller than {@code numThreads}, such as 0, means
-     *                   that the pool doesn't grow beyond {@code numThreads}
+     * @param maxThreads the maximum number of threads; a value not larger than {@code numThreads}, such as 0,
+     *                   means that the pool doesn't grow beyond {@code numThreads}
      * @param namePrefix the name prefix of the threads
      * @param queueCapacity the capacity of the queue for tasks that wait for a thread
      */
@@ -105,6 +106,37 @@ public class WebExecutorThreadPool extends ExecutorThreadPool {
                 }
             }
         });
+    }
+
+    /**
+     * Sets the maximum number of threads. Unlike {@link ExecutorThreadPool#setMaxThreads(int)}, it doesn't change
+     * the number of threads that a growing pool keeps, which would stop it from growing.
+     */
+    @Override
+    public void setMaxThreads(int threads) {
+        if (executor instanceof GrowingThreadPoolExecutor) {
+            ThreadPoolBudget budget = getThreadPoolBudget();
+            if (budget != null) {
+                budget.check(threads);
+            }
+            executor.setMaximumPoolSize(threads);
+        } else {
+            super.setMaxThreads(threads);
+        }
+    }
+
+    /**
+     * Sets the time after which an idle thread beyond the number of threads that the pool keeps stops.
+     *
+     * @param idleTimeout the idle timeout in milliseconds, at least 1
+     */
+    @Override
+    public void setIdleTimeout(int idleTimeout) {
+        if (idleTimeout < 1) {
+            throw new IllegalArgumentException(
+                    "The idle timeout of the HTTP server thread pool must be at least 1 ms, but was " + idleTimeout);
+        }
+        super.setIdleTimeout(idleTimeout);
     }
 
     /**

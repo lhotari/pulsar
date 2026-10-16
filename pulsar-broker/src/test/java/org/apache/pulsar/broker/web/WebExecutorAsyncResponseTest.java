@@ -50,6 +50,7 @@ import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
+import org.glassfish.jersey.server.AsyncContext;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.glassfish.jersey.servlet.ServletContainer;
 import org.testng.annotations.AfterClass;
@@ -127,6 +128,12 @@ public class WebExecutorAsyncResponseTest {
         }
 
         @GET
+        @Path("/resumeAsyncContextFromOtherThread")
+        public void resumeAsyncContextFromOtherThread(@Suspended AsyncContext asyncContext) {
+            otherExecutor.execute(() -> asyncContext.resume("resumed"));
+        }
+
+        @GET
         @Path("/resumeOnRequestThread")
         public void resumeOnRequestThread(@Suspended AsyncResponse asyncResponse) {
             asyncResponse.resume("resumed");
@@ -162,6 +169,14 @@ public class WebExecutorAsyncResponseTest {
         assertThat(response.body()).isEqualTo("failed");
         assertThat(response.headers().firstValue(WRITER_THREAD_HEADER)).hasValueSatisfying(
                 threadName -> assertThat(threadName).startsWith(WEB_THREAD_PREFIX));
+    }
+
+    @Test
+    public void testAsyncContextParameterIsLeftToJersey() throws Exception {
+        // the wrapper doesn't implement Jersey's AsyncContext, so such a parameter gets Jersey's own object
+        HttpResponse<String> response = get("/test/resumeAsyncContextFromOtherThread");
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).isEqualTo("resumed");
     }
 
     @Test

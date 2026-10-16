@@ -199,6 +199,31 @@ public class WebExecutorThreadPoolTest {
         }
     }
 
+    @Test(timeOut = 30000)
+    public void testSetMaxThreadsKeepsPoolGrowing() throws Exception {
+        WebExecutorThreadPool pool = new WebExecutorThreadPool(2, 3, "test-web", 8192);
+        pool.setMaxThreads(4);
+        pool.start();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            assertThat(pool.getMaxThreads()).isEqualTo(4);
+            // the pool keeps 2 threads and still grows up to the new maximum
+            assertThat(pool.getThreads()).isEqualTo(2);
+            blockThreads(pool, 4, release);
+            assertThat(pool.getThreads()).isEqualTo(4);
+        } finally {
+            release.countDown();
+            pool.stop();
+        }
+    }
+
+    @Test
+    public void testIdleTimeoutMustBePositive() {
+        WebExecutorThreadPool pool = new WebExecutorThreadPool(2, 4, "test-web", 8192);
+        assertThatThrownBy(() -> pool.setIdleTimeout(0)).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("at least 1 ms");
+    }
+
     private static void blockThreads(WebExecutorThreadPool pool, int count, CountDownLatch release)
             throws InterruptedException {
         CountDownLatch started = new CountDownLatch(count);
