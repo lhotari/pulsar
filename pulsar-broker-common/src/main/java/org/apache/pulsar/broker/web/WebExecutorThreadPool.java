@@ -19,7 +19,6 @@
 package org.apache.pulsar.broker.web;
 
 import io.netty.util.concurrent.DefaultThreadFactory;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -153,7 +152,7 @@ public class WebExecutorThreadPool extends ExecutorThreadPool {
         }
     }
 
-    private static final class TaskQueue extends LinkedBlockingQueue<Runnable> {
+    private static final class TaskQueue extends BlockingArrayQueue<Runnable> {
         private volatile GrowingThreadPoolExecutor executor;
 
         TaskQueue(int capacity) {
