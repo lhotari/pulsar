@@ -1,0 +1,266 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.pulsar.broker.web;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import io.netty.util.concurrent.DefaultThreadFactory;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.container.AsyncResponse;
+import jakarta.ws.rs.container.Suspended;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.ext.WriterInterceptor;
+import jakarta.ws.rs.ext.WriterInterceptorContext;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee10.servlet.ServletHolder;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.ServerConnector;
+import org.glassfish.jersey.server.ResourceConfig;
+import org.glassfish.jersey.servlet.ServletContainer;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Test;
+
+public class WebExecutorAsyncResponseTest {
+
+    private static final String WEB_THREAD_PREFIX = "test-web";
+    private static final String OTHER_THREAD_PREFIX = "test-other";
+    private static final String WRITER_THREAD_HEADER = "X-Writer-Thread";
+
+    private ExecutorService otherExecutor;
+    private WebExecutorThreadPool webExecutor;
+    private Server server;
+    private URI baseUri;
+    private HttpClient httpClient;
+
+    @BeforeClass
+    public void setup() throws Exception {
+        otherExecutor = Executors.newSingleThreadExecutor(new DefaultThreadFactory(OTHER_THREAD_PREFIX));
+        webExecutor = new WebExecutorThreadPool(8, WEB_THREAD_PREFIX);
+        server = new Server(webExecutor);
+        ServerConnector connector = new ServerConnector(server);
+        connector.setPort(0);
+        server.addConnector(connector);
+
+        ResourceConfig config = new ResourceConfig();
+        config.register(new TestResource(otherExecutor));
+        config.register(WriterThreadInterceptor.class);
+        config.register(new WebExecutorAsyncResponseFeature(webExecutor));
+        ServletHolder servletHolder = new ServletHolder(new ServletContainer(config));
+        servletHolder.setAsyncSupported(true);
+        ServletContextHandler context = new ServletContextHandler();
+        context.addServlet(servletHolder, "/*");
+        server.setHandler(context);
+        server.start();
+
+        baseUri = URI.create("http://localhost:" + connector.getLocalPort());
+        httpClient = HttpClient.newHttpClient();
+    }
+
+    @AfterClass(alwaysRun = true)
+    public void cleanup() throws Exception {
+        if (httpClient != null) {
+            httpClient.close();
+        }
+        if (server != null) {
+            server.stop();
+        }
+        if (otherExecutor != null) {
+            otherExecutor.shutdownNow();
+        }
+    }
+
+    @Path("/test")
+    public static class TestResource {
+        private final ExecutorService otherExecutor;
+
+        public TestResource(ExecutorService otherExecutor) {
+            this.otherExecutor = otherExecutor;
+        }
+
+        @GET
+        @Path("/resumeFromOtherThread")
+        public void resumeFromOtherThread(@Suspended AsyncResponse asyncResponse) {
+            otherExecutor.execute(() -> asyncResponse.resume("resumed"));
+        }
+
+        @GET
+        @Path("/resumeExceptionFromOtherThread")
+        public void resumeExceptionFromOtherThread(@Suspended AsyncResponse asyncResponse) {
+            otherExecutor.execute(() -> asyncResponse.resume(new WebApplicationException(
+                    Response.status(Response.Status.CONFLICT).entity("failed").build())));
+        }
+
+        @GET
+        @Path("/resumeOnRequestThread")
+        public void resumeOnRequestThread(@Suspended AsyncResponse asyncResponse) {
+            asyncResponse.resume("resumed");
+        }
+    }
+
+    public static class WriterThreadInterceptor implements WriterInterceptor {
+        @Override
+        public void aroundWriteTo(WriterInterceptorContext context) throws IOException {
+            context.getHeaders().add(WRITER_THREAD_HEADER, Thread.currentThread().getName());
+            context.proceed();
+        }
+    }
+
+    private HttpResponse<String> get(String path) throws Exception {
+        return httpClient.send(HttpRequest.newBuilder(baseUri.resolve(path)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
+    public void testResumeFromOtherThreadWritesOnWebExecutor() throws Exception {
+        HttpResponse<String> response = get("/test/resumeFromOtherThread");
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).isEqualTo("resumed");
+        assertThat(response.headers().firstValue(WRITER_THREAD_HEADER)).hasValueSatisfying(
+                threadName -> assertThat(threadName).startsWith(WEB_THREAD_PREFIX));
+    }
+
+    @Test
+    public void testResumeExceptionFromOtherThreadWritesOnWebExecutor() throws Exception {
+        HttpResponse<String> response = get("/test/resumeExceptionFromOtherThread");
+        assertThat(response.statusCode()).isEqualTo(409);
+        assertThat(response.body()).isEqualTo("failed");
+        assertThat(response.headers().firstValue(WRITER_THREAD_HEADER)).hasValueSatisfying(
+                threadName -> assertThat(threadName).startsWith(WEB_THREAD_PREFIX));
+    }
+
+    @Test
+    public void testResumeOnRequestThread() throws Exception {
+        HttpResponse<String> response = get("/test/resumeOnRequestThread");
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).isEqualTo("resumed");
+        assertThat(response.headers().firstValue(WRITER_THREAD_HEADER)).hasValueSatisfying(
+                threadName -> assertThat(threadName).startsWith(WEB_THREAD_PREFIX));
+    }
+
+    @Test
+    public void testResumeOnPoolThreadRunsInline() throws Exception {
+        AsyncResponse delegate = mock(AsyncResponse.class);
+        when(delegate.resume(any(Object.class))).thenReturn(true);
+        WebExecutorAsyncResponse asyncResponse = new WebExecutorAsyncResponse(delegate, webExecutor);
+        AtomicReference<Boolean> result = new AtomicReference<>();
+        CountDownLatch done = new CountDownLatch(1);
+        webExecutor.execute(() -> {
+            result.set(asyncResponse.resume("value"));
+            // resumed before returning, on this thread
+            verify(delegate).resume("value");
+            done.countDown();
+        });
+        assertThat(done.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(result.get()).isTrue();
+    }
+
+    @Test
+    public void testCompletionIsDispatchedOnceWhileQueued() throws Exception {
+        int poolSize = 2;
+        WebExecutorThreadPool pool = new WebExecutorThreadPool(poolSize, "test-blocked");
+        pool.start();
+        try {
+            // occupy all the pool's threads so that the completion stays queued
+            CountDownLatch poolBlocked = new CountDownLatch(poolSize);
+            CountDownLatch blockPool = new CountDownLatch(1);
+            for (int i = 0; i < poolSize; i++) {
+                pool.execute(() -> {
+                    poolBlocked.countDown();
+                    try {
+                        blockPool.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+            }
+            assertThat(poolBlocked.await(10, TimeUnit.SECONDS)).isTrue();
+            AsyncResponse delegate = mock(AsyncResponse.class);
+            when(delegate.isSuspended()).thenReturn(true);
+            AtomicReference<String> resumingThread = new AtomicReference<>();
+            when(delegate.resume(any(Object.class))).thenAnswer(invocation -> {
+                resumingThread.set(Thread.currentThread().getName());
+                return true;
+            });
+            WebExecutorAsyncResponse asyncResponse = new WebExecutorAsyncResponse(delegate, pool);
+
+            assertThat(asyncResponse.resume("first")).isTrue();
+            assertThat(asyncResponse.isDone()).isTrue();
+            assertThat(asyncResponse.isSuspended()).isFalse();
+            assertThat(asyncResponse.resume("second")).isFalse();
+            assertThat(asyncResponse.resume(new RuntimeException("third"))).isFalse();
+            assertThat(asyncResponse.cancel()).isFalse();
+            verify(delegate, never()).resume(any(Object.class));
+
+            blockPool.countDown();
+            verify(delegate, timeout(10000)).resume("first");
+            verify(delegate, never()).resume("second");
+            verify(delegate, never()).resume(any(Throwable.class));
+            verify(delegate, never()).cancel();
+            assertThat(resumingThread.get()).startsWith("test-blocked");
+        } finally {
+            pool.stop();
+        }
+    }
+
+    @Test
+    public void testRejectedCompletionRunsOnCallingThread() throws Exception {
+        WebExecutorThreadPool pool = new WebExecutorThreadPool(2, "test-stopped");
+        pool.start();
+        pool.stop();
+        AsyncResponse delegate = mock(AsyncResponse.class);
+        AtomicReference<Thread> resumingThread = new AtomicReference<>();
+        when(delegate.resume(any(Object.class))).thenAnswer(invocation -> {
+            resumingThread.set(Thread.currentThread());
+            return true;
+        });
+        WebExecutorAsyncResponse asyncResponse = new WebExecutorAsyncResponse(delegate, pool);
+
+        assertThat(asyncResponse.resume("value")).isTrue();
+        verify(delegate).resume("value");
+        assertThat(resumingThread.get()).isSameAs(Thread.currentThread());
+    }
+
+    @Test
+    public void testCompletedDelegateIsNotResumed() {
+        AsyncResponse delegate = mock(AsyncResponse.class);
+        when(delegate.isDone()).thenReturn(true);
+        WebExecutorAsyncResponse asyncResponse = new WebExecutorAsyncResponse(delegate, webExecutor);
+
+        assertThat(asyncResponse.resume("value")).isFalse();
+        verify(delegate, never()).resume(any(Object.class));
+    }
+}
