@@ -20,6 +20,8 @@ package org.apache.pulsar.broker.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -190,24 +192,11 @@ public class WebExecutorAsyncResponseTest {
 
     @Test
     public void testCompletionIsDispatchedOnceWhileQueued() throws Exception {
-        int poolSize = 2;
-        WebExecutorThreadPool pool = new WebExecutorThreadPool(poolSize, "test-blocked");
+        WebExecutorThreadPool pool = new WebExecutorThreadPool(2, "test-blocked");
         pool.start();
+        CountDownLatch release = new CountDownLatch(1);
         try {
-            // occupy all the pool's threads so that the completion stays queued
-            CountDownLatch poolBlocked = new CountDownLatch(poolSize);
-            CountDownLatch blockPool = new CountDownLatch(1);
-            for (int i = 0; i < poolSize; i++) {
-                pool.execute(() -> {
-                    poolBlocked.countDown();
-                    try {
-                        blockPool.await();
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                });
-            }
-            assertThat(poolBlocked.await(10, TimeUnit.SECONDS)).isTrue();
+            blockPool(pool, 2, release);
             AsyncResponse delegate = mock(AsyncResponse.class);
             when(delegate.isSuspended()).thenReturn(true);
             AtomicReference<String> resumingThread = new AtomicReference<>();
@@ -218,20 +207,83 @@ public class WebExecutorAsyncResponseTest {
             WebExecutorAsyncResponse asyncResponse = new WebExecutorAsyncResponse(delegate, pool);
 
             assertThat(asyncResponse.resume("first")).isTrue();
-            assertThat(asyncResponse.isDone()).isTrue();
-            assertThat(asyncResponse.isSuspended()).isFalse();
+            // Jersey's state is reported until the queued completion has run
+            assertThat(asyncResponse.isDone()).isFalse();
+            assertThat(asyncResponse.isSuspended()).isTrue();
             assertThat(asyncResponse.resume("second")).isFalse();
             assertThat(asyncResponse.resume(new RuntimeException("third"))).isFalse();
             assertThat(asyncResponse.cancel()).isFalse();
+            assertThat(asyncResponse.setTimeout(1, TimeUnit.SECONDS)).isFalse();
             verify(delegate, never()).resume(any(Object.class));
 
-            blockPool.countDown();
+            release.countDown();
             verify(delegate, timeout(10000)).resume("first");
             verify(delegate, never()).resume("second");
             verify(delegate, never()).resume(any(Throwable.class));
             verify(delegate, never()).cancel();
+            verify(delegate, never()).setTimeout(anyLong(), any());
             assertThat(resumingThread.get()).startsWith("test-blocked");
         } finally {
+            release.countDown();
+            pool.stop();
+        }
+    }
+
+    @Test
+    public void testCancellingAgainSucceeds() throws Exception {
+        WebExecutorThreadPool pool = new WebExecutorThreadPool(2, "test-blocked");
+        pool.start();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            blockPool(pool, 2, release);
+            AsyncResponse delegate = mock(AsyncResponse.class);
+            when(delegate.cancel()).thenReturn(true);
+            WebExecutorAsyncResponse asyncResponse = new WebExecutorAsyncResponse(delegate, pool);
+
+            assertThat(asyncResponse.cancel()).isTrue();
+            // cancelling again succeeds while the cancellation is queued
+            assertThat(asyncResponse.cancel()).isTrue();
+            assertThat(asyncResponse.cancel(10)).isTrue();
+            assertThat(asyncResponse.resume("value")).isFalse();
+
+            release.countDown();
+            verify(delegate, timeout(10000)).cancel();
+            when(delegate.isDone()).thenReturn(true);
+            when(delegate.isCancelled()).thenReturn(true);
+            // and after it has run
+            assertThat(asyncResponse.cancel()).isTrue();
+            verify(delegate).cancel();
+            verify(delegate, never()).cancel(anyInt());
+            verify(delegate, never()).resume(any(Object.class));
+        } finally {
+            release.countDown();
+            pool.stop();
+        }
+    }
+
+    @Test
+    public void testCompletionRunsOnCallingThreadWhenTimeoutIsSet() throws Exception {
+        WebExecutorThreadPool pool = new WebExecutorThreadPool(2, "test-blocked");
+        pool.start();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            blockPool(pool, 2, release);
+            AsyncResponse delegate = mock(AsyncResponse.class);
+            when(delegate.setTimeout(anyLong(), any())).thenReturn(true);
+            AtomicReference<Thread> resumingThread = new AtomicReference<>();
+            when(delegate.resume(any(Object.class))).thenAnswer(invocation -> {
+                resumingThread.set(Thread.currentThread());
+                return true;
+            });
+            WebExecutorAsyncResponse asyncResponse = new WebExecutorAsyncResponse(delegate, pool);
+
+            assertThat(asyncResponse.setTimeout(1, TimeUnit.SECONDS)).isTrue();
+            // a Jersey timeout can't overtake a queued completion, since the completion isn't queued
+            assertThat(asyncResponse.resume("value")).isTrue();
+            verify(delegate).resume("value");
+            assertThat(resumingThread.get()).isSameAs(Thread.currentThread());
+        } finally {
+            release.countDown();
             pool.stop();
         }
     }
@@ -255,12 +307,36 @@ public class WebExecutorAsyncResponseTest {
     }
 
     @Test
-    public void testCompletedDelegateIsNotResumed() {
+    public void testCompletedDelegateIsCompletedOnCallingThread() {
         AsyncResponse delegate = mock(AsyncResponse.class);
         when(delegate.isDone()).thenReturn(true);
+        AtomicReference<Thread> resumingThread = new AtomicReference<>();
+        when(delegate.resume(any(Object.class))).thenAnswer(invocation -> {
+            resumingThread.set(Thread.currentThread());
+            return false;
+        });
         WebExecutorAsyncResponse asyncResponse = new WebExecutorAsyncResponse(delegate, webExecutor);
 
+        // Jersey's response decides the result, and doesn't write anything since it's already done
         assertThat(asyncResponse.resume("value")).isFalse();
-        verify(delegate, never()).resume(any(Object.class));
+        verify(delegate).resume("value");
+        assertThat(resumingThread.get()).isSameAs(Thread.currentThread());
+    }
+
+    // occupies all the pool's threads so that completions stay queued until release is counted down
+    private static void blockPool(WebExecutorThreadPool pool, int poolSize, CountDownLatch release)
+            throws InterruptedException {
+        CountDownLatch poolBlocked = new CountDownLatch(poolSize);
+        for (int i = 0; i < poolSize; i++) {
+            pool.execute(() -> {
+                poolBlocked.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+        assertThat(poolBlocked.await(10, TimeUnit.SECONDS)).isTrue();
     }
 }

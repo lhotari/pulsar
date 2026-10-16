@@ -25,6 +25,8 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.eclipse.jetty.util.BlockingArrayQueue;
+import org.eclipse.jetty.util.MathUtils;
+import org.eclipse.jetty.util.ProcessorUtils;
 import org.eclipse.jetty.util.thread.ExecutorThreadPool;
 
 /**
@@ -43,6 +45,7 @@ public class WebExecutorThreadPool extends ExecutorThreadPool {
 
     private static final ThreadLocal<WebExecutorThreadPool> CURRENT_POOL = new ThreadLocal<>();
 
+    private final ThreadPoolExecutor executor;
     private final ThreadFactory threadFactory;
     private volatile boolean startAttempted;
 
@@ -62,9 +65,21 @@ public class WebExecutorThreadPool extends ExecutorThreadPool {
      * @param queueCapacity the capacity of the queue for tasks that wait for a thread
      */
     public WebExecutorThreadPool(int numThreads, int maxThreads, String namePrefix, int queueCapacity) {
-        super(createExecutor(numThreads, maxThreads, queueCapacity), -1, null);
+        this(createExecutor(numThreads, maxThreads, queueCapacity), numThreads, namePrefix);
+    }
+
+    private WebExecutorThreadPool(ThreadPoolExecutor executor, int numThreads, String namePrefix) {
+        super(executor, -1, null);
+        this.executor = executor;
         // the number of threads that are started when the pool starts
         setMinThreads(Math.min(8, numThreads));
+        if (executor instanceof GrowingThreadPoolExecutor) {
+            // Jetty sizes the reserved thread executor from the maximum number of threads, and its threads wait for
+            // work without an idle timeout, so they wouldn't let the pool shrink. Size it from numThreads, like it
+            // is sized for a pool that doesn't grow.
+            setReservedThreads(Math.max(1,
+                    MathUtils.ceilToNextPowerOfTwo(Math.min(ProcessorUtils.availableProcessors(), numThreads / 8))));
+        }
         this.threadFactory = new DefaultThreadFactory(namePrefix);
     }
 
@@ -81,7 +96,14 @@ public class WebExecutorThreadPool extends ExecutorThreadPool {
     protected Thread newThread(Runnable job) {
         return threadFactory.newThread(() -> {
             CURRENT_POOL.set(this);
-            job.run();
+            try {
+                job.run();
+            } finally {
+                if (executor instanceof GrowingThreadPoolExecutor growingExecutor) {
+                    // this thread has stopped, so a queued task might have no thread to run it
+                    growingExecutor.startThreadForQueuedTasks();
+                }
+            }
         });
     }
 
@@ -116,6 +138,9 @@ public class WebExecutorThreadPool extends ExecutorThreadPool {
      * task when no thread is idle.
      */
     private static final class GrowingThreadPoolExecutor extends ThreadPoolExecutor {
+        // a task that only starts a thread, which then runs the queued tasks
+        private static final Runnable START_THREAD = () -> { };
+
         // tasks that have been submitted and haven't completed yet, both queued and running
         private final AtomicInteger submittedTasks = new AtomicInteger();
 
@@ -128,7 +153,9 @@ public class WebExecutorThreadPool extends ExecutorThreadPool {
                     (task, executor) -> {
                         // the queue declined the task to start a new thread, but the pool reached its maximum
                         // size concurrently, so queue the task after all
-                        if (executor.isShutdown() || !queue.forceOffer(task)) {
+                        if (executor.isShutdown() || !queue.forceOffer(task)
+                                // the executor could have been shut down and drained before the task was queued
+                                || (executor.isShutdown() && queue.remove(task))) {
                             throw new RejectedExecutionException("Task " + task + " rejected from " + executor);
                         }
                     });
@@ -144,11 +171,36 @@ public class WebExecutorThreadPool extends ExecutorThreadPool {
                 submittedTasks.decrementAndGet();
                 throw e;
             }
+            // The queue decides whether to start a thread from the pool size before it queues the task. A thread
+            // that stops after being idle in between doesn't run the task, and ThreadPoolExecutor doesn't replace
+            // it while other threads are left, so check again now that the task is queued. Stopping threads check
+            // too, after they have left the pool.
+            startThreadForQueuedTasks();
+        }
+
+        /**
+         * Starts a thread if tasks are queued while no thread is idle and the pool is below its maximum size.
+         */
+        void startThreadForQueuedTasks() {
+            if (getQueue().isEmpty() || isShutdown()) {
+                return;
+            }
+            int poolSize = getPoolSize();
+            if (poolSize < getMaximumPoolSize() && submittedTasks.get() > poolSize) {
+                try {
+                    // not counted in submittedTasks, so the queue declines it and the executor starts a thread
+                    super.execute(START_THREAD);
+                } catch (RejectedExecutionException e) {
+                    // the executor is shutting down, or its queue is full, so threads are busy anyway
+                }
+            }
         }
 
         @Override
         protected void afterExecute(Runnable r, Throwable t) {
-            submittedTasks.decrementAndGet();
+            if (r != START_THREAD) {
+                submittedTasks.decrementAndGet();
+            }
         }
     }
 

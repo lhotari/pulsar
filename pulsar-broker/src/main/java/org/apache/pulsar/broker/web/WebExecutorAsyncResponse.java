@@ -25,7 +25,7 @@ import java.util.Date;
 import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import lombok.CustomLog;
 
@@ -38,15 +38,29 @@ import lombok.CustomLog;
  * store callback thread. This wrapper hands the completion to the web service executor, the pool meant for blocking
  * response writing, unless the calling thread already belongs to it. When the executor rejects the task, the
  * request is completed on the calling thread so that the response isn't lost.
+ *
+ * <p>The first {@code resume} or {@code cancel} call decides how the request completes, even while its completion
+ * is still queued. Later calls fail like they do on a completed response, except that a cancellation succeeds
+ * after an earlier cancellation. {@link #isSuspended()}, {@link #isCancelled()} and {@link #isDone()} report
+ * Jersey's state, so they change once the queued completion has run.
+ *
+ * <p>Jersey's timeout handling uses its own response, not this wrapper, so a timeout could complete the request
+ * while a completion is queued and the queued completion would be lost. Once a timeout or a timeout handler is
+ * set, the request is therefore completed on the calling thread. Pulsar's endpoints don't use timeouts.
  */
 @CustomLog
 final class WebExecutorAsyncResponse implements AsyncResponse {
 
     private final AsyncResponse delegate;
     private final WebExecutorThreadPool executor;
-    // Set by the first resume or cancel call, so that later calls fail like they would on a completed response
+    private static final int NOT_REQUESTED = 0;
+    private static final int RESUME_REQUESTED = 1;
+    private static final int CANCEL_REQUESTED = 2;
+
+    // Set by the first resume or cancel call, so that later calls behave like they would on a completed response
     // while the first completion is still waiting in the executor's queue.
-    private final AtomicBoolean completionRequested = new AtomicBoolean();
+    private final AtomicInteger requestedCompletion = new AtomicInteger(NOT_REQUESTED);
+    private volatile boolean timeoutSet;
 
     WebExecutorAsyncResponse(AsyncResponse delegate, WebExecutorThreadPool executor) {
         this.delegate = delegate;
@@ -55,34 +69,38 @@ final class WebExecutorAsyncResponse implements AsyncResponse {
 
     @Override
     public boolean resume(Object response) {
-        return complete(() -> delegate.resume(response));
+        return complete(RESUME_REQUESTED, () -> delegate.resume(response));
     }
 
     @Override
     public boolean resume(Throwable response) {
-        return complete(() -> delegate.resume(response));
+        return complete(RESUME_REQUESTED, () -> delegate.resume(response));
     }
 
     @Override
     public boolean cancel() {
-        return complete(delegate::cancel);
+        return complete(CANCEL_REQUESTED, delegate::cancel);
     }
 
     @Override
     public boolean cancel(int retryAfter) {
-        return complete(() -> delegate.cancel(retryAfter));
+        return complete(CANCEL_REQUESTED, () -> delegate.cancel(retryAfter));
     }
 
     @Override
     public boolean cancel(Date retryAfter) {
-        return complete(() -> delegate.cancel(retryAfter));
+        return complete(CANCEL_REQUESTED, () -> delegate.cancel(retryAfter));
     }
 
-    private boolean complete(BooleanSupplier completion) {
-        if (delegate.isDone() || !completionRequested.compareAndSet(false, true)) {
-            return false;
+    private boolean complete(int completionType, BooleanSupplier completion) {
+        int previousCompletion = requestedCompletion.compareAndExchange(NOT_REQUESTED, completionType);
+        if (previousCompletion != NOT_REQUESTED) {
+            // like on a completed response, cancelling again succeeds if the response was cancelled
+            return completionType == CANCEL_REQUESTED && previousCompletion == CANCEL_REQUESTED
+                    && (delegate.isCancelled() || !delegate.isDone());
         }
-        if (executor.isPoolThread()) {
+        if (timeoutSet || delegate.isDone() || executor.isPoolThread()) {
+            // a completed response doesn't write anything, so there's no need to hand it to the executor
             return completion.getAsBoolean();
         }
         try {
@@ -104,7 +122,7 @@ final class WebExecutorAsyncResponse implements AsyncResponse {
 
     @Override
     public boolean isSuspended() {
-        return !completionRequested.get() && delegate.isSuspended();
+        return delegate.isSuspended();
     }
 
     @Override
@@ -114,16 +132,22 @@ final class WebExecutorAsyncResponse implements AsyncResponse {
 
     @Override
     public boolean isDone() {
-        return completionRequested.get() || delegate.isDone();
+        return delegate.isDone();
     }
 
     @Override
     public boolean setTimeout(long time, TimeUnit unit) {
+        timeoutSet = true;
+        if (requestedCompletion.get() != NOT_REQUESTED) {
+            // like on a resumed response
+            return false;
+        }
         return delegate.setTimeout(time, unit);
     }
 
     @Override
     public void setTimeoutHandler(TimeoutHandler handler) {
+        timeoutSet = true;
         delegate.setTimeoutHandler(handler);
     }
 

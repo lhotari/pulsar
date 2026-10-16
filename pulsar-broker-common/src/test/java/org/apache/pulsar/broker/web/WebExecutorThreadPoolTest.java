@@ -161,6 +161,44 @@ public class WebExecutorThreadPoolTest {
         }
     }
 
+    @Test(timeOut = 120000)
+    public void testTaskIsNotStrandedWhileAnIdleThreadRetires() throws Exception {
+        WebExecutorThreadPool pool = new WebExecutorThreadPool(2, 3, "test-web", 8192);
+        // a very short idle timeout makes the extra thread retire while tasks are being submitted
+        pool.setIdleTimeout(1);
+        pool.start();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            blockThreads(pool, 2, release);
+            for (int i = 0; i < 5000; i++) {
+                CountDownLatch ran = new CountDownLatch(1);
+                pool.execute(ran::countDown);
+                assertThat(ran.await(5, TimeUnit.SECONDS)).as("task %d ran", i).isTrue();
+                // vary the pause around the idle timeout so that submissions race with the thread stopping
+                TimeUnit.MICROSECONDS.sleep(500 + (i % 13) * 80);
+            }
+        } finally {
+            release.countDown();
+            pool.stop();
+        }
+    }
+
+    @Test(timeOut = 30000)
+    public void testGrowingPoolReservesThreadsLikeFixedPool() throws Exception {
+        // reserved threads don't stop after being idle, so they are sized from numThreads and not maxThreads
+        WebExecutorThreadPool fixedPool = new WebExecutorThreadPool(64, 0, "test-web", 8192);
+        WebExecutorThreadPool growingPool = new WebExecutorThreadPool(64, 1024, "test-web", 8192);
+        fixedPool.start();
+        growingPool.start();
+        try {
+            assertThat(growingPool.getMaxThreads()).isEqualTo(1024);
+            assertThat(growingPool.getReservedThreads()).isEqualTo(fixedPool.getReservedThreads());
+        } finally {
+            fixedPool.stop();
+            growingPool.stop();
+        }
+    }
+
     private static void blockThreads(WebExecutorThreadPool pool, int count, CountDownLatch release)
             throws InterruptedException {
         CountDownLatch started = new CountDownLatch(count);
