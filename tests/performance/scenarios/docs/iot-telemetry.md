@@ -32,6 +32,10 @@ application-visible order across Key_Shared hash-range reassignment.
 - [`iot-telemetry.yaml`](../iot-telemetry.yaml) is the full topology without churn.
 - [`iot-telemetry-restarts.yaml`](../iot-telemetry-restarts.yaml) restarts 10% of each application's
   pods every 30 seconds.
+- [`iot-telemetry-key-shared-replay.yaml`](../iot-telemetry-key-shared-replay.yaml) stalls and restarts Key_Shared
+  consumers so that the subscriptions' replay queues hold thousands of messages: 30,000 msg/s with string keys to five
+  applications of 20 pods on four topics, each application pausing three pods for five seconds every 15 seconds and
+  restarting one every 20 seconds. The report's Backlog and rates section shows the replay queues over time.
 - [`iot-telemetry-small.yaml`](../iot-telemetry-small.yaml) keeps the 20-way fanout,
   30 topics and 1,000 msg/s rate, but uses 10 gateways and 10 pods per application, with the low-memory
   configuration.
@@ -222,7 +226,17 @@ workloads:
       podRestarts:             # each application restarts this fraction of its pods every intervalSeconds
         intervalSeconds: 0
         fraction: 0.0
+      podPauses:               # not set in the base file: each application pauses this fraction of its pods
+        intervalSeconds: 0     # every intervalSeconds, for pauseMillis
+        fraction: 0.0
+        pauseMillis: 0
 ```
+
+`behaviors.podPauses` stalls pods as a garbage collection, a slow downstream or a debugger would: every
+`intervalSeconds`, each application pauses a random `fraction` of its pods' consumers for `pauseMillis`, shorter than
+the interval, and resumes them. A paused consumer stops asking for messages once it has received the ones it already
+asked for, so with Key_Shared the broker holds back its keys' messages in the subscription's replay queue, and
+dispatches the other keys' messages around them, until the replay queue reaches its look-ahead limit.
 
 `applications.joinSeconds` has each application join after the measurement starts: a list with a value for each
 application, in seconds, where 0 joins at the start, as every application does without the setting. An application

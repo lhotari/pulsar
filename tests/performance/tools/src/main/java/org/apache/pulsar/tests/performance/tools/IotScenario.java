@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.client.api.SubscriptionType;
 
 /**
@@ -216,11 +217,16 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
     }
 
     /** What happens to the simulated system during the run, beyond the traffic. */
-    public record Behaviors(PodRestarts podRestarts) {
-        static final Behaviors NONE = new Behaviors(PodRestarts.NONE);
+    public record Behaviors(PodRestarts podRestarts, PodPauses podPauses) {
+        static final Behaviors NONE = new Behaviors(PodRestarts.NONE, PodPauses.NONE);
 
         public Behaviors {
             podRestarts = podRestarts != null ? podRestarts : PodRestarts.NONE;
+            podPauses = podPauses != null ? podPauses : PodPauses.NONE;
+        }
+
+        public Behaviors(PodRestarts podRestarts) {
+            this(podRestarts, null);
         }
     }
 
@@ -235,6 +241,23 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
 
         boolean enabled() {
             return intervalSeconds > 0 && fraction > 0;
+        }
+    }
+
+    /**
+     * Each application pauses some of its pods periodically, as a pod stalled by a garbage collection, a slow
+     * downstream or a debugger would: a paused pod's consumer stops asking for messages, so the broker holds back its
+     * keys' messages, which a Key_Shared subscription keeps in its replay queue, until it resumes.
+     *
+     * @param intervalSeconds how often each application pauses pods; 0 never
+     * @param fraction the fraction of an application's pods that each pause stops
+     * @param pauseMillis how long the pods stay paused, shorter than the interval
+     */
+    public record PodPauses(int intervalSeconds, double fraction, int pauseMillis) {
+        static final PodPauses NONE = new PodPauses(0, 0, 0);
+
+        boolean enabled() {
+            return intervalSeconds > 0 && fraction > 0 && pauseMillis > 0;
         }
     }
 
@@ -270,6 +293,7 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
         Producer producer = gateways.producer();
         Client client = applications.client();
         PodRestarts podRestarts = behaviors.podRestarts();
+        PodPauses podPauses = behaviors.podPauses();
         require(durationSeconds >= 1, "measurement.seconds must be at least 1");
         require(warmupSeconds >= 0 && warmupMessages >= 0 && warmupRoundDelaySeconds >= 0,
                 "warmup.seconds, warmup.messages and warmup.roundDelaySeconds must not be negative");
@@ -374,6 +398,13 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
         }
         require(podRestarts.intervalSeconds() >= 0 && podRestarts.fraction() >= 0 && podRestarts.fraction() <= 1,
                 "behaviors.podRestarts.intervalSeconds must not be negative, and fraction must be from 0 to 1");
+        require(podPauses.intervalSeconds() >= 0 && podPauses.fraction() >= 0 && podPauses.fraction() <= 1
+                        && podPauses.pauseMillis() >= 0,
+                "behaviors.podPauses.intervalSeconds and pauseMillis must not be negative, and fraction must be from 0"
+                        + " to 1");
+        require(!podPauses.enabled()
+                        || podPauses.pauseMillis() < TimeUnit.SECONDS.toMillis(podPauses.intervalSeconds()),
+                "behaviors.podPauses.pauseMillis must be shorter than intervalSeconds");
     }
 
     private static void require(boolean condition, String message) {

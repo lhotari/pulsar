@@ -24,6 +24,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
@@ -278,6 +279,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private final AtomicBoolean stopping = new AtomicBoolean();
         private final AtomicReference<Throwable> restartFailure = new AtomicReference<>();
         private volatile Thread restarter;
+        private volatile Thread pauser;
         private int nextWarmupRound = 1;
         private volatile boolean finished;
 
@@ -407,6 +409,11 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                 restarter = thread;
                 thread.start();
             }
+            if (scenario.behaviors().podPauses().enabled() && !stopping.get()) {
+                Thread thread = new Thread(this::pausePods, "iot-client-pauser-" + index);
+                pauser = thread;
+                thread.start();
+            }
         }
 
         void checkRestarts() {
@@ -471,6 +478,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             // so that they don't open pods after they're closed, or use the shared resources after they are
             interruptAndAwait(joiner);
             interruptAndAwait(restarter);
+            interruptAndAwait(pauser);
             closePods();
         }
 
@@ -478,6 +486,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             stopping.set(true);
             interruptAndAwait(joiner);
             interruptAndAwait(restarter);
+            interruptAndAwait(pauser);
         }
 
         /**
@@ -593,6 +602,36 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     restartFailure.compareAndSet(null, error);
                     return;
                 }
+            }
+        }
+
+        // Pauses random pods' consumers for the pause's time every interval, and resumes them then, also when the
+        // pauses stop. A pod that a restart replaces meanwhile is resumed, closed, harmlessly.
+        private void pausePods() {
+            IotScenario.PodPauses podPauses = scenario.behaviors().podPauses();
+            int pauseCount = Math.max(1, (int) Math.ceil(scenario.podsPerApplication() * podPauses.fraction()));
+            List<Consumer<byte[]>> paused = new ArrayList<>(pauseCount);
+            try {
+                while (!stopping.get()) {
+                    Thread.sleep(TimeUnit.SECONDS.toMillis(podPauses.intervalSeconds()) - podPauses.pauseMillis());
+                    synchronized (pods) {
+                        List<ClientAndConsumer> candidates = new ArrayList<>(pods);
+                        Collections.shuffle(candidates);
+                        for (ClientAndConsumer pod : candidates.subList(0, Math.min(pauseCount, candidates.size()))) {
+                            pod.consumer().pause();
+                            paused.add(pod.consumer());
+                        }
+                    }
+                    Thread.sleep(podPauses.pauseMillis());
+                    paused.forEach(Consumer::resume);
+                    paused.clear();
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            } catch (RuntimeException error) {
+                restartFailure.compareAndSet(null, error);
+            } finally {
+                paused.forEach(Consumer::resume);
             }
         }
     }
