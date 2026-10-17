@@ -275,6 +275,43 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
     }
 
     @Test(timeOut = 10000)
+    public void testDisconnectAllConsumersDefersTheRemovalsBookkeeping() throws Exception {
+        List<Consumer> consumers = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            final int index = i;
+            Consumer consumer = createMockConsumer();
+            doReturn("consumer-" + i).when(consumer).consumerName();
+            doReturn((long) i).when(consumer).consumerId();
+            // one pending entry each
+            PendingAcksMap pendingAcks = consumer.getPendingAcks();
+            doAnswer(invocation -> {
+                invocation.getArgument(0, PendingAcksMap.PendingAcksConsumer.class).accept(1, index, 1, 100 + index);
+                return null;
+            }).when(pendingAcks).forEachAndClose(any());
+            // the last consumer's removal fails, so it stays
+            if (i < 2) {
+                doAnswer(invocation -> {
+                    persistentDispatcher.removeConsumer(consumer);
+                    return null;
+                }).when(consumer).disconnect(anyBoolean(), any());
+            }
+            persistentDispatcher.addConsumer(consumer).join();
+            consumers.add(consumer);
+        }
+        clearInvocations(consumers.get(2).getPendingAcks());
+
+        persistentDispatcher.disconnectAllConsumers(false, Optional.empty());
+
+        // the removals didn't scan the remaining consumer's pending acks for draining hashes
+        verify(consumers.get(2).getPendingAcks(), never()).forEach(any());
+        // the consumer that remains gets the removed consumers' pending entries from the replay queue
+        assertEquals(persistentDispatcher.getConsumers(), List.of(consumers.get(2)));
+        assertEquals(persistentDispatcher.getNumberOfMessagesInReplay(), 2);
+        assertTrue(persistentDispatcher.redeliveryMessages.containsStickyKeyHash(100));
+        assertTrue(persistentDispatcher.redeliveryMessages.containsStickyKeyHash(101));
+    }
+
+    @Test(timeOut = 10000)
     public void testAddConsumerWhenClosed() throws Exception {
         persistentDispatcher.close().get();
         Consumer consumer = createMockConsumer();

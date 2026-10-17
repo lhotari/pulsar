@@ -26,6 +26,7 @@ import com.google.common.collect.Range;
 import io.github.merlimat.slog.Logger;
 import io.netty.channel.EventLoopGroup;
 import it.unimi.dsi.fastutil.ints.IntList;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -94,6 +95,12 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     protected volatile Range<Position> lastIndividualDeletedRangeFromCursorRecovery;
 
     private CompletableFuture<Void> closeFuture = null;
+    // Set while disconnectAllConsumers removes every consumer, such as when the topic unloads: a removal then defers
+    // the pending entries that it would move into the replay queue, which the last removal clears, and the Key_Shared
+    // dispatcher skips the draining bookkeeping of the hashes that the removal moves
+    protected boolean removingAllConsumers;
+    // the deferred pending entries: ledger ID, entry ID and sticky key hash of each
+    private LongArrayList deferredPendingEntries;
     protected final MessageRedeliveryController redeliveryMessages;
     protected final RedeliveryTracker redeliveryTracker;
 
@@ -254,6 +261,15 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                     .log("Removed consumer with pending acks");
             if (consumerList.isEmpty()) {
                 clearComponentsAfterRemovedAllConsumers();
+            } else if (removingAllConsumers) {
+                LongArrayList deferred = deferredPendingEntries != null ? deferredPendingEntries
+                        : (deferredPendingEntries = new LongArrayList());
+                consumer.getPendingAcks().forEachAndClose((ledgerId, entryId, batchSize, stickyKeyHash) -> {
+                    deferred.add(ledgerId);
+                    deferred.add(entryId);
+                    deferred.add(stickyKeyHash);
+                });
+                totalAvailablePermits -= consumer.getAvailablePermitsForDispatcherRemoval();
             } else {
                 log.debug("Consumers are left, reading more entries");
                 MutableBoolean notifyAddedToReplay = new MutableBoolean(false);
@@ -299,6 +315,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     protected synchronized void clearComponentsAfterRemovedAllConsumers() {
         cancelPendingRead();
+        deferredPendingEntries = null;
 
         redeliveryMessages.clear();
         redeliveryTracker.clear();
@@ -689,10 +706,38 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             // Iterator of CopyOnWriteArrayList uses the internal array to do the for-each, and CopyOnWriteArrayList
             // will create a new internal array when adding/removing a new item. So remove items in the for-each
             // block is safety when the for-each and add/remove are using a same lock.
-            consumerList.forEach(consumer -> consumer.disconnect(isResetCursor, assignedBrokerLookupData));
+            removingAllConsumers = true;
+            try {
+                consumerList.forEach(consumer -> consumer.disconnect(isResetCursor, assignedBrokerLookupData));
+            } finally {
+                removingAllConsumers = false;
+                replayDeferredPendingEntries();
+            }
             cancelPendingRead();
         }
         return closeFuture;
+    }
+
+    // The consumers that remain after disconnectAllConsumers, which doesn't happen unless a removal failed, get the
+    // removed consumers' pending entries from the replay queue, as each removal would have added them
+    private void replayDeferredPendingEntries() {
+        LongArrayList deferred = deferredPendingEntries;
+        deferredPendingEntries = null;
+        if (deferred == null || consumerList.isEmpty()) {
+            return;
+        }
+        log.warn()
+                .attr("consumers", consumerList.size())
+                .attr("pendingEntries", deferred.size() / 3)
+                .log("Consumers remain after disconnecting all of them; replaying the removed ones' pending entries");
+        boolean addedToReplay = false;
+        for (int i = 0; i < deferred.size(); i += 3) {
+            addedToReplay |= addMessageToReplay(deferred.getLong(i), deferred.getLong(i + 1),
+                    deferred.getLong(i + 2));
+        }
+        if (addedToReplay) {
+            notifyRedeliveryMessageAdded();
+        }
     }
 
     @Override
