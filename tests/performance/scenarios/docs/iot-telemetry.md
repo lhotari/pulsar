@@ -187,6 +187,7 @@ workloads:
       size: 64                 # bytes, the device's ID, sequence and send time included
     devices:
       count: 300000
+      keyType: bytes           # not set in the base file: bytes, the device's ID as 8 bytes, or string, device-<ID>
     gateways:
       count: 100
       producer:                # the gateways' Pulsar clients and producers
@@ -250,6 +251,11 @@ gateways batch messages of any device together, with the producer's default batc
 applications check each device's order, and with Key_Shared the gateways keep a batch to one device, as the next
 section describes. Skipping messages and resetting subscriptions need Key_Shared or Failover, since an application
 then expects each device's messages from the first one that it receives.
+
+`devices.keyType` sets the messages' key. With `bytes`, the default, it's the device's ID as 8 big-endian bytes, which
+the broker receives base64-encoded; with `string`, it's `device-<ID>` as a plain string key, the key type of most
+applications, which Key_Shared hashes as a string. The applications check that each message has its device's key
+either way.
 
 `timeoutSeconds` bounds the whole workload: the applications stop waiting for messages after it and the run fails,
 the gateways give up waiting for a warmup round or the measurement's start, and the launcher waits for the containers
