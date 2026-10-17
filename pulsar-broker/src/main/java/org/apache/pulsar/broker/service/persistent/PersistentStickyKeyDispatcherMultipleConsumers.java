@@ -34,7 +34,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Predicate;
 import lombok.Getter;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
@@ -108,6 +107,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
                 topic.getBrokerService().executor(), this::cancelPendingRead, () -> reScheduleReadInMs(0),
                 () -> havePendingRead, this::getReadMoreEntriesCallCount, () -> !redeliveryMessages.isEmpty());
         this.selector = selector;
+        redeliveryMessages.setOwnerResolver(selector::select);
     }
 
     private static StickyKeyConsumerSelector createSelector(KeySharedMeta ksm, ServiceConfiguration conf) {
@@ -250,7 +250,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             if (dispatchedInThisRead.contains(olderPosition)) {
                 continue;
             }
-            if (redeliveryMessages.getHash(olderPosition.getLedgerId(), olderPosition.getEntryId()) == null) {
+            if (!redeliveryMessages.contains(olderPosition.getLedgerId(), olderPosition.getEntryId())) {
                 older.remove();
                 continue;
             }
@@ -269,15 +269,21 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             return CompletableFuture.completedFuture(null);
         }
         return super.addConsumer(consumer).thenCompose(__ -> selector.addConsumer(consumer))
-                .thenAccept(impactedConsumers ->
+                .thenAccept(impactedConsumers -> {
+            replayOwnersChanged();
             // TODO: Add some way to prevent changes in between the time the consumer is added and the
             // time the draining hashes are applied. It might be fine for ConsistentHashingStickyKeyConsumerSelector
             // since it's not really asynchronous, although it returns a CompletableFuture
-            handleConsumerAdded(consumer, impactedConsumers)
-        ).exceptionally(ex -> {
+            handleConsumerAdded(consumer, impactedConsumers);
+        }).exceptionally(ex -> {
             internalRemoveConsumer(consumer);
             throw FutureUtil.wrapToCompletionException(ex);
         });
+    }
+
+    // The selector assigns hashes to other consumers: the replay queue indexes its positions by consumer again
+    private synchronized void replayOwnersChanged() {
+        redeliveryMessages.ownersChanged();
     }
 
     /**
@@ -352,6 +358,8 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         }
         // The consumer must be removed from the selector before calling the superclass removeConsumer method.
         Optional<ImpactedConsumersResult> impactedConsumers = selector.removeConsumer(consumer);
+        // before the superclass moves the consumer's pending entries into the replay queue
+        replayOwnersChanged();
         super.removeConsumer(consumer);
         handleConsumerRemoved(consumer, impactedConsumers);
     }
@@ -495,7 +503,7 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             // instead issue a normal read that waits at the end of the topic for new entries. That would leave
             // deliverable messages stuck in the replay queue or the delayed delivery tracker until an unrelated event
             // (such as a consumer flow request) triggers another read, stalling dispatch (issue #21554).
-            // The former "allowOutOfOrderDelivery ||" escape here was dropped once ReplayPositionFilter started
+            // The former "allowOutOfOrderDelivery ||" escape here was dropped once the replay selection started
             // filtering out-of-order replay positions by available permits; don't re-add it without removing that.
             skipNextReplayToTriggerLookAhead = true;
             // skip backoff delay before reading ahead in the "look ahead" mode to prevent any additional latency
@@ -769,84 +777,33 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
     }
 
     /**
-     * Creates a filter for replaying messages. The filter is stateful and shouldn't be cached or reused.
-     * @see PersistentDispatcherMultipleConsumers#createFilterForReplay()
+     * Selects the replay positions of the consumers that can take messages now, as the dispatch would: those with
+     * permits and a writable connection, leaving out a hash that another consumer drains and, when ordering is
+     * enforced, the later positions of a hash left out. The replay queue indexes its positions by consumer, so a
+     * consumer without permits doesn't cost the selection anything, however many positions it has.
      */
     @Override
-    protected Predicate<Position> createFilterForReplay() {
-        return new ReplayPositionFilter();
+    protected NavigableSet<Position> selectMessagesToReplay(int maxMessagesToRead) {
+        return redeliveryMessages.selectForReplay(maxMessagesToRead, replaySelection);
     }
 
-    /**
-     * Filter for replaying messages. The filter is stateful for a single invocation and shouldn't be cached, shared
-     * or reused. This is a short-lived object, and optimizing it for the "no garbage" coding style of Pulsar is
-     * unnecessary since the JVM can optimize allocations for short-lived objects.
-     */
-    private class ReplayPositionFilter implements Predicate<Position> {
-        // tracks the available permits for each consumer for the duration of the filter usage
-        // the filter is stateful and shouldn't be shared or reused later
-        private final Map<Consumer, MutableInt> availablePermitsMap = new HashMap<>();
-        // tracks the hashes that have been blocked during the filtering
-        // it is necessary to block all later messages after a hash gets blocked so that ordering is preserved
-        private final Set<Long> hashesBlockedForOrdering = new HashSet<>();
+    // Out-of-order delivery relaxes ordering, not routing: dispatch selects the owning consumer by hash in both modes,
+    // so the permit check keeps the read's budget off positions that dispatch would only put back into the replay
+    // queue. Positions without a hash, of delayed messages and hash-less redelivery paths, are selected as they come;
+    // the dispatch filters them once it has read them.
+    private final MessageRedeliveryController.ReplaySelection replaySelection =
+            new MessageRedeliveryController.ReplaySelection() {
+                @Override
+                public int availablePermits(Object owner) {
+                    return getAvailablePermits((Consumer) owner);
+                }
 
-        @Override
-        public boolean test(Position position) {
-            // Out-of-order delivery relaxes ordering, not routing: filterAndGroupEntriesForDispatching selects the
-            // owning consumer by hash in both modes, so the hash is needed in both. It feeds the permit check below,
-            // which keeps this read's bounded budget (see MessageRedeliveryController#getMessagesToReplayNow) off
-            // positions that dispatch would only push straight back into the replay queue. Under out-of-order delivery,
-            // that check and the no-consumer check are the only live rejections here, and they made the
-            // "allowOutOfOrderDelivery ||" look-ahead escape removable.
-            Long stickyKeyHash = redeliveryMessages.getHash(position.getLedgerId(), position.getEntryId());
-            if (stickyKeyHash == null) {
-                // The sticky key hash is missing for delayed messages and positions added through hash-less
-                // redelivery paths. Filtering will happen at dispatch time after reading the entry from the ledger.
-                log.debug()
-                        .attr("position", position)
-                        .log("replay of entry at position doesn't contain sticky key hash.");
-                return true;
-            }
-            // check if the hash is already blocked, if so, then replaying of the position should be skipped
-            // to preserve ordering
-            if (hashesBlockedForOrdering.contains(stickyKeyHash)) {
-                return false;
-            }
-
-            // find the consumer for the sticky key hash
-            Consumer consumer = selector.select(stickyKeyHash.intValue());
-            // skip replaying the message position if there's no assigned consumer
-            if (consumer == null) {
-                blockStickyKeyHashIfOrderingRequired(stickyKeyHash);
-                return false;
-            }
-
-            // lookup the available permits for the consumer
-            MutableInt availablePermits =
-                    availablePermitsMap.computeIfAbsent(consumer,
-                            k -> new MutableInt(getAvailablePermits(consumer)));
-            // skip replaying the message position if the consumer has no available permits
-            if (availablePermits.intValue() <= 0) {
-                blockStickyKeyHashIfOrderingRequired(stickyKeyHash);
-                return false;
-            }
-
-            if (shouldBlockDispatch(consumer, stickyKeyHash.intValue())) {
-                // the hash is draining and the consumer is not the draining consumer
-                blockStickyKeyHashIfOrderingRequired(stickyKeyHash);
-                return false;
-            }
-
-            availablePermits.decrement();
-            return true;
-        }
-
-        private void blockStickyKeyHashIfOrderingRequired(long stickyKeyHash) {
-            if (!allowOutOfOrderDelivery) {
-                hashesBlockedForOrdering.add(stickyKeyHash);
-            }
-        }
-    }
+                @Override
+                public boolean isBlocked(Object owner, int stickyKeyHash) {
+                    // the hash is draining and the consumer is not the draining consumer
+                    return shouldBlockDispatch((Consumer) owner, stickyKeyHash);
+                }
+            };
 
     @Override
     protected int getStickyKeyHash(Entry entry) {
