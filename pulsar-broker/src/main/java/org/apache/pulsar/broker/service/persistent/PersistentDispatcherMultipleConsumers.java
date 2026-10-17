@@ -641,7 +641,11 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     public void markDeletePositionMoveForward() {
         Position markDeletePosition = cursor.getMarkDeletedPosition();
         if (markDeletePosition != null) {
-            redeliveryMessages.removeAllUpTo(markDeletePosition.getLedgerId(), markDeletePosition.getEntryId());
+            // The expiry monitor, the backlog quota and skipping call this from managed ledger threads, while the
+            // dispatcher changes the replay queue, which isn't thread-safe, under its monitor
+            synchronized (this) {
+                redeliveryMessages.removeAllUpTo(markDeletePosition.getLedgerId(), markDeletePosition.getEntryId());
+            }
             for (Consumer consumer : consumerList) {
                 consumer.removePendingAcksUpToPositionAndDecrementUnacked(
                         markDeletePosition.getLedgerId(), markDeletePosition.getEntryId());
