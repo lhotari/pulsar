@@ -31,6 +31,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -43,7 +44,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 import org.apache.pulsar.client.api.Consumer;
+import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientSharedResources;
 import org.apache.pulsar.client.api.Schema;
@@ -280,6 +283,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private final AtomicReference<Throwable> restartFailure = new AtomicReference<>();
         private volatile Thread restarter;
         private volatile Thread pauser;
+        // null unless the pods acknowledge after a delay
+        private final DelayedAcks delayedAcks;
         private int nextWarmupRound = 1;
         private volatile boolean finished;
 
@@ -293,6 +298,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             expectedMessages = scenario.resetToMillis(index) >= 0 ? -1 : scenario.expectedMessageCount(index);
             catchUp = new CatchUpTracker(scenario.topicCount(), scenario.applications().caughtUpLatencyMillis());
             pods = new ArrayList<>(scenario.podsPerApplication());
+            int ackDelayMillis = scenario.applications().ackDelayMillis();
+            delayedAcks = ackDelayMillis > 0 ? new DelayedAcks(ackDelayMillis, "iot-delayed-acks-" + index) : null;
             receiveLatency = new HdrLatencyRecorder(output.resolve("application-latency.hdr"),
                     PerformanceTool.MAX_LATENCY_MICROS);
         }
@@ -479,6 +486,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             interruptAndAwait(joiner);
             interruptAndAwait(restarter);
             interruptAndAwait(pauser);
+            if (delayedAcks != null) {
+                delayedAcks.stop();
+            }
             closePods();
         }
 
@@ -487,6 +497,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             interruptAndAwait(joiner);
             interruptAndAwait(restarter);
             interruptAndAwait(pauser);
+            if (delayedAcks != null) {
+                delayedAcks.stop();
+            }
         }
 
         /**
@@ -565,7 +578,11 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                                     catchUp.received(message.getTopicName(), message.getPublishTime(),
                                             receivedEpochMs, tracker::uniqueMessages);
                                 }
-                                currentConsumer.acknowledgeAsync(message);
+                                if (delayedAcks != null) {
+                                    delayedAcks.add(currentConsumer, message.getMessageId());
+                                } else {
+                                    currentConsumer.acknowledgeAsync(message);
+                                }
                             } catch (RuntimeException error) {
                                 tracker.invalidMessage();
                                 currentConsumer.negativeAcknowledge(message);
@@ -633,6 +650,50 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             } finally {
                 paused.forEach(Consumer::resume);
             }
+        }
+    }
+
+    /**
+     * Acknowledges messages a fixed time after they were received, in the order received, on a thread of its own, so
+     * that the listener threads don't wait. A closed pod's acknowledgment fails, which leaves the message to its
+     * redelivery as a pod that stopped before acknowledging would.
+     */
+    private static final class DelayedAcks {
+        private record Pending(Consumer<byte[]> consumer, MessageId messageId, long dueNanos) {
+        }
+
+        private final ConcurrentLinkedQueue<Pending> queue = new ConcurrentLinkedQueue<>();
+        private final long delayNanos;
+        private final Thread thread;
+        private volatile boolean stopped;
+
+        DelayedAcks(int delayMillis, String name) {
+            this.delayNanos = TimeUnit.MILLISECONDS.toNanos(delayMillis);
+            this.thread = new Thread(this::run, name);
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        void add(Consumer<byte[]> consumer, MessageId messageId) {
+            queue.add(new Pending(consumer, messageId, System.nanoTime() + delayNanos));
+        }
+
+        private void run() {
+            while (!stopped) {
+                Pending head = queue.peek();
+                long waitNanos = head == null ? TimeUnit.MILLISECONDS.toNanos(1) : head.dueNanos() - System.nanoTime();
+                if (waitNanos > 0) {
+                    LockSupport.parkNanos(Math.min(waitNanos, TimeUnit.MILLISECONDS.toNanos(1)));
+                    continue;
+                }
+                queue.poll();
+                head.consumer().acknowledgeAsync(head.messageId()).exceptionally(failure -> null);
+            }
+        }
+
+        void stop() throws InterruptedException {
+            stopped = true;
+            thread.join(TimeUnit.SECONDS.toMillis(10));
         }
     }
 

@@ -36,6 +36,10 @@ application-visible order across Key_Shared hash-range reassignment.
   consumers so that the subscriptions' replay queues hold thousands of messages: 30,000 msg/s with string keys to five
   applications of 20 pods on four topics, each application pausing three pods for five seconds every 15 seconds and
   restarting one every 20 seconds. The report's Backlog and rates section shows the replay queues over time.
+- [`iot-telemetry-key-shared-unloads.yaml`](../iot-telemetry-key-shared-unloads.yaml) unloads one of four topics
+  every 15 seconds, as a rolling restart of the brokers would, while 250 Key_Shared consumers per topic hold pending
+  acknowledgments: their pods acknowledge each message two seconds after receiving it. The report's Topic unloads
+  section shows each unload's time.
 - [`iot-telemetry-small.yaml`](../iot-telemetry-small.yaml) keeps the 20-way fanout,
   30 topics and 1,000 msg/s rate, but uses 10 gateways and 10 pods per application, with the low-memory
   configuration.
@@ -222,6 +226,7 @@ workloads:
       skipMessages: []         # not set in the base file: the messages of each topic each late application skips
       unloadBeforeJoin: false  # not set in the base file: unload the topics before the late applications join
       resetToMillis: []        # not set in the base file: the publish time each late application resets to, in ms
+      ackDelayMillis: 0        # not set in the base file: how long a pod takes to acknowledge a message
     behaviors:
       podRestarts:             # each application restarts this fraction of its pods every intervalSeconds
         intervalSeconds: 0
@@ -230,7 +235,17 @@ workloads:
         intervalSeconds: 0     # every intervalSeconds, for pauseMillis
         fraction: 0.0
         pauseMillis: 0
+      topicUnloads:            # not set in the base file: the launcher unloads this fraction of the topics
+        intervalSeconds: 0     # every intervalSeconds, one at a time
+        fraction: 0.0
 ```
+
+`behaviors.topicUnloads` has the launcher unload a random `fraction` of the topics, at least one, every
+`intervalSeconds`, one at a time, as a rolling restart of the brokers would hand them over: each topic closes,
+disconnecting its producers and consumers, and loads again. The report's Topic unloads section shows the time of each
+unload, which the run directory's `topic-unloads.csv` records. `applications.ackDelayMillis` has every
+pod acknowledge a message that long after receiving it, on a thread of its own, so that the consumers hold pending
+acknowledgments, as an application that acknowledges once it has stored a message does.
 
 `behaviors.podPauses` stalls pods as a garbage collection, a slow downstream or a debugger would: every
 `intervalSeconds`, each application pauses a random `fraction` of its pods' consumers for `pauseMillis`, shorter than
