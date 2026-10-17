@@ -1,0 +1,54 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# Key_Shared during a rolling restart of the brokers: five applications consume the telemetry of 100,000 devices, with
+# string keys, from four topics through 50 pods each, and each pod acknowledges a message two seconds after receiving
+# it, as an application that acknowledges once it has stored a message, so that every consumer holds hundreds of
+# pending acknowledgments. Every 15 seconds the launcher unloads one of the topics, as a broker that restarts would
+# hand it over: the broker closes the topic, disconnecting its 250 consumers, and loads it again, and the consumers
+# reconnect and receive their unacknowledged messages again. The gateways don't batch, so that each message is an entry
+# of its own. It measures the unloads' time and the redelivery and catch-up that follows each.
+extends: [iot-telemetry-base.yaml, configs/iot-telemetry-high-mem.yaml]
+workloads:
+  iotTelemetry:
+    warmup:
+      seconds: 20
+    measurement:
+      seconds: 180
+    timeoutSeconds: 420
+    rate: 20000
+    payload:
+      size: 128
+    devices:
+      count: 100000
+      keyType: string
+    gateways:
+      count: 20
+      producer:
+        precreate: true
+        batchingEnabled: false
+    topics:
+      count: 4
+      prefix: persistent://public/default/iot-unloads-
+    applications:
+      count: 5
+      podsPerApplication: 50
+      subscriptionPrefix: unloads-application-
+      ackDelayMillis: 2000
+    behaviors:
+      topicUnloads:
+        intervalSeconds: 15
+        fraction: 0.25

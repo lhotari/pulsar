@@ -518,6 +518,7 @@ public class PerformanceLauncher implements Callable<Integer> {
         MetricsCollection metricsCollection = null;
         NetworkImpairments network = null;
         JoinPreparation joinPreparation = null;
+        TopicUnloads topicUnloads = null;
         Exception networkCleanupFailure = null;
         Instant gatewaysStarted = null;
         // When the seeks after the workloads ended, or 0 without them
@@ -624,6 +625,10 @@ public class PerformanceLauncher implements Callable<Integer> {
                 // It records the offload status when the late applications join, and at the run's end
                 joinPreparation = JoinPreparation.start(cluster.getHttpServiceUrl(), iotScenario,
                         offloadSettings != null, runOutput, coordinationDirectory, runId, PerformanceLauncher::status);
+            }
+            if (iotScenario.behaviors().topicUnloads().enabled()) {
+                topicUnloads = TopicUnloads.start(cluster.getHttpServiceUrl(), iotScenario.topicNames(),
+                        iotScenario.behaviors().topicUnloads(), runOutput, PerformanceLauncher::status);
             }
             TopicStatsSampler backlogSource = topicStatsSampler;
             progress = new ProgressMonitor(loader.mapper(), System.out,
@@ -772,6 +777,12 @@ public class PerformanceLauncher implements Callable<Integer> {
             TopicStatsSampler remoteTopicStatsToClose = remoteTopicStatsSampler;
             Thread gateToStop = measurementGate;
             JoinPreparation joinPreparationToClose = joinPreparation;
+            TopicUnloads topicUnloadsToClose = topicUnloads;
+            shutDown("stopping the topic unloads", () -> {
+                if (topicUnloadsToClose != null) {
+                    topicUnloadsToClose.close();
+                }
+            });
             shutDown("stopping the join preparation", () -> {
                 if (joinPreparationToClose != null) {
                     joinPreparationToClose.close();

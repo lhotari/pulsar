@@ -90,6 +90,12 @@ public final class RunReport {
      * The launcher's seeks to random publish times after the workloads ({@code offload.seeks}), and how long each took.
      */
     public static final String SEEKS_FILE = "seeks.csv";
+    /**
+     * The launcher's periodic topic unloads during the workload ({@code behaviors.topicUnloads}): each unload's start,
+     * topic, time in microseconds and error, empty when it succeeded.
+     */
+    public static final String TOPIC_UNLOADS_FILE = "topic-unloads.csv";
+    public static final String TOPIC_UNLOADS_HEADER = "epochMillis,topic,durationMicros,error";
     public static final String SEEKS_HEADER =
             "seek,startEpochMillis,endEpochMillis,topic,publishTime,resetMicros,peekMicros,position";
     /**
@@ -392,6 +398,7 @@ public final class RunReport {
         appendOffloadStatus(report, runDirectory.resolve(OFFLOAD_STATUS_FILE), storageRequests);
         appendJoinPreparation(report, runDirectory.resolve(JOIN_PREPARATION_FILE), storageRequests);
         appendSeeks(report, runDirectory.resolve(SEEKS_FILE), storageRequests);
+        appendTopicUnloads(report, runDirectory.resolve(TOPIC_UNLOADS_FILE));
         appendLatency(report, runDirectory, run, consumerHistograms, measurementStart);
         appendRemoteApplications(report, runDirectory, run.workload(), mapper);
         if (samples != null) {
@@ -975,6 +982,38 @@ public final class RunReport {
             report.append(String.format(Locale.ROOT, "%nDuring the seeks, the storage served %,d reads of objects,"
                     + " %.2f per seek, %,.1f MB in ranged reads.%n", reads, (double) reads / resets.size(),
                     storageRequests.rangeBytes(first, last) / (1024.0 * 1024.0)));
+        }
+    }
+
+    static void appendTopicUnloads(StringBuilder report, Path unloads) throws IOException {
+        if (!Files.isRegularFile(unloads)) {
+            return;
+        }
+        List<String> lines = Files.readAllLines(unloads);
+        List<Long> durations = new ArrayList<>();
+        int failed = 0;
+        for (String line : lines.subList(Math.min(1, lines.size()), lines.size())) {
+            String[] fields = line.split(",", -1);
+            if (fields.length != 4) {
+                continue;
+            }
+            if (fields[3].isEmpty()) {
+                durations.add(Long.parseLong(fields[2]));
+            } else {
+                failed++;
+            }
+        }
+        if (durations.isEmpty() && failed == 0) {
+            return;
+        }
+        report.append(String.format(Locale.ROOT, "%n## Topic unloads%n%nThe launcher unloaded topics periodically"
+                + " during the workload, as a rolling restart of the brokers would: the time of each unload, in which"
+                + " the broker closes the topic and disconnects its producers and consumers. %s`%s` has each one.%n%n"
+                + "| | Unloads | p50 | p90 | p99 | Max | Mean |%n|---|---:|---:|---:|---:|---:|---:|%n",
+                failed > 0 ? String.format(Locale.ROOT, "**%,d unload(s) failed.** ", failed) : "",
+                TOPIC_UNLOADS_FILE));
+        if (!durations.isEmpty()) {
+            appendLatencyRow(report, "Unload", durations);
         }
     }
 
