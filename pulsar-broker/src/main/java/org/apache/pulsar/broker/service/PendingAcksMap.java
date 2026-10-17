@@ -391,15 +391,26 @@ public class PendingAcksMap {
      * @return the remaining unacked count, or {@link #PENDING_ACK_NOT_FOUND} if not found
      */
     int removeAndGetRemainingUnacked(long ledgerId, long entryId) {
+        long removedEntry = removeAndGetPacked(ledgerId, entryId);
+        return PendingAckValues.isNotFound(removedEntry)
+                ? PENDING_ACK_NOT_FOUND : PendingAckValues.remainingUnacked(removedEntry);
+    }
+
+    /**
+     * Removes the pending ack and returns its remaining unacked count and sticky key hash packed into a long, which
+     * {@link #remainingUnacked(long)} and {@link #stickyKeyHash(long)} read, or a value for which
+     * {@link #isNotFound(long)} is true when it isn't pending.
+     */
+    long removeAndGetPacked(long ledgerId, long entryId) {
         try {
             writeLock.lock();
             PendingAcksLedgerMap ledgerMap = pendingAcks.get(ledgerId);
             if (ledgerMap == null) {
-                return PENDING_ACK_NOT_FOUND;
+                return PendingAckValues.PACKED_NOT_FOUND;
             }
             long removedEntry = ledgerMap.remove(entryId);
             if (PendingAckValues.isNotFound(removedEntry)) {
-                return PENDING_ACK_NOT_FOUND;
+                return PendingAckValues.PACKED_NOT_FOUND;
             }
             size--;
             handleRemovePendingAck(ledgerId, entryId, PendingAckValues.stickyKeyHash(removedEntry));
@@ -407,10 +418,22 @@ public class PendingAcksMap {
                 pendingAcks.remove(ledgerId);
                 recycleEmptyLedgerMap(ledgerMap);
             }
-            return PendingAckValues.remainingUnacked(removedEntry);
+            return removedEntry;
         } finally {
             writeLock.unlock();
         }
+    }
+
+    static boolean isNotFound(long packedPendingAck) {
+        return PendingAckValues.isNotFound(packedPendingAck);
+    }
+
+    static int remainingUnacked(long packedPendingAck) {
+        return PendingAckValues.remainingUnacked(packedPendingAck);
+    }
+
+    static int stickyKeyHash(long packedPendingAck) {
+        return PendingAckValues.stickyKeyHash(packedPendingAck);
     }
 
     /**

@@ -28,6 +28,7 @@ import io.github.merlimat.slog.Logger;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.Promise;
 import io.opentelemetry.api.common.Attributes;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectIntPair;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -1482,10 +1483,12 @@ public class Consumer {
         int blockedPermits;
         if (pendingAcks != null) {
             List<Position> pendingPositions = new ArrayList<>((int) pendingAcks.size());
+            IntArrayList stickyKeyHashes = new IntArrayList((int) pendingAcks.size());
             MutableInt totalRedeliveryMessages = new MutableInt(0);
             pendingAcks.forEachAndClear((ledgerId, entryId, remainingUnacked, stickyKeyHash) -> {
                 totalRedeliveryMessages.add(remainingUnacked);
                 pendingPositions.add(PositionFactory.create(ledgerId, entryId));
+                stickyKeyHashes.add(stickyKeyHash);
             });
 
             if (totalRedeliveryMessages.intValue() > 0) {
@@ -1496,7 +1499,7 @@ public class Consumer {
             msgRedeliver.recordMultipleEvents(totalRedeliveryMessages.intValue(), totalRedeliveryMessages.intValue());
             msgRedeliverCounter.add(totalRedeliveryMessages.intValue());
 
-            subscription.redeliverUnacknowledgedMessages(this, pendingPositions);
+            subscription.redeliverUnacknowledgedMessages(this, pendingPositions, stickyKeyHashes);
         } else {
             clearUnackedMessages();
             blockedPermits = unblockAndTransferBlockedPermits();
@@ -1509,13 +1512,14 @@ public class Consumer {
     public void redeliverUnacknowledgedMessages(List<MessageIdData> messageIds) {
         int totalRedeliveryMessages = 0;
         List<Position> pendingPositions = new ArrayList<>();
+        // each position's sticky key hash, so that a Key_Shared dispatcher keeps its key's order
+        IntArrayList stickyKeyHashes = new IntArrayList();
         for (MessageIdData msg : messageIds) {
-            Position position = PositionFactory.create(msg.getLedgerId(), msg.getEntryId());
-            int remainingUnacked = pendingAcks.removeAndGetRemainingUnacked(
-                    position.getLedgerId(), position.getEntryId());
-            if (remainingUnacked != PENDING_ACK_NOT_FOUND) {
-                totalRedeliveryMessages += remainingUnacked;
-                pendingPositions.add(position);
+            long pendingAck = pendingAcks.removeAndGetPacked(msg.getLedgerId(), msg.getEntryId());
+            if (!PendingAcksMap.isNotFound(pendingAck)) {
+                totalRedeliveryMessages += PendingAcksMap.remainingUnacked(pendingAck);
+                pendingPositions.add(PositionFactory.create(msg.getLedgerId(), msg.getEntryId()));
+                stickyKeyHashes.add(PendingAcksMap.stickyKeyHash(pendingAck));
             }
         }
 
@@ -1523,7 +1527,7 @@ public class Consumer {
             // A rejected transactional ACK can leave a zero count with unacked batch indexes.
             // Preserve replay without releasing backpressure or deferred permits.
             if (!pendingPositions.isEmpty()) {
-                subscription.redeliverUnacknowledgedMessages(this, pendingPositions);
+                subscription.redeliverUnacknowledgedMessages(this, pendingPositions, stickyKeyHashes);
             }
             return;
         }
@@ -1536,7 +1540,7 @@ public class Consumer {
                 .attr("size", pendingPositions.size())
                 .log("Consumer received msg-redelivery");
 
-        subscription.redeliverUnacknowledgedMessages(this, pendingPositions);
+        subscription.redeliverUnacknowledgedMessages(this, pendingPositions, stickyKeyHashes);
         msgRedeliver.recordMultipleEvents(totalRedeliveryMessages, totalRedeliveryMessages);
         msgRedeliverCounter.add(totalRedeliveryMessages);
 
