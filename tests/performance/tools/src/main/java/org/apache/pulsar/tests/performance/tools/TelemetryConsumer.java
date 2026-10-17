@@ -20,7 +20,6 @@ package org.apache.pulsar.tests.performance.tools;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -536,9 +535,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                             listenersInFlight.incrementAndGet();
                             try {
                                 TelemetryMessage.Decoded decoded = TelemetryMessage.decode(message.getData());
-                                byte[] key = message.getKeyBytes();
-                                if (key == null || key.length != Long.BYTES
-                                        || ByteBuffer.wrap(key).getLong() != decoded.deviceId()) {
+                                if (!TelemetryMessage.hasKey(message, decoded.deviceId(), scenario.stringKeys())) {
                                     throw new IllegalArgumentException(
                                             "Telemetry key does not match payload device ID");
                                 }

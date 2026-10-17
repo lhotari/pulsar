@@ -234,6 +234,27 @@ public class IotScenarioTest {
     }
 
     @Test
+    public void choosesTheKeyType() {
+        assertThat(withDevices(new IotScenario.Devices(1_000)).stringKeys()).isFalse();
+        assertThat(withDevices(new IotScenario.Devices(1_000, "bytes")).stringKeys()).isFalse();
+        assertThat(withDevices(new IotScenario.Devices(1_000, "string")).stringKeys()).isTrue();
+        assertThatThrownBy(() -> withDevices(new IotScenario.Devices(1_000, "long")))
+                .hasMessageContaining("devices.keyType must be one of [bytes, string], not long");
+        // a scenario file without the setting keeps binary keys
+        IotScenario.Devices fromYaml = new YamlScenarioLoader().mapper().convertValue(Map.of("count", 1_000),
+                IotScenario.Devices.class);
+        assertThat(withDevices(fromYaml).stringKeys()).isFalse();
+    }
+
+    private static IotScenario withDevices(IotScenario.Devices devices) {
+        return new IotScenario("pulsar://localhost:6650", new IotScenario.Warmup(0, 0, 1, 0),
+                new IotScenario.Measurement(120, 1_000), 0, new IotScenario.Payload(64), devices,
+                new IotScenario.Gateways(10, new IotScenario.Producer(2, 2, 100, true, true, null), null),
+                new IotScenario.Topics(2, "persistent://public/default/iot-"),
+                new IotScenario.Applications(1, 2, "app-", new IotScenario.Client(2, 2), null), null, 300);
+    }
+
+    @Test
     public void rejectsInvalidJoinSettings() {
         assertThatThrownBy(() -> scenario(new IotScenario.Applications(3, 2, "app-", new IotScenario.Client(2, 2),
                 null, List.of(0, 20), null))).hasMessageContaining("a value for each of the 3 applications");

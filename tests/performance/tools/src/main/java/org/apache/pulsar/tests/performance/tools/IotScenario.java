@@ -60,8 +60,29 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
     public record Payload(int size) {
     }
 
-    /** The devices whose telemetry the gateways publish, each with its own key and sequence. */
-    public record Devices(int count) {
+    /**
+     * The devices whose telemetry the gateways publish, each with its own key and sequence.
+     *
+     * @param keyType the messages' key: {@code bytes}, the default, the device's ID as 8 big-endian bytes, which the
+     *                broker receives base64-encoded, or {@code string}, {@code device-<ID>} as a plain string key,
+     *                which Key_Shared hashes as a string
+     */
+    public record Devices(int count, String keyType) {
+        /** The {@code keyType} of binary keys, the default. */
+        public static final String BYTES_KEYS = "bytes";
+        /** The {@code keyType} of string keys. */
+        public static final String STRING_KEYS = "string";
+        static final List<String> KEY_TYPES = List.of(BYTES_KEYS, STRING_KEYS);
+
+        public Devices {
+            if (keyType == null) {
+                keyType = BYTES_KEYS;
+            }
+        }
+
+        public Devices(int count) {
+            this(count, null);
+        }
     }
 
     /**
@@ -263,6 +284,8 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                         && applications.podsPerApplication() >= 1,
                 "devices.count, gateways.count, topics.count, applications.count and "
                         + "applications.podsPerApplication must be at least 1");
+        require(Devices.KEY_TYPES.contains(devices.keyType()),
+                "devices.keyType must be one of " + Devices.KEY_TYPES + ", not " + devices.keyType());
         require(producer.ioThreads() >= 1 && producer.listenerThreads() >= 1 && client.ioThreads() >= 1
                         && client.listenerThreads() >= 1,
                 "The gateways' and the applications' ioThreads and listenerThreads must be at least 1");
@@ -381,6 +404,11 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
 
     public int deviceCount() {
         return devices.count();
+    }
+
+    /** Whether the gateways key the messages with strings rather than with bytes. */
+    public boolean stringKeys() {
+        return Devices.STRING_KEYS.equals(devices.keyType());
     }
 
     public int gatewayCount() {
