@@ -769,6 +769,19 @@ public class RunReportTest {
     }
 
     @Test
+    public void reportsTheTopicUnloads() throws IOException {
+        Path unloads = run.resolve(RunReport.TOPIC_UNLOADS_FILE);
+        Files.writeString(unloads, RunReport.TOPIC_UNLOADS_HEADER + "\n1000,t-0,12000,\n2000,t-1,30000,\n"
+                + "3000,t-2,5000,timed out\n");
+        StringBuilder report = new StringBuilder();
+
+        RunReport.appendTopicUnloads(report, unloads);
+
+        assertThat(report.toString()).contains("## Topic unloads").contains("**1 unload(s) failed.**")
+                .contains("| Unload | 2 | 12.0 ms | 30.0 ms | 30.0 ms | 30.0 ms | 21.0 ms |");
+    }
+
+    @Test
     public void readsTheReplayQueuesWhenSampled() throws IOException {
         Files.writeString(run.resolve(RunReport.TOPIC_STATS_FILE), RunReport.TOPIC_STATS_HEADER + "\n"
                 + "1000,t-0,a,0,0,0,5\n1000,t-1,a,0,0,0,7\n2000,t-0,a,0,10,10,0\n2000,t-1,a,0,10,10,1\n");
