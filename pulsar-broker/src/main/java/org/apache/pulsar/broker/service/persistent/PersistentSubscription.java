@@ -24,6 +24,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.MoreObjects;
 import io.github.merlimat.slog.Logger;
 import io.netty.buffer.ByteBuf;
+import it.unimi.dsi.fastutil.ints.IntList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -1648,6 +1649,15 @@ public class PersistentSubscription extends AbstractSubscription {
         Dispatcher dispatcher = getDispatcher();
         if (dispatcher != null) {
             dispatcher.redeliverUnacknowledgedMessages(consumer, positions);
+        }
+    }
+
+    @Override
+    public void redeliverUnacknowledgedMessages(Consumer consumer, List<Position> positions,
+                                                IntList stickyKeyHashes) {
+        Dispatcher dispatcher = getDispatcher();
+        if (dispatcher != null) {
+            dispatcher.redeliverUnacknowledgedMessages(consumer, positions, stickyKeyHashes);
         }
     }
 

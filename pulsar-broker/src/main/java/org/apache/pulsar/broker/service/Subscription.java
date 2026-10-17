@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.broker.service;
 
+import it.unimi.dsi.fastutil.ints.IntList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -106,6 +107,15 @@ public interface Subscription extends MessageExpirer {
     void redeliverUnacknowledgedMessages(Consumer consumer, long consumerEpoch);
 
     void redeliverUnacknowledgedMessages(Consumer consumer, List<Position> positions);
+
+    /**
+     * Redelivers the positions with the sticky key hash of each, {@code STICKY_KEY_HASH_NOT_SET} when unknown, so
+     * that a Key_Shared dispatcher keeps their keys' order. Without an override, the hashes are ignored.
+     */
+    default void redeliverUnacknowledgedMessages(Consumer consumer, List<Position> positions,
+                                                 IntList stickyKeyHashes) {
+        redeliverUnacknowledgedMessages(consumer, positions);
+    }
 
     void markTopicWithBatchMessagePublished();
 

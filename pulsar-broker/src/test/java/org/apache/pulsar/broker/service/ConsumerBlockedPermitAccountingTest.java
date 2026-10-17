@@ -166,7 +166,7 @@ public class ConsumerBlockedPermitAccountingTest {
                 assertThat(readRemovalBalanceFromAnotherThread(consumer)).isEqualTo(dispatcherFlowPermits.get());
                 assertThat(consumer.getAvailablePermitsForDispatcherRemoval()).isEqualTo(dispatcherFlowPermits.get());
                 return null;
-            }).when(subscription).redeliverUnacknowledgedMessages(any(), any(List.class));
+            }).when(subscription).redeliverUnacknowledgedMessages(any(), any(List.class), any());
         }
 
         consumer.pauseAt(PausePoint.BLOCKED_FLOW);
