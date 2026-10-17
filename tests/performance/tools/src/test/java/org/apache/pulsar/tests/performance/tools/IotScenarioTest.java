@@ -205,6 +205,17 @@ public class IotScenarioTest {
     }
 
     @Test
+    public void validatesTheAckDelay() {
+        assertThat(scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null))
+                .applications().ackDelayMillis()).isZero();
+        assertThat(scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null, null,
+                null, null, false, null, null, 500)).applications().ackDelayMillis()).isEqualTo(500);
+        assertThatThrownBy(() -> scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
+                null, null, null, null, false, null, null, -1)))
+                .hasMessageContaining("applications.ackDelayMillis must not be negative");
+    }
+
+    @Test
     public void choosesTheSubscriptionType() {
         IotScenario keyShared = scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
                 null));
@@ -244,10 +255,16 @@ public class IotScenarioTest {
         assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(null,
                 new IotScenario.PodPauses(15, 1.5, 5000))))
                 .hasMessageContaining("fraction must be from 0 to 1");
+        assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(null, null,
+                new IotScenario.TopicUnloads(10, 2))))
+                .hasMessageContaining("behaviors.topicUnloads.intervalSeconds must not be negative");
+        assertThat(withBehaviors(new IotScenario.Behaviors(null, null, new IotScenario.TopicUnloads(10, 0.25)))
+                .behaviors().topicUnloads().enabled()).isTrue();
         // a scenario file with restarts only has no pauses
         IotScenario.Behaviors fromYaml = new YamlScenarioLoader().mapper().convertValue(
                 Map.of("podRestarts", Map.of("intervalSeconds", 30, "fraction", 0.1)), IotScenario.Behaviors.class);
         assertThat(withBehaviors(fromYaml).behaviors().podPauses().enabled()).isFalse();
+        assertThat(withBehaviors(fromYaml).behaviors().topicUnloads().enabled()).isFalse();
     }
 
     private static IotScenario withBehaviors(IotScenario.Behaviors behaviors) {

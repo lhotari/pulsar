@@ -160,11 +160,14 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
      * @param subscriptionType the subscriptions' type: {@code Key_Shared}, the default, {@code Shared} or
      *                         {@code Failover}. A Shared subscription doesn't keep a device's messages in order, so
      *                         the applications check it for lost and duplicated messages only
+     * @param ackDelayMillis how long a pod takes to acknowledge a message after receiving it, as an application that
+     *                       acknowledges once it has processed or stored a message; 0, the default, acknowledges at
+     *                       once. The broker holds the messages not acknowledged yet as the consumer's pending acks
      */
     public record Applications(int count, int podsPerApplication, String subscriptionPrefix, Client client,
                                Map<String, String> env, List<Integer> joinSeconds, Integer caughtUpLatencyMillis,
                                List<Long> skipMessages, boolean unloadBeforeJoin, List<Long> resetToMillis,
-                               String subscriptionType) {
+                               String subscriptionType, Integer ackDelayMillis) {
         /** The default of {@code caughtUpLatencyMillis}. */
         public static final int DEFAULT_CAUGHT_UP_LATENCY_MILLIS = 1000;
         /** The subscription types that the applications support. */
@@ -184,6 +187,17 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
             if (subscriptionType == null) {
                 subscriptionType = SubscriptionType.Key_Shared.name();
             }
+            if (ackDelayMillis == null) {
+                ackDelayMillis = 0;
+            }
+        }
+
+        public Applications(int count, int podsPerApplication, String subscriptionPrefix, Client client,
+                            Map<String, String> env, List<Integer> joinSeconds, Integer caughtUpLatencyMillis,
+                            List<Long> skipMessages, boolean unloadBeforeJoin, List<Long> resetToMillis,
+                            String subscriptionType) {
+            this(count, podsPerApplication, subscriptionPrefix, client, env, joinSeconds, caughtUpLatencyMillis,
+                    skipMessages, unloadBeforeJoin, resetToMillis, subscriptionType, null);
         }
 
         public Applications(int count, int podsPerApplication, String subscriptionPrefix, Client client,
@@ -217,16 +231,21 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
     }
 
     /** What happens to the simulated system during the run, beyond the traffic. */
-    public record Behaviors(PodRestarts podRestarts, PodPauses podPauses) {
-        static final Behaviors NONE = new Behaviors(PodRestarts.NONE, PodPauses.NONE);
+    public record Behaviors(PodRestarts podRestarts, PodPauses podPauses, TopicUnloads topicUnloads) {
+        static final Behaviors NONE = new Behaviors(PodRestarts.NONE, PodPauses.NONE, TopicUnloads.NONE);
 
         public Behaviors {
             podRestarts = podRestarts != null ? podRestarts : PodRestarts.NONE;
             podPauses = podPauses != null ? podPauses : PodPauses.NONE;
+            topicUnloads = topicUnloads != null ? topicUnloads : TopicUnloads.NONE;
         }
 
         public Behaviors(PodRestarts podRestarts) {
-            this(podRestarts, null);
+            this(podRestarts, null, null);
+        }
+
+        public Behaviors(PodRestarts podRestarts, PodPauses podPauses) {
+            this(podRestarts, podPauses, null);
         }
     }
 
@@ -240,6 +259,21 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
         static final PodRestarts NONE = new PodRestarts(0, 0);
 
         boolean enabled() {
+            return intervalSeconds > 0 && fraction > 0;
+        }
+    }
+
+    /**
+     * The launcher unloads some of the topics periodically while the workload runs, as a rolling restart of the
+     * brokers moves them between brokers: the topic closes, its consumers and producers reconnect and it loads again.
+     *
+     * @param intervalSeconds how often the launcher unloads topics; 0 never
+     * @param fraction the fraction of the topics that each round unloads, one at a time, at least one
+     */
+    public record TopicUnloads(int intervalSeconds, double fraction) {
+        public static final TopicUnloads NONE = new TopicUnloads(0, 0);
+
+        public boolean enabled() {
             return intervalSeconds > 0 && fraction > 0;
         }
     }
@@ -381,6 +415,7 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                         && applications.resetToMillis().stream().allMatch(resetTo -> resetTo == null || resetTo == -1),
                 "applications.skipMessages and applications.resetToMillis need a subscription type that keeps each"
                         + " device's order, not Shared");
+        require(applications.ackDelayMillis() >= 0, "applications.ackDelayMillis must not be negative");
         require(producer.precreateConcurrency() >= 1, "gateways.producer.precreateConcurrency must be at least 1");
         require(producer.batchingMaxPublishDelayMillis() == null || producer.batchingMaxPublishDelayMillis() >= 1,
                 "gateways.producer.batchingMaxPublishDelayMillis must be at least 1");
@@ -402,6 +437,9 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                         && podPauses.pauseMillis() >= 0,
                 "behaviors.podPauses.intervalSeconds and pauseMillis must not be negative, and fraction must be from 0"
                         + " to 1");
+        TopicUnloads topicUnloads = behaviors.topicUnloads();
+        require(topicUnloads.intervalSeconds() >= 0 && topicUnloads.fraction() >= 0 && topicUnloads.fraction() <= 1,
+                "behaviors.topicUnloads.intervalSeconds must not be negative, and fraction must be from 0 to 1");
         require(!podPauses.enabled()
                         || podPauses.pauseMillis() < TimeUnit.SECONDS.toMillis(podPauses.intervalSeconds()),
                 "behaviors.podPauses.pauseMillis must be shorter than intervalSeconds");
