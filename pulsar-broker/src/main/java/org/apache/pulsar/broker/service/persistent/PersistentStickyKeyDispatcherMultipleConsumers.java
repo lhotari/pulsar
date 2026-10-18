@@ -431,7 +431,12 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             return false;
         }
 
-        if (!allowOutOfOrderDelivery) {
+        // A position added to the replay queue with a hash during the read, such as a removed consumer's pending entry
+        // or a negatively acknowledged message, blocks its hash: a normal read's entries of the hash wait in the
+        // replay queue (canDispatchEntry), and a replay read's entries wait for it (olderReplayAdditionPending). A
+        // position without a hash, such as a transaction's aborted acknowledgment, can't block its hash, so only
+        // then is the whole read set aside when an older position was added during it.
+        if (!allowOutOfOrderDelivery && redeliveryMessages.hasPositionsWithoutHash()) {
             // A corner case that we have to retry a readMoreEntries in order to preserver order delivery.
             // This may happen when consumer closed. See issue #12885 for details.
             Optional<Position> firstReplayPosition = getFirstPositionInReplay();

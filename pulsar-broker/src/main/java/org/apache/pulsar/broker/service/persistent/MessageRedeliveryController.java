@@ -82,6 +82,8 @@ public class MessageRedeliveryController {
     private final Int2IntOpenHashMap hashRefCounts = new Int2IntOpenHashMap();
     // whether any position has had a hash: a Shared dispatcher's positions never have one
     private boolean hasHashes;
+    // the queued positions without a hash
+    private int positionsWithoutHashCount;
 
     // The index by owner, with an owner resolver: stale after the owners changed, and rebuilt by the next selection
     private IntFunction<Object> ownerResolver;
@@ -188,6 +190,7 @@ public class MessageRedeliveryController {
         int entry = (int) entryId;
         if (ledger.entries.checkedAdd(entry)) {
             size++;
+            positionsWithoutHashCount++;
             if (indexed()) {
                 positionsWithoutHash.add(ledgerId, entry);
             }
@@ -219,6 +222,8 @@ public class MessageRedeliveryController {
             unindex(ledgerId, entry, previousHash);
             if (previousHash != STICKY_KEY_HASH_NOT_SET) {
                 decrementRefCount(previousHash);
+            } else {
+                positionsWithoutHashCount--;
             }
         }
         ledger.hashes.put(entry, hash);
@@ -292,6 +297,8 @@ public class MessageRedeliveryController {
         unindex(ledgerId, entry, hash);
         if (hash != STICKY_KEY_HASH_NOT_SET) {
             decrementRefCount(hash);
+        } else {
+            positionsWithoutHashCount--;
         }
         if (ledger.entries.isEmpty()) {
             ledgers.remove(ledgerId);
@@ -343,6 +350,8 @@ public class MessageRedeliveryController {
                 int hash = ledger.hashes.remove(entries.next());
                 if (hash != STICKY_KEY_HASH_NOT_SET) {
                     decrementRefCount(hash);
+                } else {
+                    positionsWithoutHashCount--;
                 }
                 removed++;
             }
@@ -374,6 +383,7 @@ public class MessageRedeliveryController {
     public void clear() {
         ledgers.clear();
         size = 0;
+        positionsWithoutHashCount = 0;
         clearIndex();
         trimIfEmpty();
     }
@@ -388,6 +398,11 @@ public class MessageRedeliveryController {
             result.append(ledger.getLongKey()).append('=').append(ledger.getValue().entries);
         }
         return result.append('}').toString();
+    }
+
+    /** Whether a queued position has no hash, so that it can't hold back the later messages of its key. */
+    public boolean hasPositionsWithoutHash() {
+        return positionsWithoutHashCount > 0;
     }
 
     public boolean containsStickyKeyHash(int stickyKeyHash) {

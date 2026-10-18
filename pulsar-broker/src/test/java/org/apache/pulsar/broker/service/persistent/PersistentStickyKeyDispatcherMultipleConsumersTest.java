@@ -1060,6 +1060,59 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
      * already holds an even older position of another hash. The in-flight read's newer entry must not be dispatched
      * to the hash's new owner before the older one.
      */
+    @Test(timeOut = 10000)
+    public void testNormalReadKeepsTheHashesThatAnOlderAdditionDoesNotBlock() {
+        List<Position> dispatched = new ArrayList<>();
+        mockSendMessages(consumerMock, entries -> entries.forEach(entry -> dispatched.add(entry.getPosition())));
+        persistentDispatcher.addConsumer(consumerMock).join();
+        StickyKeyConsumerSelector selector = persistentDispatcher.getSelector();
+        // two keys of the consumer with different hashes
+        String blockedKey = "key0";
+        String otherKey = null;
+        for (int i = 1; otherKey == null; i++) {
+            if (selector.makeStickyKeyHash(("key" + i).getBytes(UTF_8))
+                    != selector.makeStickyKeyHash(blockedKey.getBytes(UTF_8))) {
+                otherKey = "key" + i;
+            }
+        }
+        int blockedHash = selector.makeStickyKeyHash(blockedKey.getBytes(UTF_8));
+        // the replay queue's first position when the read started, and an older one of the blocked key added while
+        // the read was in flight, as a removed consumer's pending entry is
+        persistentDispatcher.addMessageToReplay(1, 10, selector.makeStickyKeyHash(otherKey.getBytes(UTF_8)));
+        persistentDispatcher.minReplayedPosition = PositionFactory.create(1, 10);
+        persistentDispatcher.addMessageToReplay(1, 5, blockedHash);
+
+        persistentDispatcher.trySendMessagesToConsumers(PersistentDispatcherMultipleConsumers.ReadType.Normal,
+                List.of(createEntry(1, 20, "blocked", 20, blockedKey), createEntry(1, 21, "other", 21, otherKey)));
+
+        // only the blocked key's entry waits for the older one; the other key's entry waits for 1:10, which is
+        // already in the replay queue
+        assertThat(dispatched).isEmpty();
+        assertThat(persistentDispatcher.getMessagesToReplayNow(10, Long.MAX_VALUE)).contains(
+                PositionFactory.create(1, 5), PositionFactory.create(1, 10));
+        assertThat(persistentDispatcher.redeliveryMessages.contains(1, 20)).isTrue();
+        assertThat(persistentDispatcher.redeliveryMessages.contains(1, 21)).isTrue();
+
+        // an entry of a key without anything queued is dispatched although an older position was added
+        String freeKey = null;
+        for (int i = 1; freeKey == null; i++) {
+            int hash = selector.makeStickyKeyHash(("free" + i).getBytes(UTF_8));
+            if (!persistentDispatcher.redeliveryMessages.containsStickyKeyHash(hash)) {
+                freeKey = "free" + i;
+            }
+        }
+        persistentDispatcher.trySendMessagesToConsumers(PersistentDispatcherMultipleConsumers.ReadType.Normal,
+                List.of(createEntry(1, 22, "free", 22, freeKey)));
+        assertThat(dispatched).containsExactly(PositionFactory.create(1, 22));
+
+        // a position without a hash added during the read can't block its key: the whole read waits
+        persistentDispatcher.addMessageToReplay(1, 6);
+        persistentDispatcher.trySendMessagesToConsumers(PersistentDispatcherMultipleConsumers.ReadType.Normal,
+                List.of(createEntry(1, 23, "free-again", 23, freeKey)));
+        assertThat(dispatched).containsExactly(PositionFactory.create(1, 22));
+        assertThat(persistentDispatcher.redeliveryMessages.contains(1, 23)).isTrue();
+    }
+
     @Test(timeOut = 30000)
     public void testInFlightReplayReadDoesNotOvertakeRemovedConsumersPendingEntry() throws Exception {
         persistentDispatcher.close();
