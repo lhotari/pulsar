@@ -1975,6 +1975,36 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
     }
 
     @Test
+    public void testCompactionThresholdRatioDoesNotDelayCompactionForever() throws Exception {
+        CompletableFuture<Long> compactPromise = new CompletableFuture<>();
+        Compactor compactor = ((PulsarCompactionServiceFactory) pulsarTestContext.getPulsarService()
+                .getCompactionServiceFactory()).getCompactor();
+        doReturn(compactPromise).when(compactor).compact(anyString());
+        pulsarTestContext.getPulsarService().getConfiguration().setBrokerServiceCompactionThresholdRatio(0.5);
+        // every check is ten checks after the topic's load
+        pulsarTestContext.getPulsarService().getConfiguration().setBrokerServiceCompactionMonitorIntervalInSeconds(0);
+
+        Policies policies = new Policies();
+        policies.compaction_threshold = 1L;
+        pulsarTestContext.getPulsarResources().getNamespaceResources()
+                .createPolicies(TopicName.get(successTopicName).getNamespaceObject(), policies);
+
+        PersistentTopic topic = Mockito.spy(new PersistentTopic(successTopicName, ledgerMock, brokerService));
+        topic.initialize().get();
+        doAnswer(invocationOnMock -> {
+            topic.triggerCompaction();
+            return CompletableFuture.completedFuture(null);
+        }).when(topic).triggerCompactionWithCheckHasMoreMessages();
+        doReturn(100L).when(topic).compactedLedgerSize();
+
+        // below the ratio's threshold of 50, but above the topic's threshold, as after a few tombstones
+        doReturn(10L).when(ledgerMock).getTotalSize();
+        doReturn(10L).when(ledgerMock).getEstimatedBacklogSize();
+        topic.checkCompaction();
+        verify(topic, times(1)).triggerCompactionWithCheckHasMoreMessages();
+    }
+
+    @Test
     public void testCompactionTriggeredAfterThresholdSecondInvocation() throws Exception {
         CompletableFuture<Long> compactPromise = new CompletableFuture<>();
         Compactor compactor = ((PulsarCompactionServiceFactory) pulsarTestContext.getPulsarService()

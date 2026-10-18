@@ -97,6 +97,7 @@ import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.mutable.MutableInt;
 import org.apache.pulsar.broker.PulsarServerException;
+import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.delayed.BucketDelayedDeliveryTrackerFactory;
 import org.apache.pulsar.broker.delayed.DelayedDeliveryTrackerFactory;
 import org.apache.pulsar.broker.loadbalance.extensions.ExtensibleLoadManagerImpl;
@@ -2556,8 +2557,12 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         try {
             long compactionThreshold = topicPolicies.getCompactionThreshold().get();
             if (isCompactionEnabled() && currentCompaction.isDone()) {
-                double ratio = brokerService.pulsar().getConfiguration().getBrokerServiceCompactionThresholdRatio();
-                if (ratio > 0) {
+                ServiceConfiguration config = brokerService.pulsar().getConfiguration();
+                double ratio = config.getBrokerServiceCompactionThresholdRatio();
+                // A topic whose new data passes the threshold is compacted at least every ten checks, so that a
+                // state that shrinks, as tombstones delete keys, is compacted too
+                if (ratio > 0 && System.nanoTime() - lastCompactionTriggerNanos < TimeUnit.SECONDS.toNanos(
+                        10L * config.getBrokerServiceCompactionMonitorIntervalInSeconds())) {
                     compactionThreshold = Math.max(compactionThreshold, (long) (ratio * compactedLedgerSize()));
                 }
 
@@ -2582,6 +2587,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                             .log("topic: backlogEstimate: is bigger than compactionThreshold:. Triggering "
                                     + "compaction");
 
+                    lastCompactionTriggerNanos = System.nanoTime();
                     triggerCompactionWithCheckHasMoreMessages();
 
                 }
@@ -2590,6 +2596,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             log.warn().exception(e).log("Error getting policies and skipping compaction check");
         }
     }
+
+    // When checkCompaction last triggered a compaction, or the topic was loaded
+    private volatile long lastCompactionTriggerNanos = System.nanoTime();
 
     // The size of the topic's compacted ledger once it's open, or 0
     @VisibleForTesting

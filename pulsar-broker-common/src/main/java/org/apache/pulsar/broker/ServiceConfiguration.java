@@ -3858,8 +3858,10 @@ public class ServiceConfiguration implements PulsarConfiguration {
             + " threshold policy. Each compaction reads and rewrites every key's latest message, so with a large"
             + " compacted state and a small threshold the broker compacts the whole state again for a little new"
             + " data. A ratio of 1.0 compacts when the new data is as large as the compacted state, which bounds"
-            + " the bytes written by compaction to about twice the bytes published. Using a value of 0 is"
-            + " disabling it."
+            + " the bytes written by compaction to about twice the bytes published. A topic whose new data passes"
+            + " the threshold without the ratio is still compacted at least every ten compaction checks, so that"
+            + " a shrinking state, as tombstones delete keys, is compacted too. It applies to the compaction"
+            + " services that keep a compacted ledger in the broker. Using a value of 0 is disabling it."
     )
     private double brokerServiceCompactionThresholdRatio = 0;
 
