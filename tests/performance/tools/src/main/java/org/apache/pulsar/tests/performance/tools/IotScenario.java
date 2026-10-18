@@ -180,16 +180,27 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
      * @param subscriptionType the subscriptions' type: {@code Key_Shared}, the default, {@code Shared} or
      *                         {@code Failover}. A Shared subscription doesn't keep a device's messages in order, so
      *                         the applications check it for lost and duplicated messages only
+     * @param mode how each pod reads the topics: {@code subscription}, the default, with a consumer of the
+     *             application's subscription, which receives every message; or {@code compactedReaders}, with a
+     *             reader of each topic that reads it compacted from the start, as a digital twin service rebuilds the
+     *             devices' latest state, which receives each device's latest message that compaction kept and then
+     *             every later one. A pod that reads compacted keeps each device's latest sequence, which must never
+     *             fall, and has its state when it has each device's last message
      */
     public record Applications(int count, int podsPerApplication, String subscriptionPrefix, Client client,
                                Map<String, String> env, List<Integer> joinSeconds, Integer caughtUpLatencyMillis,
                                List<Long> skipMessages, boolean unloadBeforeJoin, List<Long> resetToMillis,
-                               String subscriptionType) {
+                               String subscriptionType, String mode) {
         /** The default of {@code caughtUpLatencyMillis}. */
         public static final int DEFAULT_CAUGHT_UP_LATENCY_MILLIS = 1000;
         /** The subscription types that the applications support. */
         static final List<SubscriptionType> SUBSCRIPTION_TYPES =
                 List.of(SubscriptionType.Key_Shared, SubscriptionType.Shared, SubscriptionType.Failover);
+        /** The {@code mode} of pods with a consumer of the subscription, the default. */
+        public static final String SUBSCRIPTION_MODE = "subscription";
+        /** The {@code mode} of pods with a reader of each topic, which reads it compacted. */
+        public static final String COMPACTED_READERS_MODE = "compactedReaders";
+        static final List<String> MODES = List.of(SUBSCRIPTION_MODE, COMPACTED_READERS_MODE);
 
         public Applications {
             // kept with any nulls, which the scenario's validation rejects with its message
@@ -204,6 +215,22 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
             if (subscriptionType == null) {
                 subscriptionType = SubscriptionType.Key_Shared.name();
             }
+            if (mode == null) {
+                mode = SUBSCRIPTION_MODE;
+            }
+        }
+
+        public Applications(int count, int podsPerApplication, String subscriptionPrefix, Client client,
+                            Map<String, String> env, List<Integer> joinSeconds, Integer caughtUpLatencyMillis,
+                            List<Long> skipMessages, boolean unloadBeforeJoin, List<Long> resetToMillis,
+                            String subscriptionType) {
+            this(count, podsPerApplication, subscriptionPrefix, client, env, joinSeconds, caughtUpLatencyMillis,
+                    skipMessages, unloadBeforeJoin, resetToMillis, subscriptionType, null);
+        }
+
+        /** Whether each pod reads the topics compacted with readers rather than consuming the subscription. */
+        public boolean readsCompacted() {
+            return COMPACTED_READERS_MODE.equals(mode);
         }
 
         public Applications(int count, int podsPerApplication, String subscriptionPrefix, Client client,
@@ -401,6 +428,17 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                         && applications.resetToMillis().stream().allMatch(resetTo -> resetTo == null || resetTo == -1),
                 "applications.skipMessages and applications.resetToMillis need a subscription type that keeps each"
                         + " device's order, not Shared");
+        require(Applications.MODES.contains(applications.mode()),
+                "applications.mode must be one of " + Applications.MODES + ", not " + applications.mode());
+        // A pod that reads compacted rebuilds the latest state from the start at any time, and has no subscription
+        // to prepare or to pause
+        require(!applications.readsCompacted() || applications.joinSeconds().stream()
+                        .allMatch(seconds -> seconds == null || seconds == 0)
+                        && applications.skipMessages().stream().allMatch(skipped -> skipped == null || skipped == 0)
+                        && applications.resetToMillis().stream().allMatch(resetTo -> resetTo == null || resetTo == -1)
+                        && !applications.unloadBeforeJoin() && !podPauses.enabled() && warmupMessages == 0,
+                "applications.mode compactedReaders doesn't support joinSeconds, skipMessages, resetToMillis,"
+                        + " unloadBeforeJoin, behaviors.podPauses or warmup.messages");
         require(topics.partitions() >= 0, "topics.partitions must not be negative");
         // The launcher prepares a join with each topic's stats, which a partitioned topic keeps per partition
         require(!topics.partitioned() || !applications.unloadBeforeJoin()

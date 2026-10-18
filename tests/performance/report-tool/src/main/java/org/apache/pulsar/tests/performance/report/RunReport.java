@@ -31,6 +31,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -383,6 +384,7 @@ public final class RunReport {
         appendProfiles(report, runDirectory, mapper);
         NetworkReport.append(report, runDirectory, mapper, measurementStart);
         appendCorrectness(report, "Correctness", run.workload(), consumers);
+        appendDeviceStates(report, run.workload(), consumers);
         appendThroughput(report, producer, consumers);
         Path stats = runDirectory.resolve(TOPIC_STATS_FILE);
         Samples samples = Files.isRegularFile(stats) ? readSamples(stats) : null;
@@ -445,7 +447,9 @@ public final class RunReport {
                         ? " of " + workload.path("topics").path("partitions").asInt() + " partitions" : "")))
                 .append(row("Applications", workload.path("applications").path("count").asInt() + " × "
                         + workload.path("applications").path("podsPerApplication").asInt()
-                        + " pods, " + workload.path("applications").path("subscriptionType").asText("Key_Shared")))
+                        + " pods, " + ("compactedReaders".equals(workload.path("applications").path("mode").asText())
+                        ? "compacted readers" : workload.path("applications").path("subscriptionType")
+                        .asText("Key_Shared"))))
                 .append(row("Messages", String.format(Locale.ROOT, "%,d measured, %,d warmup",
                         messageCount(producer, "measurementMessages",
                                 workload.path("measurement").path("messages").asLong()),
@@ -705,6 +709,36 @@ public final class RunReport {
                     + " with the same message ID, redelivered, and %,d with another one: the broker persisted the"
                     + " message twice%s.%n", redelivered, republished, republished > 0
                     ? ", see each application's `republished-duplicates.txt`" : ""));
+        }
+    }
+
+    /**
+     * For applications whose pods read the topics compacted: the devices whose last state a pod lacked at the end,
+     * and how long the restarted pods took to rebuild their state, until they received the first message published
+     * after their start. Nothing for applications that consume a subscription.
+     */
+    static void appendDeviceStates(StringBuilder report, JsonNode workload, List<JsonNode> consumers) {
+        List<JsonNode> readers = consumers.stream()
+                .filter(consumer -> "compactedReaders".equals(consumer.path("mode").asText())).toList();
+        if (readers.isEmpty()) {
+            return;
+        }
+        report.append("\n## Device states\n\nEach pod reads the topics compacted from the start and keeps each"
+                + " device's latest state. Unique messages counts the updates of the pods' states. A restarted pod"
+                + " has rebuilt its state when it receives the first message published after its start.\n\n"
+                + "| Application | Devices without their last state | Restarted pods | Start-up p50 | Start-up max |\n"
+                + "|---|---:|---:|---:|---:|\n");
+        for (JsonNode consumer : readers) {
+            List<Long> startUps = new ArrayList<>();
+            consumer.path("podStartUpMillis").forEach(millis -> startUps.add(millis.asLong()));
+            Collections.sort(startUps);
+            String median = startUps.isEmpty() ? "–"
+                    : String.format(Locale.ROOT, "%,d ms", startUps.get(startUps.size() / 2));
+            String max = startUps.isEmpty() ? "–"
+                    : String.format(Locale.ROOT, "%,d ms", startUps.get(startUps.size() - 1));
+            report.append(String.format(Locale.ROOT, "| %s | %,d | %,d | %s | %s |%n",
+                    applicationName(workload, consumer.path("applicationIndex").asInt()),
+                    consumer.path("staleDevices").asLong(), startUps.size(), median, max));
         }
     }
 

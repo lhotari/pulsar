@@ -43,6 +43,10 @@ application-visible order across Key_Shared hash-range reassignment.
   processors with hot standbys: each application is a Failover subscription of three pods on four topics of 12
   partitions, so each partition has one active consumer, and every 20 seconds each application restarts one pod, whose
   partitions fail over to a standby: the fail-overs' delivery gap and redelivery, with each device's order checked.
+- [`iot-device-shadow.yaml`](../iot-device-shadow.yaml) keeps device shadows on compacted topics: the broker compacts
+  the four topics every 4 MB of updates, and two applications of three pods read them compacted from the start with
+  `applications.mode: compactedReaders`, restarting one pod each every 30 seconds, which rebuilds its state from the
+  compacted topics: the compaction, the restarted pods' start-up time, and each device's latest state at every pod.
 - [`iot-telemetry-small.yaml`](../iot-telemetry-small.yaml) keeps the 20-way fanout,
   30 topics and 1,000 msg/s rate, but uses 10 gateways and 10 pods per application, with the low-memory
   configuration.
@@ -220,6 +224,7 @@ workloads:
       podsPerApplication: 100  # a Pulsar client with a consumer of the subscription each
       subscriptionPrefix: iot-application-
       subscriptionType: Key_Shared  # not set in the base file: Key_Shared, Shared or Failover
+      mode: subscription       # not set in the base file: subscription, or compactedReaders
       client:                  # the client resources that every pod's client shares
         ioThreads: 8
         listenerThreads: 16
@@ -245,6 +250,17 @@ the workloads start. A gateway's producer routes each device's messages to one p
 pod's consumer subscribes to every partition. The launcher samples each partition's stats. The applications' join
 preparation (`skipMessages`, `unloadBeforeJoin` and `resetToMillis`), offloading and a remote cluster don't support
 partitioned topics.
+
+`applications.mode` sets how each pod reads the topics. With `subscription`, the default, it has a consumer of its
+application's subscription, which receives every message. With `compactedReaders`, it has a reader of each topic that
+reads it compacted from the start, as a TableView does, and keeps each device's latest sequence: the device's state.
+Such a pod receives each device's latest message that compaction kept, and then every later one. A device's sequence
+that falls is an ordering violation, a repeated one a duplicate, and the application has received everything when,
+once the gateways have finished, each of its pods has every device's last message; the devices that a pod lacks then
+count as invalid. A restarted pod has started up when it receives the first message published after its start, and
+the latency covers only such messages. The topics are compacted by the broker, with
+`brokerServiceCompactionThresholdInBytes` in `cluster.brokers.env`. The mode doesn't support `joinSeconds`, the join
+preparation, `behaviors.podPauses` or `warmup.messages`.
 
 `behaviors.podPauses` stalls pods as a garbage collection, a slow downstream or a debugger would: every
 `intervalSeconds`, each application pauses a random `fraction` of its pods' consumers for `pauseMillis`, shorter than

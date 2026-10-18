@@ -285,6 +285,18 @@ public class RunReportTest {
     }
 
     @Test
+    public void reportsTheDeviceStatesOfCompactedReaders() throws IOException {
+        JsonNode workload = mapper.readTree("{\"applications\": {\"subscriptionPrefix\": \"twin-\"}}");
+        StringBuilder report = new StringBuilder();
+        RunReport.appendDeviceStates(report, workload, List.of(mapper.readTree("{\"applicationIndex\": 0}")));
+        assertThat(report).isEmpty();
+        RunReport.appendDeviceStates(report, workload, List.of(mapper.readTree("{\"applicationIndex\": 1,"
+                + " \"mode\": \"compactedReaders\", \"staleDevices\": 2, \"podStartUpMillis\": [900, 300, 1200]}")));
+        assertThat(report.toString()).contains("## Device states")
+                .contains("| twin-1 | 2 | 3 | 900 ms | 1,200 ms |");
+    }
+
+    @Test
     public void reportsCorrectnessThroughputLatencyAndSampledStats() throws IOException {
         Files.createDirectories(run.resolve("gateways"));
         Files.writeString(run.resolve("gateways/gateways-summary.json"), "{\"measurementMessages\": 400000,"

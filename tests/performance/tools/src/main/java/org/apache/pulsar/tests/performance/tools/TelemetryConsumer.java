@@ -44,9 +44,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.pulsar.client.api.Consumer;
+import org.apache.pulsar.client.api.Message;
+import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.PulsarClientSharedResources;
+import org.apache.pulsar.client.api.Reader;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionInitialPosition;
 import picocli.CommandLine.Command;
@@ -91,7 +94,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             for (int index = 0; index < scenario.applicationCount(); index++) {
                 Path applicationOutput = output.resolve(scenario.subscriptionName(index));
                 Files.createDirectories(applicationOutput);
-                applications.add(new Application(scenario, index, applicationOutput));
+                applications.add(new Application(scenario, index, applicationOutput, coordinationDirectory(), runId));
             }
             progress = new ProgressStream(applications.stream().map(Application::receiveLatency).toList(),
                     line -> status(line, scenario, applications, phase.get()));
@@ -236,7 +239,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         long invalidMessages = 0;
         int finished = 0;
         for (Application application : applications) {
-            DeviceSequenceTracker.Summary summary = application.tracker.summary();
+            DeviceSequenceTracker.Summary summary = application.summarySoFar();
             received += summary.uniqueMessages();
             duplicates += summary.duplicates();
             orderingViolations += summary.orderingViolations();
@@ -283,11 +286,25 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private volatile Thread pauser;
         private int nextWarmupRound = 1;
         private volatile boolean finished;
+        // For pods that read compacted: what the messages did to the pods' device states, over every pod, each
+        // restarted pod's start-up time, until it receives the first message published after its start, and each
+        // device's next sequence at the gateways once they have finished
+        private final Path coordinationDirectory;
+        private final String runId;
+        private final AtomicLong stateUpdates = new AtomicLong();
+        private final AtomicLong stateRepeats = new AtomicLong();
+        private final AtomicLong stateRegressions = new AtomicLong();
+        private final AtomicLong stateInvalid = new AtomicLong();
+        private final List<Long> podStartUpMillis = Collections.synchronizedList(new ArrayList<>());
+        private volatile long[] finalSequences;
 
-        Application(IotScenario scenario, int index, Path output) throws IOException {
+        Application(IotScenario scenario, int index, Path output, Path coordinationDirectory, String runId)
+                throws IOException {
             this.scenario = scenario;
             this.index = index;
             this.output = output;
+            this.coordinationDirectory = coordinationDirectory;
+            this.runId = runId;
             tracker = new DeviceSequenceTracker(scenario.deviceCount(), scenario.startsAtFirstSequence(index),
                     scenario.keepsDeviceOrder());
             // Unknown until the launcher has reset the subscription, which it tells with the prepared join
@@ -390,7 +407,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
 
         void openPods(PulsarClientSharedResources sharedResources, AtomicLong opened) throws Exception {
             for (int pod = 0; pod < scenario.podsPerApplication(); pod++) {
-                ClientAndConsumer created = createPod(sharedResources, pod);
+                ClientAndConsumer created = createPod(sharedResources, pod, false);
                 synchronized (pods) {
                     // a late application's joiner can open a pod after the application stopped
                     if (stopping.get()) {
@@ -426,14 +443,62 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         /** Tells the gateways about the next warmup round, once the application has received it. */
         void markWarmupRounds(Path coordinationDirectory, String runId) throws IOException {
             if (nextWarmupRound <= scenario.warmupRounds() && scenario.warmupMessageCountPerRound() > 0
-                    && tracker.uniqueMessages() >= scenario.warmupMessageCountPerRound() * nextWarmupRound) {
+                    && warmupMessagesReceived() >= scenario.warmupMessageCountPerRound() * nextWarmupRound) {
                 WarmupBarrier.markApplicationComplete(coordinationDirectory, runId, nextWarmupRound, index);
                 nextWarmupRound++;
             }
         }
 
-        boolean receivedEveryMessage() {
+        // A pod that reads compacted receives every message published after its start, so the warmup's are those of
+        // the pod that has received the most
+        private long warmupMessagesReceived() {
+            if (!scenario.applications().readsCompacted()) {
+                return tracker.uniqueMessages();
+            }
+            synchronized (pods) {
+                return pods.stream().mapToLong(pod -> pod.state().receivedMessages()).max().orElse(0);
+            }
+        }
+
+        boolean receivedEveryMessage() throws IOException {
+            if (scenario.applications().readsCompacted()) {
+                return staleDevices() == 0;
+            }
             return expectedMessages >= 0 && tracker.uniqueMessages() >= expectedMessages;
+        }
+
+        /**
+         * For pods that read compacted: the most devices whose latest state a pod doesn't have, the last message of
+         * the device, or every device while the gateways haven't finished or the pods aren't all open.
+         */
+        private long staleDevices() throws IOException {
+            long[] next = finalSequences;
+            if (next == null) {
+                next = FinalSequencesMarker.read(coordinationDirectory, runId).orElse(null);
+                if (next == null) {
+                    return scenario.deviceCount();
+                }
+                finalSequences = next;
+            }
+            synchronized (pods) {
+                if (pods.size() < scenario.podsPerApplication()) {
+                    return scenario.deviceCount();
+                }
+                long stale = 0;
+                for (ClientAndConsumer pod : pods) {
+                    stale = Math.max(stale, pod.state().staleDevices(next));
+                }
+                return stale;
+            }
+        }
+
+        /** The counts so far, for the progress. */
+        DeviceSequenceTracker.Summary summarySoFar() {
+            if (!scenario.applications().readsCompacted()) {
+                return tracker.summary();
+            }
+            return new DeviceSequenceTracker.Summary(stateUpdates.get(), stateRepeats.get(), stateRegressions.get(),
+                    stateInvalid.get(), 0, 0);
         }
 
         /**
@@ -443,6 +508,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         boolean finish() throws Exception {
             stopRestarts();
             awaitListeners();
+            if (scenario.applications().readsCompacted()) {
+                return finishReadingCompacted();
+            }
             DeviceSequenceTracker.Summary summary = tracker.summary();
             receiveLatency.close();
             tracker.writeState(output.resolve("application-state.bin"));
@@ -471,6 +539,43 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             finished = true;
             // with skipped messages, the count tells a lost message from a skipped one
             return summary.valid() && expectedMessages >= 0 && summary.uniqueMessages() == expectedMessages;
+        }
+
+        /**
+         * Finishes an application whose pods read compacted: a repeated or older sequence of a device, an invalid
+         * message, or a pod without a device's latest state fails it.
+         */
+        private boolean finishReadingCompacted() throws Exception {
+            long stale = staleDevices();
+            receiveLatency.close();
+            List<Long> startUps;
+            synchronized (podStartUpMillis) {
+                startUps = new ArrayList<>(podStartUpMillis);
+            }
+            Files.writeString(output.resolve("application-summary.json"), "{\n"
+                    + "  \"applicationIndex\": " + index + ",\n"
+                    + "  \"mode\": \"" + scenario.applications().mode() + "\",\n"
+                    + "  \"uniqueMessages\": " + stateUpdates.get() + ",\n"
+                    + "  \"skippedMessages\": 0,\n"
+                    + "  \"duplicates\": " + stateRepeats.get() + ",\n"
+                    + "  \"redeliveredDuplicates\": 0,\n"
+                    + "  \"republishedDuplicates\": 0,\n"
+                    + "  \"orderingViolations\": " + stateRegressions.get() + ",\n"
+                    + "  \"invalidMessages\": " + (stateInvalid.get() + stale) + ",\n"
+                    + "  \"staleDevices\": " + stale + ",\n"
+                    + "  \"podStartUpMillis\": " + startUps + ",\n"
+                    + "  \"firstMeasurementMessageReceivedEpochMs\": "
+                    + firstMeasurementReceiptEpochMs.get() + ",\n"
+                    + "  \"lastMeasurementMessageReceivedEpochMs\": "
+                    + lastMeasurementReceiptEpochMs.get() + ",\n"
+                    + "  \"joinSeconds\": 0,\n"
+                    + "  \"joinEpochMs\": 0,\n"
+                    + "  \"caughtUpLatencyMillis\": " + catchUp.thresholdMillis() + ",\n"
+                    + "  \"caughtUpEpochMs\": 0,\n"
+                    + "  \"messagesWhenCaughtUp\": 0\n}\n");
+            closePods();
+            finished = true;
+            return stale == 0 && stateRepeats.get() == 0 && stateRegressions.get() == 0 && stateInvalid.get() == 0;
         }
 
         /** Closes the application's pods, when it hasn't finished, such as after a failure. */
@@ -527,8 +632,11 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             }
         }
 
-        private ClientAndConsumer createPod(PulsarClientSharedResources sharedResources, int podIndex)
-                throws Exception {
+        private ClientAndConsumer createPod(PulsarClientSharedResources sharedResources, int podIndex,
+                                            boolean restart) throws Exception {
+            if (scenario.applications().readsCompacted()) {
+                return createReaderPod(sharedResources, restart);
+            }
             PulsarClient client = PulsarClient.builder()
                     .serviceUrl(scenario.serviceUrl())
                     .sharedResources(sharedResources)
@@ -575,11 +683,81 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                             }
                         })
                         .subscribe();
-                return new ClientAndConsumer(client, consumer);
+                return new ClientAndConsumer(client, consumer, List.of(), null);
             } catch (Throwable error) {
                 // uninterruptibly: an interrupted subscription would otherwise leave the client closing
                 client.closeAsync().exceptionally(failure -> null).join();
                 throw error;
+            }
+        }
+
+        /**
+         * A pod that reads each topic compacted from the start, as a digital twin service rebuilds the devices'
+         * latest state, with each device's latest sequence its state.
+         */
+        private ClientAndConsumer createReaderPod(PulsarClientSharedResources sharedResources, boolean restart)
+                throws Exception {
+            PulsarClient client = PulsarClient.builder()
+                    .serviceUrl(scenario.serviceUrl())
+                    .sharedResources(sharedResources)
+                    .build();
+            LatestValueTracker state = new LatestValueTracker(scenario.deviceCount());
+            long startEpochMs = System.currentTimeMillis();
+            // A restarted pod has read the compacted state and the backlog when it receives a message published
+            // after its start
+            AtomicBoolean startedUp = new AtomicBoolean(!restart);
+            List<Reader<byte[]>> readers = new ArrayList<>(scenario.topicCount());
+            try {
+                for (String topic : scenario.topicNames()) {
+                    readers.add(client.newReader(Schema.BYTES)
+                            .topic(topic)
+                            .startMessageId(MessageId.earliest)
+                            .readCompacted(true)
+                            .readerListener((reader, message) ->
+                                    receivedState(message, state, startEpochMs, startedUp))
+                            .create());
+                }
+                return new ClientAndConsumer(client, null, readers, state);
+            } catch (Throwable error) {
+                // uninterruptibly: an interrupted creation would otherwise leave the client closing
+                readers.forEach(reader -> reader.closeAsync().exceptionally(failure -> null).join());
+                client.closeAsync().exceptionally(failure -> null).join();
+                throw error;
+            }
+        }
+
+        private void receivedState(Message<byte[]> message, LatestValueTracker state, long podStartEpochMs,
+                                   AtomicBoolean startedUp) {
+            long receivedEpochMs = System.currentTimeMillis();
+            listenersInFlight.incrementAndGet();
+            try {
+                TelemetryMessage.Decoded decoded = TelemetryMessage.decode(message.getData());
+                if (!TelemetryMessage.hasKey(message, decoded.deviceId(), scenario.stringKeys())) {
+                    throw new IllegalArgumentException("Telemetry key does not match payload device ID");
+                }
+                switch (state.received(decoded.deviceId(), decoded.sequence())) {
+                    case UPDATE -> stateUpdates.incrementAndGet();
+                    case REPEAT -> stateRepeats.incrementAndGet();
+                    case REGRESSION -> stateRegressions.incrementAndGet();
+                    case INVALID -> stateInvalid.incrementAndGet();
+                }
+                // Only the messages published since the pod started have a delivery latency: the earlier ones are
+                // the state that it rebuilds
+                if (message.getPublishTime() >= podStartEpochMs) {
+                    if (startedUp.compareAndSet(false, true)) {
+                        podStartUpMillis.add(receivedEpochMs - podStartEpochMs);
+                    }
+                    if (decoded.measurement()) {
+                        firstMeasurementReceiptEpochMs.accumulateAndGet(receivedEpochMs,
+                                (current, received) -> current == 0 ? received : Math.min(current, received));
+                        lastMeasurementReceiptEpochMs.accumulateAndGet(receivedEpochMs, Math::max);
+                    }
+                    receiveLatency.recordMillis(receivedEpochMs - message.getPublishTime(), decoded.measurement());
+                }
+            } catch (RuntimeException error) {
+                stateInvalid.incrementAndGet();
+            } finally {
+                listenersInFlight.decrementAndGet();
             }
         }
 
@@ -593,7 +771,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                         synchronized (pods) {
                             int podIndex = ThreadLocalRandom.current().nextInt(pods.size());
                             pods.get(podIndex).close();
-                            pods.set(podIndex, createPod(sharedResources, podIndex));
+                            pods.set(podIndex, createPod(sharedResources, podIndex, true));
                         }
                     }
                 } catch (InterruptedException interrupted) {
@@ -637,23 +815,36 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         }
     }
 
-    private record ClientAndConsumer(PulsarClient client, Consumer<byte[]> consumer) implements AutoCloseable {
+    /**
+     * A pod: its client, and either its consumer of the subscription, or its readers of the topics with the devices'
+     * state that they keep.
+     */
+    private record ClientAndConsumer(PulsarClient client, Consumer<byte[]> consumer, List<Reader<byte[]>> readers,
+                                     LatestValueTracker state) implements AutoCloseable {
         @Override
         public void close() throws Exception {
             try {
-                consumer.close();
+                if (consumer != null) {
+                    consumer.close();
+                }
+                for (Reader<byte[]> reader : readers) {
+                    reader.close();
+                }
             } finally {
                 client.close();
             }
         }
 
         /**
-         * Closes the consumer, then the client, also when closing the consumer failed. A pod that a restart closed and
-         * couldn't replace, as when the application stops during the restart, is already closed, which isn't a
-         * failure.
+         * Closes the consumer or the readers, then the client, also when closing them failed. A pod that a restart
+         * closed and couldn't replace, as when the application stops during the restart, is already closed, which
+         * isn't a failure.
          */
         CompletableFuture<Void> closeAsync() {
-            return consumer.closeAsync().handle((ignored, consumerFailure) -> unlessAlreadyClosed(consumerFailure))
+            CompletableFuture<Void> closed = consumer != null ? consumer.closeAsync()
+                    : CompletableFuture.allOf(readers.stream().map(Reader::closeAsync)
+                    .toArray(CompletableFuture[]::new));
+            return closed.handle((ignored, consumerFailure) -> unlessAlreadyClosed(consumerFailure))
                     .thenCompose(consumerFailure -> client.closeAsync()
                             .exceptionallyCompose(failure -> unlessAlreadyClosed(failure) == null
                                     ? CompletableFuture.completedFuture(null) : CompletableFuture.failedFuture(failure))

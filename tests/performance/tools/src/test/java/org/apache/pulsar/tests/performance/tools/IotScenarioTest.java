@@ -261,6 +261,35 @@ public class IotScenarioTest {
     }
 
     @Test
+    public void choosesTheMode() {
+        assertThat(scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null))
+                .applications().readsCompacted()).isFalse();
+        IotScenario readers = scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null,
+                null, null, null, false, null, null, "compactedReaders"));
+        assertThat(readers.applications().readsCompacted()).isTrue();
+        assertThatThrownBy(() -> scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
+                null, null, null, null, false, null, null, "tableView")))
+                .hasMessageContaining("applications.mode must be one of [subscription, compactedReaders]");
+        // a reading pod rebuilds the state from the start at any time, so it doesn't join later
+        assertThatThrownBy(() -> scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
+                null, List.of(0, 30), null, null, false, null, null, "compactedReaders")))
+                .hasMessageContaining("applications.mode compactedReaders doesn't support");
+        assertThatThrownBy(() -> new IotScenario("pulsar://localhost:6650", new IotScenario.Warmup(0, 1_000, 1, 0),
+                new IotScenario.Measurement(120, 1_000), 0, new IotScenario.Payload(64),
+                new IotScenario.Devices(1_000),
+                new IotScenario.Gateways(10, new IotScenario.Producer(2, 2, 100, true, true, null), null),
+                new IotScenario.Topics(2, "persistent://public/default/iot-"),
+                new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null, null, null, null,
+                        false, null, null, "compactedReaders"), null, 300))
+                .hasMessageContaining("applications.mode compactedReaders doesn't support");
+        // a scenario file without the setting keeps the subscription
+        IotScenario.Applications fromYaml = new YamlScenarioLoader().mapper().convertValue(Map.of("count", 2,
+                "podsPerApplication", 2, "subscriptionPrefix", "app-", "client",
+                Map.of("ioThreads", 2, "listenerThreads", 2)), IotScenario.Applications.class);
+        assertThat(fromYaml.mode()).isEqualTo("subscription");
+    }
+
+    @Test
     public void validatesThePodPauses() {
         assertThat(withBehaviors(null).behaviors().podPauses().enabled()).isFalse();
         assertThat(withBehaviors(new IotScenario.Behaviors(null, new IotScenario.PodPauses(15, 0.1, 5000)))
