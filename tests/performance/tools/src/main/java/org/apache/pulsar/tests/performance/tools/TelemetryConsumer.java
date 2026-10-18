@@ -299,6 +299,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private final AtomicLong stateInvalid = new AtomicLong();
         private final List<Long> podStartUpMillis = Collections.synchronizedList(new ArrayList<>());
         private volatile long[] finalSequences;
+        // Checking every device of every pod takes time under the pods' lock, so the receive loop checks once a second
+        private long nextStaleCheckNanos;
 
         Application(IotScenario scenario, int index, Path output, Path coordinationDirectory, String runId)
                 throws IOException {
@@ -464,6 +466,11 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
 
         boolean receivedEveryMessage() throws IOException {
             if (scenario.applications().readsCompacted()) {
+                long now = System.nanoTime();
+                if (now - nextStaleCheckNanos < 0) {
+                    return false;
+                }
+                nextStaleCheckNanos = now + TimeUnit.SECONDS.toNanos(1);
                 return staleDevices() == 0;
             }
             return expectedMessages >= 0 && tracker.uniqueMessages() >= expectedMessages;
@@ -549,6 +556,13 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
          */
         private boolean finishReadingCompacted() throws Exception {
             long stale = staleDevices();
+            // A pod that a restart replaced after the receive loop's last check rebuilds its state now that the
+            // restarts have stopped
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(scenario.timeoutSeconds());
+            while (stale > 0 && finalSequences != null && System.nanoTime() - deadline < 0) {
+                Thread.sleep(1000);
+                stale = staleDevices();
+            }
             receiveLatency.close();
             // the state of the pod that lacks the most devices' last messages, which the launcher checks
             synchronized (pods) {
@@ -589,7 +603,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     + "  \"messagesWhenCaughtUp\": 0\n}\n");
             closePods();
             finished = true;
-            return stale == 0 && stateRepeats.get() == 0 && stateRegressions.get() == 0 && stateInvalid.get() == 0;
+            // A repeated state, as after a reader reconnects, is reported as a duplicate, but a state service takes it
+            return stale == 0 && stateRegressions.get() == 0 && stateInvalid.get() == 0;
         }
 
         /** Closes the application's pods, when it hasn't finished, such as after a failure. */

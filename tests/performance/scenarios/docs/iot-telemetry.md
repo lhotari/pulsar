@@ -255,7 +255,8 @@ partitioned topics.
 application's subscription, which receives every message. With `compactedReaders`, it has a reader of each topic that
 reads it compacted from the start, as a TableView does, and keeps each device's latest sequence: the device's state.
 Such a pod receives each device's latest message that compaction kept, and then every later one. A device's sequence
-that falls is an ordering violation, a repeated one a duplicate, and the application has received everything when,
+that falls is an ordering violation, and a repeated one is reported as a duplicate without failing the run, since a
+state service takes it. The application has received everything when,
 once the gateways have finished, each of its pods has every device's last message; the devices that a pod lacks then
 count as invalid. A restarted pod has started up when it receives the first message published after its start, and
 the latency covers only such messages. The topics are compacted by the broker, with
