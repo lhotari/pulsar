@@ -44,7 +44,11 @@ public class PulsarCompactionServiceFactory implements CompactionServiceFactory 
         if (compactor == null) {
             synchronized (this) {
                 if (compactor == null) {
-                    compactor = newCompactor();
+                    Compactor created = newCompactor();
+                    if (created instanceof AbstractTwoPhaseCompactor<?> twoPhaseCompactor) {
+                        twoPhaseCompactor.setEntryCache(entryCache);
+                    }
+                    compactor = created;
                 }
             }
         }

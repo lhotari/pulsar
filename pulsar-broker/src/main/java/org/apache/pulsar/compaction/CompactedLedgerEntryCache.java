@@ -62,12 +62,27 @@ public final class CompactedLedgerEntryCache {
 
     /** Keeps a copy of the compacted ledger's entry, without changing the buffer's reader index or reference count. */
     void put(long ledgerId, long entryId, ByteBuf entry) {
+        byte[] bytes = copyIfEnabled(entry);
+        if (bytes != null) {
+            entries.put(new Key(ledgerId, entryId), bytes);
+        }
+    }
+
+    /** Keeps the bytes of the compacted ledger's entry, which the caller doesn't change afterwards. */
+    void put(long ledgerId, long entryId, byte[] entry) {
+        if (entries != null) {
+            entries.put(new Key(ledgerId, entryId), entry);
+        }
+    }
+
+    /** A copy of the entry's readable bytes when the cache keeps entries, or null. */
+    byte[] copyIfEnabled(ByteBuf entry) {
         if (entries == null) {
-            return;
+            return null;
         }
         byte[] bytes = new byte[entry.readableBytes()];
         entry.getBytes(entry.readerIndex(), bytes);
-        entries.put(new Key(ledgerId, entryId), bytes);
+        return bytes;
     }
 
     /** The bytes that the cached entries take, an estimate. */

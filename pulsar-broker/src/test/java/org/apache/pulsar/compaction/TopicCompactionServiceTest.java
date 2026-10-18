@@ -21,6 +21,8 @@ package org.apache.pulsar.compaction;
 import static org.apache.pulsar.compaction.Compactor.COMPACTED_TOPIC_LEDGER_PROPERTY;
 import static org.apache.pulsar.compaction.Compactor.COMPACTION_SUBSCRIPTION;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.AssertJUnit.fail;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -257,5 +259,32 @@ public class TopicCompactionServiceTest extends MockedPulsarServiceBaseTest {
         }
         fromBookies.forEach(Entry::release);
         fromCache.forEach(Entry::release);
+    }
+
+    @Test
+    public void testCompactionWritesTheSnapshotThroughToTheCache() throws Exception {
+        String topic = "persistent://prop-xyz/ns1/written-through-topic";
+        CompactedLedgerEntryCache cache = new CompactedLedgerEntryCache(16 * 1024 * 1024);
+        compactor.setEntryCache(cache);
+        PulsarTopicCompactionService service = new PulsarTopicCompactionService(topic, bk, () -> compactor, cache);
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer().topic(topic)
+                .enableBatching(false)
+                .messageRoutingMode(MessageRoutingMode.SinglePartition)
+                .create();
+        for (int i = 0; i < 20; i++) {
+            producer.newMessage().key("key-" + (i % 10)).value(("value-" + i).getBytes()).send();
+        }
+        long sizeBefore = cache.size();
+        service.compact().join();
+        long compactedLedger = admin.topics().getInternalStats(topic).cursors.get(COMPACTION_SUBSCRIPTION)
+                .properties.get(COMPACTED_TOPIC_LEDGER_PROPERTY);
+
+        // the new snapshot's ten entries, before any reader read them
+        assertTrue(cache.size() > sizeBefore);
+        for (long entryId = 0; entryId < 10; entryId++) {
+            assertNotNull(cache.get(compactedLedger, entryId));
+        }
+        assertNull(cache.get(compactedLedger, 10));
     }
 }
