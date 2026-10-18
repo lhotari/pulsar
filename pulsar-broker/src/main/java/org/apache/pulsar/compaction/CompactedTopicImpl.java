@@ -294,7 +294,8 @@ public class CompactedTopicImpl implements CompactedTopic {
         }
         List<Entry> entries = new ArrayList<>(cached.size());
         for (byte[] bytes : cached) {
-            ByteBuf buf = Unpooled.wrappedBuffer(bytes);
+            // read-only, so that no reader changes the cached bytes for the others
+            ByteBuf buf = Unpooled.wrappedBuffer(bytes).asReadOnly();
             try (RawMessage m = RawMessageImpl.deserializeFrom(buf)) {
                 entries.add(EntryImpl.create(m.getMessageIdData().getLedgerId(), m.getMessageIdData().getEntryId(),
                         m.getHeadersAndPayload()));

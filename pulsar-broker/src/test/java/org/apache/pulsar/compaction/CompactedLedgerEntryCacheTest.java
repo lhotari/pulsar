@@ -49,7 +49,9 @@ public class CompactedLedgerEntryCacheTest {
     public void keepsNothingWhenDisabled() {
         CompactedLedgerEntryCache cache = CompactedLedgerEntryCache.DISABLED;
         assertFalse(cache.isEnabled());
-        cache.put(7, 0, Unpooled.copiedBuffer("entry-0", StandardCharsets.UTF_8));
+        ByteBuf entry = Unpooled.copiedBuffer("entry-0", StandardCharsets.UTF_8);
+        cache.put(7, 0, entry);
+        entry.release();
         assertNull(cache.get(7, 0));
         assertEquals(cache.size(), 0);
     }

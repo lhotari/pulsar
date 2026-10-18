@@ -27,7 +27,8 @@ import io.netty.buffer.ByteBuf;
  * is read whole, in order, by every reader that reads the topic compacted from the start, and twice by every
  * compaction, which reads the previous snapshot in both of its phases; without a cache, each of these reads it from
  * the bookies. The entries are kept as heap copies, so that a hit needs no reference counting against the eviction.
- * Compacted ledgers' ids aren't reused, so a deleted ledger's entries are evicted as the least recently used.
+ * Compacted ledgers' ids aren't reused, so a deleted ledger's entries are evicted as the least recently used. A cache
+ * serves the ledgers of one BookKeeper cluster, whose ledger ids identify them.
  */
 public final class CompactedLedgerEntryCache {
     /** A cache that keeps nothing. */
