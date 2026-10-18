@@ -650,7 +650,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             // A pod that a restart replaced after the receive loop's last check rebuilds its state now that the
             // restarts have stopped, within a pod's start-up time
             long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(2);
-            while (stale > 0 && finalSequences != null && System.nanoTime() - deadline < 0) {
+            while (stale > 0 && applicationState == null && finalSequences != null
+                    && System.nanoTime() - deadline < 0) {
                 Thread.sleep(1000);
                 stale = staleDevices();
             }
