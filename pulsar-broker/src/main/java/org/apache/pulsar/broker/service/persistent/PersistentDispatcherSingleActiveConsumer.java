@@ -141,14 +141,15 @@ public class PersistentDispatcherSingleActiveConsumer extends AbstractDispatcher
                     .attr("activeConsumerFailoverDelayTimeMillis",
                             serviceConfig.getActiveConsumerFailoverDelayTimeMillis())
                     .log("Rewind cursor and read more entries after ms delay");
+            // before reading, which readMoreEntries skips while the task is pending
+            synchronized (this) {
+                readOnActiveConsumerTask = null;
+            }
             Consumer activeConsumer = getActiveConsumer();
             cursor.rewind(activeConsumer != null && activeConsumer.readCompacted());
 
             notifyActiveConsumerChanged(activeConsumer);
             readMoreEntries(activeConsumer);
-            synchronized (this) {
-                readOnActiveConsumerTask = null;
-            }
         }, serviceConfig.getActiveConsumerFailoverDelayTimeMillis(), TimeUnit.MILLISECONDS);
 
     }
@@ -371,6 +372,12 @@ public class PersistentDispatcherSingleActiveConsumer extends AbstractDispatcher
                 }
                 if (havePendingRead) {
                     log.debug("Skipping read due to pending read");
+                    return;
+                }
+                if (readOnActiveConsumerTask != null) {
+                    // The new active consumer reads after the delayed rewind, so that it doesn't receive messages
+                    // that follow the ones that the previous active consumer has yet to process
+                    log.debug("Skipping read: the cursor is waiting to be rewound for the new active consumer");
                     return;
                 }
 
