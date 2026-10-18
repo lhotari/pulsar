@@ -23,6 +23,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ComparisonChain;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
@@ -237,6 +238,21 @@ public class CompactedTopicImpl implements CompactedTopic {
     }
 
     static CompletableFuture<List<Entry>> readEntries(LedgerHandle lh, long from, long to) {
+        return readEntries(lh, from, to, CompactedLedgerEntryCache.DISABLED);
+    }
+
+    /**
+     * Reads the compacted ledger's entries from {@code from} to {@code to}: from the cache when it has every one of
+     * them, otherwise from the bookies, keeping them in the cache.
+     */
+    static CompletableFuture<List<Entry>> readEntries(LedgerHandle lh, long from, long to,
+                                                      CompactedLedgerEntryCache cache) {
+        if (cache.isEnabled()) {
+            List<Entry> cached = readCachedEntries(lh.getId(), from, to, cache);
+            if (cached != null) {
+                return CompletableFuture.completedFuture(cached);
+            }
+        }
         CompletableFuture<Enumeration<LedgerEntry>> promise = new CompletableFuture<>();
 
         lh.asyncReadEntries(from, to,
@@ -251,7 +267,9 @@ public class CompactedTopicImpl implements CompactedTopic {
                 (seq) -> {
                     List<Entry> entries = new ArrayList<Entry>();
                     while (seq.hasMoreElements()) {
-                        ByteBuf buf = seq.nextElement().getEntryBuffer();
+                        LedgerEntry ledgerEntry = seq.nextElement();
+                        ByteBuf buf = ledgerEntry.getEntryBuffer();
+                        cache.put(lh.getId(), ledgerEntry.getEntryId(), buf);
                         try (RawMessage m = RawMessageImpl.deserializeFrom(buf)) {
                             entries.add(EntryImpl.create(m.getMessageIdData().getLedgerId(),
                                                          m.getMessageIdData().getEntryId(),
@@ -262,6 +280,29 @@ public class CompactedTopicImpl implements CompactedTopic {
                     }
                     return entries;
                 });
+    }
+
+    // The entries when the cache has every one of them, or null
+    private static List<Entry> readCachedEntries(long ledgerId, long from, long to, CompactedLedgerEntryCache cache) {
+        List<byte[]> cached = new ArrayList<>((int) (to - from + 1));
+        for (long entryId = from; entryId <= to; entryId++) {
+            byte[] bytes = cache.get(ledgerId, entryId);
+            if (bytes == null) {
+                return null;
+            }
+            cached.add(bytes);
+        }
+        List<Entry> entries = new ArrayList<>(cached.size());
+        for (byte[] bytes : cached) {
+            ByteBuf buf = Unpooled.wrappedBuffer(bytes);
+            try (RawMessage m = RawMessageImpl.deserializeFrom(buf)) {
+                entries.add(EntryImpl.create(m.getMessageIdData().getLedgerId(), m.getMessageIdData().getEntryId(),
+                        m.getHeadersAndPayload()));
+            } finally {
+                buf.release();
+            }
+        }
+        return entries;
     }
 
     /**

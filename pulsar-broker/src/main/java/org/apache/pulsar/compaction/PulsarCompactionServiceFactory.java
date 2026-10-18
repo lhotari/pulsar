@@ -36,6 +36,9 @@ public class PulsarCompactionServiceFactory implements CompactionServiceFactory 
 
     private volatile Compactor compactor;
 
+    // The compacted ledgers' entries, shared by the broker's compacted topics
+    private CompactedLedgerEntryCache entryCache = CompactedLedgerEntryCache.DISABLED;
+
     @VisibleForTesting
     public Compactor getCompactor() throws PulsarServerException {
         if (compactor == null) {
@@ -65,6 +68,10 @@ public class PulsarCompactionServiceFactory implements CompactionServiceFactory 
             return FutureUtil.failedFuture(new NullPointerException("Expected pulsarService should not be null"));
         }
         this.pulsarService = pulsarService;
+        long cacheSizeMb = pulsarService.getConfiguration().getBrokerServiceCompactedLedgerCacheSizeMB();
+        if (cacheSizeMb > 0) {
+            entryCache = new CompactedLedgerEntryCache(cacheSizeMb * 1024 * 1024);
+        }
         return CompletableFuture.completedFuture(null);
     }
 
@@ -80,7 +87,7 @@ public class PulsarCompactionServiceFactory implements CompactionServiceFactory 
                     } catch (Throwable e) {
                         throw new CompletionException(e);
                     }
-                });
+                }, entryCache);
         return CompletableFuture.completedFuture(pulsarTopicCompactionService);
     }
 

@@ -3852,6 +3852,15 @@ public class ServiceConfiguration implements PulsarConfiguration {
     private long brokerServiceCompactionThresholdInBytes = 0;
 
     @FieldContext(
+        category = CATEGORY_SERVER,
+        doc = "The heap, in MB, that the broker's cache of compacted ledgers' entries takes, shared by its compacted"
+            + " topics. A compacted topic's snapshot is read whole by every reader that reads it compacted from the"
+            + " start, such as a TableView, and twice by every compaction; without the cache, each of these reads it"
+            + " from the bookies. Using a value of 0 is disabling the cache."
+    )
+    private long brokerServiceCompactedLedgerCacheSizeMB = 0;
+
+    @FieldContext(
             category = CATEGORY_SERVER,
             doc = "Timeout for each read request in the compaction phase one loop, If the execution time of one "
                     + "single message read operation exceeds this time, the compaction will not proceed."
