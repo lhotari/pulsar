@@ -713,6 +713,14 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         cancelPendingRead();
     }
 
+    /** Resumes the dispatch that {@link #stopDispatchingForClose()} stopped, when the topic's close failed. */
+    public void resumeDispatchingAfterClose() {
+        if (dispatchStoppedForClose) {
+            dispatchStoppedForClose = false;
+            readMoreEntriesAsync();
+        }
+    }
+
     /** The consumers' pending acknowledgments: the entries dispatched to them that they haven't acknowledged. */
     public long getPendingAcknowledgments() {
         long pending = 0;
@@ -823,6 +831,14 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         }
 
         readFailureBackoff.reduceToHalf();
+
+        if (dispatchStoppedForClose) {
+            // a read in flight when the closing topic stopped the dispatch: its entries wait in the replay queue, so
+            // that no pending acknowledgment is added while the topic waits for them to drain
+            entries.forEach(this::addEntryToReplay);
+            onReadEnded(readType);
+            return;
+        }
 
         if (shouldRewindBeforeReadingOrReplaying && readType == ReadType.Normal) {
             // All consumers got disconnected before the completion of the read operation

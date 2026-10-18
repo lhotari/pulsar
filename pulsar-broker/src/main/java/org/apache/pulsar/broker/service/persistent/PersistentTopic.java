@@ -1903,7 +1903,25 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         } finally {
             lock.writeLock().unlock();
         }
+        if (closeType == CloseTypes.transferring) {
+            return closeAfterDrainingAcknowledgments(closeType, inProgressTransferCloseTask);
+        }
+        // the fenced topic takes no messages; its consumers acknowledge what they have received before it closes the
+        // cursors and disconnects them
+        CompletableFuture<Void> inProgressTask = inProgressTransferCloseTask;
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        drainAcknowledgmentsBeforeClose().whenComplete((__, ignored) -> {
+            try {
+                FutureUtil.completeAfter(result, closeAfterDrainingAcknowledgments(closeType, inProgressTask));
+            } catch (Throwable e) {
+                result.completeExceptionally(e);
+            }
+        });
+        return result;
+    }
 
+    private CompletableFuture<Void> closeAfterDrainingAcknowledgments(
+            CloseTypes closeType, CompletableFuture<Void> inProgressTransferCloseTask) {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         if (inProgressTransferCloseTask != null) {
             futures.add(inProgressTransferCloseTask);
@@ -1913,9 +1931,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         replicators.forEach((cluster, replicator) -> futures.add(replicator.terminate()));
         shadowReplicators.forEach((__, replicator) -> futures.add(replicator.terminate()));
         if (closeType != CloseTypes.transferring) {
-            futures.add(drainAcknowledgmentsBeforeClose().thenCompose(__ ->
-                ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(
-                brokerService.getPulsar(), topic)).thenAccept(lookupData -> {
+            futures.add(ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(
+                brokerService.getPulsar(), topic).thenAccept(lookupData -> {
                     producers.values().forEach(producer -> futures.add(producer.disconnect(lookupData)));
                     // Topics unloaded due to the ExtensibleLoadManager undergo closing twice: first with
                     // disconnectClients = false, second with disconnectClients = true. The check below identifies the
@@ -5239,7 +5256,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         CompletableFuture<Void> drained = new CompletableFuture<>();
         long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         checkAcknowledgmentsDrained(dispatchers, deadlineNanos, drained);
-        return drained;
+        // the deadline holds also if the checks stop, such as when the broker's executor shuts down
+        return drained.completeOnTimeout(null, timeoutMillis + ACK_DRAIN_CHECK_INTERVAL_MILLIS * 5,
+                TimeUnit.MILLISECONDS);
     }
 
     private void checkAcknowledgmentsDrained(List<PersistentDispatcherMultipleConsumers> dispatchers,
@@ -5253,8 +5272,12 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             drained.complete(null);
             return;
         }
-        brokerService.executor().schedule(() -> checkAcknowledgmentsDrained(dispatchers, deadlineNanos, drained),
-                ACK_DRAIN_CHECK_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
+        try {
+            brokerService.executor().schedule(() -> checkAcknowledgmentsDrained(dispatchers, deadlineNanos, drained),
+                    ACK_DRAIN_CHECK_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            drained.complete(null);
+        }
     }
 
     private void fenceTopicToCloseOrDelete() {
@@ -5265,6 +5288,12 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     private void unfenceTopicToResume() {
         isFenced = false;
         isClosingOrDeleting = false;
+        // a close that drained the acknowledgments stopped the dispatch
+        subscriptions.values().forEach(sub -> {
+            if (sub.getDispatcher() instanceof PersistentDispatcherMultipleConsumers dispatcher) {
+                dispatcher.resumeDispatchingAfterClose();
+            }
+        });
         subscriptions.values().forEach(sub -> sub.resumeAfterFence());
         unfenceReplicatorsToResume();
     }

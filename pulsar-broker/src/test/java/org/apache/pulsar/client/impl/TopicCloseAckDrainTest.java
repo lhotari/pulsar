@@ -32,6 +32,7 @@ import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionType;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 @Test(groups = "broker-impl")
@@ -50,8 +51,15 @@ public class TopicCloseAckDrainTest extends ProducerConsumerBase {
         super.internalCleanup();
     }
 
-    @Test(timeOut = 30_000)
-    public void testUnloadWaitsForTheConsumersAcknowledgments() throws Exception {
+    @DataProvider
+    public Object[][] unloads() {
+        // a topic's unload, and its bundle's unload, which closes the topic without waiting for its clients, as a
+        // rolling restart of the brokers does
+        return new Object[][] {{false}, {true}};
+    }
+
+    @Test(timeOut = 30_000, dataProvider = "unloads")
+    public void testUnloadWaitsForTheConsumersAcknowledgments(boolean bundleUnload) throws Exception {
         String topic = newUniqueName("persistent://public/default/ack-drain");
         @lombok.Cleanup
         Consumer<String> consumer = pulsarClient.newConsumer(Schema.STRING).topic(topic)
@@ -68,7 +76,8 @@ public class TopicCloseAckDrainTest extends ProducerConsumerBase {
         }
 
         // the consumer has received the messages but not acknowledged them
-        CompletableFuture<Void> unload = admin.topics().unloadAsync(topic);
+        CompletableFuture<Void> unload = bundleUnload ? admin.namespaces().unloadAsync("public/default")
+                : admin.topics().unloadAsync(topic);
         Thread.sleep(500);
         assertThat(unload).isNotDone();
 
