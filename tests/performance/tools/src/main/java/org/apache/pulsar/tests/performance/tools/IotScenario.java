@@ -264,13 +264,20 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
     }
 
     /** What happens to the simulated system during the run, beyond the traffic. */
-    public record Behaviors(PodRestarts podRestarts, PodPauses podPauses, ProcessingFailures processingFailures) {
-        static final Behaviors NONE = new Behaviors(PodRestarts.NONE, PodPauses.NONE, ProcessingFailures.NONE);
+    public record Behaviors(PodRestarts podRestarts, PodPauses podPauses, ProcessingFailures processingFailures,
+                            ScheduledDelivery scheduledDelivery) {
+        static final Behaviors NONE = new Behaviors(PodRestarts.NONE, PodPauses.NONE, ProcessingFailures.NONE,
+                ScheduledDelivery.NONE);
 
         public Behaviors {
             podRestarts = podRestarts != null ? podRestarts : PodRestarts.NONE;
             podPauses = podPauses != null ? podPauses : PodPauses.NONE;
             processingFailures = processingFailures != null ? processingFailures : ProcessingFailures.NONE;
+            scheduledDelivery = scheduledDelivery != null ? scheduledDelivery : ScheduledDelivery.NONE;
+        }
+
+        public Behaviors(PodRestarts podRestarts, PodPauses podPauses, ProcessingFailures processingFailures) {
+            this(podRestarts, podPauses, processingFailures, null);
         }
 
         public Behaviors(PodRestarts podRestarts, PodPauses podPauses) {
@@ -279,6 +286,34 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
 
         public Behaviors(PodRestarts podRestarts) {
             this(podRestarts, null);
+        }
+    }
+
+    /**
+     * The gateways schedule each measured message's delivery a random delay ahead, as a command service schedules
+     * commands for the devices' maintenance windows: the broker keeps the messages back until then, in its delayed
+     * delivery tracker. The applications record how late each measured message arrives after its delivery time,
+     * instead of after its publishing, and count the messages that arrive early.
+     *
+     * @param minDelayMillis the shortest delay
+     * @param maxDelayMillis the longest delay; 0 for none
+     * @param earlyToleranceMillis how early a message may arrive without counting as early, 1,000 by default: a broker
+     *                             without {@code isDelayedDeliveryDeliverAtTimeStrict} delivers messages up to its
+     *                             {@code delayedDeliveryTickTimeMillis}, 1,000 by default, before their time
+     */
+    public record ScheduledDelivery(int minDelayMillis, int maxDelayMillis, Integer earlyToleranceMillis) {
+        static final ScheduledDelivery NONE = new ScheduledDelivery(0, 0, null);
+        /** The message property with the message's delivery time, in epoch milliseconds. */
+        public static final String DELIVER_AT_PROPERTY = "deliverAt";
+
+        public ScheduledDelivery {
+            if (earlyToleranceMillis == null) {
+                earlyToleranceMillis = 1000;
+            }
+        }
+
+        public boolean enabled() {
+            return maxDelayMillis > 0;
         }
     }
 
@@ -502,6 +537,22 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                         && applications.resetToMillis().stream().allMatch(resetTo -> resetTo == null || resetTo == -1),
                 "applications.skipMessages and applications.resetToMillis need a subscription type that keeps each"
                         + " device's order, not Shared");
+        ScheduledDelivery scheduled = behaviors.scheduledDelivery();
+        long scheduledDelaySeconds = (scheduled.maxDelayMillis() + 999L) / 1000;
+        require(!scheduled.enabled() || timeoutSeconds >= minimumRuntimeSeconds + scheduledDelaySeconds,
+                String.format(Locale.ROOT, "timeoutSeconds is %d, but the last scheduled message is delivered %d s"
+                        + " after the warmup and the measurement, which take %d s, so set timeoutSeconds to at"
+                        + " least %d", timeoutSeconds, scheduledDelaySeconds, minimumRuntimeSeconds,
+                        minimumRuntimeSeconds + scheduledDelaySeconds));
+        require(scheduled.minDelayMillis() >= 0 && scheduled.maxDelayMillis() >= scheduled.minDelayMillis()
+                        && scheduled.earlyToleranceMillis() >= 0,
+                "behaviors.scheduledDelivery needs 0 <= minDelayMillis <= maxDelayMillis and earlyToleranceMillis of"
+                        + " at least 0");
+        // The broker delivers delayed messages only to Shared and Key_Shared subscriptions, and the delays deliver a
+        // device's messages out of order
+        require(!scheduled.enabled() || SubscriptionType.Shared.name().equals(applications.subscriptionType())
+                        && !applications.readsCompacted(),
+                "behaviors.scheduledDelivery needs applications.subscriptionType Shared and mode subscription");
         ProcessingFailures failures = behaviors.processingFailures();
         require(failures.fraction() >= 0 && failures.fraction() < 1 && failures.poisonFraction() >= 0
                         && failures.poisonFraction() < 1,

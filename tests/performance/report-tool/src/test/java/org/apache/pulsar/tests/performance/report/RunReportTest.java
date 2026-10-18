@@ -285,6 +285,22 @@ public class RunReportTest {
     }
 
     @Test
+    public void reportsTheScheduledDelivery() throws IOException {
+        StringBuilder report = new StringBuilder();
+        JsonNode consumer = mapper.readTree("{\"applicationIndex\": 1, \"earlyDeliveries\": 2,"
+                + " \"maxEarlyMillis\": 1500}");
+        RunReport.appendScheduledDelivery(report, mapper.readTree("{\"applications\": {\"subscriptionPrefix\":"
+                + " \"commands-\"}}"), List.of(consumer));
+        assertThat(report).isEmpty();
+        RunReport.appendScheduledDelivery(report, mapper.readTree("{\"applications\": {\"subscriptionPrefix\":"
+                + " \"commands-\"}, \"behaviors\": {\"scheduledDelivery\": {\"minDelayMillis\": 60000,"
+                + " \"maxDelayMillis\": 300000}}}"), List.of(consumer));
+        assertThat(report.toString()).contains("## Scheduled delivery")
+                .contains("60,000 to 300,000 ms ahead").contains("more than 1,000 ms before")
+                .contains("| commands-1 | 2 | 1,500 ms |");
+    }
+
+    @Test
     public void reportsTheProcessingFailures() throws IOException {
         StringBuilder report = new StringBuilder();
         RunReport.appendProcessingFailures(report, mapper.readTree("{\"applications\": {\"subscriptionPrefix\":"

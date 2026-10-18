@@ -309,6 +309,10 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private final AtomicLong deadLetters = new AtomicLong();
         private final AtomicLong unexpectedDeadLetters = new AtomicLong();
         private final AtomicReference<Throwable> retryFailure = new AtomicReference<>();
+        // With scheduled delivery: the messages that arrived earlier than their delivery time allows, and the most
+        // that any arrived before it
+        private final AtomicLong earlyDeliveries = new AtomicLong();
+        private final AtomicLong maxEarlyMillis = new AtomicLong();
         // Guarded by pods
         private ClientAndConsumer deadLetterPod;
 
@@ -566,12 +570,15 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     + "  \"failedAttempts\": " + failedAttempts.get() + ",\n"
                     + "  \"deadLetters\": " + deadLetters.get() + ",\n"
                     + "  \"expectedDeadLetters\": " + expectedDeadLetters + ",\n"
-                    + "  \"unexpectedDeadLetters\": " + unexpectedDeadLetters.get() + "\n}\n");
+                    + "  \"unexpectedDeadLetters\": " + unexpectedDeadLetters.get() + ",\n"
+                    + "  \"earlyDeliveries\": " + earlyDeliveries.get() + ",\n"
+                    + "  \"maxEarlyMillis\": " + maxEarlyMillis.get() + "\n}\n");
             closePods();
             finished = true;
             // with skipped messages, the count tells a lost message from a skipped one
             return summary.valid() && expectedMessages >= 0 && summary.uniqueMessages() == expectedMessages
-                    && deadLetters.get() == expectedDeadLetters && unexpectedDeadLetters.get() == 0;
+                    && deadLetters.get() == expectedDeadLetters && unexpectedDeadLetters.get() == 0
+                    && earlyDeliveries.get() == 0;
         }
 
         /**
@@ -743,7 +750,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                                                     : Math.min(current, received));
                                     lastMeasurementReceiptEpochMs.accumulateAndGet(receivedEpochMs, Math::max);
                                 }
-                                receiveLatency.recordMillis(receivedEpochMs - message.getPublishTime(),
+                                receiveLatency.recordMillis(receivedEpochMs - deliveryDue(message, receivedEpochMs),
                                         decoded.measurement());
                                 tracker.received(decoded.deviceId(), decoded.sequence(), message.getMessageId(),
                                         decoded.sentNanos(), message.getTopicName(),
@@ -781,6 +788,26 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                 client.closeAsync().exceptionally(failure -> null).join();
                 throw error;
             }
+        }
+
+        /**
+         * When the message was due: its delivery time, for a message whose delivery the gateway scheduled, which
+         * counts as early when it arrives before the time by more than the tolerance; otherwise its publishing.
+         */
+        private long deliveryDue(Message<byte[]> message, long receivedEpochMs) {
+            String deliverAt = message.getProperty(IotScenario.ScheduledDelivery.DELIVER_AT_PROPERTY);
+            if (deliverAt == null) {
+                return message.getPublishTime();
+            }
+            long due = Long.parseLong(deliverAt);
+            long early = due - receivedEpochMs;
+            if (early > 0) {
+                maxEarlyMillis.accumulateAndGet(early, Math::max);
+                if (early > scenario.behaviors().scheduledDelivery().earlyToleranceMillis()) {
+                    earlyDeliveries.incrementAndGet();
+                }
+            }
+            return Math.min(due, receivedEpochMs);
         }
 
         /**

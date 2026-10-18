@@ -290,6 +290,28 @@ public class IotScenarioTest {
     }
 
     @Test
+    public void schedulesTheDelivery() {
+        IotScenario.Applications shared = new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
+                null, null, null, null, false, null, "Shared");
+        IotScenario.ScheduledDelivery scheduled = new IotScenario.ScheduledDelivery(1_000, 60_000, null);
+        assertThat(scheduled.earlyToleranceMillis()).isEqualTo(1_000);
+        assertThat(withBehaviors(new IotScenario.Behaviors(null, null, null, scheduled), shared).behaviors()
+                .scheduledDelivery().enabled()).isTrue();
+        assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(null, null, null, scheduled),
+                new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null)))
+                .hasMessageContaining("behaviors.scheduledDelivery needs applications.subscriptionType Shared");
+        assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(null, null, null,
+                new IotScenario.ScheduledDelivery(2_000, 1_000, null)), shared))
+                .hasMessageContaining("0 <= minDelayMillis <= maxDelayMillis");
+        // the last message is delivered 200 s after the measurement's 120 s
+        assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(null, null, null,
+                new IotScenario.ScheduledDelivery(0, 200_000, null)), shared))
+                .hasMessageContaining("timeoutSeconds is 300, but the last scheduled message is delivered 200 s"
+                        + " after the warmup and the measurement, which take 120 s, so set timeoutSeconds to at"
+                        + " least 320");
+    }
+
+    @Test
     public void failsAndRetriesMessages() {
         IotScenario.ProcessingFailures failures = new IotScenario.ProcessingFailures(0.05, 0.01, null, null, null);
         assertThat(failures.retry()).isEqualTo("negativeAck");

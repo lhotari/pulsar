@@ -386,6 +386,7 @@ public final class RunReport {
         appendCorrectness(report, "Correctness", run.workload(), consumers);
         appendDeviceStates(report, run.workload(), consumers);
         appendProcessingFailures(report, run.workload(), consumers);
+        appendScheduledDelivery(report, run.workload(), consumers);
         appendThroughput(report, producer, consumers);
         Path stats = runDirectory.resolve(TOPIC_STATS_FILE);
         Samples samples = Files.isRegularFile(stats) ? readSamples(stats) : null;
@@ -736,6 +737,29 @@ public final class RunReport {
                     applicationName(workload, consumer.path("applicationIndex").asInt()),
                     consumer.path("failedAttempts").asLong(), consumer.path("deadLetters").asLong(),
                     consumer.path("expectedDeadLetters").asLong(), consumer.path("unexpectedDeadLetters").asLong()));
+        }
+    }
+
+    /**
+     * With scheduled delivery: the delays, and each application's messages that arrived earlier than their delivery
+     * time allows. Nothing without it.
+     */
+    static void appendScheduledDelivery(StringBuilder report, JsonNode workload, List<JsonNode> consumers) {
+        JsonNode scheduled = workload.path("behaviors").path("scheduledDelivery");
+        if (scheduled.path("maxDelayMillis").asInt() <= 0) {
+            return;
+        }
+        report.append(String.format(Locale.ROOT, "%n## Scheduled delivery%n%nThe gateways schedule each measured"
+                        + " message's delivery %,d to %,d ms ahead. The latency of a scheduled message is how late it"
+                        + " arrives after its delivery time. A message that arrives more than %,d ms before its time"
+                        + " counts as early.%n%n| Application | Early deliveries | Most before the time |%n"
+                        + "|---|---:|---:|%n",
+                scheduled.path("minDelayMillis").asInt(), scheduled.path("maxDelayMillis").asInt(),
+                scheduled.path("earlyToleranceMillis").asInt(1000)));
+        for (JsonNode consumer : consumers) {
+            report.append(String.format(Locale.ROOT, "| %s | %,d | %,d ms |%n",
+                    applicationName(workload, consumer.path("applicationIndex").asInt()),
+                    consumer.path("earlyDeliveries").asLong(), consumer.path("maxEarlyMillis").asLong()));
         }
     }
 

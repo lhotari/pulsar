@@ -51,6 +51,10 @@ application-visible order across Key_Shared hash-range reassignment.
   applications with Shared subscriptions fail the first two attempts of 5 % of the alarms and retry them through
   their retry topic after 2 seconds, and the 0.1 % that fail every attempt go to their dead letter topic: the retry
   topics' delayed deliveries and the dead letter topics, with each alarm processed or dead-lettered once.
+- [`iot-scheduled-commands.yaml`](../iot-scheduled-commands.yaml) schedules device commands for maintenance windows
+  with delayed delivery: each of the 5,000 commands per second is delivered 1 to 5 minutes later, so each of the four
+  Shared subscriptions' delayed delivery trackers holds up to about 1.5 million messages: their cost and how late
+  the commands arrive.
 - [`iot-telemetry-small.yaml`](../iot-telemetry-small.yaml) keeps the 20-way fanout,
   30 topics and 1,000 msg/s rate, but uses 10 gateways and 10 pods per application, with the low-memory
   configuration.
@@ -247,6 +251,10 @@ workloads:
         intervalSeconds: 0     # every intervalSeconds, for pauseMillis
         fraction: 0.0
         pauseMillis: 0
+      scheduledDelivery:       # not set in the base file: the gateways schedule the measured messages' delivery
+        minDelayMillis: 0
+        maxDelayMillis: 0      # 0 for none
+        earlyToleranceMillis: 1000
       processingFailures:      # not set in the base file: the applications fail and retry some messages
         fraction: 0.0          # the first two attempts of this fraction fail
         poisonFraction: 0.0    # every attempt of this fraction fails: they're dead-lettered
@@ -284,6 +292,15 @@ processed or dead-lettered, and the dead letters must be exactly the messages of
 applications compute from each device's last sequence that the gateways hand over. The failures need Shared
 subscriptions, since retries deliver a device's messages out of order. A failed attempt isn't a receipt, and a
 message's latency is that of the attempt that succeeds, since its last publication.
+
+`behaviors.scheduledDelivery` makes the gateways schedule each measured message's delivery a random delay ahead,
+from `minDelayMillis` to `maxDelayMillis`, with `deliverAt`, and put the delivery time in the message's `deliverAt`
+property. The broker keeps the messages in its delayed delivery trackers until then. The applications record how late
+each scheduled message arrives after its delivery time, instead of after its publishing, and count the messages that
+arrive more than `earlyToleranceMillis`, 1,000 by default, before it: a broker without
+`isDelayedDeliveryDeliverAtTimeStrict` delivers messages up to its `delayedDeliveryTickTimeMillis` before their time.
+It needs Shared subscriptions, and a `timeoutSeconds` that leaves room for the last delay. The warmup messages aren't
+scheduled.
 
 `behaviors.podPauses` stalls pods as a garbage collection, a slow downstream or a debugger would: every
 `intervalSeconds`, each application pauses a random `fraction` of its pods' consumers for `pauseMillis`, shorter than
