@@ -24,8 +24,14 @@ import static org.testng.Assert.assertEqualsNoOrder;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.testng.annotations.DataProvider;
@@ -230,5 +236,258 @@ public class MessageRedeliveryControllerTest {
             expected2.add(PositionFactory.create(3, 1));
             assertEquals(actual2, expected2);
         }
+    }
+
+    // Owners "A", "B" and "C" by hash: hashes 1-99 belong to A, 100-199 to B, 200-299 to C, others to no owner
+    private static Object ownerOf(int hash) {
+        return hash < 100 ? "A" : hash < 200 ? "B" : hash < 300 ? "C" : null;
+    }
+
+    // Permits by owner, blocked hashes, and how many positions the selection checked
+    private static final class Selection implements MessageRedeliveryController.ReplaySelection {
+        final Map<Object, Integer> permits = new HashMap<>();
+        final Set<Integer> blocked = new HashSet<>();
+        final AtomicInteger checked = new AtomicInteger();
+
+        @Override
+        public int availablePermits(Object owner) {
+            return permits.getOrDefault(owner, 0);
+        }
+
+        @Override
+        public boolean isBlocked(Object owner, int stickyKeyHash) {
+            checked.incrementAndGet();
+            return blocked.contains(stickyKeyHash);
+        }
+    }
+
+    private static MessageRedeliveryController indexed(boolean allowOutOfOrderDelivery) {
+        MessageRedeliveryController controller = new MessageRedeliveryController(allowOutOfOrderDelivery);
+        controller.setOwnerResolver(MessageRedeliveryControllerTest::ownerOf);
+        return controller;
+    }
+
+    private static List<Position> positions(long... ledgerAndEntryIds) {
+        List<Position> positions = new ArrayList<>();
+        for (int i = 0; i < ledgerAndEntryIds.length; i += 2) {
+            positions.add(PositionFactory.create(ledgerAndEntryIds[i], ledgerAndEntryIds[i + 1]));
+        }
+        return positions;
+    }
+
+    @Test(dataProvider = "allowOutOfOrderDelivery", timeOut = 10000)
+    public void testSelectionSkipsTheOwnersWithoutPermitsWithoutVisitingTheirPositions(
+            boolean allowOutOfOrderDelivery) {
+        MessageRedeliveryController controller = indexed(allowOutOfOrderDelivery);
+        for (int entry = 0; entry < 20_000; entry++) {
+            controller.add(1, entry, 1 + entry % 99);
+        }
+        for (int entry = 20_000; entry < 20_010; entry++) {
+            controller.add(1, entry, 150);
+        }
+        Selection selection = new Selection();
+        selection.permits.put("B", 100);
+
+        assertEquals(controller.selectForReplay(500, selection), new TreeSet<>(positions(1, 20_000, 1, 20_001,
+                1, 20_002, 1, 20_003, 1, 20_004, 1, 20_005, 1, 20_006, 1, 20_007, 1, 20_008, 1, 20_009)));
+        // only B's positions were checked
+        assertEquals(selection.checked.get(), 10);
+
+        // A gets permits: its oldest positions come first, up to its permits
+        selection.permits.put("A", 3);
+        assertEquals(controller.selectForReplay(5, selection), new TreeSet<>(positions(1, 0, 1, 1, 1, 2, 1, 20_000,
+                1, 20_001)));
+    }
+
+    @Test(dataProvider = "allowOutOfOrderDelivery", timeOut = 10000)
+    public void testSelectionTakesPositionsInOrderAcrossOwnersAndThoseWithoutAHash(boolean allowOutOfOrderDelivery) {
+        MessageRedeliveryController controller = indexed(allowOutOfOrderDelivery);
+        controller.add(2, 5, 150);
+        controller.add(1, 7, 10);
+        controller.add(1, 3);
+        controller.add(3, 1, 250);
+        controller.add(1, 9, 500);
+        Selection selection = new Selection();
+        selection.permits.put("A", 10);
+        selection.permits.put("B", 10);
+        selection.permits.put("C", 10);
+
+        // the position without an owner, 1:9, is skipped
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(1, 3, 1, 7, 2, 5, 3, 1)));
+        assertEquals(controller.selectForReplay(2, selection), new TreeSet<>(positions(1, 3, 1, 7)));
+    }
+
+    @Test(dataProvider = "allowOutOfOrderDelivery", timeOut = 10000)
+    public void testSelectionSkipsABlockedHash(boolean allowOutOfOrderDelivery) {
+        MessageRedeliveryController controller = indexed(allowOutOfOrderDelivery);
+        controller.add(1, 1, 10);
+        controller.add(1, 2, 11);
+        controller.add(1, 3, 10);
+        controller.add(1, 4, 12);
+        Selection selection = new Selection();
+        selection.permits.put("A", 10);
+        selection.blocked.add(10);
+
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(1, 2, 1, 4)));
+        // with ordering enforced, the blocked hash's later position isn't checked again
+        assertEquals(selection.checked.get(), allowOutOfOrderDelivery ? 4 : 3);
+    }
+
+    @Test(dataProvider = "allowOutOfOrderDelivery", timeOut = 10000)
+    public void testSelectionFollowsChangedOwnersAndRemovals(boolean allowOutOfOrderDelivery) {
+        Map<Integer, Object> owners = new HashMap<>(Map.of(10, "A", 20, "B"));
+        MessageRedeliveryController controller = new MessageRedeliveryController(allowOutOfOrderDelivery);
+        controller.setOwnerResolver(owners::get);
+        controller.add(1, 1, 10);
+        controller.add(1, 2, 20);
+        Selection selection = new Selection();
+        selection.permits.put("A", 10);
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(1, 1)));
+
+        // B is removed and its hash moves to A
+        owners.put(20, "A");
+        controller.ownersChanged();
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(1, 1, 1, 2)));
+
+        // positions added, re-added with another hash, removed and removed up to the mark-delete position
+        controller.add(1, 3, 10);
+        controller.add(2, 1, 10);
+        controller.add(1, 1, 20);
+        controller.remove(1, 2);
+        controller.removeAllUpTo(1, 1);
+        assertEquals(controller.size(), 2);
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(1, 3, 2, 1)));
+        if (!allowOutOfOrderDelivery) {
+            assertFalse(controller.containsStickyKeyHash(20));
+            assertTrue(controller.containsStickyKeyHash(10));
+        }
+        controller.clear();
+        assertTrue(controller.selectForReplay(10, selection).isEmpty());
+        assertTrue(controller.getIndexedOwners().isEmpty());
+    }
+
+    @Test(dataProvider = "allowOutOfOrderDelivery", timeOut = 10000)
+    public void testRemoveAllUpToAcrossLedgersKeepsCountsAndHashes(boolean allowOutOfOrderDelivery) {
+        MessageRedeliveryController controller = indexed(allowOutOfOrderDelivery);
+        controller.add(1, 1, 10);
+        controller.add(1, 5, 11);
+        controller.add(2, 0, 10);
+        controller.add(2, 4, 12);
+        controller.add(2, 9, 12);
+        controller.add(3, 2);
+
+        controller.removeAllUpTo(2, 4);
+
+        assertEquals(controller.size(), 2);
+        assertEquals(controller.getFirstPositionInReplay().orElseThrow(), PositionFactory.create(2, 9));
+        assertNull(controller.getHash(1, 5));
+        assertEquals(controller.getHash(2, 9), Long.valueOf(12));
+        if (!allowOutOfOrderDelivery) {
+            assertFalse(controller.containsStickyKeyHash(10));
+            assertFalse(controller.containsStickyKeyHash(11));
+            assertTrue(controller.containsStickyKeyHash(12));
+        }
+        // the position without a hash, then A's
+        Selection selection = new Selection();
+        selection.permits.put("A", 10);
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(2, 9, 3, 2)));
+    }
+
+    @Test(dataProvider = "allowOutOfOrderDelivery", timeOut = 10000)
+    public void testIndexedEdgeCases(boolean allowOutOfOrderDelivery) {
+        MessageRedeliveryController controller = indexed(allowOutOfOrderDelivery);
+        Selection selection = new Selection();
+        selection.permits.put("A", 10);
+        selection.permits.put("B", 10);
+        // the index exists before these additions
+        assertTrue(controller.selectForReplay(10, selection).isEmpty());
+
+        // unsigned entry IDs above Integer.MAX_VALUE stay in order
+        long high = 0xFFFF_FFF0L;
+        controller.add(1, high, 10);
+        controller.add(1, 5, 10);
+        assertEquals(controller.getFirstPositionInReplay().orElseThrow(), PositionFactory.create(1, 5));
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(1, 5, 1, high)));
+        // a mark-delete position before the ledger's first entry removes nothing of it
+        controller.removeAllUpTo(1, -1);
+        assertEquals(controller.size(), 2);
+        controller.removeAllUpTo(1, high);
+        assertTrue(controller.isEmpty());
+
+        // a position without a hash that gets one, and a position whose hash moves to another owner
+        controller.add(2, 1);
+        controller.add(2, 1, 150);
+        controller.add(2, 2, 10);
+        controller.add(2, 2, 150);
+        selection.permits.put("B", 0);
+        assertTrue(controller.selectForReplay(10, selection).isEmpty());
+        selection.permits.put("B", 10);
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(2, 1, 2, 2)));
+        if (!allowOutOfOrderDelivery) {
+            assertFalse(controller.containsStickyKeyHash(10));
+            assertTrue(controller.containsStickyKeyHash(150));
+        }
+
+        // reused after clear()
+        controller.clear();
+        controller.add(3, 1, 10);
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(3, 1)));
+        assertEquals(controller.getIndexedOwners(), List.of("A"));
+        // the index forgets the hashes with their last positions
+        controller.remove(3, 1);
+        controller.add(3, 2, 150);
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(3, 2)));
+    }
+
+    @Test(dataProvider = "allowOutOfOrderDelivery", timeOut = 10000)
+    public void testIndexedUpdatesWhileStaleAndAcrossLedgers(boolean allowOutOfOrderDelivery) {
+        MessageRedeliveryController controller = indexed(allowOutOfOrderDelivery);
+        Selection selection = new Selection();
+        selection.permits.put("A", 10);
+        selection.permits.put("B", 10);
+        // A's positions in ledgers 1 and 3, B's in ledger 2
+        controller.add(3, 1, 10);
+        controller.add(1, 1, 11);
+        controller.add(2, 1, 150);
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(1, 1, 2, 1, 3, 1)));
+
+        // a hash blocked in ledger 1 is skipped in ledger 3 too
+        controller.add(1, 2, 10);
+        selection.blocked.add(10);
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(1, 1, 2, 1)));
+        selection.blocked.clear();
+
+        // a duplicate addition counts once; a re-addition with another hash while the index is stale moves it
+        controller.add(1, 1, 11);
+        controller.ownersChanged();
+        controller.add(1, 1, 150);
+        controller.remove(1, 1);
+        assertFalse(controller.containsStickyKeyHash(11));
+        // 2:1 keeps hash 150
+        assertEquals(controller.containsStickyKeyHash(150), !allowOutOfOrderDelivery);
+        selection.permits.put("A", 0);
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(2, 1)));
+        assertEquals(controller.size(), 3);
+    }
+
+    @Test(timeOut = 10000)
+    public void testAFailedReindexIsRetried() {
+        AtomicInteger failures = new AtomicInteger(1);
+        MessageRedeliveryController controller = new MessageRedeliveryController(false);
+        controller.setOwnerResolver(hash -> {
+            if (failures.getAndDecrement() > 0) {
+                throw new IllegalStateException("selector failure");
+            }
+            return ownerOf(hash);
+        });
+        controller.add(1, 1, 10);
+        Selection selection = new Selection();
+        selection.permits.put("A", 10);
+        try {
+            controller.selectForReplay(10, selection);
+        } catch (IllegalStateException expected) {
+            // the next selection indexes the positions again
+        }
+        assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(1, 1)));
     }
 }

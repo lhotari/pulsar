@@ -1401,7 +1401,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             messagesAvailableNow.forEach(p -> redeliveryMessages.add(p.getLedgerId(), p.getEntryId()));
         }
         if (!redeliveryMessages.isEmpty()) {
-            return redeliveryMessages.getMessagesToReplayNow(cappedMaxMessagesToRead, createFilterForReplay());
+            return selectMessagesToReplay(cappedMaxMessagesToRead);
         } else {
             return Collections.emptyNavigableSet();
         }
@@ -1412,18 +1412,13 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     }
 
     /**
-     * Creates a stateful filter for filtering replay positions.
-     * This is only used for Key_Shared mode to skip replaying certain entries.
-     * Filter out the entries that will be discarded due to the order guarantee mechanism of Key_Shared mode.
-     * This method is in order to avoid the scenario below:
-     * - Get positions from the Replay queue.
-     * - Read entries from BK.
-     * - The order guarantee mechanism of Key_Shared mode filtered out all the entries.
-     * - Delivery non entry to the client, but we did a BK read.
+     * Selects up to {@code maxMessagesToRead} positions of the non-empty replay queue to read now, in order. The
+     * Key_Shared dispatcher leaves out the positions that it would only put back into the replay queue after reading
+     * them, such as those of a consumer without permits, so that it doesn't read entries it can't dispatch.
      */
-    protected Predicate<Position> createFilterForReplay() {
-        // pick all positions from the replay
-        return position -> true;
+    protected NavigableSet<Position> selectMessagesToReplay(int maxMessagesToRead) {
+        // every position
+        return redeliveryMessages.getMessagesToReplayNow(maxMessagesToRead, position -> true);
     }
 
     /**
