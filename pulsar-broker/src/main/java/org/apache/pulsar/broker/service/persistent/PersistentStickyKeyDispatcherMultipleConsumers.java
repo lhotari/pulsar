@@ -374,10 +374,32 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         if (drainingHashesRequired) {
             // register draining hashes for the impacted consumers and ranges, in case a hash switched from one
             // consumer to another. This will handle the case where a hash gets switched from an existing
-            // consumer to another existing consumer during removal.
-            registerDrainingHashes(consumer, impactedConsumers.orElseThrow());
+            // consumer to another existing consumer during removal. Not when every consumer is being removed: that
+            // would scan the pending acks of every remaining consumer for each removal, only to be cleared.
+            if (!removingAllConsumers) {
+                registerDrainingHashes(consumer, impactedConsumers.orElseThrow());
+            }
             drainingHashesTracker.consumerRemoved(consumer);
         }
+    }
+
+    // The removals skipped registering the hashes that moved away from the remaining consumers: rebuild the draining
+    // hashes from their pending acks, those of each consumer whose hash the selector now assigns to another consumer
+    @Override
+    protected synchronized void consumersRemainedAfterRemovingAll() {
+        if (!drainingHashesRequired) {
+            return;
+        }
+        drainingHashesTracker.clear();
+        for (Consumer consumer : consumerList) {
+            consumer.getPendingAcks().forEach((ledgerId, entryId, batchSize, stickyKeyHash) -> {
+                if (stickyKeyHash != STICKY_KEY_HASH_NOT_SET && selector.select(stickyKeyHash) != consumer) {
+                    drainingHashesTracker.addEntry(consumer, stickyKeyHash);
+                }
+            });
+        }
+        // the hashes that drained meanwhile can be dispatched again
+        reScheduleReadWithKeySharedUnblockingInterval();
     }
 
     @Override
