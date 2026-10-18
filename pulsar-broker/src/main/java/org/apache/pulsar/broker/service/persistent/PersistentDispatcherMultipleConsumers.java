@@ -1033,6 +1033,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     protected boolean addEntryToReplay(Entry entry) {
         long stickyKeyHash = getStickyKeyHash(entry);
         boolean addedToReplay = addMessageToReplay(entry.getLedgerId(), entry.getEntryId(), stickyKeyHash);
+        if (addedToReplay && entry.getReadCountHandler() != null) {
+            // the entry will be read again: keep it in the cache until then, instead of reading it from the bookies
+            entry.getReadCountHandler().incrementExpectedReadCount();
+        }
         entry.release();
         return addedToReplay;
     }
