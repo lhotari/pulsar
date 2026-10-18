@@ -141,14 +141,15 @@ public class PersistentDispatcherSingleActiveConsumer extends AbstractDispatcher
                     .attr("activeConsumerFailoverDelayTimeMillis",
                             serviceConfig.getActiveConsumerFailoverDelayTimeMillis())
                     .log("Rewind cursor and read more entries after ms delay");
-            // before reading, which readMoreEntries skips while the task is pending
+            Consumer activeConsumer;
+            // Together under the monitor: readMoreEntries skips reading while the task is pending, and a read that
+            // it issues once the task is cleared must start from the rewound position
             synchronized (this) {
                 readOnActiveConsumerTask = null;
+                activeConsumer = getActiveConsumer();
+                cursor.rewind(activeConsumer != null && activeConsumer.readCompacted());
+                notifyActiveConsumerChanged(activeConsumer);
             }
-            Consumer activeConsumer = getActiveConsumer();
-            cursor.rewind(activeConsumer != null && activeConsumer.readCompacted());
-
-            notifyActiveConsumerChanged(activeConsumer);
             readMoreEntries(activeConsumer);
         }, serviceConfig.getActiveConsumerFailoverDelayTimeMillis(), TimeUnit.MILLISECONDS);
 
@@ -233,6 +234,14 @@ public class PersistentDispatcherSingleActiveConsumer extends AbstractDispatcher
                 log.debug("rewind because topic is transferring");
             }
             entries.forEach(Entry::release);
+            if (currentConsumer != null && readConsumer != currentConsumer && !topic.isTransferring()
+                    && subscriptionType == SubType.Failover
+                    && serviceConfig.getActiveConsumerFailoverDelayTimeMillis() > 0) {
+                // The read was in flight when the active consumer changed, so the change didn't delay the rewind:
+                // delay it now, so that the previous active consumer can process what it already received
+                scheduleReadOnActiveConsumer();
+                return;
+            }
             cursor.rewind(currentConsumer != null ? currentConsumer.readCompacted() : readConsumer.readCompacted());
             if (currentConsumer != null) {
                 notifyActiveConsumerChanged(currentConsumer);

@@ -141,7 +141,8 @@ public class PersistentDispatcherSingleActiveConsumerTest extends SharedPulsarBa
         PersistentSubscription sub = topic.getSubscription(subscription);
         ServiceConfiguration config = topic.getBrokerService().pulsar().getConfiguration();
         int previousDelay = config.getActiveConsumerFailoverDelayTimeMillis();
-        config.setActiveConsumerFailoverDelayTimeMillis(1000);
+        // long enough that the delayed rewind doesn't run before the assertion
+        config.setActiveConsumerFailoverDelayTimeMillis(5000);
         try {
             AtomicReference<Consumer> active = new AtomicReference<>();
             PersistentDispatcherSingleActiveConsumer dispatcher =
@@ -167,7 +168,7 @@ public class PersistentDispatcherSingleActiveConsumerTest extends SharedPulsarBa
             Assert.assertFalse(dispatcher.havePendingRead,
                     "The new active consumer must not read before the cursor is rewound for it");
             // the delayed rewind reads for it
-            Awaitility.await().atMost(10, TimeUnit.SECONDS).until(() -> dispatcher.havePendingRead);
+            Awaitility.await().atMost(20, TimeUnit.SECONDS).until(() -> dispatcher.havePendingRead);
         } finally {
             config.setActiveConsumerFailoverDelayTimeMillis(previousDelay);
         }
