@@ -34,6 +34,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import lombok.Getter;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
@@ -127,7 +128,13 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         }
     }
 
+    // The hashes whose draining ended, -1 for some, which the next read pass unparks, also when the replay queue is
+    // empty, so that it doesn't grow; added without the dispatcher's monitor, from the threads that remove pending
+    // acks, and each followed by a read pass
+    private final Set<Integer> unblockedHashes = ConcurrentHashMap.newKeySet();
+
     private void stickyKeyHashUnblocked(int stickyKeyHash) {
+        unblockedHashes.add(stickyKeyHash > -1 ? stickyKeyHash : STICKY_KEY_HASH_NOT_SET);
         if (stickyKeyHash > -1) {
             log.debug()
                     .attr("stickyKeyHash", stickyKeyHash)
@@ -809,6 +816,18 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
      * enforced, the later positions of a hash left out. The replay queue indexes its positions by consumer, so a
      * consumer without permits doesn't cost the selection anything, however many positions it has.
      */
+    @Override
+    protected synchronized NavigableSet<Position> getMessagesToReplayNow(int maxMessagesToRead, long bytesToRead) {
+        if (!unblockedHashes.isEmpty()) {
+            for (Iterator<Integer> unblocked = unblockedHashes.iterator(); unblocked.hasNext(); ) {
+                int hash = unblocked.next();
+                unblocked.remove();
+                redeliveryMessages.unpark(hash);
+            }
+        }
+        return super.getMessagesToReplayNow(maxMessagesToRead, bytesToRead);
+    }
+
     @Override
     protected NavigableSet<Position> selectMessagesToReplay(int maxMessagesToRead) {
         return redeliveryMessages.selectForReplay(maxMessagesToRead, replaySelection);

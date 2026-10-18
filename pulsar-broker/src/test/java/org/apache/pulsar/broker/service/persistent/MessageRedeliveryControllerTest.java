@@ -329,8 +329,8 @@ public class MessageRedeliveryControllerTest {
         selection.blocked.add(10);
 
         assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(1, 2, 1, 4)));
-        // with ordering enforced, the blocked hash's later position isn't checked again
-        assertEquals(selection.checked.get(), allowOutOfOrderDelivery ? 4 : 3);
+        // the blocked hash's later position isn't checked again: the check is the hash's and the owner's
+        assertEquals(selection.checked.get(), 3);
     }
 
     @Test(dataProvider = "allowOutOfOrderDelivery", timeOut = 10000)
@@ -489,5 +489,56 @@ public class MessageRedeliveryControllerTest {
             // the next selection indexes the positions again
         }
         assertEquals(controller.selectForReplay(10, selection), new TreeSet<>(positions(1, 1)));
+    }
+
+    @Test(dataProvider = "allowOutOfOrderDelivery", timeOut = 10000)
+    public void testBlockedHashesAreParkedUntilUnparked(boolean allowOutOfOrderDelivery) {
+        MessageRedeliveryController controller = indexed(allowOutOfOrderDelivery);
+        // A's hash 10 is blocked, as while another consumer drains it; its positions are many
+        for (int entry = 0; entry < 1_000; entry++) {
+            controller.add(1, entry, 10);
+        }
+        controller.add(1, 2_000, 11);
+        Selection selection = new Selection();
+        selection.permits.put("A", 100);
+        selection.blocked.add(10);
+
+        assertEquals(controller.selectForReplay(100, selection), new TreeSet<>(positions(1, 2_000)));
+        assertEquals(controller.getParkedHashCount(), 1);
+        assertTrue(controller.hasParkedHashes());
+
+        // the next selections don't visit the parked positions, nor new ones of the hash
+        controller.add(1, 3_000, 10);
+        selection.checked.set(0);
+        assertEquals(controller.selectForReplay(100, selection), new TreeSet<>(positions(1, 2_000)));
+        assertEquals(selection.checked.get(), 1);
+        assertEquals(controller.size(), 1_002);
+        if (!allowOutOfOrderDelivery) {
+            assertTrue(controller.containsStickyKeyHash(10));
+        }
+
+        // parked positions are removed as others are
+        controller.remove(1, 3_000);
+        controller.removeAllUpTo(1, 499);
+        assertEquals(controller.size(), 501);
+
+        // unparked, the hash's positions are selected in order
+        selection.blocked.clear();
+        controller.unpark(10);
+        assertFalse(controller.hasParkedHashes());
+        assertEquals(controller.selectForReplay(3, selection), new TreeSet<>(positions(1, 500, 1, 501, 1, 502)));
+
+        // parking again, then unparking every hash
+        selection.blocked.add(10);
+        controller.selectForReplay(3, selection);
+        assertEquals(controller.getParkedHashCount(), 1);
+        controller.unpark(STICKY_KEY_HASH_NOT_SET);
+        assertEquals(controller.getParkedHashCount(), 0);
+
+        // removing the hash's last positions forgets it as parked
+        controller.selectForReplay(3, selection);
+        controller.removeAllUpTo(1, 999);
+        assertEquals(controller.getParkedHashCount(), 0);
+        assertFalse(controller.hasParkedHashes());
     }
 }
