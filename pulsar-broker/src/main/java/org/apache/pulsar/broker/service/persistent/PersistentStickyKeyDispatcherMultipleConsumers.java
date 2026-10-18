@@ -34,6 +34,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Getter;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
@@ -127,7 +130,13 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         }
     }
 
+    // The hashes whose draining ended, -1 for some, which the next read pass unparks, also when the replay queue is
+    // empty, so that it doesn't grow; added without the dispatcher's monitor, from the threads that remove pending
+    // acks, and each followed by a read pass
+    private final Set<Integer> unblockedHashes = ConcurrentHashMap.newKeySet();
+
     private void stickyKeyHashUnblocked(int stickyKeyHash) {
+        unblockedHashes.add(stickyKeyHash > -1 ? stickyKeyHash : STICKY_KEY_HASH_NOT_SET);
         if (stickyKeyHash > -1) {
             log.debug()
                     .attr("stickyKeyHash", stickyKeyHash)
@@ -431,7 +440,12 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
             return false;
         }
 
-        if (!allowOutOfOrderDelivery) {
+        // A position added to the replay queue with a hash during the read, such as a removed consumer's pending entry
+        // or a negatively acknowledged message, blocks its hash: a normal read's entries of the hash wait in the
+        // replay queue (canDispatchEntry), and a replay read's entries wait for it (olderReplayAdditionPending). A
+        // position without a hash, such as a transaction's aborted acknowledgment, can't block its hash, so only
+        // then is the whole read set aside when an older position was added during it.
+        if (!allowOutOfOrderDelivery && redeliveryMessages.hasPositionsWithoutHash()) {
             // A corner case that we have to retry a readMoreEntries in order to preserver order delivery.
             // This may happen when consumer closed. See issue #12885 for details.
             Optional<Position> firstReplayPosition = getFirstPositionInReplay();
@@ -807,9 +821,32 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
      * consumer without permits doesn't cost the selection anything, however many positions it has.
      */
     @Override
-    protected NavigableSet<Position> selectMessagesToReplay(int maxMessagesToRead) {
-        return redeliveryMessages.selectForReplay(maxMessagesToRead, replaySelection);
+    protected synchronized NavigableSet<Position> getMessagesToReplayNow(int maxMessagesToRead, long bytesToRead) {
+        if (!unblockedHashes.isEmpty()) {
+            for (Iterator<Integer> unblocked = unblockedHashes.iterator(); unblocked.hasNext(); ) {
+                int hash = unblocked.next();
+                unblocked.remove();
+                redeliveryMessages.unpark(hash);
+            }
+        }
+        return super.getMessagesToReplayNow(maxMessagesToRead, bytesToRead);
     }
+
+    @Override
+    protected NavigableSet<Position> selectMessagesToReplay(int maxMessagesToRead) {
+        NavigableSet<Position> selected = redeliveryMessages.selectForReplay(maxMessagesToRead, replaySelection);
+        if (redeliveryMessages.hasParkedHashes() && parkedHashesWakeupScheduled.compareAndSet(false, true)) {
+            // a read pass that unparks the hashes after their longest parking, should no notification wake one
+            topic.getBrokerService().executor().schedule(() -> {
+                parkedHashesWakeupScheduled.set(false);
+                readMoreEntries();
+            }, MessageRedeliveryController.MAX_PARKED_MILLIS + PARKED_WAKEUP_MARGIN_MILLIS, TimeUnit.MILLISECONDS);
+        }
+        return selected;
+    }
+
+    private static final long PARKED_WAKEUP_MARGIN_MILLIS = 100;
+    private final AtomicBoolean parkedHashesWakeupScheduled = new AtomicBoolean();
 
     // Out-of-order delivery relaxes ordering, not routing: dispatch selects the owning consumer by hash in both modes,
     // so the permit check keeps the read's budget off positions that dispatch would only put back into the replay

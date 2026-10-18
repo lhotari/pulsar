@@ -243,6 +243,11 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     private static final String TOPIC_EPOCH_PROPERTY_NAME = "pulsar.topic.epoch";
 
     private static final double MESSAGE_EXPIRY_THRESHOLD = 1.5;
+    // how often a closing topic checks whether its consumers have acknowledged what they received
+    private static final long ACK_DRAIN_CHECK_INTERVAL_MILLIS = 20;
+    // the drain of the consumers' acknowledgments that a close waits for before it fences the topic
+    private final Object ackDrainLock = new Object();
+    private CompletableFuture<Void> ackDrainBeforeClose;
 
     private static final long POLICY_UPDATE_FAILURE_RETRY_TIME_SECONDS = 60;
 
@@ -1860,6 +1865,38 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     @Override
     public CompletableFuture<Void> close(
             boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect) {
+        if (!disconnectClients
+                || brokerService.getPulsar().getConfiguration().getTopicCloseAckDrainTimeoutMillis() <= 0) {
+            return closeFenced(disconnectClients, closeWithoutWaitingClientDisconnect);
+        }
+        // Before the topic is fenced, so that its producers go on publishing: its consumers acknowledge what they
+        // have received, with the dispatch stopped, before it closes the cursors and disconnects them. A close called
+        // meanwhile waits for the same drain.
+        CompletableFuture<Void> drain;
+        boolean startDrain = false;
+        synchronized (ackDrainLock) {
+            if (ackDrainBeforeClose == null) {
+                ackDrainBeforeClose = new CompletableFuture<>();
+                startDrain = true;
+            }
+            drain = ackDrainBeforeClose;
+        }
+        if (startDrain) {
+            FutureUtil.completeAfter(drain, drainAcknowledgmentsBeforeClose());
+        }
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        drain.whenComplete((__, ignored) -> {
+            try {
+                FutureUtil.completeAfter(result, closeFenced(disconnectClients, closeWithoutWaitingClientDisconnect));
+            } catch (Throwable e) {
+                result.completeExceptionally(e);
+            }
+        });
+        return result;
+    }
+
+    private CompletableFuture<Void> closeFenced(boolean disconnectClients,
+                                                boolean closeWithoutWaitingClientDisconnect) {
         lock.writeLock().lock();
         // Choose the close type.
         CloseTypes closeType;
@@ -5212,6 +5249,54 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         }
     }
 
+    /**
+     * Waits up to topicCloseAckDrainTimeoutMillis, with the dispatchers of the Shared and Key_Shared subscriptions
+     * stopped, until their consumers have acknowledged what they have received, so that the topic, once loaded again,
+     * doesn't dispatch the messages whose acknowledgments the disconnect would lose. The producers go on publishing
+     * meanwhile: their messages wait for the topic's next load.
+     */
+    private CompletableFuture<Void> drainAcknowledgmentsBeforeClose() {
+        long timeoutMillis = brokerService.getPulsar().getConfiguration().getTopicCloseAckDrainTimeoutMillis();
+        if (timeoutMillis <= 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+        List<PersistentDispatcherMultipleConsumers> dispatchers = new ArrayList<>();
+        subscriptions.forEach((name, subscription) -> {
+            if (subscription.getDispatcher() instanceof PersistentDispatcherMultipleConsumers dispatcher) {
+                dispatcher.stopDispatchingForClose();
+                dispatchers.add(dispatcher);
+            }
+        });
+        if (dispatchers.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        CompletableFuture<Void> drained = new CompletableFuture<>();
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        checkAcknowledgmentsDrained(dispatchers, deadlineNanos, drained);
+        // the deadline holds also if the checks stop, such as when the broker's executor shuts down
+        return drained.completeOnTimeout(null, timeoutMillis + ACK_DRAIN_CHECK_INTERVAL_MILLIS * 5,
+                TimeUnit.MILLISECONDS);
+    }
+
+    private void checkAcknowledgmentsDrained(List<PersistentDispatcherMultipleConsumers> dispatchers,
+                                             long deadlineNanos, CompletableFuture<Void> drained) {
+        long pending = 0;
+        for (PersistentDispatcherMultipleConsumers dispatcher : dispatchers) {
+            pending += dispatcher.getPendingAcknowledgments();
+        }
+        if (pending == 0 || System.nanoTime() - deadlineNanos >= 0) {
+            log.debug().attr("pendingAcknowledgments", pending).log("Closing after draining the acknowledgments");
+            drained.complete(null);
+            return;
+        }
+        try {
+            brokerService.executor().schedule(() -> checkAcknowledgmentsDrained(dispatchers, deadlineNanos, drained),
+                    ACK_DRAIN_CHECK_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            drained.complete(null);
+        }
+    }
+
     private void fenceTopicToCloseOrDelete() {
         isClosingOrDeleting = true;
         isFenced = true;
@@ -5220,6 +5305,15 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     private void unfenceTopicToResume() {
         isFenced = false;
         isClosingOrDeleting = false;
+        synchronized (ackDrainLock) {
+            ackDrainBeforeClose = null;
+        }
+        // a close that drained the acknowledgments stopped the dispatch
+        subscriptions.values().forEach(sub -> {
+            if (sub.getDispatcher() instanceof PersistentDispatcherMultipleConsumers dispatcher) {
+                dispatcher.resumeDispatchingAfterClose();
+            }
+        });
         subscriptions.values().forEach(sub -> sub.resumeAfterFence());
         unfenceReplicatorsToResume();
     }

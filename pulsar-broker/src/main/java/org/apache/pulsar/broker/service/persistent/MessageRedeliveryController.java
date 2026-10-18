@@ -36,6 +36,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.PriorityQueue;
 import java.util.TreeSet;
+import java.util.concurrent.TimeUnit;
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -72,6 +73,9 @@ public class MessageRedeliveryController {
     }
 
     private static final long MAX_ENTRY_ID = 0xFFFF_FFFFL;
+    /** The longest that a hash stays parked without being told that it's unblocked, given a selection then. */
+    static final long MAX_PARKED_MILLIS = 1000;
+    private static final long MAX_PARKED_NANOS = TimeUnit.MILLISECONDS.toNanos(MAX_PARKED_MILLIS);
 
     private final boolean allowOutOfOrderDelivery;
     // ledger ID -> the ledger's positions in the replay queue
@@ -82,6 +86,8 @@ public class MessageRedeliveryController {
     private final Int2IntOpenHashMap hashRefCounts = new Int2IntOpenHashMap();
     // whether any position has had a hash: a Shared dispatcher's positions never have one
     private boolean hasHashes;
+    // the queued positions without a hash
+    private int positionsWithoutHashCount;
 
     // The index by owner, with an owner resolver: stale after the owners changed, and rebuilt by the next selection
     private IntFunction<Object> ownerResolver;
@@ -94,6 +100,13 @@ public class MessageRedeliveryController {
     private final SortedPositions positionsWithoutHash = new SortedPositions();
     // the positions whose hash has no owner, which a selection skips
     private final SortedPositions positionsWithoutOwner = new SortedPositions();
+    // The positions of the hashes that a selection found blocked, such as while another consumer drains them, by hash:
+    // kept out of their owners' positions, so that the selections don't visit them again, until they're unparked
+    private final Int2ObjectOpenHashMap<SortedPositions> parkedPositionsByHash = new Int2ObjectOpenHashMap<>();
+    // when every parked hash was last unparked, which bounds how long a hash whose unblocking isn't told stays parked
+    private long lastUnparkAllNanos = System.nanoTime();
+    // whether any hash is parked, read without the monitor by the threads that tell unblocked hashes
+    private volatile boolean hasParkedHashes;
 
     public MessageRedeliveryController(boolean allowOutOfOrderDelivery) {
         this.allowOutOfOrderDelivery = allowOutOfOrderDelivery;
@@ -177,6 +190,8 @@ public class MessageRedeliveryController {
         ownerPositionsByHash.clear();
         positionsWithoutHash.clear();
         positionsWithoutOwner.clear();
+        parkedPositionsByHash.clear();
+        hasParkedHashes = false;
     }
 
     private boolean indexed() {
@@ -188,6 +203,7 @@ public class MessageRedeliveryController {
         int entry = (int) entryId;
         if (ledger.entries.checkedAdd(entry)) {
             size++;
+            positionsWithoutHashCount++;
             if (indexed()) {
                 positionsWithoutHash.add(ledgerId, entry);
             }
@@ -219,6 +235,8 @@ public class MessageRedeliveryController {
             unindex(ledgerId, entry, previousHash);
             if (previousHash != STICKY_KEY_HASH_NOT_SET) {
                 decrementRefCount(previousHash);
+            } else {
+                positionsWithoutHashCount--;
             }
         }
         ledger.hashes.put(entry, hash);
@@ -275,6 +293,9 @@ public class MessageRedeliveryController {
             hashRefCounts.remove(hash);
             // the index forgets the hash's owner with its last position, so it holds only the queued hashes
             ownerPositionsByHash.remove(hash);
+            if (parkedPositionsByHash.remove(hash) != null) {
+                updateHasParkedHashes();
+            }
         }
     }
 
@@ -292,6 +313,8 @@ public class MessageRedeliveryController {
         unindex(ledgerId, entry, hash);
         if (hash != STICKY_KEY_HASH_NOT_SET) {
             decrementRefCount(hash);
+        } else {
+            positionsWithoutHashCount--;
         }
         if (ledger.entries.isEmpty()) {
             ledgers.remove(ledgerId);
@@ -309,6 +332,9 @@ public class MessageRedeliveryController {
             ownerPositionsByHash.trim();
             positionsByOwner.clear();
             positionsByOwner.trim();
+            parkedPositionsByHash.clear();
+            parkedPositionsByHash.trim();
+            hasParkedHashes = false;
         }
     }
 
@@ -343,6 +369,8 @@ public class MessageRedeliveryController {
                 int hash = ledger.hashes.remove(entries.next());
                 if (hash != STICKY_KEY_HASH_NOT_SET) {
                     decrementRefCount(hash);
+                } else {
+                    positionsWithoutHashCount--;
                 }
                 removed++;
             }
@@ -362,6 +390,9 @@ public class MessageRedeliveryController {
             for (SortedPositions positions : positionsByOwner.values()) {
                 positions.removeUpTo(markDeleteLedgerId, markDeleteEntryId);
             }
+            for (SortedPositions positions : parkedPositionsByHash.values()) {
+                positions.removeUpTo(markDeleteLedgerId, markDeleteEntryId);
+            }
         }
         trimIfEmpty();
     }
@@ -374,6 +405,7 @@ public class MessageRedeliveryController {
     public void clear() {
         ledgers.clear();
         size = 0;
+        positionsWithoutHashCount = 0;
         clearIndex();
         trimIfEmpty();
     }
@@ -388,6 +420,11 @@ public class MessageRedeliveryController {
             result.append(ledger.getLongKey()).append('=').append(ledger.getValue().entries);
         }
         return result.append('}').toString();
+    }
+
+    /** Whether a queued position has no hash, so that it can't hold back the later messages of its key. */
+    public boolean hasPositionsWithoutHash() {
+        return positionsWithoutHashCount > 0;
     }
 
     public boolean containsStickyKeyHash(int stickyKeyHash) {
@@ -448,6 +485,9 @@ public class MessageRedeliveryController {
         Objects.requireNonNull(ownerResolver, "The selection needs an owner resolver");
         if (ownersStale) {
             reindex();
+        } else if (!parkedPositionsByHash.isEmpty()
+                && System.nanoTime() - lastUnparkAllNanos > MAX_PARKED_NANOS) {
+            unparkAll();
         }
         PriorityQueue<OwnerCursor> heads = new PriorityQueue<>();
         if (!positionsWithoutHash.isEmpty()) {
@@ -464,6 +504,8 @@ public class MessageRedeliveryController {
             }
         }
         IntOpenHashSet blockedHashes = null;
+        // the hashes found blocked, with their owners' positions, to park after the selection
+        Reference2ObjectOpenHashMap<SortedPositions, IntOpenHashSet> toPark = null;
         while (!heads.isEmpty() && selected.size() < maxMessagesToRead) {
             OwnerCursor cursor = heads.poll();
             boolean take = true;
@@ -473,12 +515,12 @@ public class MessageRedeliveryController {
                     take = false;
                 } else if (selection.isBlocked(cursor.owner, hash)) {
                     take = false;
-                    if (!allowOutOfOrderDelivery) {
-                        if (blockedHashes == null) {
-                            blockedHashes = new IntOpenHashSet();
-                        }
-                        blockedHashes.add(hash);
+                    if (blockedHashes == null) {
+                        blockedHashes = new IntOpenHashSet();
+                        toPark = new Reference2ObjectOpenHashMap<>();
                     }
+                    blockedHashes.add(hash);
+                    toPark.computeIfAbsent(cursor.positions, k -> new IntOpenHashSet()).add(hash);
                 }
             }
             if (take) {
@@ -489,7 +531,93 @@ public class MessageRedeliveryController {
                 addIfNotExhausted(heads, cursor);
             }
         }
+        if (toPark != null) {
+            for (Reference2ObjectMap.Entry<SortedPositions, IntOpenHashSet> owner
+                    : Reference2ObjectMaps.fastIterable(toPark)) {
+                park(owner.getKey(), owner.getValue());
+            }
+        }
         return selected;
+    }
+
+    // Moves the hashes' positions from their owner's positions to the parked positions, in one pass
+    private void park(SortedPositions ownerPositions, IntOpenHashSet hashes) {
+        List<long[]> moved = new ArrayList<>();
+        for (Long2ObjectMap.Entry<RoaringBitmap> ledgerEntry : ownerPositions.ledgers.long2ObjectEntrySet()) {
+            long ledgerId = ledgerEntry.getLongKey();
+            Int2IntOpenHashMap ledgerHashes = ledgers.get(ledgerId).hashes;
+            PeekableIntIterator entries = ledgerEntry.getValue().getIntIterator();
+            while (entries.hasNext()) {
+                int entry = entries.next();
+                int hash = ledgerHashes.get(entry);
+                if (hashes.contains(hash)) {
+                    moved.add(new long[] {ledgerId, entry, hash});
+                }
+            }
+        }
+        for (long[] position : moved) {
+            int hash = (int) position[2];
+            ownerPositions.remove(position[0], (int) position[1]);
+            SortedPositions parked = parkedPositionsByHash.get(hash);
+            if (parked == null) {
+                parked = new SortedPositions();
+                parkedPositionsByHash.put(hash, parked);
+                // the hash's later positions go to the parked positions too
+                ownerPositionsByHash.put(hash, parked);
+            }
+            parked.add(position[0], (int) position[1]);
+        }
+        updateHasParkedHashes();
+    }
+
+    /**
+     * Tells that the hash may be dispatched again, such as when its draining ended: its parked positions go back to
+     * their owner's positions. {@code STICKY_KEY_HASH_NOT_SET} unparks every hash.
+     */
+    public void unpark(int stickyKeyHash) {
+        if (stickyKeyHash == STICKY_KEY_HASH_NOT_SET) {
+            unparkAll();
+            return;
+        }
+        SortedPositions parked = parkedPositionsByHash.remove(stickyKeyHash);
+        if (parked != null) {
+            ownerPositionsByHash.remove(stickyKeyHash);
+            SortedPositions owner = ownerPositions(stickyKeyHash);
+            for (Long2ObjectMap.Entry<RoaringBitmap> ledger : parked.ledgers.long2ObjectEntrySet()) {
+                RoaringBitmap entries = owner.ledgers.get(ledger.getLongKey());
+                if (entries == null) {
+                    owner.ledgers.put(ledger.getLongKey(), ledger.getValue());
+                } else {
+                    entries.or(ledger.getValue());
+                }
+            }
+            updateHasParkedHashes();
+        }
+    }
+
+    private void unparkAll() {
+        lastUnparkAllNanos = System.nanoTime();
+        if (parkedPositionsByHash.isEmpty()) {
+            return;
+        }
+        int[] hashes = parkedPositionsByHash.keySet().toIntArray();
+        for (int hash : hashes) {
+            unpark(hash);
+        }
+    }
+
+    /** Whether any hash is parked; may be called from any thread. */
+    public boolean hasParkedHashes() {
+        return hasParkedHashes;
+    }
+
+    private void updateHasParkedHashes() {
+        hasParkedHashes = !parkedPositionsByHash.isEmpty();
+    }
+
+    @VisibleForTesting
+    int getParkedHashCount() {
+        return parkedPositionsByHash.size();
     }
 
     private static void addIfNotExhausted(PriorityQueue<OwnerCursor> heads, OwnerCursor cursor) {
@@ -521,6 +649,7 @@ public class MessageRedeliveryController {
     // An owner's next position in a selection; ordered by that position
     private static final class OwnerCursor implements Comparable<OwnerCursor> {
         final Object owner;
+        final SortedPositions positions;
         int permits;
         private final ObjectBidirectionalIterator<Long2ObjectMap.Entry<RoaringBitmap>> ledgers;
         private final Long2ObjectRBTreeMap<LedgerPositions> queuedLedgers;
@@ -533,6 +662,7 @@ public class MessageRedeliveryController {
         OwnerCursor(Object owner, SortedPositions positions, int permits,
                     Long2ObjectRBTreeMap<LedgerPositions> queuedLedgers) {
             this.owner = owner;
+            this.positions = positions;
             this.permits = permits;
             this.ledgers = positions.ledgers.long2ObjectEntrySet().iterator();
             this.queuedLedgers = queuedLedgers;
