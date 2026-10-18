@@ -511,6 +511,14 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     return scenario.deviceCount();
                 }
                 finalSequences = next;
+                // The gateways have finished: a restart now would only keep a pod rebuilding its state, so the pods
+                // wouldn't all have every device's last state at the same time when the restarts take as long as
+                // their interval
+                try {
+                    stopRestarts();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
             synchronized (pods) {
                 if (pods.size() < scenario.podsPerApplication()) {
@@ -966,7 +974,10 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     Thread.currentThread().interrupt();
                     return;
                 } catch (Exception error) {
-                    restartFailure.compareAndSet(null, error);
+                    // a restart that the application's stop interrupts isn't a failure
+                    if (!stopping.get()) {
+                        restartFailure.compareAndSet(null, error);
+                    }
                     return;
                 }
             }
