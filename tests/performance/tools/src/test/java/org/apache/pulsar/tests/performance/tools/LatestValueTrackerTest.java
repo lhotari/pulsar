@@ -19,6 +19,7 @@
 package org.apache.pulsar.tests.performance.tools;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.io.DataInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.testng.annotations.Test;
@@ -39,6 +40,20 @@ public class LatestValueTrackerTest {
         assertThat(tracker.staleDevices(new long[] {7, 1, 0})).isZero();
         assertThat(tracker.staleDevices(new long[] {8, 1, 0})).isEqualTo(1);
         assertThat(tracker.staleDevices(new long[] {8, 2, 1})).isEqualTo(3);
+    }
+
+    @Test
+    public void writesTheStateAsTheGatewaysDo() throws Exception {
+        LatestValueTracker tracker = new LatestValueTracker(2);
+        tracker.received(0, 4);
+        Path state = Files.createTempDirectory("state").resolve("application-state.bin");
+        tracker.writeState(state);
+        try (var input = new DataInputStream(Files.newInputStream(state))) {
+            assertThat(input.readInt()).isEqualTo(DeviceSequenceTracker.STATE_VERSION);
+            assertThat(input.readInt()).isEqualTo(2);
+            assertThat(input.readLong()).isEqualTo(5);
+            assertThat(input.readLong()).isZero();
+        }
     }
 
     @Test

@@ -20,11 +20,13 @@ package org.apache.pulsar.tests.performance.tools;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
@@ -548,6 +550,18 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private boolean finishReadingCompacted() throws Exception {
             long stale = staleDevices();
             receiveLatency.close();
+            // the state of the pod that lacks the most devices' last messages, which the launcher checks
+            synchronized (pods) {
+                long[] next = finalSequences;
+                pods.stream().max(Comparator.comparingLong(pod -> next != null ? pod.state().staleDevices(next) : 0))
+                        .ifPresent(pod -> {
+                            try {
+                                pod.state().writeState(output.resolve("application-state.bin"));
+                            } catch (IOException e) {
+                                throw new UncheckedIOException(e);
+                            }
+                        });
+            }
             List<Long> startUps;
             synchronized (podStartUpMillis) {
                 startUps = new ArrayList<>(podStartUpMillis);

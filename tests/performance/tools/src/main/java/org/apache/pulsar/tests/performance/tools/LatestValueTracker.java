@@ -18,6 +18,11 @@
  */
 package org.apache.pulsar.tests.performance.tools;
 
+import java.io.BufferedOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -66,6 +71,23 @@ final class LatestValueTracker {
                 return Outcome.UPDATE;
             }
             return sequence == current ? Outcome.REPEAT : Outcome.REGRESSION;
+        }
+    }
+
+    /**
+     * Writes each device's next sequence after its latest one, in the format of the gateways' state, which the
+     * launcher compares with it.
+     */
+    void writeState(Path path) throws IOException {
+        Files.createDirectories(path.getParent());
+        try (var output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
+            output.writeInt(DeviceSequenceTracker.STATE_VERSION);
+            output.writeInt(latest.length);
+            for (int device = 0; device < latest.length; device++) {
+                synchronized (locks[device & (LOCK_COUNT - 1)]) {
+                    output.writeLong(latest[device] + 1);
+                }
+            }
         }
     }
 
