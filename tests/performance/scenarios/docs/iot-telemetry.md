@@ -335,8 +335,10 @@ type other than Shared, which would deliver a message's chunks to different cons
 
 With `applications.mode: latestState`, the pods consume the application's subscription, and the application keeps
 each device's latest sequence, as a pod that reads compacted does: a falling sequence is an ordering violation, and
-gaps are allowed, such as the messages that a message TTL or a backlog quota's eviction removes. The application has
-received everything when it has each device's last message once the gateways have finished; the pauses then stop. It
+gaps are allowed, such as the messages that a message TTL or a backlog quota's eviction removes. Once the gateways
+have finished, the pauses stop, and the application has received everything when it has each device's last message,
+or when no message has arrived for 10 seconds, since a device's last message may have expired or been evicted: the
+devices without their last state are reported in the Device states section, not as invalid. It
 needs a subscription type that keeps each device's order, and doesn't support pod restarts, whose redeliveries would
 look like falling states.
 

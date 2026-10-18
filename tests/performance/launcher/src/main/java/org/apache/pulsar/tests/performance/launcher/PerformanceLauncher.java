@@ -2113,6 +2113,10 @@ public class PerformanceLauncher implements Callable<Integer> {
      */
     private static void verifyStates(Path output, Path applicationsDirectory, JsonNode workload, int applications)
             throws Exception {
+        if ("latestState".equals(workload.path("applications").path("mode").asText())) {
+            // the applications check each device's latest state, whose last message may have expired, themselves
+            return;
+        }
         long[] produced = readState(output.resolve("gateways/gateways-state.bin"));
         JsonNode skipMessages = workload.path("applications").path("skipMessages");
         JsonNode resetToMillis = workload.path("applications").path("resetToMillis");

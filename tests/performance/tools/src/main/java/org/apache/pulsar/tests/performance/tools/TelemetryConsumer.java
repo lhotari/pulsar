@@ -305,8 +305,13 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private final AtomicLong stateInvalid = new AtomicLong();
         private final List<Long> podStartUpMillis = Collections.synchronizedList(new ArrayList<>());
         private volatile long[] finalSequences;
-        // With mode latestState: each device's latest sequence that the application's pods received
+        // With mode latestState: each device's latest sequence that the application's pods received, and when the
+        // last message arrived. A device's last message may have expired or been evicted, so the application has
+        // received everything when it has each device's last message, or when no message has arrived for a while
+        // once the gateways have finished
         private final LatestValueTracker applicationState;
+        private volatile long lastReceiptNanos = System.nanoTime();
+        private static final long QUIET_NANOS = TimeUnit.SECONDS.toNanos(10);
         // Checking every device of every pod takes time under the pods' lock, so the receive loop checks once a second
         private long nextStaleCheckNanos;
         // With processing failures: the failed attempts, and the messages that reached the dead letter topic, which
@@ -511,7 +516,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     return false;
                 }
                 nextStaleCheckNanos = now + TimeUnit.SECONDS.toNanos(1);
-                return staleDevices() == 0;
+                return staleDevices() == 0
+                        || applicationState != null && finalSequences != null && now - lastReceiptNanos > QUIET_NANOS;
             }
             return expectedMessages >= 0 && tracker.uniqueMessages() >= expectedMessages;
         }
@@ -680,7 +686,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     + "  \"redeliveredDuplicates\": 0,\n"
                     + "  \"republishedDuplicates\": 0,\n"
                     + "  \"orderingViolations\": " + stateRegressions.get() + ",\n"
-                    + "  \"invalidMessages\": " + (stateInvalid.get() + stale) + ",\n"
+                    + "  \"invalidMessages\": " + (stateInvalid.get() + (applicationState != null ? 0 : stale)) + ",\n"
                     + "  \"staleDevices\": " + stale + ",\n"
                     + "  \"podStartUpMillis\": " + startUps + ",\n"
                     + "  \"firstMeasurementMessageReceivedEpochMs\": "
@@ -695,7 +701,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             closePods();
             finished = true;
             // A repeated state, as after a reader reconnects, is reported as a duplicate, but a state service takes it
-            return stale == 0 && stateRegressions.get() == 0 && stateInvalid.get() == 0;
+            // with latestState, a device without its last state lost it to the message TTL or the backlog quota
+            return (stale == 0 || applicationState != null) && stateRegressions.get() == 0
+                    && stateInvalid.get() == 0;
         }
 
         /** Closes the application's pods, when it hasn't finished, such as after a failure. */
@@ -877,6 +885,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
          */
         private void receivedLatestState(Consumer<byte[]> consumer, Message<byte[]> message,
                                          TelemetryMessage.Decoded decoded, long receivedEpochMs) {
+            lastReceiptNanos = System.nanoTime();
             switch (applicationState.received(decoded.deviceId(), decoded.sequence())) {
                 case UPDATE -> stateUpdates.incrementAndGet();
                 case REPEAT -> stateRepeats.incrementAndGet();
