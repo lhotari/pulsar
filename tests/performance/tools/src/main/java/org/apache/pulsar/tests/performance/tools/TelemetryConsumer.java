@@ -31,8 +31,10 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -309,6 +311,10 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         // the application also consumes, of which those that weren't to fail at every attempt are unexpected
         private final AtomicLong failedAttempts = new AtomicLong();
         private final AtomicLong deadLetters = new AtomicLong();
+        // The messages that reached the dead letter topic, by device and sequence: the client can dead-letter a
+        // message again when a reconnection loses the acknowledgment of its first dead-lettering, which the tracker
+        // counts as a duplicate
+        private final Set<Long> deadLettered = ConcurrentHashMap.newKeySet();
         private final AtomicLong unexpectedDeadLetters = new AtomicLong();
         // The retries that the retry topic couldn't take, which the client redelivers instead
         private final AtomicLong retryPublishFailures = new AtomicLong();
@@ -863,9 +869,11 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                                     throw new IllegalArgumentException(
                                             "Telemetry key does not match payload device ID");
                                 }
-                                deadLetters.incrementAndGet();
-                                if (!failures.poison(decoded.deviceId(), decoded.sequence())) {
-                                    unexpectedDeadLetters.incrementAndGet();
+                                if (deadLettered.add((decoded.deviceId() << 40) | decoded.sequence())) {
+                                    deadLetters.incrementAndGet();
+                                    if (!failures.poison(decoded.deviceId(), decoded.sequence())) {
+                                        unexpectedDeadLetters.incrementAndGet();
+                                    }
                                 }
                                 tracker.received(decoded.deviceId(), decoded.sequence(), message.getMessageId(),
                                         decoded.sentNanos(), message.getTopicName(),
