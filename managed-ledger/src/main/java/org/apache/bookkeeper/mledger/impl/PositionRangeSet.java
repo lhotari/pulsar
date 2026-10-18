@@ -22,6 +22,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.BoundType;
 import com.google.common.collect.Range;
 import io.github.merlimat.slog.Logger;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectRBTreeMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectSortedMap;
 import java.util.ArrayList;
@@ -305,17 +306,51 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
                 consumer.apply(lastLedgerId, upperEntryId));
     }
 
+    /**
+     * The ledgers' bitmaps, in ledger order, as long arrays, while they fit two budgets: {@code maxRanges} ranges of
+     * present values, as {@link #size()} counts them, and as many longs as {@code maxRanges} ranges of two longs
+     * each would take, which bounds the serialized size. The ledgers after the last one that fits are left out. It
+     * counts ranges rather than present values, so that the acknowledgments of many consecutive entries, a single
+     * range, don't leave out the ledgers that follow.
+     */
     @Override
     public Map<Long, long[]> toRanges(int maxRanges) {
         Map<Long, long[]> internalBitSetMap = new HashMap<>();
-        MutableInt rangeCount = new MutableInt();
-        rangeBitmapMap.forEach((ledgerId, bitmap) -> {
-            if (rangeCount.addAndGet((int) bitmap.cardinality()) > maxRanges) {
-                return;
+        long remainingRanges = maxRanges;
+        long remainingLongs = 2L * maxRanges;
+        for (Long2ObjectMap.Entry<LongBitmap> ledger : rangeBitmapMap.long2ObjectEntrySet()) {
+            remainingRanges -= rangeCount(ledger.getValue(), remainingRanges);
+            if (remainingRanges < 0) {
+                break;
             }
-            internalBitSetMap.put(ledgerId, bitmap.serializeToLongArray());
-        });
+            long[] serialized = ledger.getValue().serializeToLongArray();
+            remainingLongs -= serialized.length;
+            if (remainingLongs < 0) {
+                break;
+            }
+            internalBitSetMap.put(ledger.getLongKey(), serialized);
+        }
         return internalBitSetMap;
+    }
+
+    /** The number of ledgers with acknowledged entries, of which {@link #toRanges} may leave out the last ones. */
+    public int ledgerCount() {
+        return rangeBitmapMap.size();
+    }
+
+    // The ranges of consecutive present values in the bitmap, counting up to one more than the limit
+    private static long rangeCount(LongBitmap bitmap, long limit) {
+        long count = 0;
+        long start = bitmap.nextPresentValue(0);
+        while (start >= 0 && count <= limit) {
+            count++;
+            long end = bitmap.nextAbsentValue(start);
+            if (end < 0) {
+                break;
+            }
+            start = bitmap.nextPresentValue(end);
+        }
+        return count;
     }
 
     @Override

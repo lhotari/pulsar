@@ -615,6 +615,41 @@ public class PositionRangeSetTest {
     }
 
     @Test
+    public void testToRangesCountsRangesNotAcknowledgedEntries() {
+        // as a cursor whose mark-delete position is held back while the entries after it are acknowledged: few
+        // ranges of many entries, over several ledgers
+        PositionRangeSet set = newSet();
+        set.addOpenClosed(1, -1, 1, 99);
+        set.addOpenClosed(2, -1, 2, 99);
+        set.addOpenClosed(3, 9, 3, 19);
+        set.addOpenClosed(3, 29, 3, 39);
+        assertEquals(set.size(), 4);
+        assertEquals(set.ledgerCount(), 3);
+
+        // every ledger fits the budget of ranges, although they hold 220 acknowledged entries
+        assertEquals(set.toRanges(4).keySet(), Set.of(1L, 2L, 3L));
+        // a ledger whose ranges don't fit is left out, with the ledgers after it
+        assertEquals(set.toRanges(3).keySet(), Set.of(1L, 2L));
+        assertEquals(set.toRanges(1).keySet(), Set.of(1L));
+
+        PositionRangeSet restored = newSet();
+        restored.build(set.toRanges(4));
+        assertEquals(restored.asRanges(), set.asRanges());
+    }
+
+    @Test
+    public void testToRangesBoundsTheSerializedSize() {
+        // a single range far into the ledger serializes to many longs: the size, not the ranges, leaves it out
+        PositionRangeSet set = newSet();
+        set.addOpenClosed(1, -1, 1, 9);
+        set.addOpenClosed(2, 1_000_000, 2, 1_000_001);
+        assertEquals(set.size(), 2);
+
+        assertEquals(set.toRanges(10).keySet(), Set.of(1L));
+        assertEquals(set.toRanges(100_000).keySet(), Set.of(1L, 2L));
+    }
+
+    @Test
     public void testCompatibilityWithLegacyOpenLongPairRangeSet() {
         // Simulate 4.x cursor persistence: serialize individual deleted messages using the legacy
         // OpenLongPairRangeSet (still present in pulsar-common) backed by RoaringBitSet, then
