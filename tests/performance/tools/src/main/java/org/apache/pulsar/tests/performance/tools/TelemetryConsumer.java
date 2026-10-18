@@ -48,6 +48,7 @@ import java.util.concurrent.locks.LockSupport;
 import org.apache.pulsar.client.api.Consumer;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.PulsarClient;
+import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.PulsarClientSharedResources;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionInitialPosition;
@@ -707,14 +708,27 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             }
         }
 
-        /** Closes the consumer, then the client, also when closing the consumer failed. */
+        /**
+         * Closes the consumer, then the client, also when closing the consumer failed. A pod that a restart closed and
+         * couldn't replace, as when the application stops during the restart, is already closed, which isn't a
+         * failure.
+         */
         CompletableFuture<Void> closeAsync() {
-            return consumer.closeAsync().handle((ignored, consumerFailure) -> consumerFailure)
-                    .thenCompose(consumerFailure -> client.closeAsync().thenRun(() -> {
-                        if (consumerFailure != null) {
-                            throw new CompletionException(consumerFailure);
-                        }
-                    }));
+            return consumer.closeAsync().handle((ignored, consumerFailure) -> unlessAlreadyClosed(consumerFailure))
+                    .thenCompose(consumerFailure -> client.closeAsync()
+                            .exceptionallyCompose(failure -> unlessAlreadyClosed(failure) == null
+                                    ? CompletableFuture.completedFuture(null) : CompletableFuture.failedFuture(failure))
+                            .thenRun(() -> {
+                                if (consumerFailure != null) {
+                                    throw new CompletionException(consumerFailure);
+                                }
+                            }));
+        }
+
+        private static Throwable unlessAlreadyClosed(Throwable failure) {
+            Throwable cause = failure instanceof CompletionException && failure.getCause() != null
+                    ? failure.getCause() : failure;
+            return cause instanceof PulsarClientException.AlreadyClosedException ? null : failure;
         }
     }
 }
