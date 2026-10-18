@@ -3852,6 +3852,18 @@ public class ServiceConfiguration implements PulsarConfiguration {
     private long brokerServiceCompactionThresholdInBytes = 0;
 
     @FieldContext(
+        category = CATEGORY_SERVER,
+        doc = "Raises the compaction threshold of a compacted topic to this fraction of its compacted ledger's size,"
+            + " when that is larger than brokerServiceCompactionThresholdInBytes or the topic's compaction"
+            + " threshold policy. Each compaction reads and rewrites every key's latest message, so with a large"
+            + " compacted state and a small threshold the broker compacts the whole state again for a little new"
+            + " data. A ratio of 1.0 compacts when the new data is as large as the compacted state, which bounds"
+            + " the bytes written by compaction to about twice the bytes published. Using a value of 0 is"
+            + " disabling it."
+    )
+    private double brokerServiceCompactionThresholdRatio = 0;
+
+    @FieldContext(
             category = CATEGORY_SERVER,
             doc = "Timeout for each read request in the compaction phase one loop, If the execution time of one "
                     + "single message read operation exceeds this time, the compaction will not proceed."

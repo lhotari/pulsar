@@ -2556,6 +2556,10 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         try {
             long compactionThreshold = topicPolicies.getCompactionThreshold().get();
             if (isCompactionEnabled() && currentCompaction.isDone()) {
+                double ratio = brokerService.pulsar().getConfiguration().getBrokerServiceCompactionThresholdRatio();
+                if (ratio > 0) {
+                    compactionThreshold = Math.max(compactionThreshold, (long) (ratio * compactedLedgerSize()));
+                }
 
                 long backlogEstimate = 0;
 
@@ -2585,6 +2589,19 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         } catch (Exception e) {
             log.warn().exception(e).log("Error getting policies and skipping compaction check");
         }
+    }
+
+    // The size of the topic's compacted ledger once it's open, or 0
+    @VisibleForTesting
+    public long compactedLedgerSize() {
+        if (topicCompactionService instanceof PulsarTopicCompactionService pulsarTopicCompactionService) {
+            CompletableFuture<CompactedTopicContext> context =
+                    pulsarTopicCompactionService.getCompactedTopic().getCompactedTopicContextFuture();
+            if (context != null && context.isDone() && !context.isCompletedExceptionally()) {
+                return context.join().getLedger().getLength();
+            }
+        }
+        return 0;
     }
 
     public CompletableFuture<Void> preCreateSubscriptionForCompactionIfNeeded() {
