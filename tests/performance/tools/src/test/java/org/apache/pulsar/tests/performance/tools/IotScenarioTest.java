@@ -234,6 +234,33 @@ public class IotScenarioTest {
     }
 
     @Test
+    public void partitionsTheTopics() {
+        IotScenario plain = scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null));
+        assertThat(plain.topics().partitioned()).isFalse();
+        assertThat(plain.statsTopicNames()).containsExactly("persistent://public/default/iot-0",
+                "persistent://public/default/iot-1");
+        IotScenario partitioned = withTopics(new IotScenario.Topics(2, "persistent://public/default/iot-", 2),
+                new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null));
+        assertThat(partitioned.topicNames()).containsExactly("persistent://public/default/iot-0",
+                "persistent://public/default/iot-1");
+        assertThat(partitioned.statsTopicNames()).containsExactly("persistent://public/default/iot-0-partition-0",
+                "persistent://public/default/iot-0-partition-1", "persistent://public/default/iot-1-partition-0",
+                "persistent://public/default/iot-1-partition-1");
+        assertThatThrownBy(() -> withTopics(new IotScenario.Topics(2, "persistent://public/default/iot-", -1),
+                new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null)))
+                .hasMessageContaining("topics.partitions must not be negative");
+        // the launcher prepares a join with each topic's stats
+        assertThatThrownBy(() -> withTopics(new IotScenario.Topics(2, "persistent://public/default/iot-", 2),
+                new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null, List.of(0, 30), null,
+                        null, true)))
+                .hasMessageContaining("topics.partitions doesn't support");
+        // a scenario file without the setting keeps non-partitioned topics
+        IotScenario.Topics fromYaml = new YamlScenarioLoader().mapper().convertValue(Map.of("count", 2,
+                "prefix", "persistent://public/default/iot-"), IotScenario.Topics.class);
+        assertThat(fromYaml.partitions()).isZero();
+    }
+
+    @Test
     public void validatesThePodPauses() {
         assertThat(withBehaviors(null).behaviors().podPauses().enabled()).isFalse();
         assertThat(withBehaviors(new IotScenario.Behaviors(null, new IotScenario.PodPauses(15, 0.1, 5000)))
@@ -363,6 +390,13 @@ public class IotScenarioTest {
 
     private static IotScenario scenario(IotScenario.Applications applications) {
         return scenario(applications, new IotScenario.Warmup(0, 0, 1, 0));
+    }
+
+    private static IotScenario withTopics(IotScenario.Topics topics, IotScenario.Applications applications) {
+        return new IotScenario("pulsar://localhost:6650", new IotScenario.Warmup(0, 0, 1, 0),
+                new IotScenario.Measurement(120, 1_000), 0, new IotScenario.Payload(64), new IotScenario.Devices(1_000),
+                new IotScenario.Gateways(10, new IotScenario.Producer(2, 2, 100, true, true, null), null),
+                topics, applications, null, 300);
     }
 
     // The gateways without batching, as skipping messages needs

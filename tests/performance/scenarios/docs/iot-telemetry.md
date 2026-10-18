@@ -39,6 +39,10 @@ application-visible order across Key_Shared hash-range reassignment.
 - [`iot-telemetry-key-shared-stuck-consumer.yaml`](../iot-telemetry-key-shared-stuck-consumer.yaml) pauses one of
   each application's five pods for 45 seconds every minute, so that the replay queues reach their look-ahead limit
   and dispatch stops until the pod resumes: what the broker spends while dispatch is stuck.
+- [`iot-telemetry-failover-processors.yaml`](../iot-telemetry-failover-processors.yaml) runs eight stream
+  processors with hot standbys: each application is a Failover subscription of three pods on four topics of 12
+  partitions, so each partition has one active consumer, and every 20 seconds each application restarts one pod, whose
+  partitions fail over to a standby: the fail-overs' delivery gap and redelivery, with each device's order checked.
 - [`iot-telemetry-small.yaml`](../iot-telemetry-small.yaml) keeps the 20-way fanout,
   30 topics and 1,000 msg/s rate, but uses 10 gateways and 10 pods per application, with the low-memory
   configuration.
@@ -210,6 +214,7 @@ workloads:
     topics:
       count: 30
       prefix: persistent://public/default/iot-telemetry-
+      partitions: 0            # not set in the base file: the partitions of each topic, 0 for non-partitioned
     applications:              # each a subscription of its own, consumed through its pods
       count: 20
       podsPerApplication: 100  # a Pulsar client with a consumer of the subscription each
@@ -234,6 +239,12 @@ workloads:
         fraction: 0.0
         pauseMillis: 0
 ```
+
+`topics.partitions` makes each topic a partitioned topic of that many partitions, which the launcher creates before
+the workloads start. A gateway's producer routes each device's messages to one partition by the device's key, and each
+pod's consumer subscribes to every partition. The launcher samples each partition's stats. The applications' join
+preparation (`skipMessages`, `unloadBeforeJoin` and `resetToMillis`), offloading and a remote cluster don't support
+partitioned topics.
 
 `behaviors.podPauses` stalls pods as a garbage collection, a slow downstream or a debugger would: every
 `intervalSeconds`, each application pauses a random `fraction` of its pods' consumers for `pauseMillis`, shorter than

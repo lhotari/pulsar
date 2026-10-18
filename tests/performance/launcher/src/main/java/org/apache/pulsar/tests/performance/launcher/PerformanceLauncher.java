@@ -297,6 +297,10 @@ public class PerformanceLauncher implements Callable<Integer> {
         if (offloadSettings != null) {
             offloadSettings.checkTopics(workload.path("topics").path("prefix").textValue());
         }
+        // The launcher creates partitioned topics in its own cluster only, and offloading's seeks read each topic
+        if (workload.path("topics").path("partitions").asInt(0) > 0 && (remote != null || offloadSettings != null)) {
+            throw new IllegalArgumentException("topics.partitions doesn't support cluster.remote or offload");
+        }
         String remoteClusterName = ClusterSettings.remoteClusterName(clusterName);
         ObjectNode remoteWorkload = null;
         if (remote != null) {
@@ -567,6 +571,9 @@ public class PerformanceLauncher implements Callable<Integer> {
             }
             if (offloadSettings != null) {
                 setOffloadPolicies(cluster, offloadSettings);
+            }
+            if (iotScenario.topics().partitioned()) {
+                createPartitionedTopics(cluster, iotScenario);
             }
             if (metrics) {
                 String composeFile = System.getProperty("performance.metrics.composeFile");
@@ -1092,6 +1099,23 @@ public class PerformanceLauncher implements Callable<Integer> {
                 offload.deletionLagMillis()));
     }
 
+    /**
+     * Creates the workload's topics as partitioned topics, before the workloads start, since a producer would create
+     * a non-partitioned topic.
+     */
+    private static void createPartitionedTopics(PulsarCluster cluster, IotScenario scenario)
+            throws PulsarClientException, PulsarAdminException {
+        try (PulsarAdmin admin = PulsarAdmin.builder()
+                .serviceHttpUrl(cluster.getHttpServiceUrl())
+                .build()) {
+            for (String topic : scenario.topicNames()) {
+                admin.topics().createPartitionedTopic(topic, scenario.topics().partitions());
+            }
+        }
+        status(String.format(Locale.ROOT, "Created %d partitioned topic(s) of %d partitions",
+                scenario.topics().count(), scenario.topics().partitions()));
+    }
+
     // The version that a broker reports, or empty when it doesn't answer; it names a release such as latest, which
     // the whole cluster runs
     private static String brokerVersion(PulsarCluster cluster) {
@@ -1203,8 +1227,14 @@ public class PerformanceLauncher implements Callable<Integer> {
     private static TopicStatsSampler startTopicStatsSampler(PulsarCluster cluster, JsonNode workload,
                                                             Path runOutput, boolean replicated, String fileName) {
         String prefix = workload.path("topics").path("prefix").textValue();
+        int partitions = workload.path("topics").path("partitions").asInt(0);
+        // A partitioned topic's stats are its partitions'
         List<String> topics = IntStream.range(0, workload.path("topics").path("count").intValue())
-                .mapToObj(topic -> prefix + topic).toList();
+                .mapToObj(topic -> prefix + topic)
+                .flatMap(topic -> partitions > 0
+                        ? IntStream.range(0, partitions).mapToObj(partition -> topic + "-partition-" + partition)
+                        : Stream.of(topic))
+                .toList();
         try {
             // Each broker, by its name in the cluster's network, which Docker names the container with a leading slash
             Map<String, String> brokerHttpUrls = new LinkedHashMap<>();

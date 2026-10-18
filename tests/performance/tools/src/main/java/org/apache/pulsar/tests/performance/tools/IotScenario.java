@@ -127,8 +127,28 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
         }
     }
 
-    /** The telemetry topics, named {@code <prefix><index>}. */
-    public record Topics(int count, String prefix) {
+    /**
+     * The telemetry topics, named {@code <prefix><index>}.
+     *
+     * @param partitions the partitions of each topic, which the launcher creates as a partitioned topic before the
+     *                   workloads start; 0, the default, for non-partitioned topics, which the gateways' producers
+     *                   create. A producer routes a device's messages by its key to one partition
+     */
+    public record Topics(int count, String prefix, Integer partitions) {
+        public Topics {
+            if (partitions == null) {
+                partitions = 0;
+            }
+        }
+
+        public Topics(int count, String prefix) {
+            this(count, prefix, null);
+        }
+
+        /** Whether the topics are partitioned. */
+        public boolean partitioned() {
+            return partitions > 0;
+        }
     }
 
     /**
@@ -381,6 +401,12 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                         && applications.resetToMillis().stream().allMatch(resetTo -> resetTo == null || resetTo == -1),
                 "applications.skipMessages and applications.resetToMillis need a subscription type that keeps each"
                         + " device's order, not Shared");
+        require(topics.partitions() >= 0, "topics.partitions must not be negative");
+        // The launcher prepares a join with each topic's stats, which a partitioned topic keeps per partition
+        require(!topics.partitioned() || !applications.unloadBeforeJoin()
+                        && applications.skipMessages().stream().allMatch(skipped -> skipped == null || skipped == 0)
+                        && applications.resetToMillis().stream().allMatch(resetTo -> resetTo == null || resetTo == -1),
+                "topics.partitions doesn't support applications.skipMessages, unloadBeforeJoin or resetToMillis");
         require(producer.precreateConcurrency() >= 1, "gateways.producer.precreateConcurrency must be at least 1");
         require(producer.batchingMaxPublishDelayMillis() == null || producer.batchingMaxPublishDelayMillis() >= 1,
                 "gateways.producer.batchingMaxPublishDelayMillis must be at least 1");
@@ -547,6 +573,23 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
         List<String> result = new ArrayList<>(topics.count());
         for (int i = 0; i < topics.count(); i++) {
             result.add(topicName(i));
+        }
+        return result;
+    }
+
+    /**
+     * The topics whose stats the brokers keep: the topics, or each partition of the partitioned topics, named
+     * {@code <topic>-partition-<index>}.
+     */
+    public List<String> statsTopicNames() {
+        if (!topics.partitioned()) {
+            return topicNames();
+        }
+        List<String> result = new ArrayList<>(topics.count() * topics.partitions());
+        for (String topic : topicNames()) {
+            for (int partition = 0; partition < topics.partitions(); partition++) {
+                result.add(topic + "-partition-" + partition);
+            }
         }
         return result;
     }

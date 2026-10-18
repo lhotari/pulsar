@@ -440,7 +440,9 @@ public final class RunReport {
                     + brokerEnvs.path("managedLedgerDefaultAckQuorum").asText()));
         }
         report.append(row("Gateways", workload.path("gateways").path("count").asInt() + " gateway(s) × "
-                        + workload.path("topics").path("count").asInt() + " topic(s)"))
+                        + workload.path("topics").path("count").asInt() + " topic(s)"
+                        + (workload.path("topics").path("partitions").asInt(0) > 0
+                        ? " of " + workload.path("topics").path("partitions").asInt() + " partitions" : "")))
                 .append(row("Applications", workload.path("applications").path("count").asInt() + " × "
                         + workload.path("applications").path("podsPerApplication").asInt()
                         + " pods, " + workload.path("applications").path("subscriptionType").asText("Key_Shared")))
