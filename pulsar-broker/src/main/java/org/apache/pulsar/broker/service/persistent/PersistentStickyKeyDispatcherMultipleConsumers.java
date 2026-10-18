@@ -35,6 +35,8 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Getter;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
@@ -830,8 +832,19 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
 
     @Override
     protected NavigableSet<Position> selectMessagesToReplay(int maxMessagesToRead) {
-        return redeliveryMessages.selectForReplay(maxMessagesToRead, replaySelection);
+        NavigableSet<Position> selected = redeliveryMessages.selectForReplay(maxMessagesToRead, replaySelection);
+        if (redeliveryMessages.hasParkedHashes() && parkedHashesWakeupScheduled.compareAndSet(false, true)) {
+            // a read pass that unparks the hashes after their longest parking, should no notification wake one
+            topic.getBrokerService().executor().schedule(() -> {
+                parkedHashesWakeupScheduled.set(false);
+                readMoreEntries();
+            }, MessageRedeliveryController.MAX_PARKED_MILLIS + PARKED_WAKEUP_MARGIN_MILLIS, TimeUnit.MILLISECONDS);
+        }
+        return selected;
     }
+
+    private static final long PARKED_WAKEUP_MARGIN_MILLIS = 100;
+    private final AtomicBoolean parkedHashesWakeupScheduled = new AtomicBoolean();
 
     // Out-of-order delivery relaxes ordering, not routing: dispatch selects the owning consumer by hash in both modes,
     // so the permit check keeps the read's budget off positions that dispatch would only put back into the replay

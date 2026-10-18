@@ -73,8 +73,9 @@ public class MessageRedeliveryController {
     }
 
     private static final long MAX_ENTRY_ID = 0xFFFF_FFFFL;
-    // the longest that a hash stays parked without being told that it's unblocked
-    private static final long MAX_PARKED_NANOS = TimeUnit.SECONDS.toNanos(1);
+    /** The longest that a hash stays parked without being told that it's unblocked, given a selection then. */
+    static final long MAX_PARKED_MILLIS = 1000;
+    private static final long MAX_PARKED_NANOS = TimeUnit.MILLISECONDS.toNanos(MAX_PARKED_MILLIS);
 
     private final boolean allowOutOfOrderDelivery;
     // ledger ID -> the ledger's positions in the replay queue
