@@ -243,6 +243,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     private static final String TOPIC_EPOCH_PROPERTY_NAME = "pulsar.topic.epoch";
 
     private static final double MESSAGE_EXPIRY_THRESHOLD = 1.5;
+    // how often a closing topic checks whether its consumers have acknowledged what they received
+    private static final long ACK_DRAIN_CHECK_INTERVAL_MILLIS = 20;
 
     private static final long POLICY_UPDATE_FAILURE_RETRY_TIME_SECONDS = 60;
 
@@ -1911,8 +1913,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         replicators.forEach((cluster, replicator) -> futures.add(replicator.terminate()));
         shadowReplicators.forEach((__, replicator) -> futures.add(replicator.terminate()));
         if (closeType != CloseTypes.transferring) {
-            futures.add(ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(
-                brokerService.getPulsar(), topic).thenAccept(lookupData -> {
+            futures.add(drainAcknowledgmentsBeforeClose().thenCompose(__ ->
+                ExtensibleLoadManagerImpl.getAssignedBrokerLookupData(
+                brokerService.getPulsar(), topic)).thenAccept(lookupData -> {
                     producers.values().forEach(producer -> futures.add(producer.disconnect(lookupData)));
                     // Topics unloaded due to the ExtensibleLoadManager undergo closing twice: first with
                     // disconnectClients = false, second with disconnectClients = true. The check below identifies the
@@ -5210,6 +5213,48 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 close();
             }
         }
+    }
+
+    /**
+     * Waits up to topicCloseAckDrainTimeoutMillis, with the dispatchers of the Shared and Key_Shared subscriptions
+     * stopped, until their consumers have acknowledged what they have received, so that the topic, once loaded again,
+     * doesn't dispatch the messages whose acknowledgments the disconnect would lose. The topic is fenced, so the
+     * producers' messages don't reach it meanwhile.
+     */
+    private CompletableFuture<Void> drainAcknowledgmentsBeforeClose() {
+        long timeoutMillis = brokerService.getPulsar().getConfiguration().getTopicCloseAckDrainTimeoutMillis();
+        if (timeoutMillis <= 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+        List<PersistentDispatcherMultipleConsumers> dispatchers = new ArrayList<>();
+        subscriptions.forEach((name, subscription) -> {
+            if (subscription.getDispatcher() instanceof PersistentDispatcherMultipleConsumers dispatcher) {
+                dispatcher.stopDispatchingForClose();
+                dispatchers.add(dispatcher);
+            }
+        });
+        if (dispatchers.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        CompletableFuture<Void> drained = new CompletableFuture<>();
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        checkAcknowledgmentsDrained(dispatchers, deadlineNanos, drained);
+        return drained;
+    }
+
+    private void checkAcknowledgmentsDrained(List<PersistentDispatcherMultipleConsumers> dispatchers,
+                                             long deadlineNanos, CompletableFuture<Void> drained) {
+        long pending = 0;
+        for (PersistentDispatcherMultipleConsumers dispatcher : dispatchers) {
+            pending += dispatcher.getPendingAcknowledgments();
+        }
+        if (pending == 0 || System.nanoTime() - deadlineNanos >= 0) {
+            log.debug().attr("pendingAcknowledgments", pending).log("Closing after draining the acknowledgments");
+            drained.complete(null);
+            return;
+        }
+        brokerService.executor().schedule(() -> checkAcknowledgmentsDrained(dispatchers, deadlineNanos, drained),
+                ACK_DRAIN_CHECK_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
     }
 
     private void fenceTopicToCloseOrDelete() {

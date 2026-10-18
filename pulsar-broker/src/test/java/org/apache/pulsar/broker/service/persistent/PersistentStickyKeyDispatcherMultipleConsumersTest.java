@@ -374,6 +374,21 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
     }
 
     @Test(timeOut = 10000)
+    public void testDispatchStopsWhileTheClosingTopicDrainsAcknowledgments() {
+        persistentDispatcher.addConsumer(consumerMock).join();
+        PendingAcksMap pendingAcks = consumerMock.getPendingAcks();
+        doReturn(7L).when(pendingAcks).size();
+        assertEquals(persistentDispatcher.getPendingAcknowledgments(), 7L);
+
+        persistentDispatcher.stopDispatchingForClose();
+        clearInvocations(cursorMock);
+        persistentDispatcher.readMoreEntries();
+
+        verify(cursorMock, never()).asyncReadEntriesWithSkipOrWait(anyInt(), anyLong(), any(), any(), any(), any());
+        verify(cursorMock, never()).asyncReplayEntries(anySet(), any(), any(), anyBoolean());
+    }
+
+    @Test(timeOut = 10000)
     public void testSendMessage() {
         KeySharedMeta keySharedMeta = new KeySharedMeta().setKeySharedMode(KeySharedMode.STICKY);
         PersistentStickyKeyDispatcherMultipleConsumers persistentDispatcher =
