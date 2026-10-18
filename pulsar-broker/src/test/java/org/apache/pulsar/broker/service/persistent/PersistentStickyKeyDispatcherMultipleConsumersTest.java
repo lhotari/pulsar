@@ -302,13 +302,13 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
 
         persistentDispatcher.disconnectAllConsumers(false, Optional.empty());
 
-        // the removals didn't scan the remaining consumer's pending acks for draining hashes
-        verify(consumers.get(2).getPendingAcks(), never()).forEach(any());
         // the consumer that remains gets the removed consumers' pending entries from the replay queue
         assertEquals(persistentDispatcher.getConsumers(), List.of(consumers.get(2)));
         assertEquals(persistentDispatcher.getNumberOfMessagesInReplay(), 2);
         assertTrue(persistentDispatcher.redeliveryMessages.containsStickyKeyHash(100));
         assertTrue(persistentDispatcher.redeliveryMessages.containsStickyKeyHash(101));
+        // the remaining consumer's pending acks were checked against the selector once, to rebuild the draining
+        verify(consumers.get(2).getPendingAcks(), times(1)).forEach(any());
     }
 
     @Test(timeOut = 10000)

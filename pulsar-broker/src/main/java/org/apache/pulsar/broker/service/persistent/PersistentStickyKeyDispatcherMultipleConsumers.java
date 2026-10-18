@@ -383,6 +383,25 @@ public class PersistentStickyKeyDispatcherMultipleConsumers extends PersistentDi
         }
     }
 
+    // The removals skipped registering the hashes that moved away from the remaining consumers: rebuild the draining
+    // hashes from their pending acks, those of each consumer whose hash the selector now assigns to another consumer
+    @Override
+    protected synchronized void consumersRemainedAfterRemovingAll() {
+        if (!drainingHashesRequired) {
+            return;
+        }
+        drainingHashesTracker.clear();
+        for (Consumer consumer : consumerList) {
+            consumer.getPendingAcks().forEach((ledgerId, entryId, batchSize, stickyKeyHash) -> {
+                if (stickyKeyHash != STICKY_KEY_HASH_NOT_SET && selector.select(stickyKeyHash) != consumer) {
+                    drainingHashesTracker.addEntry(consumer, stickyKeyHash);
+                }
+            });
+        }
+        // the hashes that drained meanwhile can be dispatched again
+        reScheduleReadWithKeySharedUnblockingInterval();
+    }
+
     @Override
     protected synchronized void clearComponentsAfterRemovedAllConsumers() {
         super.clearComponentsAfterRemovedAllConsumers();

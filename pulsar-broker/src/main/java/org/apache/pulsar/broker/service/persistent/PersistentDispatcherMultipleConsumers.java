@@ -735,9 +735,17 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
             addedToReplay |= addMessageToReplay(deferred.getLong(i), deferred.getLong(i + 1),
                     deferred.getLong(i + 2));
         }
+        consumersRemainedAfterRemovingAll();
         if (addedToReplay) {
             notifyRedeliveryMessageAdded();
         }
+    }
+
+    /**
+     * Called when consumers remain after disconnectAllConsumers, whose removals skipped the bookkeeping that the
+     * remaining consumers' hash assignments need, after their pending entries were added to the replay queue.
+     */
+    protected void consumersRemainedAfterRemovingAll() {
     }
 
     @Override
