@@ -23,6 +23,7 @@ import static org.apache.bookkeeper.mledger.util.PositionAckSetUtil.isAckSetEmpt
 import static org.apache.pulsar.broker.service.persistent.PersistentTopic.MESSAGE_RATE_BACKOFF_MS;
 import io.netty.buffer.ByteBuf;
 import io.prometheus.client.Gauge;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -137,6 +138,8 @@ public abstract class AbstractBaseDispatcher extends EntryFilterSupport implemen
         long filteredBytesCount = 0;
         List<Position> entriesToFiltered = hasFilter ? new ArrayList<>() : null;
         List<Position> entriesToRedeliver = hasFilter ? new ArrayList<>() : null;
+        // their sticky key hashes, so that a Key_Shared dispatcher keeps their keys' order
+        IntArrayList stickyKeyHashesToRedeliver = hasFilter ? new IntArrayList() : null;
         for (int i = 0, entriesSize = entries.size(); i < entriesSize; i++) {
             final Entry entry = entries.get(i);
             if (entry == null) {
@@ -175,6 +178,7 @@ public abstract class AbstractBaseDispatcher extends EntryFilterSupport implemen
                 continue;
             } else if (filterResult == EntryFilter.FilterResult.RESCHEDULE) {
                 entriesToRedeliver.add(entry.getPosition());
+                stickyKeyHashesToRedeliver.add(getStickyKeyHash(entry));
                 entries.set(i, null);
                 // FilterResult will be always `ACCEPTED` when there is No Filter
                 // dont need to judge whether `hasFilter` is true or not.
@@ -310,8 +314,8 @@ public abstract class AbstractBaseDispatcher extends EntryFilterSupport implemen
             this.subscription.getTopic().getBrokerService().getPulsar().getExecutor()
                     .schedule(() -> {
                         // simulate the Consumer rejected the message
-                        subscription
-                                .redeliverUnacknowledgedMessages(consumer, entriesToRedeliver);
+                        subscription.redeliverUnacknowledgedMessages(consumer, entriesToRedeliver,
+                                stickyKeyHashesToRedeliver);
                     }, serviceConfig.getDispatcherEntryFilterRescheduledMessageDelay(), TimeUnit.MILLISECONDS);
 
         }
@@ -325,6 +329,11 @@ public abstract class AbstractBaseDispatcher extends EntryFilterSupport implemen
         sendMessageInfo.setTotalBytes(totalBytes);
         sendMessageInfo.setTotalChunkedMessages(totalChunkedMessages);
         return totalEntries;
+    }
+
+    /** The entry's sticky key hash, which only a Key_Shared dispatcher calculates. */
+    protected int getStickyKeyHash(Entry entry) {
+        return StickyKeyConsumerSelector.STICKY_KEY_HASH_NOT_SET;
     }
 
     private void individualAcknowledgeMessageIfNeeded(List<Position> positions, Map<String, Long> properties) {

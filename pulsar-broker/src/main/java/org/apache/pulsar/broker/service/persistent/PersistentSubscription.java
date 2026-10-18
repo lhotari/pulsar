@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import lombok.Getter;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
@@ -70,6 +71,7 @@ import org.apache.pulsar.broker.service.Consumer;
 import org.apache.pulsar.broker.service.Dispatcher;
 import org.apache.pulsar.broker.service.EntryFilterSupport;
 import org.apache.pulsar.broker.service.GetStatsOptions;
+import org.apache.pulsar.broker.service.RedeliveredPendingAcks;
 import org.apache.pulsar.broker.service.StickyKeyDispatcher;
 import org.apache.pulsar.broker.service.Subscription;
 import org.apache.pulsar.broker.service.Topic;
@@ -1658,6 +1660,16 @@ public class PersistentSubscription extends AbstractSubscription {
         Dispatcher dispatcher = getDispatcher();
         if (dispatcher != null) {
             dispatcher.redeliverUnacknowledgedMessages(consumer, positions, stickyKeyHashes);
+        }
+    }
+
+    @Override
+    public void redeliverUnacknowledgedMessages(Consumer consumer, Supplier<RedeliveredPendingAcks> removal) {
+        Dispatcher dispatcher = getDispatcher();
+        if (dispatcher != null) {
+            dispatcher.redeliverUnacknowledgedMessages(consumer, removal);
+        } else {
+            removal.get();
         }
     }
 

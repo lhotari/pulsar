@@ -23,6 +23,7 @@ import it.unimi.dsi.fastutil.ints.IntList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.broker.loadbalance.extensions.data.BrokerLookupData;
@@ -111,6 +112,19 @@ public interface Dispatcher {
     default void redeliverUnacknowledgedMessages(Consumer consumer, List<Position> positions,
                                                  IntList stickyKeyHashes) {
         redeliverUnacknowledgedMessages(consumer, positions);
+    }
+
+    /**
+     * Removes the consumer's pending acks with {@code removal}, which also updates the consumer's unacked messages
+     * and permits, and redelivers them. A dispatcher that keeps a replay queue does both in one step that no dispatch
+     * interleaves, so that a Key_Shared hash whose draining ends with the removal doesn't dispatch a newer message
+     * before the redelivered one is in the replay queue.
+     */
+    default void redeliverUnacknowledgedMessages(Consumer consumer, Supplier<RedeliveredPendingAcks> removal) {
+        RedeliveredPendingAcks removed = removal.get();
+        if (!removed.positions().isEmpty()) {
+            redeliverUnacknowledgedMessages(consumer, removed.positions(), removed.stickyKeyHashes());
+        }
     }
 
     void addUnAckedMessages(int unAckMessages);
