@@ -3549,30 +3549,35 @@ public class ManagedCursorImpl implements ManagedCursor {
             this.individualDeletedMessagesSerializedSize = acksSerializedSize.get();
             individualDeletedMessages.resetDirtyKeys();
 
-            if (truncated.booleanValue()) {
-                ledger.getFactory().getOpenTelemetryManagedCursorStats()
-                        .incrementPersistUnackedRangesTruncated(this);
-                if (lastCursorDataFullyPersistable.compareAndSet(true, false)) {
-                    int totalRanges = individualDeletedMessages.size();
-                    log.warn()
-                        .attr("totalRanges", totalRanges)
-                        .attr("maxRanges", maxRanges)
-                        .attr("truncated", totalRanges - rangeList.size())
-                        .log("Individually deleted message ranges exceed"
-                            + " managedLedgerMaxUnackedRangesToPersist."
-                            + " Acknowledged messages beyond this limit are not persisted"
-                            + " and will be replayed on broker restart."
-                            + " Consider raising managedLedgerMaxUnackedRangesToPersist,"
-                            + " verifying managedLedgerPersistIndividualAckAsLongArray=true (the default),"
-                            + " and setting managedCursorInfoCompressionType=LZ4 to reduce the persisted size.");
-                }
-            } else {
-                lastCursorDataFullyPersistable.compareAndSet(false, true);
-            }
+            reportIndividualAcksPersisted(truncated.booleanValue(), maxRanges,
+                    individualDeletedMessages.size() - rangeList.size(), "ranges");
 
             return rangeList;
         } finally {
             lock.writeLock().unlock();
+        }
+    }
+
+    // Reports a persisted snapshot of the individual acknowledgments that left some out: the metric each time, and a
+    // warning when it starts; a complete snapshot ends it
+    private void reportIndividualAcksPersisted(boolean truncated, int maxRanges, int leftOut, String unit) {
+        if (truncated) {
+            ledger.getFactory().getOpenTelemetryManagedCursorStats()
+                    .incrementPersistUnackedRangesTruncated(this);
+            if (lastCursorDataFullyPersistable.compareAndSet(true, false)) {
+                log.warn()
+                    .attr("maxRanges", maxRanges)
+                    .attr("truncated", leftOut + " " + unit)
+                    .log("Individually deleted message ranges exceed"
+                        + " managedLedgerMaxUnackedRangesToPersist."
+                        + " Acknowledged messages beyond this limit are not persisted"
+                        + " and will be replayed on broker restart."
+                        + " Consider raising managedLedgerMaxUnackedRangesToPersist,"
+                        + " verifying managedLedgerPersistIndividualAckAsLongArray=true (the default),"
+                        + " and setting managedCursorInfoCompressionType=LZ4 to reduce the persisted size.");
+            }
+        } else {
+            lastCursorDataFullyPersistable.compareAndSet(false, true);
         }
     }
 
@@ -3632,10 +3637,12 @@ public class ManagedCursorImpl implements ManagedCursor {
         List<LongProperty> propertiesList = buildPropertiesMap(properties);
 
         Map<Long, long[]> internalRanges = null;
+        int ledgersLeftOut = 0;
         if (getConfig().isPersistIndividualAckAsLongArray()) {
             lock.readLock().lock();
             try {
                 internalRanges = individualDeletedMessages.toRanges(getConfig().getMaxUnackedRangesToPersist());
+                ledgersLeftOut = individualDeletedMessages.ledgerCount() - internalRanges.size();
             } catch (Exception e) {
                 log.warn().exception(e).log("Failed to serialize individualDeletedMessages");
             } finally {
@@ -3643,6 +3650,10 @@ public class ManagedCursorImpl implements ManagedCursor {
             }
         }
         boolean persistLongArrays = internalRanges != null && !internalRanges.isEmpty();
+        if (persistLongArrays) {
+            reportIndividualAcksPersisted(ledgersLeftOut > 0, getConfig().getMaxUnackedRangesToPersist(),
+                    ledgersLeftOut, "ledgers");
+        }
         List<MessageRange> messageRanges = persistLongArrays ? null : buildIndividualDeletedMessageRanges();
 
         PositionInfo pi = reusablePositionInfo;

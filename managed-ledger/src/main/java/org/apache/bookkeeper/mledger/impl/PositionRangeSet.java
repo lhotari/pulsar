@@ -307,30 +307,42 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
     }
 
     /**
-     * The ledgers' bitmaps, in ledger order, up to {@code maxRanges} ranges of present values, as {@link #size()}
-     * counts them: the ledgers after the last one that fits are left out. It counts ranges rather than present
-     * values, so that the acknowledgments of many consecutive entries, a single range, don't leave out the ledgers
-     * that follow.
+     * The ledgers' bitmaps, in ledger order, as long arrays, while they fit two budgets: {@code maxRanges} ranges of
+     * present values, as {@link #size()} counts them, and as many longs as {@code maxRanges} ranges of two longs
+     * each would take, which bounds the serialized size. The ledgers after the last one that fits are left out. It
+     * counts ranges rather than present values, so that the acknowledgments of many consecutive entries, a single
+     * range, don't leave out the ledgers that follow.
      */
     @Override
     public Map<Long, long[]> toRanges(int maxRanges) {
         Map<Long, long[]> internalBitSetMap = new HashMap<>();
-        long rangeCount = 0;
+        long remainingRanges = maxRanges;
+        long remainingLongs = 2L * maxRanges;
         for (Long2ObjectMap.Entry<LongBitmap> ledger : rangeBitmapMap.long2ObjectEntrySet()) {
-            rangeCount += rangeCount(ledger.getValue());
-            if (rangeCount > maxRanges) {
+            remainingRanges -= rangeCount(ledger.getValue(), remainingRanges);
+            if (remainingRanges < 0) {
                 break;
             }
-            internalBitSetMap.put(ledger.getLongKey(), ledger.getValue().serializeToLongArray());
+            long[] serialized = ledger.getValue().serializeToLongArray();
+            remainingLongs -= serialized.length;
+            if (remainingLongs < 0) {
+                break;
+            }
+            internalBitSetMap.put(ledger.getLongKey(), serialized);
         }
         return internalBitSetMap;
     }
 
-    // The ranges of consecutive present values in the bitmap
-    private static long rangeCount(LongBitmap bitmap) {
+    /** The number of ledgers with acknowledged entries, of which {@link #toRanges} may leave out the last ones. */
+    public int ledgerCount() {
+        return rangeBitmapMap.size();
+    }
+
+    // The ranges of consecutive present values in the bitmap, counting up to one more than the limit
+    private static long rangeCount(LongBitmap bitmap, long limit) {
         long count = 0;
         long start = bitmap.nextPresentValue(0);
-        while (start >= 0) {
+        while (start >= 0 && count <= limit) {
             count++;
             long end = bitmap.nextAbsentValue(start);
             if (end < 0) {
