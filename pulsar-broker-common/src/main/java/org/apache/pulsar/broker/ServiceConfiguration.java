@@ -1198,7 +1198,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
                     + "Setting this value to 0 will disable the limit calculated per consumer.",
             dynamic = true
     )
-    private int keySharedLookAheadMsgInReplayThresholdPerConsumer = 4000;
+    private int keySharedLookAheadMsgInReplayThresholdPerConsumer = 20000;
 
     @FieldContext(
             category = CATEGORY_POLICIES,
@@ -1209,8 +1209,9 @@ public class ServiceConfiguration implements PulsarConfiguration {
                     + "Formula: threshold = min(keySharedLookAheadMsgInReplayThresholdPerConsumer *"
                     + " connected consumer count, keySharedLookAheadMsgInReplayThresholdPerSubscription)"
                     + ".\n"
-                    + "Keep this value relatively low to increase the cache hit ratio for Key_Shared replay"
-                    + " queue reads; it should also be less than 2 * managedLedgerMaxUnackedRangesToPersist.\n"
+                    + "A replay queue entry takes about 20 bytes of heap, and replay reads of nearby positions are"
+                    + " coalesced, but a lower value increases the cache hit ratio for Key_Shared replay queue"
+                    + " reads; it should also be less than 2 * managedLedgerMaxUnackedRangesToPersist.\n"
                     + "However, with workloads that have low key cardinality (few distinct keys), a low value"
                     + " can leave some consumers idle, since the dispatcher pauses once this threshold is"
                     + " reached and stops reading new messages for the other consumers; increasing the value"
@@ -1223,7 +1224,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
                     + " managedLedgerMaxUnackedRangesToPersist, therefore disabling is not recommended.\n",
             dynamic = true
     )
-    private int keySharedLookAheadMsgInReplayThresholdPerSubscription = 40000;
+    private int keySharedLookAheadMsgInReplayThresholdPerSubscription = 200000;
 
     @FieldContext(
             category = CATEGORY_POLICIES,
