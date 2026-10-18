@@ -22,6 +22,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.BoundType;
 import com.google.common.collect.Range;
 import io.github.merlimat.slog.Logger;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectRBTreeMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectSortedMap;
 import java.util.ArrayList;
@@ -305,17 +306,39 @@ class PositionRangeSet implements LongPairRangeSet<Position> {
                 consumer.apply(lastLedgerId, upperEntryId));
     }
 
+    /**
+     * The ledgers' bitmaps, in ledger order, up to {@code maxRanges} ranges of present values, as {@link #size()}
+     * counts them: the ledgers after the last one that fits are left out. It counts ranges rather than present
+     * values, so that the acknowledgments of many consecutive entries, a single range, don't leave out the ledgers
+     * that follow.
+     */
     @Override
     public Map<Long, long[]> toRanges(int maxRanges) {
         Map<Long, long[]> internalBitSetMap = new HashMap<>();
-        MutableInt rangeCount = new MutableInt();
-        rangeBitmapMap.forEach((ledgerId, bitmap) -> {
-            if (rangeCount.addAndGet((int) bitmap.cardinality()) > maxRanges) {
-                return;
+        long rangeCount = 0;
+        for (Long2ObjectMap.Entry<LongBitmap> ledger : rangeBitmapMap.long2ObjectEntrySet()) {
+            rangeCount += rangeCount(ledger.getValue());
+            if (rangeCount > maxRanges) {
+                break;
             }
-            internalBitSetMap.put(ledgerId, bitmap.serializeToLongArray());
-        });
+            internalBitSetMap.put(ledger.getLongKey(), ledger.getValue().serializeToLongArray());
+        }
         return internalBitSetMap;
+    }
+
+    // The ranges of consecutive present values in the bitmap
+    private static long rangeCount(LongBitmap bitmap) {
+        long count = 0;
+        long start = bitmap.nextPresentValue(0);
+        while (start >= 0) {
+            count++;
+            long end = bitmap.nextAbsentValue(start);
+            if (end < 0) {
+                break;
+            }
+            start = bitmap.nextPresentValue(end);
+        }
+        return count;
     }
 
     @Override
