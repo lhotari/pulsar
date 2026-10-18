@@ -582,6 +582,12 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                         && failures.maxRedeliveries() > ProcessingFailures.TRANSIENT_FAILED_ATTEMPTS,
                 "behaviors.processingFailures.retryDelayMillis must not be negative, and maxRedeliveries must be at"
                         + " least " + (ProcessingFailures.TRANSIENT_FAILED_ATTEMPTS + 1));
+        // A redelivery for any other reason, of a restarted or paused pod's messages or of a nacked message's
+        // batch, counts as an attempt for the broker, which would dead-letter a message that hasn't failed enough
+        require(!failures.enabled() || failures.retriesThroughTopic()
+                        || !podRestarts.enabled() && !podPauses.enabled() && !producer.batchingEnabled(),
+                "behaviors.processingFailures.retry negativeAck needs no podRestarts or podPauses and"
+                        + " gateways.producer.batchingEnabled: false; retryTopic counts only the retries");
         // Retries deliver a device's messages out of order, and a pod that reads compacted doesn't process them
         require(!failures.enabled() || SubscriptionType.Shared.name().equals(applications.subscriptionType())
                         && !applications.readsCompacted(),
@@ -598,11 +604,14 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                 "applications.mode compactedReaders doesn't support joinSeconds, skipMessages, resetToMillis,"
                         + " unloadBeforeJoin, behaviors.podPauses or warmup.messages");
         require(topics.partitions() >= 0, "topics.partitions must not be negative");
-        // The launcher prepares a join with each topic's stats, which a partitioned topic keeps per partition
+        // The launcher prepares a join with each topic's stats, which a partitioned topic keeps per partition, and a
+        // late application's catch-up counts the topics that it receives from, which are the partitions
         require(!topics.partitioned() || !applications.unloadBeforeJoin()
+                        && applications.joinSeconds().stream().allMatch(seconds -> seconds == null || seconds == 0)
                         && applications.skipMessages().stream().allMatch(skipped -> skipped == null || skipped == 0)
                         && applications.resetToMillis().stream().allMatch(resetTo -> resetTo == null || resetTo == -1),
-                "topics.partitions doesn't support applications.skipMessages, unloadBeforeJoin or resetToMillis");
+                "topics.partitions doesn't support applications.joinSeconds, skipMessages, unloadBeforeJoin or"
+                        + " resetToMillis");
         require(producer.chunkMaxMessageSizeBytes() == null
                         || producer.chunkMaxMessageSizeBytes() >= 1024 && !producer.batchingEnabled(),
                 "gateways.producer.chunkMaxMessageSizeBytes must be at least 1024, and needs batchingEnabled: false");

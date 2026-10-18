@@ -37,10 +37,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.IntFunction;
 import org.apache.pulsar.client.api.BatcherBuilder;
+import org.apache.pulsar.client.api.ClientBuilder;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.ProducerBuilder;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientSharedResources;
+import org.apache.pulsar.client.api.SizeUnit;
 import org.apache.pulsar.client.api.SubscriptionType;
 import org.apache.pulsar.client.api.TypedMessageBuilder;
 import picocli.CommandLine.Command;
@@ -119,10 +121,16 @@ final class TelemetryProducer extends PerformanceTool.ScenarioCommand {
                 scenario.gateways().producer().ioThreads(), scenario.gateways().producer().listenerThreads());
         try {
             for (int gateway = 0; gateway < scenario.gatewayCount(); gateway++) {
-                clients.add(PulsarClient.builder()
+                ClientBuilder client = PulsarClient.builder()
                         .serviceUrl(scenario.serviceUrl())
-                        .sharedResources(sharedResources)
-                        .build());
+                        .sharedResources(sharedResources);
+                if (scenario.gateways().producer().chunkMaxMessageSizeBytes() != null) {
+                    // Room for every message in flight, which may all be one gateway's: the default limit of 64 MB
+                    // fails the sends of large messages instead of blocking them
+                    client.memoryLimit(Math.max(64L << 20, (long) scenario.gateways().producer().maxOutstanding()
+                            * scenario.payloadBytes()), SizeUnit.BYTES);
+                }
+                clients.add(client.build());
             }
             if (scenario.gateways().producer().precreate()) {
                 precreateProducers(scenario, clients, producers);
