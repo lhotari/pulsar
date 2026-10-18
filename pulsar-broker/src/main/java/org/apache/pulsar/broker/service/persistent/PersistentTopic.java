@@ -245,6 +245,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     private static final double MESSAGE_EXPIRY_THRESHOLD = 1.5;
     // how often a closing topic checks whether its consumers have acknowledged what they received
     private static final long ACK_DRAIN_CHECK_INTERVAL_MILLIS = 20;
+    // the drain of the consumers' acknowledgments that a close waits for before it fences the topic
+    private final Object ackDrainLock = new Object();
+    private CompletableFuture<Void> ackDrainBeforeClose;
 
     private static final long POLICY_UPDATE_FAILURE_RETRY_TIME_SECONDS = 60;
 
@@ -1862,6 +1865,38 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     @Override
     public CompletableFuture<Void> close(
             boolean disconnectClients, boolean closeWithoutWaitingClientDisconnect) {
+        if (!disconnectClients
+                || brokerService.getPulsar().getConfiguration().getTopicCloseAckDrainTimeoutMillis() <= 0) {
+            return closeFenced(disconnectClients, closeWithoutWaitingClientDisconnect);
+        }
+        // Before the topic is fenced, so that its producers go on publishing: its consumers acknowledge what they
+        // have received, with the dispatch stopped, before it closes the cursors and disconnects them. A close called
+        // meanwhile waits for the same drain.
+        CompletableFuture<Void> drain;
+        boolean startDrain = false;
+        synchronized (ackDrainLock) {
+            if (ackDrainBeforeClose == null) {
+                ackDrainBeforeClose = new CompletableFuture<>();
+                startDrain = true;
+            }
+            drain = ackDrainBeforeClose;
+        }
+        if (startDrain) {
+            FutureUtil.completeAfter(drain, drainAcknowledgmentsBeforeClose());
+        }
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        drain.whenComplete((__, ignored) -> {
+            try {
+                FutureUtil.completeAfter(result, closeFenced(disconnectClients, closeWithoutWaitingClientDisconnect));
+            } catch (Throwable e) {
+                result.completeExceptionally(e);
+            }
+        });
+        return result;
+    }
+
+    private CompletableFuture<Void> closeFenced(boolean disconnectClients,
+                                                boolean closeWithoutWaitingClientDisconnect) {
         lock.writeLock().lock();
         // Choose the close type.
         CloseTypes closeType;
@@ -1903,25 +1938,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         } finally {
             lock.writeLock().unlock();
         }
-        if (closeType == CloseTypes.transferring) {
-            return closeAfterDrainingAcknowledgments(closeType, inProgressTransferCloseTask);
-        }
-        // the fenced topic takes no messages; its consumers acknowledge what they have received before it closes the
-        // cursors and disconnects them
-        CompletableFuture<Void> inProgressTask = inProgressTransferCloseTask;
-        CompletableFuture<Void> result = new CompletableFuture<>();
-        drainAcknowledgmentsBeforeClose().whenComplete((__, ignored) -> {
-            try {
-                FutureUtil.completeAfter(result, closeAfterDrainingAcknowledgments(closeType, inProgressTask));
-            } catch (Throwable e) {
-                result.completeExceptionally(e);
-            }
-        });
-        return result;
-    }
 
-    private CompletableFuture<Void> closeAfterDrainingAcknowledgments(
-            CloseTypes closeType, CompletableFuture<Void> inProgressTransferCloseTask) {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         if (inProgressTransferCloseTask != null) {
             futures.add(inProgressTransferCloseTask);
@@ -5235,8 +5252,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     /**
      * Waits up to topicCloseAckDrainTimeoutMillis, with the dispatchers of the Shared and Key_Shared subscriptions
      * stopped, until their consumers have acknowledged what they have received, so that the topic, once loaded again,
-     * doesn't dispatch the messages whose acknowledgments the disconnect would lose. The topic is fenced, so the
-     * producers' messages don't reach it meanwhile.
+     * doesn't dispatch the messages whose acknowledgments the disconnect would lose. The producers go on publishing
+     * meanwhile: their messages wait for the topic's next load.
      */
     private CompletableFuture<Void> drainAcknowledgmentsBeforeClose() {
         long timeoutMillis = brokerService.getPulsar().getConfiguration().getTopicCloseAckDrainTimeoutMillis();
@@ -5288,6 +5305,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     private void unfenceTopicToResume() {
         isFenced = false;
         isClosingOrDeleting = false;
+        synchronized (ackDrainLock) {
+            ackDrainBeforeClose = null;
+        }
         // a close that drained the acknowledgments stopped the dispatch
         subscriptions.values().forEach(sub -> {
             if (sub.getDispatcher() instanceof PersistentDispatcherMultipleConsumers dispatcher) {
