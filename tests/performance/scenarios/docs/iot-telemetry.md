@@ -306,7 +306,8 @@ default, which the broker redelivers after `retryDelayMillis`, or `retryTopic`, 
 the application's retry topic, `<topics.prefix><subscription>-RETRY`, with a delivery delay of `retryDelayMillis`, as
 `reconsumeLater` does. After `maxRedeliveries`, at least 3, a message goes to the application's dead letter topic,
 `<topics.prefix><subscription>-DLQ`, which the application also consumes. Each message counts as received once,
-processed or dead-lettered, and the dead letters must be exactly the messages of the `poisonFraction`, which the
+processed or dead-lettered; a message dead-lettered again, as when a reconnection loses the acknowledgment of its
+first dead-lettering, is a duplicate, and the dead letters must be exactly the messages of the `poisonFraction`, which the
 applications compute from each device's last sequence that the gateways hand over. The failures need Shared
 subscriptions, since retries deliver a device's messages out of order. With `negativeAck`, the broker counts every
 redelivery of a message as an attempt, including those of a restarted or paused pod's messages and of a nacked
