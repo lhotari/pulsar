@@ -49,7 +49,9 @@ import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import io.netty.util.concurrent.Promise;
 import io.netty.util.concurrent.SucceededFuture;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -628,6 +630,31 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         } finally {
             entries.forEach(Entry::release);
         }
+    }
+
+    @Test(timeOut = 10000)
+    public void testRedeliveredPositionsKeepTheirStickyKeyHashes() {
+        persistentDispatcher.addConsumer(consumerMock).join();
+        Consumer slowConsumer = createMockConsumer();
+        doReturn("consumer2").when(slowConsumer).consumerName();
+        doReturn(0).when(slowConsumer).getAvailablePermits();
+        persistentDispatcher.addConsumer(slowConsumer).join();
+        StickyKeyConsumerSelector selector = persistentDispatcher.getSelector();
+        int slowHash = selector.makeStickyKeyHash(
+                generateKeyForConsumer(selector, slowConsumer).getBytes(StandardCharsets.UTF_8));
+        int fastHash = selector.makeStickyKeyHash(
+                generateKeyForConsumer(selector, consumerMock).getBytes(StandardCharsets.UTF_8));
+
+        // as a negative acknowledgment or an ack timeout redelivers them
+        persistentDispatcher.redeliverUnacknowledgedMessages(slowConsumer,
+                List.of(PositionFactory.create(1, 1), PositionFactory.create(1, 2)),
+                IntArrayList.of(slowHash, fastHash));
+
+        // the later messages of the keys wait for them, and the slow consumer's isn't read while it has no permits
+        assertTrue(persistentDispatcher.redeliveryMessages.containsStickyKeyHash(slowHash));
+        assertTrue(persistentDispatcher.redeliveryMessages.containsStickyKeyHash(fastHash));
+        assertThat(persistentDispatcher.getMessagesToReplayNow(10, Long.MAX_VALUE))
+                .containsExactly(PositionFactory.create(1, 2));
     }
 
     @Test(timeOut = 10000)

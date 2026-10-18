@@ -25,6 +25,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Range;
 import io.github.merlimat.slog.Logger;
 import io.netty.channel.EventLoopGroup;
+import it.unimi.dsi.fastutil.ints.IntList;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -1206,20 +1207,34 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
 
     @Override
     public synchronized void redeliverUnacknowledgedMessages(Consumer consumer, List<Position> positions) {
+        redeliverUnacknowledgedMessages(consumer, positions, null);
+    }
+
+    /**
+     * Redelivers the positions with their sticky key hashes, which a Key_Shared dispatcher needs to hold back the
+     * later messages of their keys until it has dispatched them again, and to replay them only when their consumer
+     * has permits. A position without a hash is read before its key is known.
+     */
+    @Override
+    public synchronized void redeliverUnacknowledgedMessages(Consumer consumer, List<Position> positions,
+                                                             IntList stickyKeyHashes) {
         log.debug()
                 .attr("consumer", consumer)
                 .attr("positions", positions)
                 .log("- Redelivering unacknowledged messages for consumer");
-        MutableBoolean addedToReplay = new MutableBoolean(false);
-        positions.forEach(position -> {
-            // TODO: We want to pass a sticky key hash as a third argument to guarantee the order of the messages
-            // on Key_Shared subscription, but it's difficult to get the sticky key here
-            if (addMessageToReplay(position.getLedgerId(), position.getEntryId())) {
+        boolean addedToReplay = false;
+        for (int i = 0; i < positions.size(); i++) {
+            Position position = positions.get(i);
+            int stickyKeyHash = stickyKeyHashes != null ? stickyKeyHashes.getInt(i) : STICKY_KEY_HASH_NOT_SET;
+            boolean added = stickyKeyHash != STICKY_KEY_HASH_NOT_SET
+                    ? addMessageToReplay(position.getLedgerId(), position.getEntryId(), stickyKeyHash)
+                    : addMessageToReplay(position.getLedgerId(), position.getEntryId());
+            if (added) {
                 redeliveryTracker.incrementAndGetRedeliveryCount(position);
-                addedToReplay.setTrue();
+                addedToReplay = true;
             }
-        });
-        if (addedToReplay.booleanValue()) {
+        }
+        if (addedToReplay) {
             notifyRedeliveryMessageAdded();
         }
     }
