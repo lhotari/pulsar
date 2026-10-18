@@ -47,6 +47,10 @@ application-visible order across Key_Shared hash-range reassignment.
   the four topics every 4 MB of updates, and two applications of three pods read them compacted from the start with
   `applications.mode: compactedReaders`, restarting one pod each every 30 seconds, which rebuilds its state from the
   compacted topics: the compaction, the restarted pods' start-up time, and each device's latest state at every pod.
+- [`iot-alarm-retries.yaml`](../iot-alarm-retries.yaml) processes alarms with retries and a dead letter topic: four
+  applications with Shared subscriptions fail the first two attempts of 5 % of the alarms and retry them through
+  their retry topic after 2 seconds, and the 0.1 % that fail every attempt go to their dead letter topic: the retry
+  topics' delayed deliveries and the dead letter topics, with each alarm processed or dead-lettered once.
 - [`iot-telemetry-small.yaml`](../iot-telemetry-small.yaml) keeps the 20-way fanout,
   30 topics and 1,000 msg/s rate, but uses 10 gateways and 10 pods per application, with the low-memory
   configuration.
@@ -243,6 +247,12 @@ workloads:
         intervalSeconds: 0     # every intervalSeconds, for pauseMillis
         fraction: 0.0
         pauseMillis: 0
+      processingFailures:      # not set in the base file: the applications fail and retry some messages
+        fraction: 0.0          # the first two attempts of this fraction fail
+        poisonFraction: 0.0    # every attempt of this fraction fails: they're dead-lettered
+        retry: negativeAck     # or retryTopic
+        retryDelayMillis: 1000
+        maxRedeliveries: 3
 ```
 
 `topics.partitions` makes each topic a partitioned topic of that many partitions, which the launcher creates before
@@ -261,6 +271,19 @@ count as invalid. A restarted pod has started up when it receives the first mess
 the latency covers only such messages. The topics are compacted by the broker, with
 `brokerServiceCompactionThresholdInBytes` in `cluster.brokers.env`. The mode doesn't support `joinSeconds`, the join
 preparation, `behaviors.podPauses` or `warmup.messages`.
+
+`behaviors.processingFailures` makes the applications fail to process some messages and retry them, as workers do
+when a downstream service fails. The first and second attempts of a `fraction` of the messages fail, and every
+attempt of a `poisonFraction` of them, chosen by a hash of the device, the sequence and the attempt, so that the
+check after the run knows which messages fail. `retry` sets how a failed message is retried: `negativeAck`, the
+default, which the broker redelivers after `retryDelayMillis`, or `retryTopic`, which the consumer republishes to
+the application's retry topic, `<topics.prefix><subscription>-RETRY`, with a delivery delay of `retryDelayMillis`, as
+`reconsumeLater` does. After `maxRedeliveries`, at least 3, a message goes to the application's dead letter topic,
+`<topics.prefix><subscription>-DLQ`, which the application also consumes. Each message counts as received once,
+processed or dead-lettered, and the dead letters must be exactly the messages of the `poisonFraction`, which the
+applications compute from each device's last sequence that the gateways hand over. The failures need Shared
+subscriptions, since retries deliver a device's messages out of order. A failed attempt isn't a receipt, and a
+message's latency is that of the attempt that succeeds, since its last publication.
 
 `behaviors.podPauses` stalls pods as a garbage collection, a slow downstream or a debugger would: every
 `intervalSeconds`, each application pauses a random `fraction` of its pods' consumers for `pauseMillis`, shorter than

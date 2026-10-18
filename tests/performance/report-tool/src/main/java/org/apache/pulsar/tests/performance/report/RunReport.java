@@ -385,6 +385,7 @@ public final class RunReport {
         NetworkReport.append(report, runDirectory, mapper, measurementStart);
         appendCorrectness(report, "Correctness", run.workload(), consumers);
         appendDeviceStates(report, run.workload(), consumers);
+        appendProcessingFailures(report, run.workload(), consumers);
         appendThroughput(report, producer, consumers);
         Path stats = runDirectory.resolve(TOPIC_STATS_FILE);
         Samples samples = Files.isRegularFile(stats) ? readSamples(stats) : null;
@@ -710,6 +711,36 @@ public final class RunReport {
                     + " message twice%s.%n", redelivered, republished, republished > 0
                     ? ", see each application's `republished-duplicates.txt`" : ""));
         }
+    }
+
+    /**
+     * With processing failures: each application's failed attempts, and the messages that reached its dead letter
+     * topic, against those that fail at every attempt. Nothing without them.
+     */
+    static void appendProcessingFailures(StringBuilder report, JsonNode workload, List<JsonNode> consumers) {
+        JsonNode failures = workload.path("behaviors").path("processingFailures");
+        if (failures.path("fraction").asDouble() <= 0 && failures.path("poisonFraction").asDouble() <= 0) {
+            return;
+        }
+        report.append(String.format(Locale.ROOT, "%n## Processing failures%n%nThe applications fail the first two"
+                        + " attempts of %s of the messages, and every attempt of %s, which reach the dead letter"
+                        + " topic after %d retries, by %s with a %,d ms delay.%n%n"
+                        + "| Application | Failed attempts | Dead letters | Expected | Unexpected |%n"
+                        + "|---|---:|---:|---:|---:|%n",
+                percent(failures.path("fraction").asDouble()), percent(failures.path("poisonFraction").asDouble()),
+                failures.path("maxRedeliveries").asInt(3),
+                "retryTopic".equals(failures.path("retry").asText()) ? "the retry topic" : "negative acknowledgment",
+                failures.path("retryDelayMillis").asInt(1000)));
+        for (JsonNode consumer : consumers) {
+            report.append(String.format(Locale.ROOT, "| %s | %,d | %,d | %,d | %,d |%n",
+                    applicationName(workload, consumer.path("applicationIndex").asInt()),
+                    consumer.path("failedAttempts").asLong(), consumer.path("deadLetters").asLong(),
+                    consumer.path("expectedDeadLetters").asLong(), consumer.path("unexpectedDeadLetters").asLong()));
+        }
+    }
+
+    private static String percent(double fraction) {
+        return String.format(Locale.ROOT, "%.2f %%", fraction * 100);
     }
 
     /**

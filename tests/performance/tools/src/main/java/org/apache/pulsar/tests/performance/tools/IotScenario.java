@@ -264,16 +264,90 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
     }
 
     /** What happens to the simulated system during the run, beyond the traffic. */
-    public record Behaviors(PodRestarts podRestarts, PodPauses podPauses) {
-        static final Behaviors NONE = new Behaviors(PodRestarts.NONE, PodPauses.NONE);
+    public record Behaviors(PodRestarts podRestarts, PodPauses podPauses, ProcessingFailures processingFailures) {
+        static final Behaviors NONE = new Behaviors(PodRestarts.NONE, PodPauses.NONE, ProcessingFailures.NONE);
 
         public Behaviors {
             podRestarts = podRestarts != null ? podRestarts : PodRestarts.NONE;
             podPauses = podPauses != null ? podPauses : PodPauses.NONE;
+            processingFailures = processingFailures != null ? processingFailures : ProcessingFailures.NONE;
+        }
+
+        public Behaviors(PodRestarts podRestarts, PodPauses podPauses) {
+            this(podRestarts, podPauses, null);
         }
 
         public Behaviors(PodRestarts podRestarts) {
             this(podRestarts, null);
+        }
+    }
+
+    /**
+     * The applications fail to process some messages, as a worker does when a downstream service fails, and retry
+     * them; the messages that they can never process, such as malformed ones, go to a dead letter topic after the
+     * retries, which each application also consumes. Which attempts fail depends only on the message and the
+     * attempt, so that a check after the run knows which messages are dead letters.
+     *
+     * @param fraction the fraction of the messages whose first and second attempts fail, as a downstream service
+     *                 that fails now and then: such a message succeeds by its third attempt
+     * @param poisonFraction the fraction of the messages that fail at every attempt, which end in the dead letter
+     *                       topic
+     * @param retry how a failed message is retried: {@code negativeAck}, the default, which the broker redelivers
+     *              after the retry delay, or {@code retryTopic}, which the consumer republishes to the application's
+     *              retry topic with a delivery delay, as {@code reconsumeLater} does
+     * @param retryDelayMillis the delay before a failed message's next attempt, 1,000 by default
+     * @param maxRedeliveries the redeliveries or republications after which a failed message goes to the dead letter
+     *                        topic, at least 3, the default
+     */
+    public record ProcessingFailures(double fraction, double poisonFraction, String retry, Integer retryDelayMillis,
+                                     Integer maxRedeliveries) {
+        static final ProcessingFailures NONE = new ProcessingFailures(0, 0, null, null, null);
+        /** The {@code retry} with negative acknowledgments, the default. */
+        public static final String NEGATIVE_ACK = "negativeAck";
+        /** The {@code retry} through the retry topic. */
+        public static final String RETRY_TOPIC = "retryTopic";
+        static final List<String> RETRIES = List.of(NEGATIVE_ACK, RETRY_TOPIC);
+        // The attempts that a message of the fraction fails
+        static final int TRANSIENT_FAILED_ATTEMPTS = 2;
+
+        public ProcessingFailures {
+            if (retry == null) {
+                retry = NEGATIVE_ACK;
+            }
+            if (retryDelayMillis == null) {
+                retryDelayMillis = 1000;
+            }
+            if (maxRedeliveries == null) {
+                maxRedeliveries = 3;
+            }
+        }
+
+        public boolean enabled() {
+            return fraction > 0 || poisonFraction > 0;
+        }
+
+        public boolean retriesThroughTopic() {
+            return RETRY_TOPIC.equals(retry);
+        }
+
+        /** Whether the message can never be processed. */
+        public boolean poison(long deviceId, long sequence) {
+            return poisonFraction > 0 && uniform(deviceId, sequence, -1) < poisonFraction;
+        }
+
+        /** Whether the attempt to process the message, the first being 0, fails. */
+        public boolean fails(long deviceId, long sequence, int attempt) {
+            return poison(deviceId, sequence) || attempt < TRANSIENT_FAILED_ATTEMPTS && fraction > 0
+                    && uniform(deviceId, sequence, attempt) < fraction;
+        }
+
+        // A number from 0 to 1 that depends only on its arguments: SplitMix64's finalizer of their combination
+        private static double uniform(long deviceId, long sequence, int attempt) {
+            long z = deviceId * 0x9E3779B97F4A7C15L + sequence * 0xC2B2AE3D27D4EB4FL + attempt * 0x165667B19E3779F9L;
+            z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+            z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+            z = z ^ (z >>> 31);
+            return (z >>> 11) * 0x1.0p-53;
         }
     }
 
@@ -428,6 +502,21 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                         && applications.resetToMillis().stream().allMatch(resetTo -> resetTo == null || resetTo == -1),
                 "applications.skipMessages and applications.resetToMillis need a subscription type that keeps each"
                         + " device's order, not Shared");
+        ProcessingFailures failures = behaviors.processingFailures();
+        require(failures.fraction() >= 0 && failures.fraction() < 1 && failures.poisonFraction() >= 0
+                        && failures.poisonFraction() < 1,
+                "behaviors.processingFailures.fraction and poisonFraction must be from 0 to below 1");
+        require(ProcessingFailures.RETRIES.contains(failures.retry()),
+                "behaviors.processingFailures.retry must be one of " + ProcessingFailures.RETRIES + ", not "
+                        + failures.retry());
+        require(failures.retryDelayMillis() >= 0
+                        && failures.maxRedeliveries() > ProcessingFailures.TRANSIENT_FAILED_ATTEMPTS,
+                "behaviors.processingFailures.retryDelayMillis must not be negative, and maxRedeliveries must be at"
+                        + " least " + (ProcessingFailures.TRANSIENT_FAILED_ATTEMPTS + 1));
+        // Retries deliver a device's messages out of order, and a pod that reads compacted doesn't process them
+        require(!failures.enabled() || SubscriptionType.Shared.name().equals(applications.subscriptionType())
+                        && !applications.readsCompacted(),
+                "behaviors.processingFailures needs applications.subscriptionType Shared and mode subscription");
         require(Applications.MODES.contains(applications.mode()),
                 "applications.mode must be one of " + Applications.MODES + ", not " + applications.mode());
         // A pod that reads compacted rebuilds the latest state from the start at any time, and has no subscription
@@ -630,6 +719,21 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
             }
         }
         return result;
+    }
+
+    /** The dead letter topic of the application's subscription, which its failed messages go to. */
+    public String deadLetterTopicName(int applicationIndex) {
+        return topics.prefix() + subscriptionName(applicationIndex) + "-DLQ";
+    }
+
+    /** The retry topic of the application's subscription. */
+    public String retryTopicName(int applicationIndex) {
+        return topics.prefix() + subscriptionName(applicationIndex) + "-RETRY";
+    }
+
+    /** Whether the gateways hand each device's last sequence to the applications, which check against it. */
+    public boolean handsOverFinalSequences() {
+        return applications.readsCompacted() || behaviors.processingFailures().enabled();
     }
 
     /** The topic with the index, from 0 to {@code topics.count} - 1. */

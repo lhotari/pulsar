@@ -46,6 +46,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.pulsar.client.api.Consumer;
+import org.apache.pulsar.client.api.ConsumerBuilder;
+import org.apache.pulsar.client.api.DeadLetterPolicy;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.PulsarClient;
@@ -54,6 +56,8 @@ import org.apache.pulsar.client.api.PulsarClientSharedResources;
 import org.apache.pulsar.client.api.Reader;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionInitialPosition;
+import org.apache.pulsar.client.api.SubscriptionType;
+import org.apache.pulsar.client.util.RetryMessageUtil;
 import picocli.CommandLine.Command;
 
 /**
@@ -299,6 +303,14 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private final AtomicLong stateInvalid = new AtomicLong();
         private final List<Long> podStartUpMillis = Collections.synchronizedList(new ArrayList<>());
         private volatile long[] finalSequences;
+        // With processing failures: the failed attempts, and the messages that reached the dead letter topic, which
+        // the application also consumes, of which those that weren't to fail at every attempt are unexpected
+        private final AtomicLong failedAttempts = new AtomicLong();
+        private final AtomicLong deadLetters = new AtomicLong();
+        private final AtomicLong unexpectedDeadLetters = new AtomicLong();
+        private final AtomicReference<Throwable> retryFailure = new AtomicReference<>();
+        // Guarded by pods
+        private ClientAndConsumer deadLetterPod;
 
         Application(IotScenario scenario, int index, Path output, Path coordinationDirectory, String runId)
                 throws IOException {
@@ -408,6 +420,16 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         }
 
         void openPods(PulsarClientSharedResources sharedResources, AtomicLong opened) throws Exception {
+            if (scenario.behaviors().processingFailures().enabled()) {
+                ClientAndConsumer created = createDeadLetterPod(sharedResources);
+                synchronized (pods) {
+                    if (stopping.get()) {
+                        created.closeAsync().exceptionally(failure -> null).join();
+                        return;
+                    }
+                    deadLetterPod = created;
+                }
+            }
             for (int pod = 0; pod < scenario.podsPerApplication(); pod++) {
                 ClientAndConsumer created = createPod(sharedResources, pod, false);
                 synchronized (pods) {
@@ -439,6 +461,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         void checkRestarts() {
             if (restartFailure.get() != null) {
                 throw new IllegalStateException("Cannot restart IoT client", restartFailure.get());
+            }
+            if (retryFailure.get() != null) {
+                throw new IllegalStateException("Cannot retry a failed message", retryFailure.get());
             }
         }
 
@@ -514,6 +539,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                 return finishReadingCompacted();
             }
             DeviceSequenceTracker.Summary summary = tracker.summary();
+            long expectedDeadLetters = expectedDeadLetters();
             receiveLatency.close();
             tracker.writeState(output.resolve("application-state.bin"));
             tracker.writeViolationSamples(output.resolve("ordering-violations.txt"));
@@ -536,11 +562,40 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     + "  \"joinEpochMs\": " + catchUp.joinEpochMs() + ",\n"
                     + "  \"caughtUpLatencyMillis\": " + catchUp.thresholdMillis() + ",\n"
                     + "  \"caughtUpEpochMs\": " + catchUp.caughtUpEpochMs() + ",\n"
-                    + "  \"messagesWhenCaughtUp\": " + catchUp.messagesWhenCaughtUp() + "\n}\n");
+                    + "  \"messagesWhenCaughtUp\": " + catchUp.messagesWhenCaughtUp() + ",\n"
+                    + "  \"failedAttempts\": " + failedAttempts.get() + ",\n"
+                    + "  \"deadLetters\": " + deadLetters.get() + ",\n"
+                    + "  \"expectedDeadLetters\": " + expectedDeadLetters + ",\n"
+                    + "  \"unexpectedDeadLetters\": " + unexpectedDeadLetters.get() + "\n}\n");
             closePods();
             finished = true;
             // with skipped messages, the count tells a lost message from a skipped one
-            return summary.valid() && expectedMessages >= 0 && summary.uniqueMessages() == expectedMessages;
+            return summary.valid() && expectedMessages >= 0 && summary.uniqueMessages() == expectedMessages
+                    && deadLetters.get() == expectedDeadLetters && unexpectedDeadLetters.get() == 0;
+        }
+
+        /**
+         * The messages that fail at every attempt, which end in the dead letter topic: 0 without processing failures,
+         * and -1 while the gateways haven't told each device's last message.
+         */
+        private long expectedDeadLetters() throws IOException {
+            IotScenario.ProcessingFailures failures = scenario.behaviors().processingFailures();
+            if (!failures.enabled()) {
+                return 0;
+            }
+            long[] next = FinalSequencesMarker.read(coordinationDirectory, runId).orElse(null);
+            if (next == null) {
+                return -1;
+            }
+            long poison = 0;
+            for (int device = 0; device < next.length; device++) {
+                for (long sequence = 0; sequence < next[device]; sequence++) {
+                    if (failures.poison(device, sequence)) {
+                        poison++;
+                    }
+                }
+            }
+            return poison;
         }
 
         /**
@@ -636,12 +691,17 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private void closePods() throws Exception {
             synchronized (pods) {
                 try {
-                    CompletableFuture.allOf(pods.stream().map(ClientAndConsumer::closeAsync)
+                    List<ClientAndConsumer> all = new ArrayList<>(pods);
+                    if (deadLetterPod != null) {
+                        all.add(deadLetterPod);
+                    }
+                    CompletableFuture.allOf(all.stream().map(ClientAndConsumer::closeAsync)
                             .toArray(CompletableFuture[]::new)).get();
                 } catch (ExecutionException e) {
                     throw e.getCause() instanceof Exception cause ? cause : e;
                 } finally {
                     pods.clear();
+                    deadLetterPod = null;
                 }
             }
         }
@@ -656,7 +716,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     .sharedResources(sharedResources)
                     .build();
             try {
-                Consumer<byte[]> consumer = client.newConsumer(Schema.BYTES)
+                ConsumerBuilder<byte[]> builder = client.newConsumer(Schema.BYTES)
                         .topics(scenario.topicNames())
                         .subscriptionName(scenario.subscriptionName(index))
                         .consumerName("iot-application-" + index + "-pod-" + podIndex)
@@ -670,6 +730,12 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                                 if (!TelemetryMessage.hasKey(message, decoded.deviceId(), scenario.stringKeys())) {
                                     throw new IllegalArgumentException(
                                             "Telemetry key does not match payload device ID");
+                                }
+                                // a failed attempt isn't a receipt: the message's latency is that of the attempt
+                                // that succeeds, since its last publication, which is to the retry topic for a
+                                // message that the retry topic retries
+                                if (failedAttempt(currentConsumer, message, decoded)) {
+                                    return;
                                 }
                                 if (decoded.measurement()) {
                                     firstMeasurementReceiptEpochMs.accumulateAndGet(receivedEpochMs,
@@ -695,11 +761,105 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                             } finally {
                                 listenersInFlight.decrementAndGet();
                             }
+                        });
+                IotScenario.ProcessingFailures failures = scenario.behaviors().processingFailures();
+                if (failures.enabled()) {
+                    DeadLetterPolicy.DeadLetterPolicyBuilder deadLetterPolicy = DeadLetterPolicy.builder()
+                            .maxRedeliverCount(failures.maxRedeliveries())
+                            .deadLetterTopic(scenario.deadLetterTopicName(index));
+                    if (failures.retriesThroughTopic()) {
+                        deadLetterPolicy.retryLetterTopic(scenario.retryTopicName(index));
+                    }
+                    builder.negativeAckRedeliveryDelay(failures.retryDelayMillis(), TimeUnit.MILLISECONDS)
+                            .enableRetry(failures.retriesThroughTopic())
+                            .deadLetterPolicy(deadLetterPolicy.build());
+                }
+                Consumer<byte[]> consumer = builder.subscribe();
+                return new ClientAndConsumer(client, consumer, List.of(), null);
+            } catch (Throwable error) {
+                // uninterruptibly: an interrupted subscription would otherwise leave the client closing
+                client.closeAsync().exceptionally(failure -> null).join();
+                throw error;
+            }
+        }
+
+        /**
+         * Fails the attempt to process the message when the processing failures fail it, and retries it then.
+         * Returns whether it failed.
+         */
+        private boolean failedAttempt(Consumer<byte[]> consumer, Message<byte[]> message,
+                                      TelemetryMessage.Decoded decoded) {
+            IotScenario.ProcessingFailures failures = scenario.behaviors().processingFailures();
+            if (!failures.enabled()) {
+                return false;
+            }
+            int attempt = failures.retriesThroughTopic() ? reconsumeTimes(message) : message.getRedeliveryCount();
+            if (!failures.fails(decoded.deviceId(), decoded.sequence(), attempt)) {
+                return false;
+            }
+            failedAttempts.incrementAndGet();
+            if (failures.retriesThroughTopic()) {
+                consumer.reconsumeLaterAsync(message, failures.retryDelayMillis(), TimeUnit.MILLISECONDS)
+                        .exceptionally(failure -> {
+                            retryFailure.compareAndSet(null, failure);
+                            return null;
+                        });
+            } else {
+                consumer.negativeAcknowledge(message);
+            }
+            return true;
+        }
+
+        // The times that the retry topic has retried the message, 0 for a message from its topic
+        private static int reconsumeTimes(Message<byte[]> message) {
+            String times = message.getProperty(RetryMessageUtil.SYSTEM_PROPERTY_RECONSUMETIMES);
+            return times != null ? Integer.parseInt(times) : 0;
+        }
+
+        /**
+         * The application's consumer of its dead letter topic, which receives the messages that failed every
+         * attempt: they count as received, once, and those that weren't to fail every attempt are unexpected.
+         */
+        private ClientAndConsumer createDeadLetterPod(PulsarClientSharedResources sharedResources) throws Exception {
+            PulsarClient client = PulsarClient.builder()
+                    .serviceUrl(scenario.serviceUrl())
+                    .sharedResources(sharedResources)
+                    .build();
+            IotScenario.ProcessingFailures failures = scenario.behaviors().processingFailures();
+            try {
+                Consumer<byte[]> consumer = client.newConsumer(Schema.BYTES)
+                        .topic(scenario.deadLetterTopicName(index))
+                        .subscriptionName(scenario.subscriptionName(index))
+                        .consumerName("iot-application-" + index + "-dead-letters")
+                        .subscriptionType(SubscriptionType.Shared)
+                        .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
+                        .messageListener((currentConsumer, message) -> {
+                            listenersInFlight.incrementAndGet();
+                            try {
+                                TelemetryMessage.Decoded decoded = TelemetryMessage.decode(message.getData());
+                                if (!TelemetryMessage.hasKey(message, decoded.deviceId(), scenario.stringKeys())) {
+                                    throw new IllegalArgumentException(
+                                            "Telemetry key does not match payload device ID");
+                                }
+                                deadLetters.incrementAndGet();
+                                if (!failures.poison(decoded.deviceId(), decoded.sequence())) {
+                                    unexpectedDeadLetters.incrementAndGet();
+                                }
+                                tracker.received(decoded.deviceId(), decoded.sequence(), message.getMessageId(),
+                                        decoded.sentNanos(), message.getTopicName(),
+                                        Thread.currentThread().getName(), message.getRedeliveryCount(),
+                                        System.currentTimeMillis());
+                                currentConsumer.acknowledgeAsync(message);
+                            } catch (RuntimeException error) {
+                                tracker.invalidMessage();
+                                currentConsumer.acknowledgeAsync(message);
+                            } finally {
+                                listenersInFlight.decrementAndGet();
+                            }
                         })
                         .subscribe();
                 return new ClientAndConsumer(client, consumer, List.of(), null);
             } catch (Throwable error) {
-                // uninterruptibly: an interrupted subscription would otherwise leave the client closing
                 client.closeAsync().exceptionally(failure -> null).join();
                 throw error;
             }

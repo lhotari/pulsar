@@ -290,6 +290,41 @@ public class IotScenarioTest {
     }
 
     @Test
+    public void failsAndRetriesMessages() {
+        IotScenario.ProcessingFailures failures = new IotScenario.ProcessingFailures(0.05, 0.01, null, null, null);
+        assertThat(failures.retry()).isEqualTo("negativeAck");
+        assertThat(failures.maxRedeliveries()).isEqualTo(3);
+        long poison = 0;
+        long transientFailures = 0;
+        for (long sequence = 0; sequence < 100_000; sequence++) {
+            if (failures.poison(7, sequence)) {
+                poison++;
+                // a poison message fails every attempt
+                assertThat(failures.fails(7, sequence, 10)).isTrue();
+            } else if (failures.fails(7, sequence, 0)) {
+                transientFailures++;
+                // the others succeed by their third attempt
+                assertThat(failures.fails(7, sequence, 2)).isFalse();
+            }
+        }
+        assertThat(poison).isBetween(800L, 1_200L);
+        assertThat(transientFailures).isBetween(4_500L, 5_500L);
+        IotScenario.Applications shared = new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
+                null, null, null, null, false, null, "Shared");
+        assertThat(withBehaviors(new IotScenario.Behaviors(null, null, failures), shared)
+                .handsOverFinalSequences()).isTrue();
+        assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(null, null, failures),
+                new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null)))
+                .hasMessageContaining("behaviors.processingFailures needs applications.subscriptionType Shared");
+        assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(null, null,
+                new IotScenario.ProcessingFailures(0.05, 0, "retryTopic", null, 2)), shared))
+                .hasMessageContaining("maxRedeliveries must be at least 3");
+        assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(null, null,
+                new IotScenario.ProcessingFailures(0.05, 0, "deadLetter", null, null)), shared))
+                .hasMessageContaining("behaviors.processingFailures.retry must be one of [negativeAck, retryTopic]");
+    }
+
+    @Test
     public void validatesThePodPauses() {
         assertThat(withBehaviors(null).behaviors().podPauses().enabled()).isFalse();
         assertThat(withBehaviors(new IotScenario.Behaviors(null, new IotScenario.PodPauses(15, 0.1, 5000)))
@@ -307,12 +342,17 @@ public class IotScenarioTest {
     }
 
     private static IotScenario withBehaviors(IotScenario.Behaviors behaviors) {
+        return withBehaviors(behaviors,
+                new IotScenario.Applications(1, 2, "app-", new IotScenario.Client(2, 2), null));
+    }
+
+    private static IotScenario withBehaviors(IotScenario.Behaviors behaviors,
+                                             IotScenario.Applications applications) {
         return new IotScenario("pulsar://localhost:6650", new IotScenario.Warmup(0, 0, 1, 0),
                 new IotScenario.Measurement(120, 1_000), 0, new IotScenario.Payload(64),
                 new IotScenario.Devices(1_000),
                 new IotScenario.Gateways(10, new IotScenario.Producer(2, 2, 100, true, true, null), null),
-                new IotScenario.Topics(2, "persistent://public/default/iot-"),
-                new IotScenario.Applications(1, 2, "app-", new IotScenario.Client(2, 2), null), behaviors, 300);
+                new IotScenario.Topics(2, "persistent://public/default/iot-"), applications, behaviors, 300);
     }
 
     @Test

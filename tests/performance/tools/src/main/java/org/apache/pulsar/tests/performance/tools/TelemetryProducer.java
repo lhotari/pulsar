@@ -240,8 +240,8 @@ final class TelemetryProducer extends PerformanceTool.ScenarioCommand {
             long measurementElapsedNanos = finishedNanos - measurementStartedNanos;
             sendLatency.close();
             writeState(deviceSequences);
-            if (scenario.applications().readsCompacted()) {
-                // the applications have each device's latest state when they have its last message
+            if (scenario.handsOverFinalSequences()) {
+                // the applications check what they received against each device's last message
                 FinalSequencesMarker.mark(coordinationDirectory(), runId, deviceSequences);
             }
             Files.writeString(output.resolve("gateways-summary.json"),
