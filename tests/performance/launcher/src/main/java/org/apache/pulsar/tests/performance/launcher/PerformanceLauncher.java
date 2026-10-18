@@ -1109,7 +1109,16 @@ public class PerformanceLauncher implements Callable<Integer> {
                 .serviceHttpUrl(cluster.getHttpServiceUrl())
                 .build()) {
             for (String topic : scenario.topicNames()) {
-                admin.topics().createPartitionedTopic(topic, scenario.topics().partitions());
+                try {
+                    admin.topics().createPartitionedTopic(topic, scenario.topics().partitions());
+                } catch (PulsarAdminException.ConflictException e) {
+                    // a cluster that a previous run left has the topic, which must have the same partitions
+                    int partitions = admin.topics().getPartitionedTopicMetadata(topic).partitions;
+                    if (partitions != scenario.topics().partitions()) {
+                        throw new IllegalStateException("The topic " + topic + " exists with " + partitions
+                                + " partitions, not " + scenario.topics().partitions());
+                    }
+                }
             }
         }
         status(String.format(Locale.ROOT, "Created %d partitioned topic(s) of %d partitions",

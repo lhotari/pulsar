@@ -303,12 +303,15 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private final AtomicLong stateInvalid = new AtomicLong();
         private final List<Long> podStartUpMillis = Collections.synchronizedList(new ArrayList<>());
         private volatile long[] finalSequences;
+        // Checking every device of every pod takes time under the pods' lock, so the receive loop checks once a second
+        private long nextStaleCheckNanos;
         // With processing failures: the failed attempts, and the messages that reached the dead letter topic, which
         // the application also consumes, of which those that weren't to fail at every attempt are unexpected
         private final AtomicLong failedAttempts = new AtomicLong();
         private final AtomicLong deadLetters = new AtomicLong();
         private final AtomicLong unexpectedDeadLetters = new AtomicLong();
-        private final AtomicReference<Throwable> retryFailure = new AtomicReference<>();
+        // The retries that the retry topic couldn't take, which the client redelivers instead
+        private final AtomicLong retryPublishFailures = new AtomicLong();
         // With scheduled delivery: the messages that arrived earlier than their delivery time allows, and the most
         // that any arrived before it
         private final AtomicLong earlyDeliveries = new AtomicLong();
@@ -466,9 +469,6 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             if (restartFailure.get() != null) {
                 throw new IllegalStateException("Cannot restart IoT client", restartFailure.get());
             }
-            if (retryFailure.get() != null) {
-                throw new IllegalStateException("Cannot retry a failed message", retryFailure.get());
-            }
         }
 
         /** Tells the gateways about the next warmup round, once the application has received it. */
@@ -493,6 +493,11 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
 
         boolean receivedEveryMessage() throws IOException {
             if (scenario.applications().readsCompacted()) {
+                long now = System.nanoTime();
+                if (now - nextStaleCheckNanos < 0) {
+                    return false;
+                }
+                nextStaleCheckNanos = now + TimeUnit.SECONDS.toNanos(1);
                 return staleDevices() == 0;
             }
             return expectedMessages >= 0 && tracker.uniqueMessages() >= expectedMessages;
@@ -571,6 +576,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     + "  \"deadLetters\": " + deadLetters.get() + ",\n"
                     + "  \"expectedDeadLetters\": " + expectedDeadLetters + ",\n"
                     + "  \"unexpectedDeadLetters\": " + unexpectedDeadLetters.get() + ",\n"
+                    + "  \"retryPublishFailures\": " + retryPublishFailures.get() + ",\n"
                     + "  \"earlyDeliveries\": " + earlyDeliveries.get() + ",\n"
                     + "  \"maxEarlyMillis\": " + maxEarlyMillis.get() + "\n}\n");
             closePods();
@@ -611,6 +617,13 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
          */
         private boolean finishReadingCompacted() throws Exception {
             long stale = staleDevices();
+            // A pod that a restart replaced after the receive loop's last check rebuilds its state now that the
+            // restarts have stopped, within a pod's start-up time
+            long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(2);
+            while (stale > 0 && finalSequences != null && System.nanoTime() - deadline < 0) {
+                Thread.sleep(1000);
+                stale = staleDevices();
+            }
             receiveLatency.close();
             // the state of the pod that lacks the most devices' last messages, which the launcher checks
             synchronized (pods) {
@@ -651,7 +664,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     + "  \"messagesWhenCaughtUp\": 0\n}\n");
             closePods();
             finished = true;
-            return stale == 0 && stateRepeats.get() == 0 && stateRegressions.get() == 0 && stateInvalid.get() == 0;
+            // A repeated state, as after a reader reconnects, is reported as a duplicate, but a state service takes it
+            return stale == 0 && stateRegressions.get() == 0 && stateInvalid.get() == 0;
         }
 
         /** Closes the application's pods, when it hasn't finished, such as after a failure. */
@@ -740,7 +754,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                                 }
                                 // a failed attempt isn't a receipt: the message's latency is that of the attempt
                                 // that succeeds, since its last publication, which is to the retry topic for a
-                                // message that the retry topic retries
+                                // message that the retry topic retries, or since its delivery time when scheduled,
+                                // which the retry topic keeps
                                 if (failedAttempt(currentConsumer, message, decoded)) {
                                     return;
                                 }
@@ -828,7 +843,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             if (failures.retriesThroughTopic()) {
                 consumer.reconsumeLaterAsync(message, failures.retryDelayMillis(), TimeUnit.MILLISECONDS)
                         .exceptionally(failure -> {
-                            retryFailure.compareAndSet(null, failure);
+                            retryPublishFailures.incrementAndGet();
                             return null;
                         });
             } else {
