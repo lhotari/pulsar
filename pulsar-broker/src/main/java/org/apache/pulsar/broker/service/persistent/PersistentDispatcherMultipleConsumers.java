@@ -45,6 +45,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
@@ -69,6 +70,7 @@ import org.apache.pulsar.broker.service.EntryAndMetadata;
 import org.apache.pulsar.broker.service.EntryBatchIndexesAcks;
 import org.apache.pulsar.broker.service.EntryBatchSizes;
 import org.apache.pulsar.broker.service.InMemoryRedeliveryTracker;
+import org.apache.pulsar.broker.service.RedeliveredPendingAcks;
 import org.apache.pulsar.broker.service.RedeliveryTracker;
 import org.apache.pulsar.broker.service.RedeliveryTrackerDisabled;
 import org.apache.pulsar.broker.service.SendMessageInfo;
@@ -1264,6 +1266,20 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     }
 
     /**
+     * Removes the pending acks and adds them to the replay queue under the dispatcher's monitor, so that no dispatch
+     * runs between the removal, which can end a Key_Shared hash's draining, and the addition, which then holds back
+     * the hash's newer messages.
+     */
+    @Override
+    public synchronized void redeliverUnacknowledgedMessages(Consumer consumer,
+                                                             Supplier<RedeliveredPendingAcks> removal) {
+        RedeliveredPendingAcks removed = removal.get();
+        if (!removed.positions().isEmpty()) {
+            redeliverUnacknowledgedMessages(consumer, removed.positions(), removed.stickyKeyHashes());
+        }
+    }
+
+    /**
      * Redelivers the positions with their sticky key hashes, which a Key_Shared dispatcher needs to hold back the
      * later messages of their keys until it has dispatched them again, and to replay them only when their consumer
      * has permits. A position without a hash is read before its key is known.
@@ -1603,6 +1619,7 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         return cursor;
     }
 
+    @Override
     protected int getStickyKeyHash(Entry entry) {
         // There's no need to calculate the hash for Shared subscription
         return STICKY_KEY_HASH_NOT_SET;

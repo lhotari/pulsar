@@ -87,6 +87,7 @@ import org.apache.pulsar.broker.service.EntryAndMetadata;
 import org.apache.pulsar.broker.service.EntryBatchIndexesAcks;
 import org.apache.pulsar.broker.service.EntryBatchSizes;
 import org.apache.pulsar.broker.service.PendingAcksMap;
+import org.apache.pulsar.broker.service.RedeliveredPendingAcks;
 import org.apache.pulsar.broker.service.RedeliveryTracker;
 import org.apache.pulsar.broker.service.StickyKeyConsumerSelector;
 import org.apache.pulsar.broker.service.TransportCnx;
@@ -667,6 +668,26 @@ public class PersistentStickyKeyDispatcherMultipleConsumersTest {
         } finally {
             entries.forEach(Entry::release);
         }
+    }
+
+    @Test(timeOut = 10000)
+    public void testPendingAcksMoveToTheReplayQueueUnderTheDispatchersMonitor() {
+        persistentDispatcher.addConsumer(consumerMock).join();
+        int hash = persistentDispatcher.getSelector().makeStickyKeyHash(
+                generateKeyForConsumer(persistentDispatcher.getSelector(), consumerMock)
+                        .getBytes(StandardCharsets.UTF_8));
+        AtomicBoolean removedUnderMonitor = new AtomicBoolean();
+
+        // removing the pending ack can end the hash's draining: no dispatch may run before the position is queued
+        persistentDispatcher.redeliverUnacknowledgedMessages(consumerMock, () -> {
+            removedUnderMonitor.set(Thread.holdsLock(persistentDispatcher));
+            assertFalse(persistentDispatcher.redeliveryMessages.containsStickyKeyHash(hash));
+            return new RedeliveredPendingAcks(List.of(PositionFactory.create(1, 1)), IntArrayList.of(hash));
+        });
+
+        assertTrue(removedUnderMonitor.get());
+        assertTrue(persistentDispatcher.redeliveryMessages.containsStickyKeyHash(hash));
+        assertEquals(persistentDispatcher.getNumberOfMessagesInReplay(), 1);
     }
 
     @Test(timeOut = 10000)

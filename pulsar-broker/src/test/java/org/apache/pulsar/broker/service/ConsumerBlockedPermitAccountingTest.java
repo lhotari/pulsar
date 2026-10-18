@@ -40,6 +40,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
@@ -159,14 +160,16 @@ public class ConsumerBlockedPermitAccountingTest {
         assertThat(consumer.isBlocked()).isTrue();
         when(subscription.getConsumers()).thenReturn(List.of(consumer, ackConsumer));
         if (unblockPath != UnblockPath.ACK) {
+            // the subscription removes the pending acks, which unblocks the consumer, before it replays them
             doAnswer(invocation -> {
+                invocation.getArgument(1, Supplier.class).get();
                 redeliveryCalls.incrementAndGet();
                 assertThat(consumer.isBlocked()).isFalse();
                 assertThat(consumer.getAvailablePermits()).isEqualTo(FLOW_PERMITS);
                 assertThat(readRemovalBalanceFromAnotherThread(consumer)).isEqualTo(dispatcherFlowPermits.get());
                 assertThat(consumer.getAvailablePermitsForDispatcherRemoval()).isEqualTo(dispatcherFlowPermits.get());
                 return null;
-            }).when(subscription).redeliverUnacknowledgedMessages(any(), any(List.class), any());
+            }).when(subscription).redeliverUnacknowledgedMessages(any(), any(Supplier.class));
         }
 
         consumer.pauseAt(PausePoint.BLOCKED_FLOW);

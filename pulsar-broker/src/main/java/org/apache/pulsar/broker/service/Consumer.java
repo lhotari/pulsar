@@ -1482,24 +1482,27 @@ public class Consumer {
 
         int blockedPermits;
         if (pendingAcks != null) {
-            List<Position> pendingPositions = new ArrayList<>((int) pendingAcks.size());
-            IntArrayList stickyKeyHashes = new IntArrayList((int) pendingAcks.size());
             MutableInt totalRedeliveryMessages = new MutableInt(0);
-            pendingAcks.forEachAndClear((ledgerId, entryId, remainingUnacked, stickyKeyHash) -> {
-                totalRedeliveryMessages.add(remainingUnacked);
-                pendingPositions.add(PositionFactory.create(ledgerId, entryId));
-                stickyKeyHashes.add(stickyKeyHash);
+            MutableInt transferredPermits = new MutableInt(0);
+            // the subscription removes the pending acks and replays them in one step, see RedeliveredPendingAcks
+            subscription.redeliverUnacknowledgedMessages(this, () -> {
+                List<Position> pendingPositions = new ArrayList<>((int) pendingAcks.size());
+                IntArrayList stickyKeyHashes = new IntArrayList((int) pendingAcks.size());
+                pendingAcks.forEachAndClear((ledgerId, entryId, remainingUnacked, stickyKeyHash) -> {
+                    totalRedeliveryMessages.add(remainingUnacked);
+                    pendingPositions.add(PositionFactory.create(ledgerId, entryId));
+                    stickyKeyHashes.add(stickyKeyHash);
+                });
+                if (totalRedeliveryMessages.intValue() > 0) {
+                    addAndGetUnackedMessages(-totalRedeliveryMessages.intValue());
+                }
+                transferredPermits.setValue(unblockAndTransferBlockedPermits());
+                return new RedeliveredPendingAcks(pendingPositions, stickyKeyHashes);
             });
-
-            if (totalRedeliveryMessages.intValue() > 0) {
-                addAndGetUnackedMessages(-totalRedeliveryMessages.intValue());
-            }
-            blockedPermits = unblockAndTransferBlockedPermits();
+            blockedPermits = transferredPermits.intValue();
 
             msgRedeliver.recordMultipleEvents(totalRedeliveryMessages.intValue(), totalRedeliveryMessages.intValue());
             msgRedeliverCounter.add(totalRedeliveryMessages.intValue());
-
-            subscription.redeliverUnacknowledgedMessages(this, pendingPositions, stickyKeyHashes);
         } else {
             clearUnackedMessages();
             blockedPermits = unblockAndTransferBlockedPermits();
@@ -1510,41 +1513,44 @@ public class Consumer {
     }
 
     public void redeliverUnacknowledgedMessages(List<MessageIdData> messageIds) {
-        int totalRedeliveryMessages = 0;
-        List<Position> pendingPositions = new ArrayList<>();
-        // each position's sticky key hash, so that a Key_Shared dispatcher keeps its key's order
-        IntArrayList stickyKeyHashes = new IntArrayList();
-        for (MessageIdData msg : messageIds) {
-            long pendingAck = pendingAcks.removeAndGetPacked(msg.getLedgerId(), msg.getEntryId());
-            if (!PendingAcksMap.isNotFound(pendingAck)) {
-                totalRedeliveryMessages += PendingAcksMap.remainingUnacked(pendingAck);
-                pendingPositions.add(PositionFactory.create(msg.getLedgerId(), msg.getEntryId()));
-                stickyKeyHashes.add(PendingAcksMap.stickyKeyHash(pendingAck));
+        MutableInt totalRedeliveryMessages = new MutableInt(0);
+        MutableInt redeliveredPositions = new MutableInt(0);
+        MutableInt transferredPermits = new MutableInt(0);
+        // the subscription removes the pending acks and replays them in one step, see RedeliveredPendingAcks
+        subscription.redeliverUnacknowledgedMessages(this, () -> {
+            List<Position> pendingPositions = new ArrayList<>();
+            // each position's sticky key hash, so that a Key_Shared dispatcher keeps its key's order
+            IntArrayList stickyKeyHashes = new IntArrayList();
+            for (MessageIdData msg : messageIds) {
+                long pendingAck = pendingAcks.removeAndGetPacked(msg.getLedgerId(), msg.getEntryId());
+                if (!PendingAcksMap.isNotFound(pendingAck)) {
+                    totalRedeliveryMessages.add(PendingAcksMap.remainingUnacked(pendingAck));
+                    pendingPositions.add(PositionFactory.create(msg.getLedgerId(), msg.getEntryId()));
+                    stickyKeyHashes.add(PendingAcksMap.stickyKeyHash(pendingAck));
+                }
             }
-        }
-
-        if (totalRedeliveryMessages == 0) {
+            redeliveredPositions.setValue(pendingPositions.size());
             // A rejected transactional ACK can leave a zero count with unacked batch indexes.
             // Preserve replay without releasing backpressure or deferred permits.
-            if (!pendingPositions.isEmpty()) {
-                subscription.redeliverUnacknowledgedMessages(this, pendingPositions, stickyKeyHashes);
+            if (totalRedeliveryMessages.intValue() > 0) {
+                addAndGetUnackedMessages(-totalRedeliveryMessages.intValue());
+                transferredPermits.setValue(unblockAndTransferBlockedPermits());
             }
+            return new RedeliveredPendingAcks(pendingPositions, stickyKeyHashes);
+        });
+        if (totalRedeliveryMessages.intValue() == 0) {
             return;
         }
 
-        addAndGetUnackedMessages(-totalRedeliveryMessages);
-        int blockedPermits = unblockAndTransferBlockedPermits();
-
         log.debug()
-                .attr("totalRedeliveryMessages", totalRedeliveryMessages)
-                .attr("size", pendingPositions.size())
+                .attr("totalRedeliveryMessages", totalRedeliveryMessages.intValue())
+                .attr("size", redeliveredPositions.intValue())
                 .log("Consumer received msg-redelivery");
 
-        subscription.redeliverUnacknowledgedMessages(this, pendingPositions, stickyKeyHashes);
-        msgRedeliver.recordMultipleEvents(totalRedeliveryMessages, totalRedeliveryMessages);
-        msgRedeliverCounter.add(totalRedeliveryMessages);
+        msgRedeliver.recordMultipleEvents(totalRedeliveryMessages.intValue(), totalRedeliveryMessages.intValue());
+        msgRedeliverCounter.add(totalRedeliveryMessages.intValue());
 
-        notifyDispatcherOfBlockedPermits(blockedPermits);
+        notifyDispatcherOfBlockedPermits(transferredPermits.intValue());
     }
 
     public Subscription getSubscription() {
