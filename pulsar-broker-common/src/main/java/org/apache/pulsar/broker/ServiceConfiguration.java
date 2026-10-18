@@ -627,6 +627,18 @@ public class ServiceConfiguration implements PulsarConfiguration {
     @FieldContext(
         category = CATEGORY_SERVER,
         dynamic = true,
+        doc = "The longest that a topic that unloads or closes waits for its Shared and Key_Shared consumers to"
+            + " acknowledge the messages they have received, in milliseconds, before it disconnects them. Dispatch"
+            + " stops while it waits, and it stops waiting once no consumer has a pending acknowledgment. The"
+            + " acknowledgments that arrive after the disconnect are lost, and the topic, once loaded again,"
+            + " dispatches those messages again, so a few seconds, longer than the applications take to"
+            + " acknowledge, reduces the redeliveries of a rolling restart. 0, the default, doesn't wait."
+    )
+    private long topicCloseAckDrainTimeoutMillis = 0;
+
+    @FieldContext(
+        category = CATEGORY_SERVER,
+        dynamic = true,
         doc = "Flag to skip broker shutdown when broker handles Out of memory error"
     )
     private boolean skipBrokerShutdownOnOOM = false;

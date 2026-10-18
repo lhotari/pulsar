@@ -101,6 +101,8 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     // the pending entries that it would move into the replay queue, which the last removal clears, and the Key_Shared
     // dispatcher skips the draining bookkeeping of the hashes that the removal moves
     protected boolean removingAllConsumers;
+    // Set when the topic closes and waits for the consumers to acknowledge what they have received
+    private volatile boolean dispatchStoppedForClose;
     // the deferred pending entries: ledger ID, entry ID and sticky key hash of each
     private LongArrayList deferredPendingEntries;
     protected final MessageRedeliveryController redeliveryMessages;
@@ -389,6 +391,10 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
     protected synchronized void internalReadMoreEntries() {
         if (cursor.isClosed()) {
             log.debug("Cursor is already closed, skipping read more entries");
+            return;
+        }
+        if (dispatchStoppedForClose) {
+            // the topic is closing and waits for the consumers' pending acknowledgments
             return;
         }
         if (isSendInProgress()) {
@@ -698,6 +704,32 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
                 ? disconnectAllConsumers(false, assignedBrokerLookupData) : CompletableFuture.completedFuture(null));
     }
 
+    /**
+     * Stops dispatching, cancelling a pending read, while the closing topic waits for the consumers to acknowledge
+     * the messages they have received, see {@link #getPendingAcknowledgments()}.
+     */
+    public synchronized void stopDispatchingForClose() {
+        dispatchStoppedForClose = true;
+        cancelPendingRead();
+    }
+
+    /** Resumes the dispatch that {@link #stopDispatchingForClose()} stopped, when the topic's close failed. */
+    public void resumeDispatchingAfterClose() {
+        if (dispatchStoppedForClose) {
+            dispatchStoppedForClose = false;
+            readMoreEntriesAsync();
+        }
+    }
+
+    /** The consumers' pending acknowledgments: the entries dispatched to them that they haven't acknowledged. */
+    public long getPendingAcknowledgments() {
+        long pending = 0;
+        for (Consumer consumer : consumerList) {
+            pending += consumer.getPendingAcks().size();
+        }
+        return pending;
+    }
+
     @Override
     public synchronized CompletableFuture<Void> disconnectAllConsumers(
             boolean isResetCursor, Optional<BrokerLookupData> assignedBrokerLookupData) {
@@ -799,6 +831,14 @@ public class PersistentDispatcherMultipleConsumers extends AbstractPersistentDis
         }
 
         readFailureBackoff.reduceToHalf();
+
+        if (dispatchStoppedForClose) {
+            // a read in flight when the closing topic stopped the dispatch: its entries wait in the replay queue, so
+            // that no pending acknowledgment is added while the topic waits for them to drain
+            entries.forEach(this::addEntryToReplay);
+            onReadEnded(readType);
+            return;
+        }
 
         if (shouldRewindBeforeReadingOrReplaying && readType == ReadType.Normal) {
             // All consumers got disconnected before the completion of the read operation
