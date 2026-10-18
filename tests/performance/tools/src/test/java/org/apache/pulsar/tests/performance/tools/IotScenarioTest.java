@@ -254,6 +254,9 @@ public class IotScenarioTest {
                 new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null, List.of(0, 30), null,
                         null, true)))
                 .hasMessageContaining("topics.partitions doesn't support");
+        assertThatThrownBy(() -> withTopics(new IotScenario.Topics(2, "persistent://public/default/iot-", 2),
+                new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null, List.of(0, 30), null)))
+                .hasMessageContaining("topics.partitions doesn't support applications.joinSeconds");
         // a scenario file without the setting keeps non-partitioned topics
         IotScenario.Topics fromYaml = new YamlScenarioLoader().mapper().convertValue(Map.of("count", 2,
                 "prefix", "persistent://public/default/iot-"), IotScenario.Topics.class);
@@ -291,8 +294,9 @@ public class IotScenarioTest {
 
     @Test
     public void failsAndRetriesMessages() {
-        IotScenario.ProcessingFailures failures = new IotScenario.ProcessingFailures(0.05, 0.01, null, null, null);
-        assertThat(failures.retry()).isEqualTo("negativeAck");
+        assertThat(new IotScenario.ProcessingFailures(0.05, 0.01, null, null, null).retry()).isEqualTo("negativeAck");
+        IotScenario.ProcessingFailures failures =
+                new IotScenario.ProcessingFailures(0.05, 0.01, "retryTopic", null, null);
         assertThat(failures.maxRedeliveries()).isEqualTo(3);
         long poison = 0;
         long transientFailures = 0;
@@ -319,6 +323,10 @@ public class IotScenarioTest {
         assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(null, null,
                 new IotScenario.ProcessingFailures(0.05, 0, "retryTopic", null, 2)), shared))
                 .hasMessageContaining("maxRedeliveries must be at least 3");
+        // the test scenario's gateways batch, so negative acknowledgments can't count the attempts
+        assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(null, null,
+                new IotScenario.ProcessingFailures(0.05, 0, null, null, null)), shared))
+                .hasMessageContaining("behaviors.processingFailures.retry negativeAck needs no podRestarts");
         assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(null, null,
                 new IotScenario.ProcessingFailures(0.05, 0, "deadLetter", null, null)), shared))
                 .hasMessageContaining("behaviors.processingFailures.retry must be one of [negativeAck, retryTopic]");
