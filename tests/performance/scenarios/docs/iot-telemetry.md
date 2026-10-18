@@ -36,6 +36,9 @@ application-visible order across Key_Shared hash-range reassignment.
   consumers so that the subscriptions' replay queues hold thousands of messages: 30,000 msg/s with string keys to five
   applications of 20 pods on four topics, each application pausing three pods for five seconds every 15 seconds and
   restarting one every 20 seconds. The report's Backlog and rates section shows the replay queues over time.
+- [`iot-telemetry-key-shared-stuck-consumer.yaml`](../iot-telemetry-key-shared-stuck-consumer.yaml) pauses one of
+  each application's five pods for 45 seconds every minute, so that the replay queues reach their look-ahead limit
+  and dispatch stops until the pod resumes: what the broker spends while dispatch is stuck.
 - [`iot-telemetry-key-shared-unloads.yaml`](../iot-telemetry-key-shared-unloads.yaml) unloads one of four topics
   every 15 seconds, as a rolling restart of the brokers would, while 250 Key_Shared consumers per topic hold pending
   acknowledgments: their pods acknowledge each message two seconds after receiving it. The report's Topic unloads
