@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import org.apache.pulsar.client.api.SubscriptionType;
 
 /**
@@ -143,16 +144,37 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
      * @param partitions the partitions of each topic, which the launcher creates as a partitioned topic before the
      *                   workloads start; 0, the default, for non-partitioned topics, which the gateways' producers
      *                   create. A producer routes a device's messages by its key to one partition
+     * @param patternDiscoverySeconds the applications subscribe to the topics by a pattern, the prefix followed by
+     *                                the index, rather than by their names, so they discover the topics as the
+     *                                gateways' producers create them: through the broker's topic list watcher, and
+     *                                every this many seconds by a lookup; null to subscribe by the names
      */
-    public record Topics(int count, String prefix, Integer partitions) {
+    public record Topics(int count, String prefix, Integer partitions, Integer patternDiscoverySeconds) {
         public Topics {
             if (partitions == null) {
                 partitions = 0;
             }
         }
 
+        public Topics(int count, String prefix, Integer partitions) {
+            this(count, prefix, partitions, null);
+        }
+
         public Topics(int count, String prefix) {
             this(count, prefix, null);
+        }
+
+        /** Whether the applications subscribe to the topics by a pattern. */
+        public boolean subscribedByPattern() {
+            return patternDiscoverySeconds != null;
+        }
+
+        /**
+         * The pattern of the topics' names: the prefix as it is, since the client finds the namespace in the
+         * pattern's text, and the index.
+         */
+        public Pattern pattern() {
+            return Pattern.compile(prefix + "\\d+");
         }
 
         /** Whether the topics are partitioned. */
@@ -604,6 +626,16 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                 "applications.mode compactedReaders doesn't support joinSeconds, skipMessages, resetToMillis,"
                         + " unloadBeforeJoin, behaviors.podPauses or warmup.messages");
         require(topics.partitions() >= 0, "topics.partitions must not be negative");
+        // A pattern subscription creates its subscription on a topic when it discovers it, and the retry and dead
+        // letter topics have the prefix too
+        require(!topics.subscribedByPattern() || topics.patternDiscoverySeconds() >= 1 && !topics.partitioned()
+                        && !applications.readsCompacted() && !behaviors.processingFailures().enabled()
+                        && applications.joinSeconds().stream().allMatch(seconds -> seconds == null || seconds == 0)
+                        && !topics.prefix().matches(".*[.*+?^$|()\\[\\]{}\\\\].*"),
+                "topics.patternDiscoverySeconds must be at least 1, needs a topics.prefix without regular expression"
+                        + " characters, and doesn't support topics.partitions,"
+                        + " applications.mode compactedReaders, applications.joinSeconds or"
+                        + " behaviors.processingFailures");
         // The launcher prepares a join with each topic's stats, which a partitioned topic keeps per partition, and a
         // late application's catch-up counts the topics that it receives from, which are the partitions
         require(!topics.partitioned() || !applications.unloadBeforeJoin()

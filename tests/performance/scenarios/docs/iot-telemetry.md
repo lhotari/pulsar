@@ -59,6 +59,9 @@ application-visible order across Key_Shared hash-range reassignment.
   chunks of four producers' images interleave in each topic, and three Key_Shared applications with two pods put the
   images together, restarting a pod every 30 seconds mid-transfer: chunked messages' throughput, latency and
   redelivery, with each image whole, once and in order for its model.
+- [`iot-fleet-onboarding.yaml`](../iot-fleet-onboarding.yaml) brings 2,000 sites' topics online during the
+  measurement: the gateways' first messages create them, and three applications subscribed by a pattern discover them
+  as they appear: topic creation and discovery under load, with every message delivered once and in order.
 - [`iot-telemetry-small.yaml`](../iot-telemetry-small.yaml) keeps the 20-way fanout,
   30 topics and 1,000 msg/s rate, but uses 10 gateways and 10 pods per application, with the low-memory
   configuration.
@@ -232,6 +235,7 @@ workloads:
       count: 30
       prefix: persistent://public/default/iot-telemetry-
       partitions: 0            # not set in the base file: the partitions of each topic, 0 for non-partitioned
+      # patternDiscoverySeconds: 30  # subscribe by the pattern <prefix>\d+, discovering topics every 30 s
     applications:              # each a subscription of its own, consumed through its pods
       count: 20
       podsPerApplication: 100  # a Pulsar client with a consumer of the subscription each
@@ -274,6 +278,13 @@ the workloads start. A gateway's producer routes each device's messages to one p
 pod's consumer subscribes to every partition. The launcher samples each partition's stats. The applications' join
 preparation (`skipMessages`, `unloadBeforeJoin` and `resetToMillis`), offloading and a remote cluster don't support
 partitioned topics.
+
+`topics.patternDiscoverySeconds` makes the applications subscribe to the topics by a pattern, the prefix followed by
+the index, instead of by their names, so they discover the topics as the gateways' first messages create them: through
+the broker's topic list watcher, and every `patternDiscoverySeconds` by a lookup. Each subscription is created at the
+earliest position when its topic is discovered, so no message is lost. The prefix mustn't have regular expression
+characters, since the client finds the namespace in the pattern, and the pattern doesn't go with partitioned topics,
+late applications, compacted readers or processing failures, whose retry and dead letter topics have the prefix too.
 
 `applications.mode` sets how each pod reads the topics. With `subscription`, the default, it has a consumer of its
 application's subscription, which receives every message. With `compactedReaders`, it has a reader of each topic that

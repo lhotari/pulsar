@@ -264,6 +264,23 @@ public class IotScenarioTest {
     }
 
     @Test
+    public void subscribesByPattern() {
+        IotScenario.Topics byPattern = new IotScenario.Topics(2, "persistent://public/default/iot-site-", null, 30);
+        assertThat(byPattern.subscribedByPattern()).isTrue();
+        assertThat(byPattern.pattern().matcher("persistent://public/default/iot-site-17").matches()).isTrue();
+        assertThat(byPattern.pattern().matcher("persistent://public/default/iot-site-app-0-DLQ").matches()).isFalse();
+        assertThat(withTopics(byPattern, new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
+                null)).topics().patternDiscoverySeconds()).isEqualTo(30);
+        assertThatThrownBy(() -> withTopics(new IotScenario.Topics(2, "persistent://public/default/iot.site-", null,
+                30), new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null)))
+                .hasMessageContaining("needs a topics.prefix without regular expression characters");
+        assertThatThrownBy(() -> withTopics(new IotScenario.Topics(2, "persistent://public/default/iot-site-", 2, 30),
+                new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null)))
+                .hasMessageContaining("doesn't support topics.partitions");
+        assertThat(new IotScenario.Topics(2, "persistent://public/default/iot-").subscribedByPattern()).isFalse();
+    }
+
+    @Test
     public void choosesTheMode() {
         assertThat(scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null))
                 .applications().readsCompacted()).isFalse();

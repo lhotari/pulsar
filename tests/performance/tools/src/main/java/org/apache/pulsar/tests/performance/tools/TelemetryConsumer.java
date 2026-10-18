@@ -737,9 +737,14 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     .sharedResources(sharedResources)
                     .build();
             try {
-                ConsumerBuilder<byte[]> builder = client.newConsumer(Schema.BYTES)
-                        .topics(scenario.topicNames())
-                        .subscriptionName(scenario.subscriptionName(index))
+                ConsumerBuilder<byte[]> builder = client.newConsumer(Schema.BYTES);
+                if (scenario.topics().subscribedByPattern()) {
+                    builder.topicsPattern(scenario.topics().pattern())
+                            .patternAutoDiscoveryPeriod(scenario.topics().patternDiscoverySeconds(), TimeUnit.SECONDS);
+                } else {
+                    builder.topics(scenario.topicNames());
+                }
+                builder.subscriptionName(scenario.subscriptionName(index))
                         .consumerName("iot-application-" + index + "-pod-" + podIndex)
                         .subscriptionType(scenario.subscriptionType())
                         .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
