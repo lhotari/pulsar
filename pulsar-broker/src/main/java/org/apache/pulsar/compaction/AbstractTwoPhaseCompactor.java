@@ -62,6 +62,8 @@ import org.apache.pulsar.common.util.FutureUtil;
  */
 @CustomLog
 public abstract class AbstractTwoPhaseCompactor<T> extends Compactor {
+  // The broker's cache of compacted ledgers' entries, which the new snapshots' entries go into as they're written
+  private volatile CompactedLedgerEntryCache entryCache = CompactedLedgerEntryCache.DISABLED;
 
   @VisibleForTesting
   static Runnable injectionAfterSeekInPhaseTwo = () -> {};
@@ -444,10 +446,17 @@ public abstract class AbstractTwoPhaseCompactor<T> extends Compactor {
     return bkf;
   }
 
+  /** Writes the new snapshots' entries through to the cache, which the readers of the snapshots read. */
+  public void setEntryCache(CompactedLedgerEntryCache entryCache) {
+    this.entryCache = entryCache;
+  }
+
   private CompletableFuture<Void> addToCompactedLedger(LedgerHandle lh, RawMessage m,
       String topic) {
     CompletableFuture<Void> bkf = new CompletableFuture<>();
     ByteBuf serialized = m.serialize();
+    // the entry as the readers of the new snapshot will read it, before the add releases the buffer
+    byte[] cached = entryCache.copyIfEnabled(serialized);
     try {
       mxBean.addCompactionWriteOp(topic, m.getHeadersAndPayload().readableBytes());
       long start = System.nanoTime();
@@ -457,6 +466,9 @@ public abstract class AbstractTwoPhaseCompactor<T> extends Compactor {
             if (rc != BKException.Code.OK) {
               bkf.completeExceptionally(BKException.create(rc));
             } else {
+              if (cached != null) {
+                entryCache.put(ledger.getId(), eid, cached);
+              }
               bkf.complete(null);
             }
           }, null);

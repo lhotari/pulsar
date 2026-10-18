@@ -51,11 +51,20 @@ public class PulsarTopicCompactionService implements TopicCompactionService {
 
     private final Supplier<Compactor> compactorSupplier;
 
+    private final CompactedLedgerEntryCache entryCache;
+
     public PulsarTopicCompactionService(String topic, BookKeeper bookKeeper,
                                         Supplier<Compactor> compactorSupplier) {
+        this(topic, bookKeeper, compactorSupplier, CompactedLedgerEntryCache.DISABLED);
+    }
+
+    public PulsarTopicCompactionService(String topic, BookKeeper bookKeeper,
+                                        Supplier<Compactor> compactorSupplier,
+                                        CompactedLedgerEntryCache entryCache) {
         this.topic = topic;
         this.compactedTopic = new CompactedTopicImpl(bookKeeper);
         this.compactorSupplier = compactorSupplier;
+        this.entryCache = entryCache;
     }
 
     @Override
@@ -84,7 +93,8 @@ public class PulsarTopicCompactionService implements TopicCompactionService {
                     }
                     long endPoint =
                             Math.min(context.ledger.getLastAddConfirmed(), startPoint + (numberOfEntriesToRead - 1));
-                    return CompactedTopicImpl.readEntries(context.ledger, startPoint, endPoint).thenApply(entries -> {
+                    return CompactedTopicImpl.readEntries(context.ledger, startPoint, endPoint, entryCache)
+                            .thenApply(entries -> {
                         if (!entries.isEmpty()) {
                             // where the reader's cursor continues, after the last entry's original position
                             context.recordNextReadIndex(entries.get(entries.size() - 1).getPosition().getNext(),

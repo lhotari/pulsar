@@ -21,6 +21,8 @@ package org.apache.pulsar.compaction;
 import static org.apache.pulsar.compaction.Compactor.COMPACTED_TOPIC_LEDGER_PROPERTY;
 import static org.apache.pulsar.compaction.Compactor.COMPACTION_SUBSCRIPTION;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.AssertJUnit.fail;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -222,5 +224,67 @@ public class TopicCompactionServiceTest extends MockedPulsarServiceBaseTest {
         // a read from past the compacted ledger's last entry has nothing to read there
         assertEquals(context.nextReadIndex(expected.get(99).getNext()), Long.valueOf(100));
         assertTrue(service.readCompactedEntries(expected.get(99).getNext(), 7).join().isEmpty());
+    }
+
+    @Test
+    public void testReadsTheCachedSnapshot() throws Exception {
+        String topic = "persistent://prop-xyz/ns1/cached-topic";
+        CompactedLedgerEntryCache cache = new CompactedLedgerEntryCache(16 * 1024 * 1024);
+        PulsarTopicCompactionService service = new PulsarTopicCompactionService(topic, bk, () -> compactor, cache);
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer().topic(topic)
+                .enableBatching(false)
+                .messageRoutingMode(MessageRoutingMode.SinglePartition)
+                .create();
+        for (int i = 0; i < 20; i++) {
+            producer.newMessage().key("key-" + (i % 10)).value(("value-" + i).getBytes()).send();
+        }
+        service.compact().join();
+        CompactedTopicImpl compactedTopic = service.getCompactedTopic();
+        Long compactedLedger = admin.topics().getInternalStats(topic).cursors.get(COMPACTION_SUBSCRIPTION)
+                .properties.get(COMPACTED_TOPIC_LEDGER_PROPERTY);
+        String[] markDeletePosition = admin.topics().getInternalStats(topic).cursors.get(COMPACTION_SUBSCRIPTION)
+                .markDeletePosition.split(":");
+        compactedTopic.newCompactedLedger(PositionFactory.create(Long.valueOf(markDeletePosition[0]),
+                Long.valueOf(markDeletePosition[1])), compactedLedger).join();
+
+        List<Entry> fromBookies = service.readCompactedEntries(PositionFactory.EARLIEST, 100).join();
+        assertEquals(fromBookies.size(), 10);
+        assertTrue(cache.size() > 0);
+        List<Entry> fromCache = service.readCompactedEntries(PositionFactory.EARLIEST, 100).join();
+        assertEquals(fromCache.stream().map(Entry::getPosition).toList(),
+                fromBookies.stream().map(Entry::getPosition).toList());
+        for (int i = 0; i < fromCache.size(); i++) {
+            assertEquals(fromCache.get(i).getData(), fromBookies.get(i).getData());
+        }
+        fromBookies.forEach(Entry::release);
+        fromCache.forEach(Entry::release);
+    }
+
+    @Test
+    public void testCompactionWritesTheSnapshotThroughToTheCache() throws Exception {
+        String topic = "persistent://prop-xyz/ns1/written-through-topic";
+        CompactedLedgerEntryCache cache = new CompactedLedgerEntryCache(16 * 1024 * 1024);
+        compactor.setEntryCache(cache);
+        PulsarTopicCompactionService service = new PulsarTopicCompactionService(topic, bk, () -> compactor, cache);
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer().topic(topic)
+                .enableBatching(false)
+                .messageRoutingMode(MessageRoutingMode.SinglePartition)
+                .create();
+        for (int i = 0; i < 20; i++) {
+            producer.newMessage().key("key-" + (i % 10)).value(("value-" + i).getBytes()).send();
+        }
+        long sizeBefore = cache.size();
+        service.compact().join();
+        long compactedLedger = admin.topics().getInternalStats(topic).cursors.get(COMPACTION_SUBSCRIPTION)
+                .properties.get(COMPACTED_TOPIC_LEDGER_PROPERTY);
+
+        // the new snapshot's ten entries, before any reader read them
+        assertTrue(cache.size() > sizeBefore);
+        for (long entryId = 0; entryId < 10; entryId++) {
+            assertNotNull(cache.get(compactedLedger, entryId));
+        }
+        assertNull(cache.get(compactedLedger, 10));
     }
 }
