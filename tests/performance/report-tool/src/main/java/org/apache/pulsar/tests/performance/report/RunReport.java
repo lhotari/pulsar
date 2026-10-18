@@ -451,7 +451,8 @@ public final class RunReport {
                         + workload.path("applications").path("podsPerApplication").asInt()
                         + " pods, " + ("compactedReaders".equals(workload.path("applications").path("mode").asText())
                         ? "compacted readers" : workload.path("applications").path("subscriptionType")
-                        .asText("Key_Shared"))))
+                        .asText("Key_Shared") + ("latestState".equals(workload.path("applications").path("mode")
+                        .asText()) ? ", latest state" : ""))))
                 .append(row("Messages", String.format(Locale.ROOT, "%,d measured, %,d warmup",
                         messageCount(producer, "measurementMessages",
                                 workload.path("measurement").path("messages").asLong()),
@@ -774,13 +775,16 @@ public final class RunReport {
      */
     static void appendDeviceStates(StringBuilder report, JsonNode workload, List<JsonNode> consumers) {
         List<JsonNode> readers = consumers.stream()
-                .filter(consumer -> "compactedReaders".equals(consumer.path("mode").asText())).toList();
+                .filter(consumer -> "compactedReaders".equals(consumer.path("mode").asText())
+                        || "latestState".equals(consumer.path("mode").asText())).toList();
         if (readers.isEmpty()) {
             return;
         }
-        report.append("\n## Device states\n\nEach pod reads the topics compacted from the start and keeps each"
-                + " device's latest state. Unique messages counts the updates of the pods' states. A restarted pod"
-                + " has rebuilt its state when it receives the first message published after its start.\n\n"
+        report.append("\n## Device states\n\nEach application keeps each device's latest state, in each pod that"
+                + " reads the topics compacted, or over its pods that consume its subscription with mode latestState,"
+                + " where the messages that the broker expired or evicted are gaps. Unique messages counts the updates"
+                + " of the states. A restarted pod has rebuilt its state when it receives the first message published"
+                + " after its start.\n\n"
                 + "| Application | Devices without their last state | Restarted pods | Start-up p50 | Start-up max |\n"
                 + "|---|---:|---:|---:|---:|\n");
         for (JsonNode consumer : readers) {

@@ -62,6 +62,10 @@ application-visible order across Key_Shared hash-range reassignment.
 - [`iot-fleet-onboarding.yaml`](../iot-fleet-onboarding.yaml) brings 2,000 sites' topics online during the
   measurement: the gateways' first messages create them, and three applications subscribed by a pattern discover them
   as they appear: topic creation and discovery under load, with every message delivered once and in order.
+- [`iot-disconnected-sites.yaml`](../iot-disconnected-sites.yaml) takes four sites offline for two of every three
+  minutes on a namespace with a 60 s message TTL and a 20 MB backlog quota that evicts the oldest messages: the
+  expiry's and the eviction's cost, with each device's latest state checked at every site, as `applications.mode:
+  latestState` does.
 - [`iot-telemetry-small.yaml`](../iot-telemetry-small.yaml) keeps the 20-way fanout,
   30 topics and 1,000 msg/s rate, but uses 10 gateways and 10 pods per application, with the low-memory
   configuration.
@@ -241,7 +245,7 @@ workloads:
       podsPerApplication: 100  # a Pulsar client with a consumer of the subscription each
       subscriptionPrefix: iot-application-
       subscriptionType: Key_Shared  # not set in the base file: Key_Shared, Shared or Failover
-      mode: subscription       # not set in the base file: subscription, or compactedReaders
+      mode: subscription       # not set in the base file: subscription, compactedReaders or latestState
       client:                  # the client resources that every pod's client shares
         ioThreads: 8
         listenerThreads: 16
@@ -328,6 +332,13 @@ chunks of that size, which the consumers put together again. It needs `batchingE
 type other than Shared, which would deliver a message's chunks to different consumers. With large messages,
 `applications.client.receiverQueueSize` keeps each pod's receiver queue to fewer messages than the client's default,
 1,000.
+
+With `applications.mode: latestState`, the pods consume the application's subscription, and the application keeps
+each device's latest sequence, as a pod that reads compacted does: a falling sequence is an ordering violation, and
+gaps are allowed, such as the messages that a message TTL or a backlog quota's eviction removes. The application has
+received everything when it has each device's last message once the gateways have finished; the pauses then stop. It
+needs a subscription type that keeps each device's order, and doesn't support pod restarts, whose redeliveries would
+look like falling states.
 
 `behaviors.podPauses` stalls pods as a garbage collection, a slow downstream or a debugger would: every
 `intervalSeconds`, each application pauses a random `fraction` of its pods' consumers for `pauseMillis`, shorter than

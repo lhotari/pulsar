@@ -305,6 +305,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private final AtomicLong stateInvalid = new AtomicLong();
         private final List<Long> podStartUpMillis = Collections.synchronizedList(new ArrayList<>());
         private volatile long[] finalSequences;
+        // With mode latestState: each device's latest sequence that the application's pods received
+        private final LatestValueTracker applicationState;
         // Checking every device of every pod takes time under the pods' lock, so the receive loop checks once a second
         private long nextStaleCheckNanos;
         // With processing failures: the failed attempts, and the messages that reached the dead letter topic, which
@@ -332,6 +334,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             this.output = output;
             this.coordinationDirectory = coordinationDirectory;
             this.runId = runId;
+            applicationState = IotScenario.Applications.LATEST_STATE_MODE.equals(scenario.applications().mode())
+                    ? new LatestValueTracker(scenario.deviceCount()) : null;
             tracker = new DeviceSequenceTracker(scenario.deviceCount(), scenario.startsAtFirstSequence(index),
                     scenario.keepsDeviceOrder());
             // Unknown until the launcher has reset the subscription, which it tells with the prepared join
@@ -489,6 +493,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         // A pod that reads compacted receives every message published after its start, so the warmup's are those of
         // the pod that has received the most
         private long warmupMessagesReceived() {
+            if (applicationState != null) {
+                return applicationState.receivedMessages();
+            }
             if (!scenario.applications().readsCompacted()) {
                 return tracker.uniqueMessages();
             }
@@ -498,7 +505,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         }
 
         boolean receivedEveryMessage() throws IOException {
-            if (scenario.applications().readsCompacted()) {
+            if (scenario.applications().keepsLatestState()) {
                 long now = System.nanoTime();
                 if (now - nextStaleCheckNanos < 0) {
                     return false;
@@ -530,6 +537,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     Thread.currentThread().interrupt();
                 }
             }
+            if (applicationState != null) {
+                return applicationState.staleDevices(next);
+            }
             synchronized (pods) {
                 if (pods.size() < scenario.podsPerApplication()) {
                     return scenario.deviceCount();
@@ -544,7 +554,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
 
         /** The counts so far, for the progress. */
         DeviceSequenceTracker.Summary summarySoFar() {
-            if (!scenario.applications().readsCompacted()) {
+            if (!scenario.applications().keepsLatestState()) {
                 return tracker.summary();
             }
             return new DeviceSequenceTracker.Summary(stateUpdates.get(), stateRepeats.get(), stateRegressions.get(),
@@ -558,7 +568,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         boolean finish() throws Exception {
             stopRestarts();
             awaitListeners();
-            if (scenario.applications().readsCompacted()) {
+            if (scenario.applications().keepsLatestState()) {
                 return finishReadingCompacted();
             }
             DeviceSequenceTracker.Summary summary = tracker.summary();
@@ -639,17 +649,23 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                 stale = staleDevices();
             }
             receiveLatency.close();
-            // the state of the pod that lacks the most devices' last messages, which the launcher checks
-            synchronized (pods) {
-                long[] next = finalSequences;
-                pods.stream().max(Comparator.comparingLong(pod -> next != null ? pod.state().staleDevices(next) : 0))
-                        .ifPresent(pod -> {
-                            try {
-                                pod.state().writeState(output.resolve("application-state.bin"));
-                            } catch (IOException e) {
-                                throw new UncheckedIOException(e);
-                            }
-                        });
+            // the state of the pod that lacks the most devices' last messages, or the application's, which the
+            // launcher checks
+            if (applicationState != null) {
+                applicationState.writeState(output.resolve("application-state.bin"));
+            } else {
+                synchronized (pods) {
+                    long[] next = finalSequences;
+                    pods.stream()
+                            .max(Comparator.comparingLong(pod -> next != null ? pod.state().staleDevices(next) : 0))
+                            .ifPresent(pod -> {
+                                try {
+                                    pod.state().writeState(output.resolve("application-state.bin"));
+                                } catch (IOException e) {
+                                    throw new UncheckedIOException(e);
+                                }
+                            });
+                }
             }
             List<Long> startUps;
             synchronized (podStartUpMillis) {
@@ -779,6 +795,10 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                                 if (failedAttempt(currentConsumer, message, decoded)) {
                                     return;
                                 }
+                                if (applicationState != null) {
+                                    receivedLatestState(currentConsumer, message, decoded, receivedEpochMs);
+                                    return;
+                                }
                                 if (decoded.measurement()) {
                                     firstMeasurementReceiptEpochMs.accumulateAndGet(receivedEpochMs,
                                             (current, received) -> current == 0 ? received
@@ -849,6 +869,27 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                 }
             }
             return Math.min(due, receivedEpochMs);
+        }
+
+        /**
+         * With mode latestState: updates the device's latest state with the message, which may follow a gap of
+         * expired or evicted messages, and acknowledges it.
+         */
+        private void receivedLatestState(Consumer<byte[]> consumer, Message<byte[]> message,
+                                         TelemetryMessage.Decoded decoded, long receivedEpochMs) {
+            switch (applicationState.received(decoded.deviceId(), decoded.sequence())) {
+                case UPDATE -> stateUpdates.incrementAndGet();
+                case REPEAT -> stateRepeats.incrementAndGet();
+                case REGRESSION -> stateRegressions.incrementAndGet();
+                case INVALID -> stateInvalid.incrementAndGet();
+            }
+            if (decoded.measurement()) {
+                firstMeasurementReceiptEpochMs.accumulateAndGet(receivedEpochMs,
+                        (current, received) -> current == 0 ? received : Math.min(current, received));
+                lastMeasurementReceiptEpochMs.accumulateAndGet(receivedEpochMs, Math::max);
+            }
+            receiveLatency.recordMillis(receivedEpochMs - message.getPublishTime(), decoded.measurement());
+            consumer.acknowledgeAsync(message);
         }
 
         /**

@@ -264,6 +264,24 @@ public class IotScenarioTest {
     }
 
     @Test
+    public void keepsTheLatestStateOfASubscription() {
+        IotScenario latest = scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null,
+                null, null, null, false, null, null, "latestState"));
+        assertThat(latest.applications().keepsLatestState()).isTrue();
+        assertThat(latest.applications().readsCompacted()).isFalse();
+        assertThat(latest.handsOverFinalSequences()).isTrue();
+        // a redelivered older message would look like a state going back
+        assertThatThrownBy(() -> scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
+                null, null, null, null, false, null, "Shared", "latestState")))
+                .hasMessageContaining("applications.mode latestState needs a subscription type that keeps each"
+                        + " device's order");
+        assertThatThrownBy(() -> withBehaviors(new IotScenario.Behaviors(new IotScenario.PodRestarts(30, 0.5)),
+                new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null, null, null, null,
+                        false, null, null, "latestState")))
+                .hasMessageContaining("doesn't support behaviors.podRestarts");
+    }
+
+    @Test
     public void subscribesByPattern() {
         IotScenario.Topics byPattern = new IotScenario.Topics(2, "persistent://public/default/iot-site-", null, 30);
         assertThat(byPattern.subscribedByPattern()).isTrue();
@@ -289,7 +307,7 @@ public class IotScenarioTest {
         assertThat(readers.applications().readsCompacted()).isTrue();
         assertThatThrownBy(() -> scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
                 null, null, null, null, false, null, null, "tableView")))
-                .hasMessageContaining("applications.mode must be one of [subscription, compactedReaders]");
+                .hasMessageContaining("applications.mode must be one of [subscription, compactedReaders, latestState]");
         // a reading pod rebuilds the state from the start at any time, so it doesn't join later
         assertThatThrownBy(() -> scenario(new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
                 null, List.of(0, 30), null, null, false, null, null, "compactedReaders")))

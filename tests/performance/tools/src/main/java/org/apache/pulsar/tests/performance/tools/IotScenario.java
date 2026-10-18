@@ -217,7 +217,10 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
      *             reader of each topic that reads it compacted from the start, as a digital twin service rebuilds the
      *             devices' latest state, which receives each device's latest message that compaction kept and then
      *             every later one. A pod that reads compacted keeps each device's latest sequence, which must never
-     *             fall, and has its state when it has each device's last message
+     *             fall, and has its state when it has each device's last message. With {@code latestState}, the pods
+     *             consume the application's subscription, which keeps a device's messages in order, and the
+     *             application keeps each device's latest sequence as a pod that reads compacted does: the messages
+     *             that the broker expires or evicts, by a message TTL or a backlog quota, are gaps, which are allowed
      */
     public record Applications(int count, int podsPerApplication, String subscriptionPrefix, Client client,
                                Map<String, String> env, List<Integer> joinSeconds, Integer caughtUpLatencyMillis,
@@ -232,7 +235,9 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
         public static final String SUBSCRIPTION_MODE = "subscription";
         /** The {@code mode} of pods with a reader of each topic, which reads it compacted. */
         public static final String COMPACTED_READERS_MODE = "compactedReaders";
-        static final List<String> MODES = List.of(SUBSCRIPTION_MODE, COMPACTED_READERS_MODE);
+        /** The {@code mode} of pods that consume the subscription, with each device's latest state checked. */
+        public static final String LATEST_STATE_MODE = "latestState";
+        static final List<String> MODES = List.of(SUBSCRIPTION_MODE, COMPACTED_READERS_MODE, LATEST_STATE_MODE);
 
         public Applications {
             // kept with any nulls, which the scenario's validation rejects with its message
@@ -263,6 +268,14 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
         /** Whether each pod reads the topics compacted with readers rather than consuming the subscription. */
         public boolean readsCompacted() {
             return COMPACTED_READERS_MODE.equals(mode);
+        }
+
+        /**
+         * Whether the application checks each device's latest state, which may skip messages, rather than every
+         * message: when its pods read compacted, or with {@code latestState}.
+         */
+        public boolean keepsLatestState() {
+            return readsCompacted() || LATEST_STATE_MODE.equals(mode);
         }
 
         public Applications(int count, int podsPerApplication, String subscriptionPrefix, Client client,
@@ -625,6 +638,17 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                         && !applications.unloadBeforeJoin() && !podPauses.enabled() && warmupMessages == 0,
                 "applications.mode compactedReaders doesn't support joinSeconds, skipMessages, resetToMillis,"
                         + " unloadBeforeJoin, behaviors.podPauses or warmup.messages");
+        // Only a device's latest sequence is checked, which a redelivery of an older message would make fall
+        require(!Applications.LATEST_STATE_MODE.equals(applications.mode())
+                        || !SubscriptionType.Shared.name().equals(applications.subscriptionType())
+                        && !podRestarts.enabled() && !failures.enabled() && !scheduled.enabled()
+                        && applications.joinSeconds().stream().allMatch(seconds -> seconds == null || seconds == 0)
+                        && applications.skipMessages().stream().allMatch(skipped -> skipped == null || skipped == 0)
+                        && applications.resetToMillis().stream().allMatch(resetTo -> resetTo == null || resetTo == -1)
+                        && !applications.unloadBeforeJoin() && warmupMessages == 0,
+                "applications.mode latestState needs a subscription type that keeps each device's order, and doesn't"
+                        + " support behaviors.podRestarts, processingFailures or scheduledDelivery, joinSeconds,"
+                        + " skipMessages, resetToMillis, unloadBeforeJoin or warmup.messages");
         require(topics.partitions() >= 0, "topics.partitions must not be negative");
         // A pattern subscription creates its subscription on a topic when it discovers it, and the retry and dead
         // letter topics have the prefix too
@@ -852,7 +876,7 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
 
     /** Whether the gateways hand each device's last sequence to the applications, which check against it. */
     public boolean handsOverFinalSequences() {
-        return applications.readsCompacted() || behaviors.processingFailures().enabled();
+        return applications.keepsLatestState() || behaviors.processingFailures().enabled();
     }
 
     /** The topic with the index, from 0 to {@code topics.count} - 1. */
