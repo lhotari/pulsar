@@ -729,6 +729,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                         .consumerName("iot-application-" + index + "-pod-" + podIndex)
                         .subscriptionType(scenario.subscriptionType())
                         .subscriptionInitialPosition(SubscriptionInitialPosition.Earliest)
+                        .receiverQueueSize(receiverQueueSize())
                         .messageListener((currentConsumer, message) -> {
                             long receivedEpochMs = System.currentTimeMillis();
                             listenersInFlight.incrementAndGet();
@@ -788,6 +789,12 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                 client.closeAsync().exceptionally(failure -> null).join();
                 throw error;
             }
+        }
+
+        // The client's default unless the scenario sets it
+        private int receiverQueueSize() {
+            Integer size = scenario.applications().client().receiverQueueSize();
+            return size != null ? size : 1000;
         }
 
         /**

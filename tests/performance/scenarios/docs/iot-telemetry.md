@@ -55,6 +55,10 @@ application-visible order across Key_Shared hash-range reassignment.
   with delayed delivery: each of the 5,000 commands per second is delivered 1 to 5 minutes later, so each of the four
   Shared subscriptions' delayed delivery trackers holds up to about 1.5 million messages: their cost and how late
   the commands arrive.
+- [`iot-ota-firmware.yaml`](../iot-ota-firmware.yaml) distributes firmware images of 1 MiB in 128 KiB chunks: the
+  chunks of four producers' images interleave in each topic, and three Key_Shared applications with two pods put the
+  images together, restarting a pod every 30 seconds mid-transfer: chunked messages' throughput, latency and
+  redelivery, with each image whole, once and in order for its model.
 - [`iot-telemetry-small.yaml`](../iot-telemetry-small.yaml) keeps the 20-way fanout,
   30 topics and 1,000 msg/s rate, but uses 10 gateways and 10 pods per application, with the low-memory
   configuration.
@@ -221,6 +225,7 @@ workloads:
         precreate: false       # open every producer before the first message
         precreateConcurrency: 32  # with precreate, producers created at the same time, in a random order
         # batchingMaxPublishDelayMillis: 10  # how long a batch waits for more messages; the client's default is 1 ms
+        # chunkMaxMessageSizeBytes: 131072  # chunk larger messages into chunks of this size; needs no batching
       env:                     # the gateways' container, which runs every gateway; from the memory configuration
         PULSAR_MEM: -Xms512m -Xmx512m -XX:MaxDirectMemorySize=256m -XX:+UseTransparentHugePages -XX:+AlwaysPreTouch
     topics:
@@ -236,6 +241,7 @@ workloads:
       client:                  # the client resources that every pod's client shares
         ioThreads: 8
         listenerThreads: 16
+        receiverQueueSize: 1000  # not set in the base file: each pod's consumer's receiver queue
       env:                     # the applications' container, which runs every application; from the memory configuration
         PULSAR_MEM: -Xms1536m -Xmx1536m -XX:MaxDirectMemorySize=256m -XX:+UseTransparentHugePages -XX:+AlwaysPreTouch
       joinSeconds: []          # not set in the base file: each application's join after the measurement starts, in s
@@ -301,6 +307,12 @@ arrive more than `earlyToleranceMillis`, 1,000 by default, before it: a broker w
 `isDelayedDeliveryDeliverAtTimeStrict` delivers messages up to its `delayedDeliveryTickTimeMillis` before their time.
 It needs Shared subscriptions, and a `timeoutSeconds` that leaves room for the last delay. The warmup messages aren't
 scheduled.
+
+`gateways.producer.chunkMaxMessageSizeBytes` makes the gateways' producers chunk the messages larger than it into
+chunks of that size, which the consumers put together again. It needs `batchingEnabled: false`, and a subscription
+type other than Shared, which would deliver a message's chunks to different consumers. With large messages,
+`applications.client.receiverQueueSize` keeps each pod's receiver queue to fewer messages than the client's default,
+1,000.
 
 `behaviors.podPauses` stalls pods as a garbage collection, a slow downstream or a debugger would: every
 `intervalSeconds`, each application pauses a random `fraction` of its pods' consumers for `pauseMillis`, shorter than

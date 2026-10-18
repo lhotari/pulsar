@@ -398,6 +398,10 @@ final class TelemetryProducer extends PerformanceTool.ScenarioCommand {
         if (batchingMaxPublishDelayMillis != null) {
             builder.batchingMaxPublishDelay(batchingMaxPublishDelayMillis, TimeUnit.MILLISECONDS);
         }
+        Integer chunkMaxMessageSizeBytes = scenario.gateways().producer().chunkMaxMessageSizeBytes();
+        if (chunkMaxMessageSizeBytes != null) {
+            builder.enableChunking(true).chunkMaxMessageSize(chunkMaxMessageSizeBytes);
+        }
         return builder;
     }
 

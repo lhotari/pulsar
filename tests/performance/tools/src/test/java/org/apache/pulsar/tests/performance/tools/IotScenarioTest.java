@@ -290,6 +290,33 @@ public class IotScenarioTest {
     }
 
     @Test
+    public void chunksLargeMessages() {
+        IotScenario.Producer unbatchedChunks = new IotScenario.Producer(2, 2, 100, false, true, null, null, 131_072);
+        IotScenario chunked = new IotScenario("pulsar://localhost:6650", new IotScenario.Warmup(0, 0, 1, 0),
+                new IotScenario.Measurement(120, 1_000), 0, new IotScenario.Payload(1_048_576),
+                new IotScenario.Devices(1_000), new IotScenario.Gateways(10, unbatchedChunks, null),
+                new IotScenario.Topics(2, "persistent://public/default/iot-"),
+                new IotScenario.Applications(1, 2, "app-", new IotScenario.Client(2, 2, 16), null), null, 300);
+        assertThat(chunked.gateways().producer().chunkMaxMessageSizeBytes()).isEqualTo(131_072);
+        assertThat(chunked.applications().client().receiverQueueSize()).isEqualTo(16);
+        assertThatThrownBy(() -> new IotScenario("pulsar://localhost:6650", new IotScenario.Warmup(0, 0, 1, 0),
+                new IotScenario.Measurement(120, 1_000), 0, new IotScenario.Payload(1_048_576),
+                new IotScenario.Devices(1_000),
+                new IotScenario.Gateways(10, new IotScenario.Producer(2, 2, 100, true, true, null, null, 131_072),
+                        null),
+                new IotScenario.Topics(2, "persistent://public/default/iot-"),
+                new IotScenario.Applications(1, 2, "app-", new IotScenario.Client(2, 2), null), null, 300))
+                .hasMessageContaining("needs batchingEnabled: false");
+        assertThatThrownBy(() -> new IotScenario("pulsar://localhost:6650", new IotScenario.Warmup(0, 0, 1, 0),
+                new IotScenario.Measurement(120, 1_000), 0, new IotScenario.Payload(1_048_576),
+                new IotScenario.Devices(1_000), new IotScenario.Gateways(10, unbatchedChunks, null),
+                new IotScenario.Topics(2, "persistent://public/default/iot-"),
+                new IotScenario.Applications(1, 2, "app-", new IotScenario.Client(2, 2), null, null, null, null,
+                        false, null, "Shared"), null, 300))
+                .hasMessageContaining("needs a subscription type other than Shared");
+    }
+
+    @Test
     public void schedulesTheDelivery() {
         IotScenario.Applications shared = new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2),
                 null, null, null, null, false, null, "Shared");

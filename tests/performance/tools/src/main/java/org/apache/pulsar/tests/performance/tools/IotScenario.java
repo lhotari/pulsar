@@ -108,9 +108,13 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
      *                                      producer receives a message every {@code gateways.count * topics.count /
      *                                      rate} seconds on average, so a batch has more than one message only when
      *                                      the delay is longer than that
+     * @param chunkMaxMessageSizeBytes chunk the messages larger than this into chunks of this size, which the
+     *                                 consumers put together again; null for no chunking. It needs
+     *                                 {@code batchingEnabled: false}
      */
     public record Producer(int ioThreads, int listenerThreads, int maxOutstanding, boolean batchingEnabled,
-                           boolean precreate, Integer precreateConcurrency, Integer batchingMaxPublishDelayMillis) {
+                           boolean precreate, Integer precreateConcurrency, Integer batchingMaxPublishDelayMillis,
+                           Integer chunkMaxMessageSizeBytes) {
         /** The default of {@code precreateConcurrency}, for scenarios written before it existed. */
         public static final int DEFAULT_PRECREATE_CONCURRENCY = 32;
 
@@ -118,6 +122,12 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
             if (precreateConcurrency == null) {
                 precreateConcurrency = DEFAULT_PRECREATE_CONCURRENCY;
             }
+        }
+
+        public Producer(int ioThreads, int listenerThreads, int maxOutstanding, boolean batchingEnabled,
+                        boolean precreate, Integer precreateConcurrency, Integer batchingMaxPublishDelayMillis) {
+            this(ioThreads, listenerThreads, maxOutstanding, batchingEnabled, precreate, precreateConcurrency,
+                    batchingMaxPublishDelayMillis, null);
         }
 
         /** Settings with the client's default batching delay. */
@@ -259,8 +269,16 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
         }
     }
 
-    /** The applications' client resources: the event loop's and the listener thread pool's threads. */
-    public record Client(int ioThreads, int listenerThreads) {
+    /**
+     * The applications' client resources: the event loop's and the listener thread pool's threads.
+     *
+     * @param receiverQueueSize each pod's consumer's receiver queue, in messages; null for the client's default,
+     *                          1,000, which is too many for messages of megabytes
+     */
+    public record Client(int ioThreads, int listenerThreads, Integer receiverQueueSize) {
+        public Client(int ioThreads, int listenerThreads) {
+            this(ioThreads, listenerThreads, null);
+        }
     }
 
     /** What happens to the simulated system during the run, beyond the traffic. */
@@ -585,6 +603,15 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                         && applications.skipMessages().stream().allMatch(skipped -> skipped == null || skipped == 0)
                         && applications.resetToMillis().stream().allMatch(resetTo -> resetTo == null || resetTo == -1),
                 "topics.partitions doesn't support applications.skipMessages, unloadBeforeJoin or resetToMillis");
+        require(producer.chunkMaxMessageSizeBytes() == null
+                        || producer.chunkMaxMessageSizeBytes() >= 1024 && !producer.batchingEnabled(),
+                "gateways.producer.chunkMaxMessageSizeBytes must be at least 1024, and needs batchingEnabled: false");
+        // Shared delivers a message's chunks to any consumer, which can't put them together
+        require(producer.chunkMaxMessageSizeBytes() == null
+                        || !SubscriptionType.Shared.name().equals(applications.subscriptionType()),
+                "gateways.producer.chunkMaxMessageSizeBytes needs a subscription type other than Shared");
+        require(client.receiverQueueSize() == null || client.receiverQueueSize() >= 1,
+                "applications.client.receiverQueueSize must be at least 1");
         require(producer.precreateConcurrency() >= 1, "gateways.producer.precreateConcurrency must be at least 1");
         require(producer.batchingMaxPublishDelayMillis() == null || producer.batchingMaxPublishDelayMillis() >= 1,
                 "gateways.producer.batchingMaxPublishDelayMillis must be at least 1");
