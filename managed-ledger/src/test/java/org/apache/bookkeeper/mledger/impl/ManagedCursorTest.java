@@ -7249,6 +7249,42 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         }
     }
 
+    @Test(timeOut = 20000)
+    public void testIndividualAcksOfManyLedgersSurviveReopenAsLongArrays() throws Exception {
+        ManagedLedgerConfig config = defaultConfig();
+        config.setPersistIndividualAckAsLongArray(true);
+        config.setMaxEntriesPerLedger(10);
+        config.setMaxUnackedRangesToPersist(20);
+        // Force persistence through the ledger path (not metadata store).
+        config.setMaxUnackedRangesToPersistInMetadataStore(0);
+        String ledgerName = "my-tenant/my-ns/persistent/test-individual-acks-of-many-ledgers-"
+                + UUID.randomUUID();
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(ledgerName, config);
+        ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("c1");
+        List<Position> positions = new ArrayList<>();
+        for (int i = 0; i < 50; i++) {
+            positions.add(ledger.addEntry(("entry-" + i).getBytes(Encoding)));
+        }
+        assertTrue(ledger.getLedgersInfoAsList().size() >= 5);
+
+        // the 8th entry holds back the mark-delete position, while every later entry is acknowledged: 42
+        // acknowledged entries, more than the limit of 20 ranges, in 5 ranges over the 5 ledgers
+        for (int i = 0; i < positions.size(); i++) {
+            if (i != 7) {
+                cursor.delete(positions.get(i));
+            }
+        }
+        ledger.close();
+
+        ManagedLedgerImpl reopened = (ManagedLedgerImpl) factory.open(ledgerName, config);
+        ManagedCursorImpl recovered = (ManagedCursorImpl) reopened.openCursor("c1");
+        assertEquals(recovered.getMarkDeletedPosition(), positions.get(6));
+        for (int i = 8; i < positions.size(); i++) {
+            assertTrue(recovered.isMessageDeleted(positions.get(i)), "acknowledged entry " + i + " was lost");
+        }
+        assertEquals(recovered.getNumberOfEntriesInBacklog(false), 1);
+    }
+
     @DataProvider(name = "batchIndexesTruncationScenarios")
     public static Object[][] batchIndexesTruncationScenarios() {
         // maxBatchIndexes, totalEntries, shouldTruncate.
