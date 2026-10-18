@@ -440,11 +440,14 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                 "applications.mode compactedReaders doesn't support joinSeconds, skipMessages, resetToMillis,"
                         + " unloadBeforeJoin, behaviors.podPauses or warmup.messages");
         require(topics.partitions() >= 0, "topics.partitions must not be negative");
-        // The launcher prepares a join with each topic's stats, which a partitioned topic keeps per partition
+        // The launcher prepares a join with each topic's stats, which a partitioned topic keeps per partition, and a
+        // late application's catch-up counts the topics that it receives from, which are the partitions
         require(!topics.partitioned() || !applications.unloadBeforeJoin()
+                        && applications.joinSeconds().stream().allMatch(seconds -> seconds == null || seconds == 0)
                         && applications.skipMessages().stream().allMatch(skipped -> skipped == null || skipped == 0)
                         && applications.resetToMillis().stream().allMatch(resetTo -> resetTo == null || resetTo == -1),
-                "topics.partitions doesn't support applications.skipMessages, unloadBeforeJoin or resetToMillis");
+                "topics.partitions doesn't support applications.joinSeconds, skipMessages, unloadBeforeJoin or"
+                        + " resetToMillis");
         require(producer.precreateConcurrency() >= 1, "gateways.producer.precreateConcurrency must be at least 1");
         require(producer.batchingMaxPublishDelayMillis() == null || producer.batchingMaxPublishDelayMillis() >= 1,
                 "gateways.producer.batchingMaxPublishDelayMillis must be at least 1");

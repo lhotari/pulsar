@@ -254,6 +254,9 @@ public class IotScenarioTest {
                 new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null, List.of(0, 30), null,
                         null, true)))
                 .hasMessageContaining("topics.partitions doesn't support");
+        assertThatThrownBy(() -> withTopics(new IotScenario.Topics(2, "persistent://public/default/iot-", 2),
+                new IotScenario.Applications(2, 2, "app-", new IotScenario.Client(2, 2), null, List.of(0, 30), null)))
+                .hasMessageContaining("topics.partitions doesn't support applications.joinSeconds");
         // a scenario file without the setting keeps non-partitioned topics
         IotScenario.Topics fromYaml = new YamlScenarioLoader().mapper().convertValue(Map.of("count", 2,
                 "prefix", "persistent://public/default/iot-"), IotScenario.Topics.class);
