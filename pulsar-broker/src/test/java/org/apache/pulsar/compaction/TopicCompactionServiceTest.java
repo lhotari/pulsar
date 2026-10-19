@@ -21,9 +21,11 @@ package org.apache.pulsar.compaction;
 import static org.apache.pulsar.compaction.Compactor.COMPACTED_TOPIC_LEDGER_PROPERTY;
 import static org.apache.pulsar.compaction.Compactor.COMPACTION_SUBSCRIPTION;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
 import static org.testng.AssertJUnit.fail;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -169,5 +171,56 @@ public class TopicCompactionServiceTest extends MockedPulsarServiceBaseTest {
 
         List<Entry> entries2 = service.readCompactedEntries(PositionFactory.EARLIEST, 1).join();
         assertEquals(entries2.size(), 1);
+    }
+
+    @Test
+    public void testReadsInOrderContinueWhereThePreviousReadEnded() throws Exception {
+        String topic = "persistent://prop-xyz/ns1/my-sequential-topic";
+        PulsarTopicCompactionService service = new PulsarTopicCompactionService(topic, bk, () -> compactor);
+        @Cleanup
+        Producer<byte[]> producer = pulsarClient.newProducer().topic(topic)
+                .enableBatching(false)
+                .messageRoutingMode(MessageRoutingMode.SinglePartition)
+                .create();
+        for (int i = 0; i < 100; i++) {
+            producer.newMessage().key("key-" + i).value(("old-" + i).getBytes()).send();
+        }
+        for (int i = 0; i < 100; i++) {
+            producer.newMessage().key("key-" + i).value(("new-" + i).getBytes()).send();
+        }
+        service.compact().join();
+        CompactedTopicImpl compactedTopic = service.getCompactedTopic();
+        Long compactedLedger = admin.topics().getInternalStats(topic).cursors.get(COMPACTION_SUBSCRIPTION)
+                .properties.get(COMPACTED_TOPIC_LEDGER_PROPERTY);
+        String[] markDeletePosition = admin.topics().getInternalStats(topic).cursors.get(COMPACTION_SUBSCRIPTION)
+                .markDeletePosition.split(":");
+        compactedTopic.newCompactedLedger(PositionFactory.create(Long.valueOf(markDeletePosition[0]),
+                Long.valueOf(markDeletePosition[1])), compactedLedger).join();
+
+        List<Entry> all = service.readCompactedEntries(PositionFactory.EARLIEST, 1000).join();
+        List<Position> expected = all.stream().map(Entry::getPosition).toList();
+        all.forEach(Entry::release);
+        assertEquals(expected.size(), 100);
+
+        // A reader's reads, each from the position after the previous one's last entry
+        List<Position> read = new ArrayList<>();
+        Position position = PositionFactory.EARLIEST;
+        while (true) {
+            List<Entry> entries = service.readCompactedEntries(position, 7).join();
+            if (entries.isEmpty()) {
+                break;
+            }
+            entries.forEach(entry -> read.add(entry.getPosition()));
+            position = entries.get(entries.size() - 1).getPosition().getNext();
+            entries.forEach(Entry::release);
+        }
+        assertEquals(read, expected);
+        // each read after the first started where the previous one ended, without a search
+        CompactedTopicContext context = compactedTopic.getCompactedTopicContext().orElseThrow();
+        assertEquals(context.nextReadIndex(expected.get(6).getNext()), Long.valueOf(7));
+        assertEquals(context.nextReadIndex(expected.get(97).getNext()), Long.valueOf(98));
+        // a read from past the compacted ledger's last entry has nothing to read there
+        assertEquals(context.nextReadIndex(expected.get(99).getNext()), Long.valueOf(100));
+        assertTrue(service.readCompactedEntries(expected.get(99).getNext(), 7).join().isEmpty());
     }
 }

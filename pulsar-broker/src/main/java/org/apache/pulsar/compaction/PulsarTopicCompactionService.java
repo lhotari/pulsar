@@ -78,14 +78,20 @@ public class PulsarTopicCompactionService implements TopicCompactionService {
         CompletableFuture<List<Entry>> resultFuture = new CompletableFuture<>();
 
         Objects.requireNonNull(compactedTopic.getCompactedTopicContextFuture()).thenCompose(
-                (context) -> findStartPoint(startPosition, context.ledger.getLastAddConfirmed(),
-                        context.cache).thenCompose((startPoint) -> {
+                (context) -> startPoint(context, startPosition).thenCompose((startPoint) -> {
                     if (startPoint == COMPACT_LEDGER_EMPTY || startPoint == NEWER_THAN_COMPACTED) {
-                        return CompletableFuture.completedFuture(Collections.emptyList());
+                        return CompletableFuture.completedFuture(Collections.<Entry>emptyList());
                     }
                     long endPoint =
                             Math.min(context.ledger.getLastAddConfirmed(), startPoint + (numberOfEntriesToRead - 1));
-                    return CompactedTopicImpl.readEntries(context.ledger, startPoint, endPoint);
+                    return CompactedTopicImpl.readEntries(context.ledger, startPoint, endPoint).thenApply(entries -> {
+                        if (!entries.isEmpty()) {
+                            // where the reader's cursor continues, after the last entry's original position
+                            context.recordNextReadIndex(entries.get(entries.size() - 1).getPosition().getNext(),
+                                    startPoint + entries.size());
+                        }
+                        return entries;
+                    });
                 })).whenComplete((result, ex) -> {
                     if (ex == null) {
                         resultFuture.complete(result);
@@ -100,6 +106,16 @@ public class PulsarTopicCompactionService implements TopicCompactionService {
                 });
 
         return resultFuture;
+    }
+
+    // Where a read from the position starts in the compacted ledger: where a previous read ended, or by a search
+    private static CompletableFuture<Long> startPoint(CompactedTopicContext context, Position startPosition) {
+        long lastEntryId = context.ledger.getLastAddConfirmed();
+        Long next = context.nextReadIndex(startPosition);
+        if (next != null && lastEntryId >= 0) {
+            return CompletableFuture.completedFuture(next > lastEntryId ? NEWER_THAN_COMPACTED : next);
+        }
+        return findStartPoint(startPosition, lastEntryId, context.cache);
     }
 
     @Override
