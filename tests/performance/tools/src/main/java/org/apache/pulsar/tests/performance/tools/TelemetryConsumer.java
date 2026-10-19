@@ -312,6 +312,11 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private final LatestValueTracker applicationState;
         private volatile long lastReceiptNanos = System.nanoTime();
         private static final long QUIET_NANOS = TimeUnit.SECONDS.toNanos(10);
+        // Whether the application completed, with each device's last state or by the quiet time, rather than timed out
+        private volatile boolean completed;
+        // Set once the gateways have finished: the restarter finishes the restart that it's doing, if any, and
+        // doesn't start another, since interrupting a restart could leave a closed pod
+        private volatile boolean restartsFinished;
         // Checking every device of every pod takes time under the pods' lock, so the receive loop checks once a second
         private long nextStaleCheckNanos;
         // With processing failures: the failed attempts, and the messages that reached the dead letter topic, which
@@ -516,8 +521,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     return false;
                 }
                 nextStaleCheckNanos = now + TimeUnit.SECONDS.toNanos(1);
-                return staleDevices() == 0
+                completed = staleDevices() == 0
                         || applicationState != null && finalSequences != null && now - lastReceiptNanos > QUIET_NANOS;
+                return completed;
             }
             return expectedMessages >= 0 && tracker.uniqueMessages() >= expectedMessages;
         }
@@ -537,10 +543,15 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                 // The gateways have finished: a restart now would only keep a pod rebuilding its state, so the pods
                 // wouldn't all have every device's last state at the same time when the restarts take as long as
                 // their interval
-                try {
-                    stopRestarts();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+                restartsFinished = true;
+                if (applicationState != null) {
+                    // the paused pods resume, and the quiet time that completes the application starts now
+                    try {
+                        interruptAndAwait(pauser);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    lastReceiptNanos = System.nanoTime();
                 }
             }
             if (applicationState != null) {
@@ -642,6 +653,23 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         }
 
         /**
+         * The most devices whose latest sequence, at a pod or at the application, passes the gateways' last one:
+         * they received a message that the gateways didn't send.
+         */
+        private long aheadDevices() {
+            long[] next = finalSequences;
+            if (next == null) {
+                return 0;
+            }
+            if (applicationState != null) {
+                return applicationState.aheadDevices(next);
+            }
+            synchronized (pods) {
+                return pods.stream().mapToLong(pod -> pod.state().aheadDevices(next)).max().orElse(0);
+            }
+        }
+
+        /**
          * Finishes an application whose pods read compacted: a repeated or older sequence of a device, an invalid
          * message, or a pod without a device's latest state fails it.
          */
@@ -655,6 +683,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                 Thread.sleep(1000);
                 stale = staleDevices();
             }
+            long ahead = aheadDevices();
             receiveLatency.close();
             // the state of the pod that lacks the most devices' last messages, or the application's, which the
             // launcher checks
@@ -687,7 +716,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                     + "  \"redeliveredDuplicates\": 0,\n"
                     + "  \"republishedDuplicates\": 0,\n"
                     + "  \"orderingViolations\": " + stateRegressions.get() + ",\n"
-                    + "  \"invalidMessages\": " + (stateInvalid.get() + (applicationState != null ? 0 : stale)) + ",\n"
+                    + "  \"invalidMessages\": " + (stateInvalid.get() + ahead + (applicationState != null ? 0 : stale))
+                    + ",\n"
                     + "  \"staleDevices\": " + stale + ",\n"
                     + "  \"podStartUpMillis\": " + startUps + ",\n"
                     + "  \"firstMeasurementMessageReceivedEpochMs\": "
@@ -703,8 +733,8 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
             finished = true;
             // A repeated state, as after a reader reconnects, is reported as a duplicate, but a state service takes it
             // with latestState, a device without its last state lost it to the message TTL or the backlog quota
-            return (stale == 0 || applicationState != null) && stateRegressions.get() == 0
-                    && stateInvalid.get() == 0;
+            return (stale == 0 || applicationState != null && completed) && finalSequences != null && ahead == 0
+                    && stateRegressions.get() == 0 && stateInvalid.get() == 0;
         }
 
         /** Closes the application's pods, when it hasn't finished, such as after a failure. */
@@ -828,6 +858,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                                 currentConsumer.acknowledgeAsync(message);
                             } catch (RuntimeException error) {
                                 tracker.invalidMessage();
+                                if (applicationState != null) {
+                                    stateInvalid.incrementAndGet();
+                                }
                                 currentConsumer.negativeAcknowledge(message);
                             } finally {
                                 listenersInFlight.decrementAndGet();
@@ -1059,10 +1092,10 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private void restartPods(PulsarClientSharedResources sharedResources) {
             int restartCount = Math.max(1,
                     (int) Math.ceil(scenario.podsPerApplication() * scenario.behaviors().podRestarts().fraction()));
-            while (!stopping.get()) {
+            while (!stopping.get() && !restartsFinished) {
                 try {
                     Thread.sleep(TimeUnit.SECONDS.toMillis(scenario.behaviors().podRestarts().intervalSeconds()));
-                    for (int i = 0; i < restartCount && !stopping.get(); i++) {
+                    for (int i = 0; i < restartCount && !stopping.get() && !restartsFinished; i++) {
                         synchronized (pods) {
                             int podIndex = ThreadLocalRandom.current().nextInt(pods.size());
                             pods.get(podIndex).close();

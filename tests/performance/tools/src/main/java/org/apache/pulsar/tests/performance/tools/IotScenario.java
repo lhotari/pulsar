@@ -649,6 +649,12 @@ public record IotScenario(String serviceUrl, Warmup warmup, Measurement measurem
                 "applications.mode latestState needs a subscription type that keeps each device's order, and doesn't"
                         + " support behaviors.podRestarts, processingFailures or scheduledDelivery, joinSeconds,"
                         + " skipMessages, resetToMillis, unloadBeforeJoin or warmup.messages");
+        // The gateways wait for the warmup's every message, which a paused pod's expired messages would never be
+        require(!Applications.LATEST_STATE_MODE.equals(applications.mode()) || !podPauses.enabled()
+                        || minimumRuntimeSeconds - durationSeconds
+                        < podPauses.intervalSeconds() - podPauses.pauseMillis() / 1000L,
+                "applications.mode latestState with behaviors.podPauses needs the warmup to end before the first"
+                        + " pause, intervalSeconds - pauseMillis after the start");
         require(topics.partitions() >= 0, "topics.partitions must not be negative");
         // A pattern subscription creates its subscription on a topic when it discovers it, and the retry and dead
         // letter topics have the prefix too

@@ -40,6 +40,9 @@ public class LatestValueTrackerTest {
         assertThat(tracker.staleDevices(new long[] {7, 1, 0})).isZero();
         assertThat(tracker.staleDevices(new long[] {8, 1, 0})).isEqualTo(1);
         assertThat(tracker.staleDevices(new long[] {8, 2, 1})).isEqualTo(3);
+        // device 0's latest sequence, 6, passes the gateways' last one, 5
+        assertThat(tracker.aheadDevices(new long[] {6, 1, 0})).isEqualTo(1);
+        assertThat(tracker.aheadDevices(new long[] {7, 1, 0})).isZero();
     }
 
     @Test

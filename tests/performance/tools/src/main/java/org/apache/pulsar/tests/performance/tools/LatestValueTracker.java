@@ -91,6 +91,20 @@ final class LatestValueTracker {
         }
     }
 
+    /** The devices whose latest sequence passes the last one that the gateways sent: they can't have sent it. */
+    long aheadDevices(long[] nextSequences) {
+        long ahead = 0;
+        for (int device = 0; device < latest.length; device++) {
+            long next = device < nextSequences.length ? nextSequences[device] : 0;
+            synchronized (locks[device & (LOCK_COUNT - 1)]) {
+                if (latest[device] >= next) {
+                    ahead++;
+                }
+            }
+        }
+        return ahead;
+    }
+
     /** The messages received, of any outcome. */
     long receivedMessages() {
         return received.get();
