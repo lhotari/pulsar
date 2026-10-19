@@ -41,6 +41,7 @@ import lombok.Cleanup;
 import lombok.CustomLog;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
+import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.intercept.BrokerInterceptor;
 import org.apache.pulsar.broker.intercept.MockBrokerInterceptor;
 import org.apache.pulsar.broker.service.BrokerService;
@@ -56,6 +57,7 @@ import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.common.api.proto.CommandSubscribe;
 import org.apache.pulsar.common.naming.TopicName;
+import org.awaitility.Awaitility;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -127,6 +129,50 @@ public class PersistentDispatcherSingleActiveConsumerTest extends SharedPulsarBa
 
         // The dispatch quota must be charged with the counts of the messages that were written.
         verify(rateLimiter).consumeDispatchQuota(3, 300);
+    }
+
+    @Test
+    public void testNoReadForNewActiveConsumerBeforeDelayedRewind() throws Exception {
+        String topicName = newTopicName();
+        String subscription = "s1";
+        admin.topics().createNonPartitionedTopic(topicName);
+        admin.topics().createSubscription(topicName, subscription, MessageId.earliest);
+        PersistentTopic topic = (PersistentTopic) getTopic(topicName, false).join().orElseThrow();
+        PersistentSubscription sub = topic.getSubscription(subscription);
+        ServiceConfiguration config = topic.getBrokerService().pulsar().getConfiguration();
+        int previousDelay = config.getActiveConsumerFailoverDelayTimeMillis();
+        // long enough that the delayed rewind doesn't run before the assertion
+        config.setActiveConsumerFailoverDelayTimeMillis(5000);
+        try {
+            AtomicReference<Consumer> active = new AtomicReference<>();
+            PersistentDispatcherSingleActiveConsumer dispatcher =
+                    new PersistentDispatcherSingleActiveConsumer(sub.getCursor(),
+                            CommandSubscribe.SubType.Failover, 0, topic, sub) {
+                        @Override
+                        public Consumer getActiveConsumer() {
+                            return active.get();
+                        }
+                    };
+            Consumer newActive = mock(Consumer.class);
+            when(newActive.getAvailablePermits()).thenReturn(1000);
+            when(newActive.isWritable()).thenReturn(true);
+            active.set(newActive);
+            synchronized (dispatcher) {
+                dispatcher.scheduleReadOnActiveConsumer();
+            }
+
+            // As the continuation of a dispatch to the previous active consumer does, while the previous consumer
+            // may still have messages to process
+            dispatcher.readMoreEntries(dispatcher.getActiveConsumer());
+
+            Assert.assertFalse(dispatcher.havePendingRead,
+                    "The new active consumer must not read before the cursor is rewound for it");
+            // the delayed rewind reads for it
+            Awaitility.await().atMost(20, TimeUnit.SECONDS).until(() -> dispatcher.havePendingRead);
+        } finally {
+            config.setActiveConsumerFailoverDelayTimeMillis(previousDelay);
+        }
+        admin.topics().delete(topicName, true);
     }
 
     @DataProvider
