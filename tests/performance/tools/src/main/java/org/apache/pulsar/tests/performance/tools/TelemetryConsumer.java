@@ -305,6 +305,9 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private final AtomicLong stateInvalid = new AtomicLong();
         private final List<Long> podStartUpMillis = Collections.synchronizedList(new ArrayList<>());
         private volatile long[] finalSequences;
+        // Set once the gateways have finished: the restarter finishes the restart that it's doing, if any, and
+        // doesn't start another, since interrupting a restart could leave a closed pod
+        private volatile boolean restartsFinished;
         // Checking every device of every pod takes time under the pods' lock, so the receive loop checks once a second
         private long nextStaleCheckNanos;
         // With processing failures: the failed attempts, and the messages that reached the dead letter topic, which
@@ -520,11 +523,7 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
                 // The gateways have finished: a restart now would only keep a pod rebuilding its state, so the pods
                 // wouldn't all have every device's last state at the same time when the restarts take as long as
                 // their interval
-                try {
-                    stopRestarts();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
+                restartsFinished = true;
             }
             synchronized (pods) {
                 if (pods.size() < scenario.podsPerApplication()) {
@@ -968,10 +967,10 @@ final class TelemetryConsumer extends PerformanceTool.ScenarioCommand {
         private void restartPods(PulsarClientSharedResources sharedResources) {
             int restartCount = Math.max(1,
                     (int) Math.ceil(scenario.podsPerApplication() * scenario.behaviors().podRestarts().fraction()));
-            while (!stopping.get()) {
+            while (!stopping.get() && !restartsFinished) {
                 try {
                     Thread.sleep(TimeUnit.SECONDS.toMillis(scenario.behaviors().podRestarts().intervalSeconds()));
-                    for (int i = 0; i < restartCount && !stopping.get(); i++) {
+                    for (int i = 0; i < restartCount && !stopping.get() && !restartsFinished; i++) {
                         synchronized (pods) {
                             int podIndex = ThreadLocalRandom.current().nextInt(pods.size());
                             pods.get(podIndex).close();
