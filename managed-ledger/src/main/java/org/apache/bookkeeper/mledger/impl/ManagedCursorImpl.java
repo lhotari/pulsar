@@ -1157,8 +1157,8 @@ public class ManagedCursorImpl implements ManagedCursor {
             // Check again for new entries after the configured time, then if still no entries are available register
             // to be notified
             if (getConfig().getNewEntriesCheckDelayInMillis() > 0) {
-                ledger.getScheduledExecutor().schedule(() -> checkForNewEntries(opReadId, op, callback, ctx),
-                        getConfig().getNewEntriesCheckDelayInMillis(), TimeUnit.MILLISECONDS);
+                ledger.scheduleNewEntriesCheck(() -> checkForNewEntries(opReadId, op, callback, ctx),
+                        getConfig().getNewEntriesCheckDelayInMillis());
             } else {
                 // If there's no delay, check directly from the same thread
                 checkForNewEntries(opReadId, op, callback, ctx);
