@@ -9,8 +9,8 @@
 > [Apache Pulsar 4.0 announcement](https://pulsar.apache.org/blog/2024/10/24/announcing-apache-pulsar-4-0/#enhanced-quality-of-service-qos-controls)
 > contains some previous context. In that blog post, the assumption was that admission control could be handled
 > primarily with rate limits, as is done with the existing PIP-82. However, a rate-limit-based approach alone
-> cannot solve the challenges. Adapting to the actual capacity by inspecting queue sizes and implementing adaptive
-> limits is how the available capacity can be shared. Dynamically adjusted rate limiters can be used as part of
+> cannot solve the challenges. Adapting to the actual capacity, for example by inspecting queue sizes and service
+> time, and implementing adaptive limits is how the available capacity can be shared. Dynamically adjusted rate limiters can be used as part of
 > this.
 
 A Pulsar broker knows when it is struggling and has no way to say so. It has exactly two instruments for
