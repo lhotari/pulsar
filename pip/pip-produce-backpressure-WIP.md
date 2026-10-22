@@ -1,4 +1,9 @@
-# PIP-495: End-to-end produce backpressure
+# PIP-WIP: End-to-end produce backpressure
+
+> [!NOTE]
+> This document was combined with Claude from multiple sources, with some assistance, and isn't meant to be
+> considered a completed design. It contains a lot of background information about produce backpressure in
+> Pulsar, the current gaps, and different design options for the high-level solution.
 
 A Pulsar broker knows when it is struggling and has no way to say so. It has exactly two instruments for
 regulating how fast a producer may publish — a rate an operator configured before the traffic arrived, and
