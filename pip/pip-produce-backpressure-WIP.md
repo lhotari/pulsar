@@ -4,6 +4,14 @@
 > This document was combined with Claude from multiple sources, with some assistance, and isn't meant to be
 > considered a completed design. It contains a lot of background information about produce backpressure in
 > Pulsar, the current gaps, and different design options for the high-level solution.
+>
+> The work to improve QoS controls in Pulsar has been delayed. The
+> [Apache Pulsar 4.0 announcement](https://pulsar.apache.org/blog/2024/10/24/announcing-apache-pulsar-4-0/#enhanced-quality-of-service-qos-controls)
+> contains some previous context. In that blog post, the assumption was that admission control could be handled
+> primarily with rate limits, as is done with the existing PIP-82. However, a rate-limit-based approach alone
+> cannot solve the challenges. Adapting to the actual capacity by inspecting queue sizes and implementing adaptive
+> limits is how the available capacity can be shared. Dynamically adjusted rate limiters can be used as part of
+> this.
 
 A Pulsar broker knows when it is struggling and has no way to say so. It has exactly two instruments for
 regulating how fast a producer may publish — a rate an operator configured before the traffic arrived, and
