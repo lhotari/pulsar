@@ -3164,8 +3164,7 @@ public class BrokerService implements Closeable {
         List<CompletableFuture<Void>> closeFutures = new ArrayList<>();
         topicFutures.forEach((name, topicFuture) -> {
             TopicName topicName = TopicName.get(name);
-            if (ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
-                    && ExtensibleLoadManagerImpl.isInternalTopic(topicName.toString())) {
+            if (isSkippedOnUnload(topicName)) {
                 if (ExtensibleLoadManagerImpl.debug(pulsar.getConfiguration(), log)) {
                     log.info()
                             .attr("topic", topicName)
@@ -3245,7 +3244,13 @@ public class BrokerService implements Closeable {
      */
     @Deprecated
     public void cleanUnloadedTopicFromCache(NamespaceBundle serviceUnit) {
-        cleanUnloadedTopicFromCache(serviceUnit, getTopicFuturesInBundle(serviceUnit));
+        // The snapshot is captured only now, after the unload, so it cannot tell a topic this unload targeted from
+        // one a newer ownership generation loaded meanwhile: only remove the topics that are still being closed.
+        Map<String, CompletableFuture<Optional<Topic>>> topicFutures = getTopicFuturesInBundle(serviceUnit);
+        topicFutures.values().removeIf(topicFuture -> extractTopic(topicFuture)
+                .map(topic -> !(topic instanceof AbstractTopic abstractTopic && abstractTopic.isFenced()))
+                .orElse(true));
+        cleanUnloadedTopicFromCache(serviceUnit, topicFutures);
     }
 
     /**
@@ -3253,24 +3258,32 @@ public class BrokerService implements Closeable {
      * currently-cached future is exactly the one captured in {@code topicFutures} (see
      * {@link #getTopicFuturesInBundle(NamespaceBundle)}), so a stale call for an old ownership generation can
      * never evict a newer generation's topic.
+     *
+     * <p>The topic is removed whether or not it is still fenced: a topic whose close failed has been unfenced to
+     * resume serving, yet the bundle is being released, so the topic must not stay cached and be reused if this
+     * broker acquires the bundle again.
      */
     public void cleanUnloadedTopicFromCache(NamespaceBundle serviceUnit,
             Map<String, CompletableFuture<Optional<Topic>>> topicFutures) {
         topicFutures.forEach((topic, topicFuture) -> {
-            Optional<Topic> topicRef = extractTopic(topicFuture);
-            // The bundle cleanup should only remove topics already fenced by close/unload.
-            if (topicRef.isPresent() && isTopicBeingUnloaded(topicRef.get())) {
-                log.info()
-                        .attr("value", serviceUnit.toString())
-                        .attr("topic", topic)
-                        .log("Clean unloaded topic from cache.");
-                removeTopicFromCache(topic, serviceUnit, topicFuture);
+            if (isSkippedOnUnload(TopicName.get(topic)) || extractTopic(topicFuture).isEmpty()) {
+                return;
             }
+            log.info()
+                    .attr("value", serviceUnit.toString())
+                    .attr("topic", topic)
+                    .log("Clean unloaded topic from cache.");
+            removeTopicFromCache(topic, serviceUnit, topicFuture);
         });
     }
 
-    private boolean isTopicBeingUnloaded(Topic topic) {
-        return topic instanceof AbstractTopic abstractTopic && abstractTopic.isFenced();
+    /**
+     * Whether {@link #unloadServiceUnit} leaves the topic open: the ExtensibleLoadManager internal topics are
+     * closed only when the broker shuts down.
+     */
+    private boolean isSkippedOnUnload(TopicName topicName) {
+        return ExtensibleLoadManagerImpl.isLoadManagerExtensionEnabled(pulsar)
+                && ExtensibleLoadManagerImpl.isInternalTopic(topicName.toString());
     }
 
     public AuthorizationService getAuthorizationService() {

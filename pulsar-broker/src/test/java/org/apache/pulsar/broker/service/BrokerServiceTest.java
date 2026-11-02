@@ -2819,10 +2819,6 @@ public class BrokerServiceTest extends BrokerTestBase {
         BrokerService brokerService = pulsar.getBrokerService();
         NamespaceBundle bundle = pulsar.getNamespaceService().getBundle(TopicName.get(topicName));
         Topic topic = brokerService.getTopic(topicName, true).get().orElseThrow();
-        // The bundle cleanup only ever runs after unloadServiceUnit has attempted to close the topic, which
-        // fences it synchronously even on a failed/incomplete close. Mirror that precondition here.
-        ((AbstractTopic) topic).isFenced = true;
-
         // A snapshot that matches exactly what is currently cached must still be cleaned up: this is the
         // legitimate backstop case (a topic whose close() failed to remove itself from the cache).
         Map<String, CompletableFuture<Optional<Topic>>> currentSnapshot = brokerService.getTopicFuturesInBundle(bundle);
@@ -2830,6 +2826,44 @@ public class BrokerServiceTest extends BrokerTestBase {
 
         assertFalse(brokerService.getTopicReference(topicName).isPresent(),
                 "cleanup should still remove a topic future that matches what was captured");
+    }
+
+    @Test
+    public void testBundleUnloadRemovesTopicWhoseCloseFailed() throws Exception {
+        final String namespace = "prop/failedCloseUnload" + UUID.randomUUID().toString().replace("-", "");
+        admin.namespaces().createNamespace(namespace);
+        admin.namespaces().setNamespaceReplicationClusters(namespace, Sets.newHashSet("test"), false);
+        final String topicName = "persistent://" + namespace + "/topic";
+        final BrokerService brokerService = pulsar.getBrokerService();
+        Producer<byte[]> producer = pulsarClient.newProducer().topic(topicName).create();
+        producer.close();
+        PersistentTopic topic = (PersistentTopic) brokerService.getTopicReference(topicName).orElseThrow();
+        CompletableFuture<Optional<Topic>> topicFuture = brokerService.getTopics().get(topicName);
+        NamespaceBundle bundle = pulsar.getNamespaceService().getBundle(TopicName.get(topicName));
+
+        // A producer whose disconnect fails makes the topic close fail, which unfences the topic again.
+        org.apache.pulsar.broker.service.Producer failingProducer =
+                mock(org.apache.pulsar.broker.service.Producer.class);
+        CompletableFuture<Void> disconnectFailure =
+                CompletableFuture.failedFuture(new RuntimeException("injected disconnect failure"));
+        doReturn(disconnectFailure).when(failingProducer).disconnect();
+        doReturn(disconnectFailure).when(failingProducer).disconnect(any());
+        topic.getProducers().put("failing-producer", failingProducer);
+        try {
+            // Wait for the clients to disconnect, so that the failed disconnect fails the topic close.
+            pulsar.getNamespaceService().unloadNamespaceBundle(bundle, 5, TimeUnit.SECONDS, false)
+                    .get(10, TimeUnit.SECONDS);
+
+            assertFalse(topic.isFenced(), "the failed close should have unfenced the topic");
+            assertNull(pulsar.getNamespaceService().getOwnershipCache().getOwnedBundle(bundle),
+                    "the bundle ownership should have been released despite the failed topic close");
+            assertThat(brokerService.getTopics().get(topicName))
+                    .as("a topic whose close failed must not stay cached after its bundle was unloaded")
+                    .isNotSameAs(topicFuture);
+        } finally {
+            topic.getProducers().remove("failing-producer");
+            topic.close(true, true).get(10, TimeUnit.SECONDS);
+        }
     }
 
     private static class BlockingCompletedFuture<T> extends CompletableFuture<T> {
