@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
@@ -43,6 +44,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerHandle;
@@ -357,7 +359,34 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
 
         verify(entries, timeout(5000)).close();
         verify(handle, timeout(5000)).closeAsync();
+        // The read cancelled by the timeout is not recorded as an unreadable cursor.
+        verify(estimatorFactory, after(1000).never()).offlineCursorBacklogCompleted(any(), any());
         assertTimedOutWithoutCursors(stats);
+    }
+
+    @Test(timeOut = 15000)
+    public void testCursorLedgerCloseFailureKeepsTheReadBacklog() throws Exception {
+        TopicName topicName = TopicName.get("persistent://tenant/namespace/offline-cursor-close-failure");
+        Position lastPosition = createOfflineTopic(topicName);
+        LedgerHandle cursorLedger = bkc.createLedger(BookKeeper.DigestType.CRC32, new byte[0]);
+        cursorLedger.addEntry(new PositionInfo().setLedgerId(lastPosition.getLedgerId())
+                .setEntryId(0).toByteArray());
+        cursorLedger.close();
+        writeCursorInfo(topicName, "subscription", cursorLedger.getId(), -1, -1);
+        CompletableFuture<ReadHandle> observedHandle = new CompletableFuture<>();
+        ManagedLedgerFactoryImpl estimatorFactory = observeReadHandle(cursorLedger.getId(), observedHandle,
+                handle -> doReturn(CompletableFuture.failedFuture(
+                        BKException.create(BKException.Code.BookieHandleNotAvailableException)))
+                        .when(handle).closeAsync());
+        ManagedLedgerOfflineBacklog backlog =
+                new ManagedLedgerOfflineBacklog(DigestType.CRC32, new byte[0], "broker", false);
+        PersistentOfflineTopicStats stats = backlog
+                .estimateUnloadedTopicBacklogAsync(estimatorFactory, topicName, cachedExecutor)
+                .get(5, TimeUnit.SECONDS);
+        verify(observedHandle.get(5, TimeUnit.SECONDS)).closeAsync();
+        assertThat(stats.cursorDetails).containsOnlyKeys("subscription");
+        assertThat(stats.cursorDetails.get("subscription").cursorBacklog).isEqualTo(2);
+        assertThat(stats.messageBacklog).isEqualTo(2);
     }
 
     private static void assertTimedOutWithoutCursors(PersistentOfflineTopicStats stats) {
@@ -644,6 +673,12 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
 
     @SuppressWarnings("unchecked")
     private ManagedLedgerFactoryImpl observeReadHandle(long ledgerId, CompletableFuture<ReadHandle> observedHandle) {
+        return observeReadHandle(ledgerId, observedHandle, handle -> { });
+    }
+
+    @SuppressWarnings("unchecked")
+    private ManagedLedgerFactoryImpl observeReadHandle(long ledgerId, CompletableFuture<ReadHandle> observedHandle,
+                                                       Consumer<ReadHandle> customizer) {
         BookKeeper observedBookKeeper = spy(bkc);
         doAnswer(invocation -> {
             OpenBuilder builder = spy(bkc.newOpenLedgerOp());
@@ -655,6 +690,7 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
                         return handle;
                     }
                     ReadHandle observed = spy(handle);
+                    customizer.accept(observed);
                     observedHandle.complete(observed);
                     return observed;
                 });
