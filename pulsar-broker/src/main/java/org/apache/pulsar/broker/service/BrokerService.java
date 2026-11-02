@@ -3246,34 +3246,79 @@ public class BrokerService implements Closeable {
     public void cleanUnloadedTopicFromCache(NamespaceBundle serviceUnit) {
         // The snapshot is captured only now, after the unload, so it cannot tell a topic this unload targeted from
         // one a newer ownership generation loaded meanwhile: only remove the topics that are still being closed.
-        Map<String, CompletableFuture<Optional<Topic>>> topicFutures = getTopicFuturesInBundle(serviceUnit);
-        topicFutures.values().removeIf(topicFuture -> extractTopic(topicFuture)
-                .map(topic -> !(topic instanceof AbstractTopic abstractTopic && abstractTopic.isFenced()))
-                .orElse(true));
-        cleanUnloadedTopicFromCache(serviceUnit, topicFutures);
+        cleanFencedTopicsFromCache(serviceUnit, getTopicFuturesInBundle(serviceUnit));
     }
 
     /**
-     * Cleans up topics that failed to unload from the broker's topic cache. Only removes a topic if its
-     * currently-cached future is exactly the one captured in {@code topicFutures} (see
-     * {@link #getTopicFuturesInBundle(NamespaceBundle)}), so a stale call for an old ownership generation can
-     * never evict a newer generation's topic.
+     * Cleans up the topics that failed to unload from the broker's topic cache, when the bundle ownership is being
+     * released whatever the outcome of the unload. Only acts on a topic if its currently-cached future is exactly
+     * the one captured in {@code topicFutures} (see {@link #getTopicFuturesInBundle(NamespaceBundle)}), so a stale
+     * call for an old ownership generation can never evict or close a newer generation's topic.
      *
-     * <p>The topic is removed whether or not it is still fenced: a topic whose close failed has been unfenced to
-     * resume serving, yet the bundle is being released, so the topic must not stay cached and be reused if this
-     * broker acquires the bundle again.
+     * <p>A topic whose close failed has been unfenced to resume serving, but it must neither keep serving a bundle
+     * this broker no longer owns nor stay cached to be reused if this broker acquires the bundle again: it is closed
+     * again, without waiting for its clients to disconnect, and removed from the cache.
      */
     public void cleanUnloadedTopicFromCache(NamespaceBundle serviceUnit,
             Map<String, CompletableFuture<Optional<Topic>>> topicFutures) {
+        cleanUnloadedTopicFromCache(serviceUnit, topicFutures, true);
+    }
+
+    /**
+     * Like {@link #cleanUnloadedTopicFromCache(NamespaceBundle, Map)}, but only removes the topics that are still
+     * being closed (fenced), and leaves a topic whose close failed open and cached. Use it when the unload failed
+     * and the bundle ownership stays with this broker, so that the topic keeps serving until a later unload of the
+     * bundle closes it.
+     */
+    public void cleanFencedTopicsFromCache(NamespaceBundle serviceUnit,
+            Map<String, CompletableFuture<Optional<Topic>>> topicFutures) {
+        cleanUnloadedTopicFromCache(serviceUnit, topicFutures, false);
+    }
+
+    private void cleanUnloadedTopicFromCache(NamespaceBundle serviceUnit,
+            Map<String, CompletableFuture<Optional<Topic>>> topicFutures, boolean closeFailedTopics) {
         topicFutures.forEach((topic, topicFuture) -> {
-            if (isSkippedOnUnload(TopicName.get(topic)) || extractTopic(topicFuture).isEmpty()) {
+            if (isSkippedOnUnload(TopicName.get(topic))) {
                 return;
+            }
+            Optional<Topic> topicRef = extractTopic(topicFuture);
+            if (topicRef.isEmpty() || topics.get(topic) != topicFuture) {
+                // Not loaded, or already removed or superseded by a newer ownership generation.
+                return;
+            }
+            if (!(topicRef.get() instanceof AbstractTopic abstractTopic && abstractTopic.isFenced())) {
+                if (!closeFailedTopics) {
+                    return;
+                }
+                forceCloseTopicThatFailedToUnload(serviceUnit, topic, topicRef.get());
             }
             log.info()
                     .attr("value", serviceUnit.toString())
                     .attr("topic", topic)
                     .log("Clean unloaded topic from cache.");
             removeTopicFromCache(topic, serviceUnit, topicFuture);
+        });
+    }
+
+    private void forceCloseTopicThatFailedToUnload(NamespaceBundle serviceUnit, String topic, Topic topicRef) {
+        log.warn()
+                .attr("bundle", serviceUnit)
+                .attr("topic", topic)
+                .log("Force closing a topic that failed to close while unloading its bundle");
+        CompletableFuture<Void> closeFuture;
+        try {
+            // Not waiting for the clients to disconnect, so that failing to disconnect them cannot fail the close.
+            closeFuture = topicRef.close(true, true);
+        } catch (Throwable e) {
+            closeFuture = CompletableFuture.failedFuture(e);
+        }
+        closeFuture.exceptionally(e -> {
+            log.warn()
+                    .attr("bundle", serviceUnit)
+                    .attr("topic", topic)
+                    .exception(e)
+                    .log("Failed to force close a topic that failed to close while unloading its bundle");
+            return null;
         });
     }
 

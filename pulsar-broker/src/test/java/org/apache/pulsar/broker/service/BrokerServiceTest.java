@@ -33,6 +33,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
@@ -2854,15 +2855,57 @@ public class BrokerServiceTest extends BrokerTestBase {
             pulsar.getNamespaceService().unloadNamespaceBundle(bundle, 5, TimeUnit.SECONDS, false)
                     .get(10, TimeUnit.SECONDS);
 
-            assertFalse(topic.isFenced(), "the failed close should have unfenced the topic");
             assertNull(pulsar.getNamespaceService().getOwnershipCache().getOwnedBundle(bundle),
                     "the bundle ownership should have been released despite the failed topic close");
             assertThat(brokerService.getTopics().get(topicName))
                     .as("a topic whose close failed must not stay cached after its bundle was unloaded")
-                    .isNotSameAs(topicFuture);
+                    .isNull();
+            // Disconnected once by the failed close, and once more by the close that does not wait for it.
+            verify(failingProducer, times(2)).disconnect(any());
+            Awaitility.await().untilAsserted(() ->
+                    assertThat(((ManagedLedgerImpl) topic.getManagedLedger()).getState())
+                            .as("a topic whose close failed must be closed when its bundle is unloaded")
+                            .isEqualTo(ManagedLedgerImpl.State.Closed));
         } finally {
             topic.getProducers().remove("failing-producer");
             topic.close(true, true).get(10, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    public void testCleanFencedTopicsFromCacheKeepsTopicWhoseCloseFailed() throws Exception {
+        final String unfencedTopicName = "persistent://prop/ns-abc/cleanFencedKeepsUnfenced-" + UUID.randomUUID();
+        final String fencedTopicName = "persistent://prop/ns-abc/cleanFencedRemovesFenced-" + UUID.randomUUID();
+        admin.topics().createNonPartitionedTopic(unfencedTopicName);
+        admin.topics().createNonPartitionedTopic(fencedTopicName);
+        final BrokerService brokerService = pulsar.getBrokerService();
+        PersistentTopic unfencedTopic =
+                (PersistentTopic) brokerService.getTopic(unfencedTopicName, true).get().orElseThrow();
+        PersistentTopic fencedTopic =
+                (PersistentTopic) brokerService.getTopic(fencedTopicName, true).get().orElseThrow();
+        CompletableFuture<Optional<Topic>> unfencedTopicFuture = brokerService.getTopics().get(unfencedTopicName);
+        NamespaceBundle bundle = pulsar.getNamespaceService().getBundle(TopicName.get(unfencedTopicName));
+        assertEquals(pulsar.getNamespaceService().getBundle(TopicName.get(fencedTopicName)), bundle);
+        // A topic whose close failed is unfenced again, while a topic still being closed stays fenced.
+        ((AbstractTopic) fencedTopic).isFenced = true;
+        try {
+            brokerService.cleanFencedTopicsFromCache(bundle, Map.of(
+                    unfencedTopicName, unfencedTopicFuture,
+                    fencedTopicName, brokerService.getTopics().get(fencedTopicName)));
+
+            assertThat(brokerService.getTopics().get(unfencedTopicName))
+                    .as("a topic whose close failed must stay cached while its bundle stays owned")
+                    .isSameAs(unfencedTopicFuture);
+            assertFalse(unfencedTopic.isFenced(), "a topic whose close failed must not be closed again");
+            assertThat(((ManagedLedgerImpl) unfencedTopic.getManagedLedger()).getState())
+                    .isNotEqualTo(ManagedLedgerImpl.State.Closed);
+            assertThat(brokerService.getTopics().get(fencedTopicName))
+                    .as("a topic still being closed is removed from the cache")
+                    .isNull();
+        } finally {
+            unfencedTopic.close(true, true).get(10, TimeUnit.SECONDS);
+            ((AbstractTopic) fencedTopic).isFenced = false;
+            fencedTopic.close(true, true).get(10, TimeUnit.SECONDS);
         }
     }
 
