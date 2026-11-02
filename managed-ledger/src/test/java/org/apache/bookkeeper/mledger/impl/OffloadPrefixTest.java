@@ -1311,6 +1311,51 @@ public class OffloadPrefixTest extends MockedBookKeeperTestCase {
         assertEquals(offloader.offloadedLedgers(), Set.of(allLedgerIds.get(0), allLedgerIds.get(1)));
     }
 
+    @Test
+    public void automaticOffloadFailureInBackgroundTaskDoesNotBlockLaterTriggers() throws Exception {
+        // When armed, the first isAppendable() call (made by the trigger on the caller thread) passes and
+        // the second one (made by the background offload task before it takes the offload mutex) throws.
+        AtomicInteger callsUntilFailure = new AtomicInteger(-1);
+        CountDownLatch failureThrown = new CountDownLatch(1);
+        MockLedgerOffloader offloader = new MockLedgerOffloader() {
+                @Override
+                public boolean isAppendable() {
+                    if (callsUntilFailure.getAndUpdate(n -> n >= 0 ? n - 1 : n) == 0) {
+                        failureThrown.countDown();
+                        throw new IllegalStateException("injected offloader failure");
+                    }
+                    return super.isAppendable();
+                }
+            };
+        ManagedLedgerConfig config = defaultConfig();
+        config.setMaxEntriesPerLedger(10);
+        config.setRetentionTime(10, TimeUnit.MINUTES);
+        config.setRetentionSizeInMB(10);
+        offloader.getOffloadPolicies().setManagedLedgerOffloadThresholdInBytes(-1L);
+        offloader.getOffloadPolicies().setManagedLedgerOffloadThresholdInSeconds(null);
+        config.setLedgerOffloader(offloader);
+
+        ManagedLedgerImpl ledger =
+                (ManagedLedgerImpl) factory.open("my_test_ledger" + UUID.randomUUID(), config);
+
+        for (int i = 0; i < 25; i++) {
+            ledger.addEntry(buildEntry(10, "entry-" + i));
+        }
+        assertEquals(offloader.offloadedLedgers().size(), 0);
+
+        offloader.getOffloadPolicies().setManagedLedgerOffloadThresholdInBytes(0L);
+        callsUntilFailure.set(1);
+        ledger.maybeOffloadInBackground(ManagedLedgerImpl.AUTOMATIC_OFFLOAD_TRIGGER);
+        assertTrue(failureThrown.await(5, TimeUnit.SECONDS));
+
+        // The failed automatic run must finish so that a later automatic trigger still offloads.
+        ledger.maybeOffloadInBackground(ManagedLedgerImpl.AUTOMATIC_OFFLOAD_TRIGGER);
+
+        assertEventuallyTrue(() -> offloader.offloadedLedgers().size() == 2);
+        List<Long> allLedgerIds = ledger.getLedgersInfoAsList().stream().map(LedgerInfo::getLedgerId).toList();
+        assertEquals(offloader.offloadedLedgers(), Set.of(allLedgerIds.get(0), allLedgerIds.get(1)));
+    }
+
     @DataProvider(name = "offloadAsSoonAsClosed")
     public Object[][] offloadAsSoonAsClosedProvider() {
         return new Object[][]{

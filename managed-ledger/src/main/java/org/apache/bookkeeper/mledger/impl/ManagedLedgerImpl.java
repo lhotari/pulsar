@@ -3577,18 +3577,24 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     }
 
     private void maybeOffloadInBackground(CompletableFuture<Position> promise, OffloadRequestSource source) {
-        Optional<OffloadThresholds> offloadThresholds = getOffloadThresholds();
-        if (offloadThresholds.isEmpty()) {
-            if (source == OffloadRequestSource.AUTOMATIC) {
-                promise.complete(PositionFactory.LATEST);
-            }
-            return;
-        }
-
-        OffloadThresholds thresholds = offloadThresholds.get();
         try {
-            executor.execute(() -> maybeOffload(thresholds.thresholdInBytes(), thresholds.thresholdInSeconds(),
-                    promise, source));
+            Optional<OffloadThresholds> offloadThresholds = getOffloadThresholds();
+            if (offloadThresholds.isEmpty()) {
+                if (source == OffloadRequestSource.AUTOMATIC) {
+                    promise.complete(PositionFactory.LATEST);
+                }
+                return;
+            }
+
+            OffloadThresholds thresholds = offloadThresholds.get();
+            executor.execute(() -> {
+                try {
+                    maybeOffload(thresholds.thresholdInBytes(), thresholds.thresholdInSeconds(), promise, source);
+                } catch (Throwable t) {
+                    // Complete the promise so that an automatic offload run is not left running forever.
+                    promise.completeExceptionally(t);
+                }
+            });
         } catch (RuntimeException e) {
             promise.completeExceptionally(e);
         }
@@ -3665,6 +3671,16 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             }
         });
 
+        try {
+            offloadLedgersOverThreshold(offloadThresholdInBytes, offloadThresholdInSeconds, unlockingPromise);
+        } catch (Throwable t) {
+            // Release the offload mutex and complete the promise if the scan fails before offloading completes it.
+            unlockingPromise.completeExceptionally(t);
+        }
+    }
+
+    private void offloadLedgersOverThreshold(long offloadThresholdInBytes, long offloadThresholdInSeconds,
+                                             CompletableFuture<Position> unlockingPromise) {
         long sizeSummed = 0;
         long toOffloadSize = 0;
         long alreadyOffloadedSize = 0;
