@@ -29,6 +29,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.NavigableMap;
 import java.util.Optional;
@@ -257,7 +258,7 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
     }
 
     @Test(timeOut = 15000)
-    public void testTimeoutDoesNotPublishOrMutatePartialStats() throws Exception {
+    public void testTimeoutPublishesCompletedCursorsOnly() throws Exception {
         TopicName topicName = TopicName.get("persistent://tenant/namespace/offline-timeout");
         Position lastPosition = createOfflineTopic(topicName);
         LedgerHandle cursorLedger = bkc.createLedger(BookKeeper.DigestType.CRC32, new byte[0]);
@@ -265,6 +266,7 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
                 .setEntryId(-1).toByteArray());
         cursorLedger.close();
         writeCursorInfo(topicName, "subscription", cursorLedger.getId(), -1, -1);
+        writeCursorInfo(topicName, "metadata-cursor", -1, lastPosition.getLedgerId(), 0);
         MetaStore actualStore = factory.getMetaStore();
         MetaStore delayedStore = spy(actualStore);
         CompletableFuture<ReadHandle> dataHandle = new CompletableFuture<>();
@@ -297,16 +299,25 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
         CompletableFuture<Void> result = estimatorFactory.estimateUnloadedTopicBacklogAsync(stats, topicName, false,
                 List.of(BookKeeper.DigestType.CRC32, new byte[0]), cachedExecutor, 1, TimeUnit.SECONDS);
         Runnable completeCursor = delayedCompletion.get(5, TimeUnit.SECONDS);
-        assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS))
-                .isInstanceOf(ExecutionException.class).hasCauseInstanceOf(TimeoutException.class);
-        assertStatsUnchanged(stats, generatedAt);
+        // As the blocking implementation did, a timeout publishes what was collected instead of failing.
+        result.get(5, TimeUnit.SECONDS);
+        assertPartialStats(stats, generatedAt);
         factory.getScheduledExecutor().chooseThread(topicName.getPersistenceNamingEncoding())
                 .submit(completeCursor).get(5, TimeUnit.SECONDS);
         factory.getScheduledExecutor().chooseThread(topicName.getPersistenceNamingEncoding())
                 .submit(() -> null).get(5, TimeUnit.SECONDS);
         verify(observedBookKeeper).newOpenLedgerOp();
         verify(dataHandle.get(5, TimeUnit.SECONDS)).closeAsync();
-        assertStatsUnchanged(stats, generatedAt);
+        // The late cursor callback does not mutate the published stats.
+        assertPartialStats(stats, generatedAt);
+    }
+
+    private static void assertPartialStats(PersistentOfflineTopicStats stats, long generatedAt) {
+        assertThat(stats.totalMessages).isEqualTo(3);
+        assertThat(stats.messageBacklog).isEqualTo(2);
+        assertThat(stats.cursorDetails).containsOnlyKeys("metadata-cursor");
+        assertThat(stats.cursorDetails.get("metadata-cursor").cursorBacklog).isEqualTo(2);
+        assertThat(stats.statGeneratedAt.getTime()).isGreaterThanOrEqualTo(generatedAt);
     }
 
     @Test(timeOut = 15000)
@@ -331,27 +342,28 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
             return releaseRead.thenApply(__ -> observed);
         });
         PersistentOfflineTopicStats stats = new PersistentOfflineTopicStats(topicName.toString(), "broker");
-        stats.totalMessages = 17;
-        stats.storageSize = 19;
-        stats.messageBacklog = 23;
-        long generatedAt = stats.statGeneratedAt.getTime();
         CompletableFuture<Void> result = estimatorFactory.estimateUnloadedTopicBacklogAsync(stats, topicName, false,
                 List.of(BookKeeper.DigestType.CRC32, new byte[0]), cachedExecutor, 1, TimeUnit.SECONDS);
         LedgerEntries entries = observedEntries.get(5, TimeUnit.SECONDS);
         ReadHandle handle = observedHandle.get(5, TimeUnit.SECONDS);
         try {
-            assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS))
-                    .isInstanceOf(ExecutionException.class).hasCauseInstanceOf(TimeoutException.class);
+            result.get(5, TimeUnit.SECONDS);
             verify(entries, never()).close();
             verify(handle, never()).closeAsync();
-            assertStatsUnchanged(stats, generatedAt);
+            assertTimedOutWithoutCursors(stats);
         } finally {
             releaseRead.complete(null);
         }
 
         verify(entries, timeout(5000)).close();
         verify(handle, timeout(5000)).closeAsync();
-        assertStatsUnchanged(stats, generatedAt);
+        assertTimedOutWithoutCursors(stats);
+    }
+
+    private static void assertTimedOutWithoutCursors(PersistentOfflineTopicStats stats) {
+        assertThat(stats.totalMessages).isEqualTo(3);
+        assertThat(stats.messageBacklog).isZero();
+        assertThat(stats.cursorDetails).isEmpty();
     }
 
     @DataProvider(name = "cursorLedgerFailures")
@@ -360,14 +372,14 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
     }
 
     @Test(dataProvider = "cursorLedgerFailures", timeOut = 15000)
-    public void testCursorLedgerFailuresCompleteTheFuture(String failure) throws Exception {
+    public void testCursorLedgerFailuresDoNotFailTheEstimate(String failure) throws Exception {
         TopicName topicName = TopicName.get("persistent://tenant/namespace/offline-failure");
         Position lastPosition = createOfflineTopic(topicName);
         LedgerHandle cursorLedger = bkc.createLedger(BookKeeper.DigestType.CRC32, new byte[0]);
         cursorLedger.addEntry("parse".equals(failure) ? new byte[] {(byte) 0xff}
                 : new PositionInfo().setLedgerId(lastPosition.getLedgerId()).setEntryId(-1).toByteArray());
         cursorLedger.close();
-        writeCursorInfo(topicName, "subscription", cursorLedger.getId(), -1, -1);
+        writeCursorInfo(topicName, "broken", cursorLedger.getId(), -1, -1);
         CompletableFuture<ReadHandle> observedHandle = new CompletableFuture<>();
         CompletableFuture<LedgerEntries> observedEntries = new CompletableFuture<>();
         ManagedLedgerFactoryImpl estimatorFactory = factory;
@@ -376,6 +388,9 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
         } else {
             estimatorFactory = observeReadHandle(cursorLedger.getId(), observedHandle);
             bkc.setReadHandleInterceptor((ledgerId, first, last, entries) -> {
+                if (ledgerId != cursorLedger.getId()) {
+                    return CompletableFuture.completedFuture(entries);
+                }
                 LedgerEntries observed = spy(entries);
                 observedEntries.complete(observed);
                 if ("read".equals(failure)) {
@@ -387,11 +402,21 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
         }
         ManagedLedgerOfflineBacklog backlog =
                 new ManagedLedgerOfflineBacklog(DigestType.CRC32, new byte[0], "broker", true);
-        CompletableFuture<PersistentOfflineTopicStats> result =
-                backlog.estimateUnloadedTopicBacklogAsync(estimatorFactory, topicName, cachedExecutor);
-        assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS))
-                .isInstanceOf(ExecutionException.class).cause().isNotInstanceOf(TimeoutException.class);
-        if (!"open".equals(failure)) {
+        PersistentOfflineTopicStats stats = backlog
+                .estimateUnloadedTopicBacklogAsync(estimatorFactory, topicName, cachedExecutor)
+                .get(5, TimeUnit.SECONDS);
+
+        assertThat(stats.totalMessages).isEqualTo(3);
+        assertThat(stats.messageBacklog).isEqualTo(3);
+        assertThat(stats.cursorDetails.get("subscription").cursorBacklog).isEqualTo(3);
+        if ("open".equals(failure)) {
+            // A cursor ledger that can't be opened is skipped.
+            assertThat(stats.cursorDetails).containsOnlyKeys("subscription");
+        } else {
+            // A cursor ledger that can't be read is reported with an unknown backlog, excluded from the total.
+            assertThat(stats.cursorDetails).containsOnlyKeys("subscription", "broken");
+            assertThat(stats.cursorDetails.get("broken").cursorBacklog).isEqualTo(-1);
+            assertThat(stats.cursorDetails.get("broken").cursorLedgerId).isEqualTo(cursorLedger.getId());
             verify(observedHandle.get(5, TimeUnit.SECONDS)).closeAsync();
             verify(observedEntries.get(5, TimeUnit.SECONDS)).close();
         }
@@ -399,8 +424,58 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
                 .submit(() -> null).get(5, TimeUnit.SECONDS);
     }
 
+    @Test(dataProvider = "accuracy", timeOut = 15000)
+    public void testUnreadableCursorsAreSkippedAndOtherCursorsReported(boolean accurate) throws Exception {
+        TopicName topicName = TopicName.get("persistent://tenant/namespace/offline-skip-cursors");
+        Position lastPosition = createOfflineTopic(topicName);
+        String managedLedgerName = topicName.getPersistenceNamingEncoding();
+        writeCursorInfo(topicName, "metadata-cursor", -1, lastPosition.getLedgerId(), 0);
+        writeCursorInfo(topicName, "failing-metadata", -1, lastPosition.getLedgerId(), -1);
+        LedgerHandle missingLedger = bkc.createLedger(BookKeeper.DigestType.CRC32, new byte[0]);
+        missingLedger.close();
+        bkc.deleteLedger(missingLedger.getId());
+        writeCursorInfo(topicName, "missing-ledger", missingLedger.getId(), -1, -1);
+        metadataStore.failConditional(new MetadataStoreException("injected cursor metadata failure"),
+                (operation, path) -> operation == OperationType.GET
+                        && path.equals("/managed-ledgers/" + managedLedgerName + "/failing-metadata"));
+        // A cursor deleted between listing the cursors and reading its metadata.
+        MetaStore actualStore = factory.getMetaStore();
+        MetaStore listingStore = spy(actualStore);
+        doAnswer(invocation -> {
+            MetaStoreCallback<List<String>> callback = invocation.getArgument(1);
+            actualStore.getCursors(managedLedgerName, new MetaStoreCallback<>() {
+                @Override
+                public void operationComplete(List<String> cursors, Stat stat) {
+                    List<String> listed = new ArrayList<>(cursors);
+                    listed.add("deleted-cursor");
+                    callback.operationComplete(listed, stat);
+                }
+
+                @Override
+                public void operationFailed(ManagedLedgerException.MetaStoreException error) {
+                    callback.operationFailed(error);
+                }
+            });
+            return null;
+        }).when(listingStore).getCursors(eq(managedLedgerName), any());
+        ManagedLedgerFactoryImpl estimatorFactory = spy(factory);
+        doReturn(listingStore).when(estimatorFactory).getMetaStore();
+
+        ManagedLedgerOfflineBacklog backlog =
+                new ManagedLedgerOfflineBacklog(DigestType.CRC32, new byte[0], "broker", accurate);
+        PersistentOfflineTopicStats stats = backlog
+                .estimateUnloadedTopicBacklogAsync(estimatorFactory, topicName, cachedExecutor)
+                .get(5, TimeUnit.SECONDS);
+
+        assertThat(stats.totalMessages).isEqualTo(3);
+        assertThat(stats.cursorDetails).containsOnlyKeys("subscription", "metadata-cursor");
+        assertThat(stats.cursorDetails.get("subscription").cursorBacklog).isEqualTo(3);
+        assertThat(stats.cursorDetails.get("metadata-cursor").cursorBacklog).isEqualTo(2);
+        assertThat(stats.messageBacklog).isEqualTo(5);
+    }
+
     @Test(timeOut = 15000)
-    public void testCursorFailureWaitsForOtherCursorCleanup() throws Exception {
+    public void testSkippedCursorWaitsForOtherCursorCleanup() throws Exception {
         TopicName topicName = TopicName.get("persistent://tenant/namespace/offline-wait-for-cursors");
         Position lastPosition = createOfflineTopic(topicName);
         LedgerHandle slowCursorLedger = bkc.createLedger(BookKeeper.DigestType.CRC32, new byte[0]);
@@ -452,9 +527,9 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
             releaseSlowRead.complete(null);
         }
 
-        assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS))
-                .isInstanceOf(ExecutionException.class)
-                .hasRootCauseInstanceOf(ManagedLedgerException.MetaStoreException.class);
+        PersistentOfflineTopicStats stats = result.get(5, TimeUnit.SECONDS);
+        assertThat(stats.cursorDetails).containsOnlyKeys("slow-subscription");
+        assertThat(stats.messageBacklog).isEqualTo(3);
         verify(entries).close();
         verify(handle).closeAsync();
     }
@@ -477,15 +552,14 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
                 new ManagedLedgerOfflineBacklog(DigestType.CRC32, new byte[0], "broker", accurate);
         CompletableFuture<PersistentOfflineTopicStats> result =
                 backlog.estimateUnloadedTopicBacklogAsync(estimatorFactory, topicName, blockingExecutor);
+        PersistentOfflineTopicStats stats = result.get(5, TimeUnit.SECONDS);
+        assertThat(stats.totalMessages).isEqualTo(3);
+        assertThat(stats.messageBacklog).isZero();
         if (accurate) {
-            assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS))
-                    .isInstanceOf(ExecutionException.class)
-                    .hasRootCauseInstanceOf(ManagedLedgerException.class);
+            // The empty cursor ledger has no position to recover, so the cursor is skipped.
+            assertThat(stats.cursorDetails).isEmpty();
             assertThat(blockingTasks.get()).isEqualTo(1);
         } else {
-            PersistentOfflineTopicStats stats = result.get(5, TimeUnit.SECONDS);
-            assertThat(stats.totalMessages).isEqualTo(3);
-            assertThat(stats.messageBacklog).isZero();
             assertThat(stats.cursorDetails.get("subscription").cursorBacklog).isEqualTo(-1);
             assertThat(blockingTasks.get()).isZero();
         }
@@ -536,26 +610,36 @@ public class ManagedLedgerOfflineBacklogTest extends MockedBookKeeperTestCase {
         assertThat(noCursorStats.cursorDetails).isEmpty();
     }
 
-    @DataProvider(name = "metadataFailures")
-    public Object[][] metadataFailures() {
-        return new Object[][] {{OperationType.GET, false}, {OperationType.GET_CHILDREN, false},
-                {OperationType.GET, true}};
-    }
-
-    @Test(dataProvider = "metadataFailures", timeOut = 15000)
-    public void testMetadataFailuresCompleteTheFuture(OperationType operation, boolean cursorInfo) throws Exception {
+    @Test(timeOut = 15000)
+    public void testManagedLedgerMetadataFailureFailsTheEstimate() throws Exception {
         TopicName topicName = TopicName.get("persistent://tenant/namespace/offline-metadata-failure");
         createOfflineTopic(topicName);
-        String failurePath = "/managed-ledgers/" + topicName.getPersistenceNamingEncoding()
-                + (cursorInfo ? "/subscription" : "");
+        String failurePath = "/managed-ledgers/" + topicName.getPersistenceNamingEncoding();
         metadataStore.failConditional(new MetadataStoreException("injected metadata failure"),
-                (actualOperation, path) -> actualOperation == operation && path.equals(failurePath));
+                (actualOperation, path) -> actualOperation == OperationType.GET && path.equals(failurePath));
         ManagedLedgerOfflineBacklog backlog =
                 new ManagedLedgerOfflineBacklog(DigestType.CRC32, new byte[0], "broker", true);
         CompletableFuture<PersistentOfflineTopicStats> result =
                 backlog.estimateUnloadedTopicBacklogAsync(factory, topicName, cachedExecutor);
         assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS))
                 .isInstanceOf(ExecutionException.class).hasRootCauseInstanceOf(MetadataStoreException.class);
+    }
+
+    @Test(timeOut = 15000)
+    public void testCursorListFailureStillReportsLedgers() throws Exception {
+        TopicName topicName = TopicName.get("persistent://tenant/namespace/offline-cursor-list-failure");
+        createOfflineTopic(topicName);
+        String failurePath = "/managed-ledgers/" + topicName.getPersistenceNamingEncoding();
+        metadataStore.failConditional(new MetadataStoreException("injected metadata failure"),
+                (actualOperation, path) -> actualOperation == OperationType.GET_CHILDREN
+                        && path.equals(failurePath));
+        ManagedLedgerOfflineBacklog backlog =
+                new ManagedLedgerOfflineBacklog(DigestType.CRC32, new byte[0], "broker", true);
+        PersistentOfflineTopicStats stats = backlog
+                .estimateUnloadedTopicBacklogAsync(factory, topicName, cachedExecutor).get(5, TimeUnit.SECONDS);
+        assertThat(stats.totalMessages).isEqualTo(3);
+        assertThat(stats.messageBacklog).isZero();
+        assertThat(stats.cursorDetails).isEmpty();
     }
 
     @SuppressWarnings("unchecked")
