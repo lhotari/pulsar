@@ -476,7 +476,7 @@ public class ProxyService implements Closeable {
         this.clientCnxs.forEach(cnx -> {
             // read once: the connection's event loop may clear the handler concurrently
             DirectProxyHandler directProxyHandler = cnx.getDirectProxyHandler();
-            if (directProxyHandler != null && directProxyHandler.getInboundChannelRequestsRate() != null) {
+            if (directProxyHandler != null) {
                 directProxyHandler.getInboundChannelRequestsRate().calculateRate();
             }
         });
